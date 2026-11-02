@@ -1,0 +1,5 @@
+# Screenshots the owner took and approved for the repo by name (2026-11-02, the hero for the
+# README and the herdr.dev listing). They show the owner's own home path and session, so the
+# PNG check skips them, but only while the file's sha256 matches: a changed image is scanned
+# again. Format: <sha256> <path>
+4c5df8807bbfba6b3b9b545e5c7c087e9a424981a916dccb9498374b775e5fba preview.png

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "files": { "includes": ["mods/**/*.js", "test/**/*.js"] },
+  // Lint only: the code keeps its own layout.
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        // Deliberate: `x ??= …` caches inside expressions and `while ((m = re.exec(s)))` loops.
+        "noAssignInExpressions": "off",
+        // The quote and paste sanitizers strip control characters by regex on purpose.
+        "noControlCharactersInRegex": "off",
+        // forEach callbacks use `return no(…)` as an early exit and one-expression arrows; the value is ignored.
+        "useIterableCallbackReturn": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["test/**/*.js"],
+      // Tests build JavaScript and shell source as strings, so "${…}" in a plain string is literal text.
+      "linter": { "rules": { "suspicious": { "noTemplateCurlyInString": "off" } } }
+    }
+  ]
+}
