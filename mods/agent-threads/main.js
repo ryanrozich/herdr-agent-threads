@@ -1,11 +1,12 @@
-// agent-threads: a pane beside a Claude Code terminal that lists each prompt and the
-// agent's final reply, with tool calls hidden. Read-only toward the agent, with one
+// agent-threads: a pane beside a Claude Code, Codex or OpenCode terminal that lists each prompt
+// and the agent's final reply, with tool calls hidden. Read-only toward the agent, with one
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself), pane.focus (the Terminal
 // button, and before the quote's paste) and pane.close (its own pane). The only programs
-// it runs besides its scripts are hc get and git remote get-url. The only file it writes
+// it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
+// and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
 //
 // Two roles, one mod:
@@ -25,10 +26,11 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand,
 } from "herdr";
 import {
-  newSession, apply, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, matches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, matches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -94,7 +96,8 @@ const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
-const idOf = (p) => (p ?? "").split("/").pop().replace(/\.jsonl$/, "");
+const idOf = (p) => idOfFile(p);
+const POLL_MS = 3000; // how often a pane on Codex or OpenCode looks for a new session
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 const tilde = (p) => (p?.startsWith(home()) ? `~${p.slice(home().length)}` : p ?? "");
 const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -121,7 +124,7 @@ function launch() {
     return null;
   }
   if (!pane?.terminal) {
-    notify({ title: "Agent Threads", body: "Focus a Claude Code terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
+    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex or OpenCode terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
     return null;
   }
   const known = shared(MAP_KEY)?.[pane.terminal];
@@ -177,7 +180,7 @@ async function heldIds(root, pid) {
 // Terminal -> transcript, in this order:
 // foreground pid -> <claude home>/sessions/<pid>.json, then --resume/--session-id in argv,
 // then the transcripts for the folder (a guess, with up to five to choose from).
-async function resolve(address, claudeHome) {
+async function resolve(address, claudeHome, current = null) {
   if (address.includes("/")) return { kind: "remote" };
   const term = terminals().find((t) => t.address === address);
   if (!term) return { kind: "gone" };
@@ -194,7 +197,7 @@ async function resolve(address, claudeHome) {
   const shell = SHELLS.has(cmd) || SHELLS.has(base(fg.name));
   const app = pane?.app === "claude-code";
   const program = pane?.program;
-  if (!claude && !app && program?.agent && program.key !== "claude" && !shell)
+  if (!claude && !app && !harnessOf(fg, pane) && program?.agent && program.key !== "claude" && !shell)
     return { kind: "unsupported", name: program.name ?? cmd };
   const pid = fg.pid ?? null;
   const live = claude || app;
@@ -203,6 +206,9 @@ async function resolve(address, claudeHome) {
   // report the path it was opened with (/tmp/x); Claude names the folder after one of them.
   const cwds = [...new Set([fg.cwd, pane?.cwd, term.cwd, info.cwd].filter(Boolean)
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
+  const harness = harnessOf(fg, pane);
+  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cmd });
+  if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
   const who = { claude, live, pid, cwd };
   tried.program = { what: "Program in pane", detail: `${claude ? `claude${version ? ` ${version}` : ""}` : cmd || "?"}${pid ? ` · pid ${pid}` : ""}`, ok: claude };
   const fromArgv = argvSession(argv);
@@ -249,6 +255,58 @@ async function resolve(address, claudeHome) {
     tried.newest = { what: "Newest transcript in project folder", detail: "the terminal reports no folder", ok: false };
   }
   return { kind: "none", ...who, tried: order(), choices };
+}
+
+// A Codex process keeps its session file open, which names it exactly. Codex writes no file
+// until the first prompt, so a process with none is waiting for one.
+async function resolveCodex({ argv, pid, cwd, cmd }) {
+  const who = { harness: "codex", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const open = pid ? await locate("codex-open", String(pid)) : null;
+  const openStep = { what: "Session file the process has open", detail: open ? idOf(open).slice(0, 8) : "none yet", ok: Boolean(open) };
+  if (open) return { kind: "found", id: idOf(open), file: open, via: "open file", ...who, guess: false, tried: [program, openStep] };
+  const named = codexArgvSession(argv);
+  if (named) {
+    const file = await locate("codex-find", named);
+    if (file) return { kind: "found", id: named, file, via: "argv", ...who, guess: false, tried: [program, openStep] };
+  }
+  const watch = await locate("codex-dir");
+  return { kind: "pending", id: null, via: null, ...who, tried: [program, openStep], watch };
+}
+
+// OpenCode records no process for a session, so the terminal title, its folder and its start time
+// decide (pickOpenCode).
+async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
+  const who = { harness: "opencode", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const script = async (...args) => {
+    const r = await exec("sh", [SCRIPT("opencode.sh"), ...args]).catch(() => null);
+    return r && r.code === 0 ? r.stdout.trim() : null;
+  };
+  const db = await script("db");
+  if (!db) return { kind: "none", ...who, tried: [program, { what: "OpenCode's database", detail: "not found", ok: false }], choices: [] };
+  const lines = (await script("sessions", db, ...cwds)) ?? "";
+  const list = lines.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const peers = pid && cwd ? Number(await script("peers", String(pid), cwd)) || 0 : 0;
+  const file = (id) => `${db}#${id}`;
+  const pick = pickOpenCode(list, age == null ? null : Date.now() - age, peers, opencodeArgv(argv), current, title);
+  const step = {
+    what: "Sessions in this folder since the process started",
+    detail: !pick.id ? "none yet" : `${pick.id.slice(0, 12)}${peers ? ` · ${plural(peers + 1, "OpenCode terminal")} here` : ""}`,
+    ok: Boolean(pick.id),
+  };
+  const choices = pick.choices.map((x) => ({ mtime: x.updated, size: null, path: file(x.id), label: openCodeLabel(x) }));
+  if (!pick.id) return { kind: "pending", id: null, via: null, ...who, tried: [program, step], watch: dirname(db), choices };
+  return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
+}
+
+// What a session's file takes to read one chunk.
+function readArgs(file, offset, chunk) {
+  const h = harnessOfFile(file);
+  if (h === "opencode") return [SCRIPT("opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
+  if (h === "codex") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), "codex"];
+  return [SCRIPT("extract.sh"), file, String(offset), String(chunk)];
 }
 
 // ---- the panel --------------------------------------------------------------------------
@@ -573,7 +631,7 @@ export default class Threads extends View {
           // pick() bumps the generation: a lookup that started before it is dropped and
           // the loop runs again for the picked file.
           const gen = this.resolveGen ?? 0;
-          const r = this.pinned ? this.pinnedResult() : await resolve(this.terminal, this.claudeHome);
+          const r = this.pinned ? this.pinnedResult() : await resolve(this.terminal, this.claudeHome, this.current()?.id ?? null);
           if (gen !== (this.resolveGen ?? 0)) { this.resolveAgain = true; continue; }
           this.adopt(r, cx);
         } while (this.resolveAgain);
@@ -588,7 +646,8 @@ export default class Threads extends View {
 
   pinnedResult() {
     if (!this.term()) return { kind: "gone" };
-    return { kind: "found", id: idOf(this.pinned), file: this.pinned, via: this.pinnedVia, claude: true, live: true, pid: null, guess: false, tried: [] };
+    const harness = harnessOfFile(this.pinned);
+    return { kind: "found", id: idOf(this.pinned), file: this.pinned, via: this.pinnedVia, harness, claude: harness === "claude", live: true, pid: null, guess: false, tried: [] };
   }
 
   // Keeps the time a session ended while it stays ended.
@@ -603,6 +662,8 @@ export default class Threads extends View {
       // The record names a session whose transcript is not written yet: keep what is shown
       // and watch for that file.
       this.watchFor = r.id;
+      // A Codex or OpenCode process that has written nothing yet says so only by not having
+      // a session: the 1 s timer looks again (poll).
       if (!cur) {
         this.res = r;
         this.watch(r.watch, cx);
@@ -684,7 +745,7 @@ export default class Threads extends View {
             let c;
             try {
               this.readWaiting = true;
-              const r = await exec("sh", [SCRIPT("extract.sh"), s.file, String(s.offset), String(chunk)]);
+              const r = await exec("sh", readArgs(s.file, s.offset, chunk));
               if (!live()) return;
               this.readWaiting = false;
               beat();
@@ -712,6 +773,7 @@ export default class Threads extends View {
             s.size = c.size;
             // From here until the offset moves, s holds part of this chunk.
             s.partial = true;
+            if (c.rewind) rewindTail(s);
             if (!(await sliced(c.events, (e) => apply(s, e), cx))) return;
             s.offset += c.used;
             s.partial = false;
@@ -817,7 +879,7 @@ export default class Threads extends View {
         try { changed = await watchFolder(dir); } catch { if (this.watched === dir) this.watched = null; return; }
         if (this.watchGen !== gen) return;
         const file = this.current()?.file;
-        if (file && changed.includes(file)) this.read(cx);
+        if (fileChanged(file, changed)) this.read(cx);
         // A transcript appearing here may be ours after /clear, or the one a fresh claude
         // just started writing.
         const want = this.watchFor ? `/${this.watchFor}.jsonl` : null;
@@ -872,6 +934,23 @@ export default class Threads extends View {
     // and a decoy or an idle claude reports no turn or status change that would look again.
     if (now.fg !== was.fg || now.there !== was.there) this.lookSoon(cx);
     else if (now.turn !== was.turn || now.status !== was.status) this.resolve(cx);
+    else if (this.lookPolled()) this.resolve(cx);
+  }
+
+  // Codex and OpenCode report no status here and name a new session (/new) nowhere the pane is
+  // told about, so a pane on one of them looks again every few seconds while it runs.
+  lookPolled() {
+    if (this.pinned || !this.res?.live || !["codex", "opencode"].includes(this.res.harness)) return false;
+    const at = Date.now();
+    if (at - (this.lastPoll ?? 0) < POLL_MS) return false;
+    this.lastPoll = at;
+    return true;
+  }
+
+  // The agent this pane is on: its session's, else what the lookup found.
+  agent() {
+    const s = this.current();
+    return HARNESS[s ? harnessOfFile(s.file) : this.res?.harness] ?? HARNESS.claude;
   }
 
   // ---- what is shown ----
@@ -1249,7 +1328,7 @@ export default class Threads extends View {
     this.imgs ??= new Map();
     if (this.imgs.has(u)) return;
     const s = this.sessions[Number(String(key).split(":")[0])];
-    const sid = (s?.file ?? "").split("/").pop().replace(/\.jsonl$/, "").replace(/[^0-9A-Za-z_-]/g, "");
+    const sid = idOf(s?.file).replace(/[^0-9A-Za-z_-]/g, "");
     if (!s?.file || !sid) { this.imgs.set(u, { st: "err" }); return; }
     this.imgs.set(u, { st: "wait" });
     (this.imgDue ??= []).push({ u, file: s.file, sid });
@@ -1264,14 +1343,14 @@ export default class Threads extends View {
       cx.spawn(async (cx) => {
         let files = null;
         try {
-          const r = await exec("sh", [SCRIPT("image.sh"), job.file, job.u, `${appHome()}/${IMG_DIR}`, job.sid]);
+          const r = await exec("sh", [SCRIPT("image.sh"), job.file, job.u, `${appHome()}/${IMG_DIR}`, job.sid, harnessOfFile(job.file)]);
           if (r.code === 0) {
             files = r.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
-              .filter((x) => x && Number.isInteger(x.i) && /^[0-9a-f-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
+              .filter((x) => x && Number.isInteger(x.i) && /^[0-9A-Za-z_-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
               .map((x) => ({ i: x.i, path: `${IMG_DIR}/${job.sid}/${x.file}`, w: Number(x.w) || 0, h: Number(x.h) || 0 }));
           }
         } catch { files = null; }
-        this.imgs.set(job.u, files ? { st: "ok", files } : { st: "err" });
+        this.imgs.set(job.u, files?.length ? { st: "ok", files } : { st: "err" });
         this.imgBusy = false;
         this.imgVer = (this.imgVer ?? 0) + 1;
         cx.notify();
@@ -1483,10 +1562,11 @@ export default class Threads extends View {
       if (!gate.ok) {
         if (gate.why === "panel") { record({ ...base, pasted: false }); return; }
         cx.write_to_clipboard(out.text);
+        const agent = this.agent();
         const why = {
-          blocked: `Claude is waiting on a prompt in ${t4}. Quote copied.`, shell: `${t4} is at a shell. Quote copied.`,
-          other: `${t4} is not running claude. Quote copied.`, closed: `${t4} is closed. Quote copied.`,
-          exited: `claude exited in ${t4}. Quote copied.`, moved: `${t4} is in another tab. Quote copied.`,
+          blocked: `${agent.short} is waiting on a prompt in ${t4}. Quote copied.`, shell: `${t4} is at a shell. Quote copied.`,
+          other: `${t4} is not running ${agent.cmd}. Quote copied.`, closed: `${t4} is closed. Quote copied.`,
+          exited: `${agent.cmd} exited in ${t4}. Quote copied.`, moved: `${t4} is in another tab. Quote copied.`,
           remote: "Remote terminal. Quote copied.", nopane: "No terminal for this pane. Quote copied.",
         }[gate.why] ?? "Quote copied.";
         record({ ...base, pasted: false, toast: why });
@@ -1494,16 +1574,17 @@ export default class Threads extends View {
         cx.notify();
         return;
       }
-      this.quoteToTerminal(out.text, pane.pane, cx, (r) => {
+      this.quoteToTerminal(quotePaste(this.agent().key, out.text), pane.pane, cx, (r) => {
         const folds = out.text.length > 800 || (out.text.match(/\n/g) ?? []).length > 2;
         let text;
         if (!r.pasted) text = `Could not focus ${t4}. Quote copied.`;
-        else if (gate.busy) text = `Quoted into ${t4} · Claude will queue it`;
+        else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
         else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
         else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
         else if (q.source === "selection") text = `Quoted your selection into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
-        if (r.pasted && folds) text += " · ⌘V again shows it in full";
+        // Claude Code folds a long paste, and a second paste opens it.
+        if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";
         if (r.pasted && !this.quotedOnce) { this.quotedOnce = true; text += " · focus is in the terminal"; }
         record({ ...base, focusOk: r.focusOk, tries: r.tries, pasted: r.pasted, folds, key: k, toast: text });
         this.say(text, r.pasted ? "quote" : "alert", cx, gate.busy || !r.pasted ? 3000 : 2500);
@@ -1592,7 +1673,7 @@ export default class Threads extends View {
     const target = focusTarget(panes(), this.terminal, myTab);
     const args = target ? { pane: target.pane } : { terminal: this.terminal };
     run("pane.focus", args);
-    const name = this.pane()?.program?.name ?? term.name ?? (this.res.claude ? "claude" : "");
+    const name = this.pane()?.program?.name ?? term.name ?? (this.res.claude || this.res.harness ? this.agent().cmd : "");
     let text = `Focused ${this.terminal}${name ? ` · ${name}` : ""}`;
     if (target && myTab && target.tab !== myTab) {
       const tab = spaces().flatMap((x) => x.tabs).find((x) => x.id === target.tab);
@@ -1951,9 +2032,13 @@ export default class Threads extends View {
   badge(t) {
     // Another agent (frame 03 "Harness not supported"), or a terminal on another machine:
     // a neutral chip with its name instead of the Claude mark.
+    const agent = this.agent();
     const other = this.res.kind === "unsupported" ? this.res.name
-      : this.res.kind === "remote" ? (this.terminal ?? "").split("/")[0] : null;
-    if (other) return h_flex().flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
+      : this.res.kind === "remote" ? (this.terminal ?? "").split("/")[0]
+        : agent.key !== "claude" ? agent.name : null;
+    if (other) return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
+      .when(this.res.kind !== "unsupported" && this.res.kind !== "remote", (el) => el.tooltip(this.badgeTip())
+        .child(svg(ICON("square-terminal")).size(13).text_color(t.muted)))
       .when(this.res.kind === "remote", (el) => el.child(svg(ICON("cpu")).size(12).text_color(t.muted)))
       .child(div().max_w(120).truncate().text_size(12).text_color(t.foreground).child(other));
     return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
@@ -2172,8 +2257,8 @@ export default class Threads extends View {
       out.push([null, "circle-x", `Session ended · ${this.terminal} closed${at}`,
         `The ${plural(n, "turn")} read so far stay here. This pane no longer follows a terminal.`, () => this.closeButtons(t)]);
     } else if (ended === "exited") {
-      out.push([null, "circle-x", `Session ended · claude exited${at}`,
-        `The ${plural(n, "turn")} read so far stay here. Start claude in ${this.terminal} again and Threads follows the new session.`, () => this.closeButtons(t)]);
+      out.push([null, "circle-x", `Session ended · ${this.agent().cmd} exited${at}`,
+        `The ${plural(n, "turn")} read so far stay here. Start ${this.agent().cmd} in ${this.terminal} again and Threads follows the new session.`, () => this.closeButtons(t)]);
     }
     const p = this.pane();
     if (me && p && p.tab !== me.tab) {
@@ -2205,20 +2290,23 @@ export default class Threads extends View {
     const s = this.current();
     if (this.choosing) return this.chooser(t);
     if (r.kind === "resolving" && !s) return this.loading(t, "Finding the session…", null);
-    if (r.kind === "remote") return this.empty(t, "messages", "Remote sessions aren't read yet", `${this.terminal} runs on another machine. This version reads Claude Code sessions on this computer only.`);
-    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code sessions. Codex and OpenCode come next. Other terminal panes are left alone.", null,
+    if (r.kind === "remote") return this.empty(t, "messages", "Remote sessions aren't read yet", `${this.terminal} runs on another machine. This version reads sessions on this computer only.`);
+    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex and OpenCode sessions. Other terminal panes are left alone.", null,
       [h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(div().flex_none().size(12).rounded(3).bg(CLAUDE).flex().items_center().justify_center().child(svg(ICON("claude-mark")).size(8).text_color("#ffffff")))
-        .child("Claude Code")]);
+        .child("Claude Code"),
+      ...[HARNESS.codex, HARNESS.opencode].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
+        .child(svg(ICON("square-terminal")).size(12).flex_none())
+        .child(h.name))]);
     if (r.kind === "gone" && !s) return this.empty(t, "circle-x", "Terminal closed", `${this.terminal} is gone, and nothing was read from it.`, null, this.closeButtons(t));
     if (r.kind === "error" && !s) return this.empty(t, "alert", "Something went wrong", r.error);
     if (r.kind === "none" && !s) return this.notFound(t, r);
-    const noTurns = () => this.empty(t, "messages", "No turns yet", `Send a prompt to claude in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
+    const noTurns = () => this.empty(t, "messages", "No turns yet", `Send a prompt to ${this.agent().cmd} in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
     if (r.kind === "pending" && !s) return noTurns();
     if (s && !s.loaded && s.error && s.turns.length === 0)
       return this.empty(t, "alert", "Couldn't read this session", s.error, null, [this.retryButton(t), ...this.closeButtons(t)]);
     if (s && !s.loaded && s.turns.length === 0)
-      return this.loading(t, `Reading session${s.size ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
+      return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
     const rows = this.rows();
     if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
@@ -2319,7 +2407,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).text_size(14).font_semibold().child(`No session found for ${this.terminal}`)))
       .child(div().text_size(12).text_color(t.muted).child(r.claude
         ? "Claude runs in this pane, but no transcript could be matched."
-        : `No Claude Code process runs in ${this.terminal}, and no transcript was matched for its folder.`))
+        : `No Claude Code, Codex or OpenCode process runs in ${this.terminal}, and no transcript was matched for its folder.`))
       .child(v_flex().rounded(8).bg(t.chrome).border_1().border_color(t.border).overflow_hidden()
         .child(div().px(10).pt(9).pb(7).text_size(10.5).font_semibold().text_color(t.dim).child("WHAT WE TRIED"))
         .children(steps.map((x) => h_flex().px(10).py(8).gap(8).items_start().border_t(1).border_color(t.border)
@@ -2331,21 +2419,21 @@ export default class Threads extends View {
         .child(this.button(t, "th-retry", "Retry", (_e, cx) => { this.res = { kind: "resolving" }; this.resolve(cx); cx.notify(); }, "refresh"))
         .children(this.chooseButton(t, r.choices))
         .children(this.closeButtons(t)))
-      .child(div().text_size(11.5).text_color(t.dim).child("Starting claude with --resume, or upgrading Claude Code, makes the match exact."));
+      .when(!r.harness, (el) => el.child(div().text_size(11.5).text_color(t.dim).child("Starting claude with --resume, or upgrading Claude Code, makes the match exact.")));
   }
 
   chooser(t) {
     const list = this.choices ?? [];
     return v_flex().flex_1().min_h(0).p(12).gap(8)
       .child(div().text_size(13.5).font_semibold().child(`Choose the session for ${this.terminal}`))
-      .child(div().text_size(12).text_color(t.muted).child("Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
+      .child(div().text_size(12).text_color(t.muted).child(this.res?.harness === "opencode" ? "Newest first. OpenCode doesn't record which terminal runs a session. Threads stays on the one you pick." : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
       .children(list.map((c, i) => h_flex().id(`th-choice-${i}`).px(10).py(8).gap(9).items_center().rounded(7).cursor_pointer()
         .bg(t.raised).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); this.pick(c, cx); })
         .child(svg(ICON("messages")).size(14).flex_none().text_color(t.muted))
         .child(v_flex().flex_1().min_w(0).gap(1)
-          .child(div().text_size(12.5).font_family(this.mono()).text_color(t.foreground).child(idOf(c.path).slice(0, 8)))
-          .child(div().text_size(11.5).text_color(t.dim).child(`modified ${when(c.mtime)} · ${fmtBytes(c.size)}${i === 0 ? " · newest" : ""}`)))))
+          .child(c.label ? div().text_size(12.5).text_color(t.foreground).truncate().child(c.label) : div().text_size(12.5).font_family(this.mono()).text_color(t.foreground).child(idOf(c.path).slice(0, 8)))
+          .child(div().text_size(11.5).text_color(t.dim).child(`modified ${when(c.mtime)}${c.size == null ? "" : ` · ${fmtBytes(c.size)}`}${i === 0 ? " · newest" : ""}`)))))
       .child(h_flex().gap(6).child(this.button(t, "th-choose-cancel", "Cancel", (_e, cx) => { this.choosing = false; cx.notify(); }, "x")));
   }
 
@@ -2485,7 +2573,7 @@ export default class Threads extends View {
     const st = stats(turn);
     const model = [shortModel(turn.model), turn.effort].filter(Boolean).join(" · ");
     return [
-      ["tokens", "arrows", `${fmtTokens(st.tokens)} tokens`],
+      this.showTokens(st) ? ["tokens", "arrows", `${fmtTokens(st.tokens)} tokens`] : null,
       turn.durationMs ? ["duration", "clock", fmtDuration(turn.durationMs)] : null,
       model ? ["model", "cpu", model] : null,
       ["tools", "wrench", plural(turn.tools, "tool call")],
@@ -2495,18 +2583,23 @@ export default class Threads extends View {
   }
   statTexts(turn) { return this.statChips(turn).map((c) => c[2]); }
 
+  // Codex and OpenCode can leave a turn with no usage on record (one stopped early), and "0 tokens"
+  // would claim a count nobody made. Claude Code's cards keep the chip they always had.
+  showTokens(st) { return st.tokens > 0 || this.agent().key === "claude"; }
+
   // The legend under the stats (i, or a click on the stats): one plain sentence for each
   // chip the card shows, "context compacted" first, then the counts line. [icon, text].
   legendEntries(turn) {
     const chips = this.statChips(turn);
     const counts = Boolean(this.countsLine(turn));
+    const who = this.agent().short;
     const say = {
-      compacted: "context compacted: the conversation got long, so Claude summarised the earlier part to free room. Some earlier detail is condensed.",
-      tokens: `tokens: text Claude newly read and wrote this turn.${counts ? " Re-reading its cache is not counted, so it can be far smaller than the cache read count above." : ""}`,
-      duration: "duration: how long Claude worked on this turn, from the prompt to its final reply.",
+      compacted: `context compacted: the conversation got long, so ${who} summarised the earlier part to free room. Some earlier detail is condensed.`,
+      tokens: `tokens: text ${who} newly read and wrote this turn.${counts ? " Re-reading its cache is not counted, so it can be far smaller than the cache read count above." : ""}`,
+      duration: `duration: how long ${who} worked on this turn, from the prompt to its final reply.`,
       model: "model · effort: the model that answered, and the effort level it was set to.",
-      tools: "tool calls: commands, file reads and edits Claude ran for this turn. They are not shown here.",
-      cache: "cache hit: share of the prompt Claude read back from its cache instead of processing it again. High is normal on a long session, and cheaper.",
+      tools: `tool calls: commands, file reads and edits ${who} ran for this turn. They are not shown here.`,
+      cache: `cache hit: share of the prompt ${who} read back from its cache instead of processing it again. High is normal on a long session, and cheaper.`,
     };
     const order = ["compacted", "tokens", "duration", "model", "tools", "cache"];
     const out = order.flatMap((id) => { const c = chips.find((x) => x[0] === id); return c ? [[c[1], say[id]]] : []; });
@@ -2625,7 +2718,7 @@ export default class Threads extends View {
         // when the wrap estimate holds (F3).
         const tw = w - 2;
         const lines = Math.min(6, this.wrapped(prompt, tw, YOU_CHAR));
-        const note = this.wrapped("No final reply yet. It appears here when Claude finishes this turn.", tw, 6.0);
+        const note = this.wrapped(`No final reply yet. It appears here when ${this.agent().short} finishes this turn.`, tw, 6.0);
         return 8 + 2 + 20 + 18 + 8 + lines * TV_LINE + 8 + this.chipRows(["00 tool calls", "000.0k tokens", "00:00"]) * 27 + 3 + note * NOTE_LINE;
       }
       case "head": return 4 + 1 + 10 + 18;
@@ -2763,7 +2856,7 @@ export default class Threads extends View {
 
   noReplyText(turn) {
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
-      : turn.errors.at(-1) ?? (turn.answeredBy ? `Claude answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
+      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
   }
 
   item(t, r, focusedPanel, size) {
@@ -2914,7 +3007,7 @@ export default class Threads extends View {
         .child(this.liveIcon(st, 12))
         .child(div().flex_none().child(st.spin ? "now" : fmtTime(turn.ts)))
         .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono())
-          .child([fmtTokens(stats(turn).tokens), clock].filter(Boolean).join(" · "))),
+          .child([this.showTokens(stats(turn)) ? fmtTokens(stats(turn).tokens) : null, clock].filter(Boolean).join(" · "))),
       this.promptBlock(t, turn, sh),
       h_flex().h(ROW.REPLY_LINE).gap(5).items_center().min_w(0)
         .child(this.liveIcon(st, 12))
@@ -2938,11 +3031,11 @@ export default class Threads extends View {
       .child(div().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text))
       .child(h_flex().gap(5).flex_wrap()
         .child(chip("wrench", plural(turn.tools, "tool call")))
-        .child(chip("arrows", `${fmtTokens(s.tokens)} tokens`))
+        .when(this.showTokens(s), (el) => el.child(chip("arrows", `${fmtTokens(s.tokens)} tokens`)))
         .when(Boolean(clock), (el) => el.child(chip("clock", clock))))
       .child(div().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(st.label === "Needs you"
-        ? "Claude is waiting for you in the terminal."
-        : st.spin ? "No final reply yet. It appears here when Claude finishes this turn."
+        ? `${this.agent().short} is waiting for you in the terminal.`
+        : st.spin ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
           : "This turn has no final reply yet. It may have been stopped.")));
   }
 

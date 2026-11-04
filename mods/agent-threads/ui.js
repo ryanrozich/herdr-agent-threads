@@ -1,5 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
+import { harnessOf } from "./harness.js";
+
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
 const KEYS = {
@@ -825,24 +827,24 @@ export function inReply(clip, reply) {
   return Boolean(c) && norm(reply).includes(c);
 }
 
-// The terminal's foreground program, from `hc get --json` and its pane: claude when argv[0]
-// is named claude, the process is named for a version ("2.1.316"), or the pane reports
-// claude-code; a shell by name. The same test resolve() uses.
+// The terminal's foreground program, from `hc get --json` and its pane: which agent it is
+// (harnessOf) or a shell by name. The same test resolve() uses.
 const SHELL_NAMES = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 export function foreground(info, pane) {
   const fg = info?.foreground ?? {};
   const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
   const cmd = base((fg.argv ?? [])[0] ?? fg.name);
   const version = /^\d+\.\d+\.\d+/.test(fg.name ?? "") ? fg.name : null;
-  const claude = cmd === "claude" || Boolean(version) || pane?.app === "claude-code";
-  return { claude, version, shell: !claude && (SHELL_NAMES.has(cmd) || SHELL_NAMES.has(base(fg.name))), name: cmd || fg.name || null, pid: fg.pid ?? null };
+  const harness = harnessOf(fg, pane);
+  const claude = harness === "claude";
+  return { claude, harness, version, shell: !harness && (SHELL_NAMES.has(cmd) || SHELL_NAMES.has(base(fg.name))), name: cmd || fg.name || null, pid: fg.pid ?? null };
 }
 
 // Whether a quote may be pasted now, from what was true at the press: { ok: true, busy }
 // or { ok: false, why }. The terminal must exist and be on this computer, a pane must show
-// it in this tab, claude must be in the foreground, the session must not have ended, and
-// claude must not be waiting on a prompt of its own (blocked). Working is allowed: Claude
-// queues what is typed while it works.
+// it in this tab, an agent must be in the foreground, the session must not have ended, and
+// the agent must not be waiting on a prompt of its own (blocked). Working is allowed: the
+// agent queues what is sent while it works.
 export function canQuote(s) {
   if (s.panelOpen) return { ok: false, why: "panel" };
   if (s.remote) return { ok: false, why: "remote" };
@@ -850,7 +852,7 @@ export function canQuote(s) {
   if (s.ended === "exited") return { ok: false, why: "exited" };
   if (!s.pane) return { ok: false, why: "nopane" };
   if (s.moved) return { ok: false, why: "moved" };
-  if (!s.fg?.claude) return { ok: false, why: s.fg?.shell ? "shell" : "other" };
+  if (!s.fg?.claude && !s.fg?.harness) return { ok: false, why: s.fg?.shell ? "shell" : "other" };
   if (s.status === "blocked") return { ok: false, why: "blocked" };
   return { ok: true, busy: s.status === "working" };
 }

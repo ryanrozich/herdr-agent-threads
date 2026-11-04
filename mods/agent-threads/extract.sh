@@ -1,6 +1,6 @@
 #!/bin/sh
-# agent-threads: read one chunk of a Claude Code transcript from a byte offset.
-# Usage: extract.sh <file> <offset> <max-bytes>
+# agent-threads: read one chunk of a Claude Code or Codex transcript from a byte offset.
+# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex]
 # Prints {"k":"file","size":N,"head":"<first uuid>"}, {"k":"chunk","used":N} (bytes of
 # whole lines read), then extract.jq's events. Reads only the bytes between offset and
 # offset+max-bytes, so a 700 MB transcript is never loaded at once. A cut-off last line is
@@ -11,12 +11,18 @@ file=$1
 case $file in /*) ;; *) file=./$file ;; esac # a relative name may start with "-"
 offset=$2
 max=$3
+harness=${4:-claude}
 here=$(dirname "$0")
 limit=6291456
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
-# The first line uuid names the file's contents: a replaced file has another one.
-head=$(head -c 65536 "$file" | LC_ALL=C grep -m 1 -o '"uuid":"[0-9a-f-]*"' | head -n 1 | cut -d '"' -f 4) || head=""
+# The first line uuid (a Codex file: its first timestamp) names the file's contents: a replaced
+# file has another one.
+if [ "$harness" = codex ]; then
+  head=$(head -c 200 "$file" | LC_ALL=C grep -m 1 -o '"timestamp":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
+else
+  head=$(head -c 65536 "$file" | LC_ALL=C grep -m 1 -o '"uuid":"[0-9a-f-]*"' | head -n 1 | cut -d '"' -f 4) || head=""
+fi
 printf '{"k":"file","size":%s,"head":"%s"}\n' "$size" "$head"
 if [ "$offset" -ge "$size" ]; then echo '{"k":"chunk","used":0}'; exit 0; fi
 
@@ -35,13 +41,22 @@ while :; do
   fi
   used=$((got - partial))
   if [ "$used" -gt 0 ]; then
-    # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
-    # type except user, assistant, system and custom-title, and every tool result, before
-    # jq parses anything. extract.jq drops the same lines again if one gets through.
-    head -c "$used" "$tmp" \
-      | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^s]|s[^y]|c[^u])' \
-      | LC_ALL=C grep -v -F '"type":"tool_result"' \
-      | jq -Rc -f "$here/extract.jq" > "$out"
+    if [ "$harness" = codex ]; then
+      # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
+      # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
+      # ignores the same lines if one gets through.
+      head -c "$used" "$tmp" \
+        | LC_ALL=C grep -E -v '"type":"(session_meta|world_state|token_usage_record|reasoning|function_call_output|custom_tool_call_output|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"' \
+        | jq -Rc -f "$here/extract-codex.jq" > "$out"
+    else
+      # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
+      # type except user, assistant, system and custom-title, and every tool result, before
+      # jq parses anything. extract.jq drops the same lines again if one gets through.
+      head -c "$used" "$tmp" \
+        | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^s]|s[^y]|c[^u])' \
+        | LC_ALL=C grep -v -F '"type":"tool_result"' \
+        | jq -Rc -f "$here/extract.jq" > "$out"
+    fi
   else
     : > "$out"
   fi

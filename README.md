@@ -1,6 +1,6 @@
 # Agent Threads
 
-Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls and status lines, and finding it means a lot of scrolling. Agent Threads opens a pane beside your Claude Code terminal that shows only the conversation: each prompt you sent and the answer that came back.
+Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls and status lines, and finding it means a lot of scrolling. Agent Threads opens a pane beside your Claude Code, Codex or OpenCode terminal that shows only the conversation: each prompt you sent and the answer that came back.
 
 ![Agent Threads beside a Claude Code terminal](preview.png)
 
@@ -10,16 +10,41 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 - **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
-- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message.
+- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode has none, see [Which agents it reads](#which-agents-it-reads).
 - **See the images you pasted.** Rows show small thumbnails. An open turn shows them larger, and a click shows one full size.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Choose how much each row shows.** Settings decide how many lines of your prompt and of the reply a row shows before you open it.
 
 ## How it works
 
-Press `Cmd-Shift-T` in a Claude Code terminal. Agent Threads opens to its right and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
+Press `Cmd-Shift-T` in a Claude Code, Codex or OpenCode terminal. Agent Threads opens to its right and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
 
-Agent Threads reads Claude's session file on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
+Agent Threads reads the agent's session on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
+
+## Which agents it reads
+
+Tested on Claude Code 2.1.318, Codex CLI 0.160.0 and OpenCode 1.19.5. None of these formats is a public promise, so a new version can change what the pane finds.
+
+| | Claude Code | Codex | OpenCode |
+|---|---|---|---|
+| Prompts, replies, search, copy, quote, links | Yes | Yes | Yes |
+| Pasted images | Yes | Yes | Yes |
+| Tokens, time, model, tool count, cache hit | Yes | Yes | Yes |
+| Agent messages | Yes | Yes | No |
+| Reads its session from | A JSONL file | A JSONL file | A SQLite database, read-only |
+| Finds the terminal's session by | The process's session record | The file the process has open | The terminal's title, then its folder |
+
+Where an agent has no data, the pane leaves the feature out:
+
+- **OpenCode has no agent messages.** Its subagents run as separate sessions, so nothing arrives in the session you are reading, and the agents button and `a` hint stay hidden.
+- **A Codex or OpenCode turn with no usage on record**, such as one you stopped right away, shows no token count. Claude Code's cards still show theirs.
+- **Codex and OpenCode report no status to Herdr here**, so the pane looks for a new session every 3 seconds, and a quote pressed while they work has no "will queue it" message.
+
+Some behaviour differs by agent:
+
+- **OpenCode shares one database between terminals and records no process for a session.** The pane reads `OC | <title>` from the terminal. Until a session has a title, or when two sessions in the folder share one, a second OpenCode in the same folder makes the pane say "guessed" and offer **Choose**. Its guess can be the other terminal's session, so check it when that banner shows.
+- **Quotes fold in OpenCode and Codex.** OpenCode shows a paste of three lines or more as `[Pasted ~N lines]`, and Codex shows a long one as `[Pasted Content N chars]`. The whole quote goes in when you submit. For OpenCode's folded paste the quote ends with one zero-width space, because OpenCode trims the blank line that keeps your reply out of the quote.
+- **OpenCode's `/undo` shows late.** The pane keeps an undone turn until OpenCode deletes it, at your next prompt.
 
 ## Screenshots
 
@@ -45,7 +70,7 @@ Select an image to open it full size. The session in these shots is made up.
 
 ## Install
 
-Needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and Claude Code. Besides `jq` it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
+Needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and at least one of Claude Code, Codex or OpenCode. Codex also needs `lsof`, and OpenCode needs `sqlite3`, `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
 
 ```sh
 git clone https://github.com/ryanrozich/herdr-agent-threads

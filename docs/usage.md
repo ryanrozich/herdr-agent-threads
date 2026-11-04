@@ -19,11 +19,21 @@ Every behaviour of the pane in detail. The [README](../README.md) has the short 
 
 ## Quoting into the terminal
 
-This is the one time Threads writes to a terminal. It puts the quote on the clipboard, focuses the bound terminal's pane, checks Herdr reports that terminal focused, and runs Herdr's paste (the `⌘V` command). Claude Code turns on bracketed paste, so the quote arrives as one paste, and nothing is ever submitted: no Enter or other key follows. Before the paste Threads strips control characters, carriage returns and stray paste markers from the text, and caps the quote at 40 lines ("Quoted the first 40 lines") or 2,000 characters. At the character cap, the line that does not fit is cut at a word and ends in "…" ("Quoted the start · cut at 2,000 characters"), so a long paragraph is quoted in part and never dropped.
+This is the one time Threads writes to a terminal. It puts the quote on the clipboard, focuses the bound terminal's pane, checks Herdr reports that terminal focused, and runs Herdr's paste (the `⌘V` command). The agent turns on bracketed paste, so the quote arrives as one paste, and nothing is ever submitted: no Enter or other key follows. Before the paste Threads strips control characters, carriage returns and stray paste markers from the text, and caps the quote at 40 lines ("Quoted the first 40 lines") or 2,000 characters. At the character cap, the line that does not fit is cut at a word and ends in "…" ("Quoted the start · cut at 2,000 characters"), so a long paragraph is quoted in part and never dropped.
 
-It pastes only when the terminal is local, open, shown in a pane and running `claude`, and Claude is not waiting on a permission prompt. Otherwise the quote stays on the clipboard and a toast says why ("t4 is at a shell. Quote copied.", "Claude is waiting on a prompt in t4. Quote copied."). While Claude is working the paste still goes in, and Claude queues it ("Quoted into t4 · Claude will queue it"). A second press within a second, or a held key, does nothing. Focus moves to the terminal, so the next keys you type go there.
+It pastes only when the terminal is local, open, shown in a pane and running `claude`, `codex` or `opencode`, and the agent is not waiting on a permission prompt. Otherwise the quote stays on the clipboard and a toast says why ("t4 is at a shell. Quote copied.", "Claude is waiting on a prompt in t4. Quote copied."). While Claude is working the paste still goes in, and Claude queues it ("Quoted into t4 · Claude will queue it"). A second press within a second, or a held key, does nothing. Focus moves to the terminal, so the next keys you type go there.
 
 Claude Code folds a paste over 800 characters or 2 lines into "[Pasted text #1 +N lines]"; the toast then says "⌘V again shows it in full", because pasting the same text again expands it.
+
+OpenCode folds a paste of three lines or more, or over 150 characters, into "[Pasted ~N lines]", and Codex folds a long one into "[Pasted Content N chars]". Both send the whole quote when you submit. OpenCode trims the blank line under a folded paste, so Threads ends that quote with one zero-width space and your reply still starts below it. Codex and OpenCode report no status to Herdr here, so the "will queue it" toast does not appear for them.
+
+## Codex and OpenCode
+
+The README's [Which agents it reads](../README.md#which-agents-it-reads) has the table of what works on each. A few details:
+
+- **Codex** has no session file until the first prompt, so the pane says it is waiting. After `/new` it follows the new rollout and draws a "New session" divider, and turns from the earlier session stay above it. A subagent's messages appear under `a`.
+- **OpenCode** sessions come from the terminal title `OC | <title>`, then `-s <id>` on the command line, then the folder. A new OpenCode in a folder waits for its first prompt rather than showing an older session. With a second OpenCode in the folder and no title to match, the header says "guessed" and **Choose** lists sessions by title or first prompt. A pick stays until you close the pane.
+- OpenCode's own terminal title can be cut with "…"; the pane matches on the part it can see, and refuses a title that fits two sessions.
 
 
 ## Settings in detail

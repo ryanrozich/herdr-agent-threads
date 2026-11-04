@@ -14,7 +14,7 @@ bunx @biomejs/biome@2.6.4 lint
 shellcheck -S warning $(git ls-files '*.sh')
 ```
 
-`test/fixtures/session.jsonl` is synthetic: the line shapes of a Claude Code 2.1.316 transcript with made-up content. Never commit real transcript text.
+`test/fixtures/session.jsonl` is synthetic: the line shapes of a Claude Code 2.1.316 transcript with made-up content. Never commit real transcript text. `test/codex.test.js` and `test/opencode.test.js` build a rollout and a database at run time, the same way, in the shapes Codex and OpenCode write. The OpenCode tests need the `sqlite3` command.
 
 Try the panel in a separate Herdr window, never the one you work in: start one with its own `HERDR_APP_HOME` in a scratch folder, install the mod there (`HERDR_APP_HOME=… ./install.sh`), and run every `herdr-app do` and `hc` with that `HERDR_APP_HOME` (and `HC_SOCKET` unset). Then pin a pane to a fixture beside any throwaway terminal:
 

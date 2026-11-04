@@ -1,5 +1,6 @@
 // agent-threads: which transcript a terminal's Claude session writes, as pure functions
-// (no Herdr imports), so the tests run them under bun.
+// (no Herdr imports), so the tests run them under bun. harness.js has the same for Codex and
+// OpenCode.
 
 import { fmtTime } from "./turns.js";
 
