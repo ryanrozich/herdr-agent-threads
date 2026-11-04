@@ -1,5 +1,12 @@
-# Screenshots the owner took and approved for the repo by name (2026-11-02, the hero for the
-# README and the herdr.dev listing). They show the owner's own home path and session, so the
-# PNG check skips them, but only while the file's sha256 matches: a changed image is scanned
-# again. Format: <sha256> <path>
-4c5df8807bbfba6b3b9b545e5c7c087e9a424981a916dccb9498374b775e5fba preview.png
+# Screenshots the owner approved for the repo by name (2026-11-04). All eight show the staged
+# acme-web session (test/make-hero.js), and each passed the PNG check before it was pinned. The
+# check skips a pinned file only while its sha256 matches, so a changed image is scanned again.
+# Format: <sha256> <path>
+dca2387e2946f00350fe185e13bacbfb9a1b015acab6403283bc418d32afd691 preview.png
+4466b50a360318c60d605f67dec8723f4f6b9753a49020e952b9aa40f90d24f6 docs/screenshots/agent-messages.png
+4a1ca903516a15eb3b44ca160bae833f38abb9c8d3245892c29ef8976343853c docs/screenshots/images.png
+eb5638367bac17112ad57fa74d430b9be3b0cab545809552b41ac36cb322a1c0 docs/screenshots/light.png
+d36ba9234f8c852a4ee7bb14a64f96e2299c0ffe9a46bc28c530827bf690f793 docs/screenshots/open-turn.png
+be2c810d81378821bc537e729d78b01f911767fd9a4e766fecd019506fcca09f docs/screenshots/panel.png
+2c082fca8b7449e28d976e12105980c120d8e4024808d6b0a86edf022df4b683 docs/screenshots/quote.png
+db5b585807271583575e97153c469ead9213c36ee946c8df16991d8ca6a201b1 docs/screenshots/search.png
