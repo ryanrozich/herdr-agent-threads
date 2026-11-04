@@ -21,6 +21,28 @@ Press `Cmd-Shift-T` in a Claude Code terminal. Agent Threads opens to its right 
 
 Agent Threads reads Claude's session file on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
 
+## Screenshots
+
+Select an image to open it full size. The session in these shots is made up.
+
+<table>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn with a list, a code block and stats"></a><br>An open turn shows the formatted reply, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests"></a><br>Typing "tests" after <code>/</code> narrows six turns to three.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A row with an image thumbnail and an open turn with the larger image"></a><br>A pasted image is a thumbnail on its row and larger in the open turn.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as its own row in the list"></a><br>With agent messages on, a subagent's report gets its own row.</td>
+</tr>
+<tr>
+<td colspan="2" valign="top"><a href="docs/screenshots/quote.png"><img src="docs/screenshots/quote.png" alt="The terminal prompt holding a quoted line, beside the pane"></a><br>After <code>q</code>, the prompt holds the reply as a <code>&gt;</code> quote, with the cursor under it.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/light.png"><img src="docs/screenshots/light.png" alt="Agent Threads beside a terminal in the light theme"></a><br>The same session in Herdr's light theme.</td>
+</tr>
+</table>
+
 ## Install
 
 Needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and Claude Code. Besides `jq` it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
