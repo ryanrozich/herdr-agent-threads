@@ -2,7 +2,7 @@
 // Pi 1.5.0 writes, with made-up text. Small chunks make turns cross chunk boundaries.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/turns.js";
@@ -162,4 +162,67 @@ test("alone in the folder, a Pi terminal's session is the one it wrote last sinc
   expect(pickOpenCode(list, 5000, 0, { id: null, cont: false }, null, null)).toEqual({ id: "a", guess: false, via: "folder", choices: [] });
   expect(pickOpenCode(list, 5000, 1, { id: null, cont: false }, "b", null)).toMatchObject({ id: "b", guess: true });
   expect(pickOpenCode(list, 99999, 0, { id: null, cont: false }, null, null).id).toBe(null);
+});
+
+// Pi's Ctrl-V writes the image to <temp>/pi-clipboard-<uuid>.png and types the path, with no space.
+function clipSession(paths, tail) {
+  n = 0;
+  second = 0;
+  parent = null;
+  const dir = mkdtempSync(join(tmpdir(), "threads-pi-"));
+  const file = join(dir, NAME);
+  writeFileSync(file, [
+    `${JSON.stringify({ type: "session", version: 3, id: ID, timestamp: ts(), cwd: "/home/dev/shop" })}\n`,
+    user([text(`${paths.join("")}${tail}`)]),
+    said([text("A cat.")]),
+  ].join(""));
+  return file;
+}
+const clip = (k) => `/tmp/pi-clipboard-00000000-0000-4000-8000-00000000000${k}`;
+
+test("a Pi paste's temp path becomes [Image #N] and a thumbnail, and a gone file says so", () => {
+  const png = `${clip(1)}.png`, missing = `${clip(2)}.png`, fake = `${clip(3)}.jpg`;
+  writeFileSync(png, Buffer.from(PNG, "base64"));
+  writeFileSync(fake, "not an image");
+  rmSync(missing, { force: true });
+  try {
+    const file = clipSession([png, " ", missing, " ", fake], "What is in this picture?");
+    const s = read(file, 1 << 20);
+    const [turn] = s.turns;
+    expect(turn.prompt).toBe("[Image #1] [Image #2] [Image #3] What is in this picture?");
+    expect(turn.images).toEqual([
+      { mt: "image/png", n: 1, src: png },
+      { mt: "image/png", n: 2, src: missing },
+      { mt: "image/jpeg", n: 3, src: fake },
+    ]);
+    const cache = mkdtempSync(join(tmpdir(), "threads-img-"));
+    const out = execFileSync("sh", [imager, file, turn.imgLine, cache, ID, "pi"], { encoding: "utf8" }).trim().split("\n").map((l) => JSON.parse(l));
+    // The real PNG is copied; the gone one says so; the one that is not an image is left out.
+    expect(out).toEqual([{ i: 0, file: `${turn.imgLine}-0.png`, w: 1, h: 1 }, { i: 1, gone: true }]);
+    expect(readFileSync(join(cache, ID, out[0].file)).toString("base64")).toBe(PNG);
+    // Once copied, the image stays after the temp file goes.
+    rmSync(png);
+    const again = execFileSync("sh", [imager, file, turn.imgLine, cache, ID, "pi"], { encoding: "utf8" });
+    expect(again).toContain(`"file":"${turn.imgLine}-0.png"`);
+  } finally {
+    for (const f of [png, fake]) rmSync(f, { force: true });
+  }
+});
+
+test("only Pi's temp-folder paste names count, and nothing else is read", () => {
+  const other = [
+    "/home/dev/tmp/pi-clipboard-00000000-0000-4000-8000-000000000004.png", // not the temp folder
+    "/tmp/screenshot.png", // not Pi's name
+    "/tmp/pi-clipboard-00000000-0000-4000-8000-000000000005.txt", // not an image name
+    "/var/folders/../../etc/pi-clipboard-00000000-0000-4000-8000-000000000006.png",
+  ];
+  for (const p of other) {
+    const s = read(clipSession([p], " hi"), 1 << 20);
+    expect(s.turns[0].prompt).toBe(`${p} hi`);
+    expect(s.turns[0].images).toEqual([]);
+  }
+  const mac = "/var/folders/x1/abc_123/T/pi-clipboard-00000000-0000-4000-8000-000000000007.png";
+  const s = read(clipSession([mac], "Why?"), 1 << 20);
+  expect(s.turns[0].prompt).toBe("[Image #1] Why?");
+  expect(existsSync(mac)).toBe(false);
 });

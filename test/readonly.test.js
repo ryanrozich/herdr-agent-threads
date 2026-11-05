@@ -21,6 +21,8 @@ const IMAGE_SH_WRITES = [
   /^LC_ALL=C grep -m 1 -F "\\"uuid\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
   /^LC_ALL=C grep -m 1 -F "\\"id\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
   /^touch "\$dir\/\$name"$/,
+  // A Pi paste's temp image, copied into the cache only after its first bytes say image.
+  /^if cp "\$p" "\$tmp" && mv "\$tmp" "\$dir\/\$name"; then tmp=\$\(mktemp "\$\{TMPDIR:-\/tmp\}\/agent-threads-img\.XXXXXX"\); else k=\$\(\(k \+ 1\)\); continue; fi$/,
   /^\| base64 --decode > "\$tmp" 2> \/dev\/null \|\| : > "\$tmp"$/,
   /^if \[ -s "\$tmp" \]; then mv "\$tmp" "\$dir\/\$name"; tmp=\$\(mktemp "\$\{TMPDIR:-\/tmp\}\/agent-threads-img\.XXXXXX"\); else i=\$\(\(i \+ 1\)\); continue; fi$/,
   /^echo "\$old" \| while IFS= read -r f; do rm -f "\$f"; done$/,

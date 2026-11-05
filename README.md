@@ -28,7 +28,7 @@ Tested on Claude Code 2.1.318, Codex CLI 0.160.0, OpenCode 1.19.5 and 2.2.5, and
 | | Claude Code | Codex | OpenCode | Pi |
 |---|---|---|---|---|
 | Prompts, replies, search, copy, quote, links | Yes | Yes | Yes | Yes |
-| Pasted images | Yes | Yes | Yes | Shown as the file path Pi pastes |
+| Pasted images | Yes | Yes | Yes | Yes, while the temporary file Pi saved is on disk |
 | Tokens, time, model, tool count, cache hit | Yes | Yes | Yes | Yes |
 | Agent messages | Yes | Yes | No | No |
 | Reads its session from | A JSONL file | A JSONL file | A SQLite database, read-only | A JSONL file |
@@ -38,7 +38,7 @@ Where an agent has no data, the pane leaves the feature out:
 
 - **OpenCode has no agent messages.** Its subagents run as separate sessions, so nothing arrives in the session you are reading, and the agents button and `a` hint stay hidden.
 - **Pi has no agent messages** either: it has no subagents of its own.
-- **Pi pastes an image as a file path.** `Ctrl-V` in Pi saves the image to a temporary file and puts its path in your prompt, so the row shows that path. An image Pi stores in the session itself shows as a thumbnail.
+- **Pi pastes an image as a file path.** `Ctrl-V` in Pi saves the image to a temporary file and puts its path in your prompt. The pane shows `[Image #1]` in place of that path and the image as a thumbnail, after checking the file starts like a PNG, JPEG, GIF or WebP. It reads only files named `pi-clipboard-<id>` in the temp folder, the name Pi gives them. The pane keeps its own copy once shown. If macOS or a reboot clears the file before then, the open turn shows its path with "Image no longer on disk".
 - **A Codex, OpenCode or Pi turn with no usage on record**, such as one you stopped right away, shows no token count. Claude Code's cards still show theirs.
 - **Codex, OpenCode and Pi report no status to Herdr here**, so the pane looks for a new session every 3 seconds, and a quote pressed while they work has no "will queue it" message.
 

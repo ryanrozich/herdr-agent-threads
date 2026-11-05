@@ -151,8 +151,11 @@ function newTurn(s, e) {
     latestParts: [],
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
     // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
-    // message id (OpenCode).
-    images: Array.isArray(e.img) ? e.img.map((mt, i) => ({ mt: String(mt), n: Number.isInteger(e.ids?.[i]) ? e.ids[i] : null })) : [],
+    // message id (OpenCode) or entry id (Pi). src is the temp file a Pi paste names.
+    images: Array.isArray(e.img)
+      ? e.img.map((mt, i) => ({ mt: String(mt), n: Number.isInteger(e.ids?.[i]) ? e.ids[i] : null,
+        src: typeof e.src?.[i] === "string" && e.src[i].length <= 300 ? e.src[i] : null }))
+      : [],
     imgLine: typeof e.u === "string" && /^[0-9A-Za-z_-]{8,80}$/.test(e.u) ? e.u : null,
   };
 }

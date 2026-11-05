@@ -1390,9 +1390,12 @@ export default class Threads extends View {
         try {
           const r = await exec("sh", [SCRIPT("image.sh"), job.file, job.u, `${appHome()}/${IMG_DIR}`, job.sid, harnessOfFile(job.file)]);
           if (r.code === 0) {
-            files = r.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
-              .filter((x) => x && Number.isInteger(x.i) && /^[0-9A-Za-z_-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
-              .map((x) => ({ i: x.i, path: `${IMG_DIR}/${job.sid}/${x.file}`, w: Number(x.w) || 0, h: Number(x.h) || 0 }));
+            const lines = r.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+              .filter((x) => x && Number.isInteger(x.i));
+            // A Pi paste whose temp file is gone: the card says so instead of showing an image.
+            files = [...lines.filter((x) => /^[0-9A-Za-z_-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
+              .map((x) => ({ i: x.i, path: `${IMG_DIR}/${job.sid}/${x.file}`, w: Number(x.w) || 0, h: Number(x.h) || 0 })),
+            ...lines.filter((x) => x.gone === true).map((x) => ({ i: x.i, gone: true }))];
           }
         } catch { files = null; }
         this.imgs.set(job.u, files?.length ? { st: "ok", files } : { st: "err" });
@@ -1403,8 +1406,10 @@ export default class Threads extends View {
     });
   }
 
-  // The decoded file for a turn's image i ({path, w, h}), or null; and the state.
-  imgFile(turn, i) { return this.imgs?.get(turn.imgLine)?.files?.find((f) => f.i === i) ?? null; }
+  // The decoded file for a turn's image i ({path, w, h}), or null; whether its file is gone;
+  // and the state.
+  imgFile(turn, i) { return this.imgs?.get(turn.imgLine)?.files?.find((f) => f.i === i && !f.gone) ?? null; }
+  imgGone(turn, i) { return Boolean(this.imgs?.get(turn.imgLine)?.files?.some((f) => f.i === i && f.gone)); }
   imgState(turn) { return this.imgs?.get(turn.imgLine)?.st ?? "wait"; }
 
   // An open card's image box, in design px: the image at the card's text width or its own
@@ -1412,7 +1417,7 @@ export default class Threads extends View {
   imgBox(r) {
     const w = this.inner();
     const f = this.imgFile(r.turn, r.i);
-    if (!f) return { w, h: this.imgState(r.turn) === "err" ? 44 : 120 };
+    if (!f) return { w, h: this.imgState(r.turn) === "wait" ? 120 : 44 };
     if (!(f.w > 0 && f.h > 0)) return { w, h: r.full ? 600 : 200 };
     const natural = Math.min(f.h, (f.h * w) / f.w);
     const h = Math.max(24, Math.round(Math.min(natural, r.full ? IMG_FULL_H : IMG_MAX_H)));
@@ -3286,13 +3291,14 @@ export default class Threads extends View {
         const box = this.imgBox(r);
         const n = turn.images[r.i]?.n;
         const st = this.imgState(turn);
-        const label = [`[Image #${n ?? r.i + 1}]`, f?.w ? `${f.w}×${f.h}` : null,
+        const gone = !f && this.imgGone(turn, r.i);
+        const label = [`[Image #${n ?? r.i + 1}]`, gone ? turn.images[r.i]?.src : null, f?.w ? `${f.w}×${f.h}` : null,
           f ? (r.full ? "click to shrink" : "click to enlarge") : null].filter(Boolean).join(" · ");
         return v_flex().pt(8).gap(4)
           .child(f
             ? div().w(box.w).h(box.h).rounded(6).overflow_hidden().border_1().border_color(t.border).bg(t.background).child(image(f.path).size_full())
             : h_flex().w_full().h(box.h).gap(6).rounded(6).bg(t.background).items_center().justify_center().text_size(12).text_color(t.dim)
-              .child(svg(ICON("image")).size(13)).child(st === "err" ? "This image could not be shown" : "Loading image…"))
+              .child(svg(ICON("image")).size(13)).child(gone ? "Image no longer on disk" : st === "wait" ? "Loading image…" : "This image could not be shown"))
           .child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim).child(label));
       }
       case "legend":

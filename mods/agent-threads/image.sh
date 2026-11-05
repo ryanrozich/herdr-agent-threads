@@ -6,7 +6,10 @@
 # {"i":N,"file":"<name>","w":W,"h":H} line per image (w and h 0 when unknown). Then trims
 # the cache to MAX_KB, oldest files first. Only metadata is printed: image data never goes
 # through the panel. Codex: <line uuid> is <turn id>_<ordinal>, and the image data is on the
-# message line just before that prompt's line. Pi: <line uuid> is the prompt entry's id.
+# message line just before that prompt's line. Pi: <line uuid> is the prompt entry's id. Pi's
+# Ctrl-V saves an image to a temp file and puts its path in the prompt: those come first, copied
+# from the temp folder only when the file starts like a PNG, JPEG, GIF or WebP. A path whose file
+# is gone prints {"i":N,"gone":true}.
 # OpenCode: <transcript> is <database>#<session>
 # and <line uuid> is the prompt's message id, in 1.x's part table or 2.x's session_message.
 set -eu
@@ -63,6 +66,16 @@ case $harness in
     LC_ALL=C grep -m 1 -F "\"uuid\":\"$uuid\"" "$file" > "$line" || { echo "no line" >&2; exit 4; } ;;
 esac
 
+# The same paths extract-pi.jq turns into [Image #N]. They have no spaces or glob characters.
+PI_CLIP='(?<!\S)(/private)?(/var/folders/[0-9A-Za-z_+-]+/[0-9A-Za-z_+-]+/T|/tmp)/pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpeg|jpg|png|gif|webp)'
+
+# The image type a file's first bytes say, as an extension, or nothing.
+magic() {
+  head -c 12 "$1" 2> /dev/null | od -An -tx1 | tr -d ' \n' | awk '
+    /^89504e470d0a1a0a/ { print "png"; exit } /^ffd8ff/ { print "jpg"; exit }
+    /^47494638/ { print "gif"; exit } /^52494646........57454250/ { print "webp"; exit }'
+}
+
 dims() {
   if command -v sips > /dev/null 2>&1; then
     sips -g pixelWidth -g pixelHeight "$1" 2> /dev/null | awk '/pixelWidth/ {w=$2} /pixelHeight/ {h=$2} END {printf "%d %d", w+0, h+0}'
@@ -73,8 +86,30 @@ dims() {
   fi
 }
 
+k=0
+if [ "$harness" = pi ]; then
+  clips=$(jq -rs --arg re "$PI_CLIP" '.[0].message.content | (if type == "string" then . else [.[]? | select(type == "object" and .type == "text") | (.text // "")] | join("\n") end) | match($re; "g") | .string' "$line")
+  for p in $clips; do
+    name=""
+    for e in png jpg gif webp; do [ -s "$dir/$uuid-$k.$e" ] && name="$uuid-$k.$e"; done
+    if [ -n "$name" ]; then
+      touch "$dir/$name"
+    elif [ -f "$p" ] && [ ! -L "$p" ] && [ "$(wc -c < "$p")" -le 52428800 ] && ext=$(magic "$p") && [ -n "$ext" ]; then
+      name="$uuid-$k.$ext"
+      if cp "$p" "$tmp" && mv "$tmp" "$dir/$name"; then tmp=$(mktemp "${TMPDIR:-/tmp}/agent-threads-img.XXXXXX"); else k=$((k + 1)); continue; fi
+    else
+      [ -e "$p" ] || printf '{"i":%s,"gone":true}\n' "$k"
+      k=$((k + 1)); continue
+    fi
+    wh=$(dims "$dir/$name")
+    w=${wh%% *} h=${wh##* }
+    printf '{"i":%s,"file":"%s","w":%s,"h":%s}\n' "$k" "$name" "${w:-0}" "${h:-0}"
+    k=$((k + 1))
+  done
+fi
+
 types=$(jq -rs "$blocks | .[].mt" "$line")
-i=0
+i=$k
 for mt in $types; do
   case $mt in
     image/png) ext=png ;;
@@ -87,7 +122,7 @@ for mt in $types; do
   if [ -s "$dir/$name" ]; then
     touch "$dir/$name"
   else
-    jq -rs --argjson i "$i" "$blocks | .[\$i].data // empty" "$line" \
+    jq -rs --argjson i "$((i - k))" "$blocks | .[\$i].data // empty" "$line" \
       | base64 --decode > "$tmp" 2> /dev/null || : > "$tmp"
     if [ -s "$tmp" ]; then mv "$tmp" "$dir/$name"; tmp=$(mktemp "${TMPDIR:-/tmp}/agent-threads-img.XXXXXX"); else i=$((i + 1)); continue; fi
   fi
