@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, commandLayout, ROW, senderLabel, senderIcon, kindWords,
-  isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight,
+  isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -105,6 +105,43 @@ test("prompts clip by wrapped lines and a character cap", () => {
 test("day keys follow the local calendar", () => {
   expect(dayKey(new Date(2026, 10, 1, 23, 59).getTime())).not.toBe(dayKey(new Date(2026, 10, 2, 0, 1).getTime()));
   expect(dayKey(null)).toBe(null);
+});
+
+test("a day divider names today and yesterday with their date, and older days by weekday", () => {
+  const now = new Date(2026, 10, 5, 12, 0).getTime();
+  expect(dayParts(new Date(2026, 10, 5, 9, 0).getTime(), now)).toEqual({ name: "Today", date: "Thu 5 Nov" });
+  expect(dayParts(new Date(2026, 10, 4, 23, 0).getTime(), now)).toEqual({ name: "Yesterday", date: "Wed 4 Nov" });
+  expect(dayParts(new Date(2026, 10, 2, 9, 0).getTime(), now)).toEqual({ name: "Monday 2 Nov", date: null });
+});
+
+test("the day band: raised in a dark theme, darker than raised in a light one, never past the selected row", () => {
+  const dark = { background: "#17191d", foreground: "#e6e6e6", raised: "#2c2e31", selected: "#ffffff17" };
+  expect(bandFill(dark)).toBe(dark.raised);
+  const light = { background: "#ffffff", foreground: "#1f2328", raised: "#f6f6f6", selected: "#00000012" };
+  const fill = bandFill(light);
+  expect(contrast(fill, light.background)).toBeGreaterThan(contrast(light.raised, light.background));
+  expect(contrast(fill, light.background)).toBeGreaterThanOrEqual(BAND_LIGHT);
+  expect(contrast(fill, light.background)).toBeLessThanOrEqual(contrast(over(light.selected, light.background), light.background));
+  // A light theme whose selected row sits between raised and the goal: the band stops at it.
+  const faint = { ...light, selected: "#0000000e" };
+  expect(contrast(over(faint.selected, light.background), light.background)).toBeLessThan(BAND_LIGHT);
+  expect(contrast(bandFill(faint), light.background)).toBeLessThanOrEqual(contrast(over(faint.selected, light.background), light.background) + 0.01);
+  // A light theme whose card fill already stands out keeps it.
+  expect(bandFill({ ...light, raised: "#e4e4e4" })).toBe("#e4e4e4");
+  // Colours that do not parse fall back to raised.
+  expect(bandFill({ ...light, background: "var(--bg)" })).toBe(light.raised);
+  expect(over("#00000080", "#ffffff")).toBe("#7f7f7f");
+  expect(over("#123456", "#ffffff")).toBe("#123456");
+  // Installed themes (read only): dark ones keep raised; light ones stay within selected.
+  const dir = join(homedir(), ".config/herdr-app/themes");
+  if (!existsSync(dir)) return;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
+    let c;
+    try { c = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { continue; }
+    c = c.colors ?? c;
+    if (!c.background || !c.foreground || !c.raised) continue;
+    expect(typeof bandFill(c)).toBe("string");
+  }
 });
 
 test("#N in the filter field is a jump, anything else a filter", () => {

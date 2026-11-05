@@ -32,10 +32,10 @@ import {
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs } from "./harness.js";
 import {
-  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, jumpTarget,
+  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
@@ -499,7 +499,7 @@ export default class Threads extends View {
         const b = (on, label, icon) => (on ? label : `[${icon} icon]`);
         return `copy${n} ${L.labels.copy} + ${b(L.labels.select, this.selecting === `${r.si}:${r.turn.n}` ? "Formatted" : "Select", "select")}${L.quote ? ` + ${b(L.labels.quote, "Quote", "quote")}` : ""}${L.terminal ? ` + ${b(L.labels.terminal, "Terminal", "terminal")}` : ""}`;
       }
-      case "day": return `day ${r.label}`;
+      case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
       case "hidden": return `unmatched ${r.n}`;
       default: return null;
     }
@@ -515,7 +515,9 @@ export default class Threads extends View {
       const cmd = commandColor(c);
       const cmdSel = commandColor(c, true);
       const caps = cardLabelColor(c, c.raised);
-      return `${x.name ?? x.id ?? "?"}: ansi5 ${contrast(c.ansi5, c.background)} muted ${contrast(c.muted, c.background)} label ${label === c.ansi5 ? "ansi5" : `mix ${contrast(label, c.background)}`} card label ${caps === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.raised)} on raised) cmd ${cmd === c.muted ? "muted" : "foreground"}/${cmdSel === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.background)}/${contrast(c.muted, c.selected)} on background/selected)`;
+      const band = bandFill(c);
+      const bandWord = band === c.raised ? "raised" : band === c.selected ? "selected" : band;
+      return `${x.name ?? x.id ?? "?"}: ansi5 ${contrast(c.ansi5, c.background)} muted ${contrast(c.muted, c.background)} label ${label === c.ansi5 ? "ansi5" : `mix ${contrast(label, c.background)}`} card label ${caps === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.raised)} on raised) cmd ${cmd === c.muted ? "muted" : "foreground"}/${cmdSel === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.background)}/${contrast(c.muted, c.selected)} on background/selected) day band ${bandWord} (${contrast(band, c.background)} on background; raised ${contrast(c.raised, c.background)}, selected ${contrast(over(c.selected, c.background), c.background)})`;
     });
     return this.contrastMemo;
   }
@@ -1059,13 +1061,13 @@ export default class Threads extends View {
       if (si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
       if (s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
-      // Day dividers when the session spans more than one day; ranges count shown turns.
+      // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
       s.turns.forEach((t, ti) => {
         const d = t.day === undefined ? (t.day = dayKey(t.ts)) : t.day;
         if (!d || !shown(t, ti)) return;
-        const r = days.get(d) ?? { first: t.n, last: t.n, ts: t.ts };
-        r.last = t.n;
+        const r = days.get(d) ?? { ts: t.ts, count: 0 };
+        r.count++;
         days.set(d, r);
       });
       let day = null;
@@ -1081,7 +1083,7 @@ export default class Threads extends View {
         if (days.size > 1 && !q && d && d !== day) {
           day = d;
           const r = days.get(d);
-          out.push({ kind: "day", key: `day:${si}:${d}`, label: `${dayLabel(r.ts).toUpperCase()} · TURNS ${r.first}–${r.last}` });
+          out.push({ kind: "day", key: `day:${si}:${d}`, ...dayParts(r.ts), count: r.count });
         }
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
         const live = this.isLive(s, si, ti, status);
@@ -2806,7 +2808,7 @@ export default class Threads extends View {
       case "turn": case "wrow": return r.shape.height;
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
-      case "day": return 30;
+      case "day": return 46;
       case "hidden": return 28;
       case "note": return 34;
       case "working": {
@@ -2964,9 +2966,7 @@ export default class Threads extends View {
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
-      case "day": return h_flex().px(16).pt(10).gap(8).items_center()
-        .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(r.label))
-        .child(div().flex_1().h(1).bg(t.border));
+      case "day": return this.dayItem(t, r);
       case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
       case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
@@ -3135,6 +3135,25 @@ export default class Threads extends View {
         ? `${this.agent().short} is waiting for you in the terminal.`
         : st.spin ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
           : "This turn has no final reply yet. It may have been stopped.")));
+  }
+
+  // A day divider: a band across the whole pane, 12 px below the turn above, with a rule
+  // above and below, a calendar icon in the accent colour, the day and its date, and the
+  // day's shown turns on the right. Its fill is ui.js bandFill.
+  dayItem(t, r) {
+    return v_flex().pt(12)
+      .child(h_flex().h(30).px(16).gap(8).items_center().bg(this.bandFill(t)).border_t_1().border_b_1().border_color(t.border)
+        .child(svg(ICON("calendar")).size(13).flex_none().text_color(t.accent))
+        .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(r.name))
+        .when(Boolean(r.date), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(r.date)))
+        .child(div().flex_1())
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(plural(r.count, "turn"))));
+  }
+
+  bandFill(t) {
+    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
+    if (this.bandMemo?.k !== k) this.bandMemo = { k, fill: bandFill(t) };
+    return this.bandMemo.fill;
   }
 
   dividerItem(t, r) {

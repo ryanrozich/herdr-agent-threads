@@ -136,6 +136,17 @@ export function dayLabel(ts, now = Date.now()) {
   return `${d.getDate()} ${months[d.getMonth()]}`;
 }
 
+// A day divider's words: {name: "Yesterday", date: "Wed 4 Nov"} for today and yesterday,
+// {name: "Monday 2 Nov", date: null} further back.
+export function dayParts(ts, now = Date.now()) {
+  const d = new Date(ts);
+  const wd = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const label = dayLabel(ts, now);
+  const date = `${d.getDate()} ${months[d.getMonth()]}`;
+  return label === "Today" || label === "Yesterday" ? { name: label, date: `${wd.slice(0, 3)} ${date}` } : { name: `${wd} ${date}`, date: null };
+}
+
 // "#12" (or "#" while typing it) in the filter field jumps to a turn instead of filtering.
 // Returns the turn number, 0 for a bare "#", or null when the text is a filter.
 export function jumpTarget(q) {
@@ -1045,6 +1056,36 @@ export function labelColor(ansi5, fg, bg) {
     if (mc > bestC) { best = m; bestC = mc; }
   }
   return best;
+}
+
+// A colour with alpha drawn over an opaque background, as #rrggbb (themes give selected
+// and hover as #rrggbbaa). An opaque colour comes back as #rrggbb.
+export function over(color, bg) {
+  const c = alpha(color, 1);
+  const m = /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(c ?? "");
+  return m ? mix(bg, c.slice(0, 7), parseInt(m[1], 16) / 255) : color;
+}
+
+// The day band's fill. A dark theme uses its card fill (raised). A light theme's card fill
+// sits too close to its background to catch the eye, so there the band is the background
+// mixed toward the foreground until it stands BAND_LIGHT off the background, but no darker
+// than the selected row's fill, so a turn still outweighs it. raised when it already stands
+// that far off, or when a colour does not parse.
+export const BAND_LIGHT = 1.15;
+export function bandFill(t) {
+  const lum = (c) => contrast(c, "#000000");
+  const bg = lum(t?.background);
+  const fg = lum(t?.foreground);
+  if (bg == null || fg == null || bg <= fg) return t?.raised;
+  const raised = contrast(t.raised, t.background) ?? 1;
+  if (raised >= BAND_LIGHT) return t.raised;
+  const sel = contrast(over(t.selected, t.background), t.background);
+  const goal = sel != null && sel > raised ? Math.min(BAND_LIGHT, sel) : BAND_LIGHT;
+  for (let k = 0.005; k <= 0.5; k += 0.005) {
+    const m = mix(t.background, t.foreground, k);
+    if ((contrast(m, t.background) ?? 1) >= goal) return m;
+  }
+  return t.raised;
 }
 
 // The command name's colour in a row or card: muted, unless muted reads under 4.5:1 on

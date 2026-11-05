@@ -1670,3 +1670,20 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   const drawn = rec; rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
 });
+
+test("a session over several days draws a day band per day, with its shown turns counted", async () => {
+  // Four turns 12 hours apart from 1 Nov 09:12 UTC span three local days in any time zone.
+  const { v, cx } = await pane(fixture("--only", "4", "--gap", "43200"));
+  draw(v, cx);
+  const days = v.rows().filter((r) => r.kind === "day");
+  expect(days.length).toBeGreaterThan(1);
+  expect(days.reduce((n, r) => n + r.count, 0)).toBe(v.turnKeys(v.rows()).length);
+  for (const r of days) {
+    expect(r.name).toMatch(/^(Today|Yesterday|[A-Z][a-z]+day \d{1,2} [A-Z][a-z]{2})$/);
+    expect(v.height(r)).toBe(46);
+  }
+  expect(state.shared["threads.debug"].t4.rows.filter((x) => x === "day").length).toBe(days.length);
+  // A search shows no day bands.
+  v.query = "turn"; draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "day")).toBe(false);
+});
