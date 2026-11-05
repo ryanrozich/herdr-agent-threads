@@ -1,4 +1,4 @@
-// agent-threads: a pane beside a Claude Code, Codex or OpenCode terminal that lists each prompt
+// agent-threads: a pane beside a Claude Code, Codex, OpenCode or Pi terminal that lists each prompt
 // and the agent's final reply, with tool calls hidden. Read-only toward the agent, with one
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
@@ -30,7 +30,7 @@ import {
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -97,7 +97,7 @@ const LATEST_LINES = 6;
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
 const idOf = (p) => idOfFile(p);
-const POLL_MS = 3000; // how often a pane on Codex or OpenCode looks for a new session
+const POLL_MS = 3000; // how often a pane on Codex, OpenCode or Pi looks for a new session
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 const tilde = (p) => (p?.startsWith(home()) ? `~${p.slice(home().length)}` : p ?? "");
 const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -124,7 +124,7 @@ function launch() {
     return null;
   }
   if (!pane?.terminal) {
-    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex or OpenCode terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
+    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex, OpenCode or Pi terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
     return null;
   }
   const known = shared(MAP_KEY)?.[pane.terminal];
@@ -208,6 +208,7 @@ async function resolve(address, claudeHome, current = null) {
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
   const harness = harnessOf(fg, pane);
   if (harness === "codex") return resolveCodex({ argv, pid, cwd, cmd });
+  if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
   const who = { claude, live, pid, cwd };
   tried.program = { what: "Program in pane", detail: `${claude ? `claude${version ? ` ${version}` : ""}` : cmd || "?"}${pid ? ` · pid ${pid}` : ""}`, ok: claude };
@@ -301,11 +302,47 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
   return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
 }
 
+// Pi keeps no session file open and records no process, so its sessions folder for the working
+// directory, the process's start time and the command line decide, as for OpenCode
+// (pickOpenCode). Pi writes only the session it is on, so a file's last write is when its last
+// turn ran.
+async function resolvePi({ argv, pid, cwd, cwds, cmd }, current) {
+  const who = { harness: "pi", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const root = (await locate("pi-dir")) ?? `${home()}/.pi/agent/sessions`;
+  const named = piArgv(argv);
+  // --session <path>: that file. One not written yet reads as missing until it is.
+  if (named.path)
+    return { kind: "found", id: named.id, file: named.path, via: "argv", ...who, guess: false, tried: [program] };
+  let dir = null;
+  let files = [];
+  for (const c of cwds) {
+    if (files.length) break;
+    dir = piFolder(root, c);
+    files = (await listFolder(dir)).filter((f) => harnessOfFile(f.path) === "pi");
+  }
+  const list = files.map((f) => ({ id: idOfFile(f.path), path: f.path, created: piStartMs(f.path) ?? f.mtime, updated: f.mtime, busy: f.mtime }));
+  const byId = named.id ? list.find((x) => x.id === named.id || x.id.startsWith(named.id)) : null;
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const peers = pid && cwd ? Number(await locate("pi-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickOpenCode(list, age == null ? null : Date.now() - age, peers, { id: byId?.id ?? null, cont: named.cont }, current, null);
+  const step = {
+    what: "Sessions in this folder since the process started",
+    detail: !pick.id ? "none yet" : `${pick.id.slice(0, 8)}${peers ? ` · ${plural(peers + 1, "Pi terminal")} here` : ""}`,
+    ok: Boolean(pick.id),
+  };
+  const choices = await Promise.all(pick.choices.map(async (x) => ({ mtime: x.updated, size: null, path: x.path, label: (await locate("pi-label", x.path)) || null })));
+  const found = pick.id && list.find((x) => x.id === pick.id);
+  // A fresh Pi writes its file with the first reply; the folder may not exist before then.
+  if (!found) return { kind: "pending", id: null, via: null, ...who, tried: [program, step], watch: files.length ? dir : root, choices };
+  return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
+}
+
 // What a session's file takes to read one chunk.
 function readArgs(file, offset, chunk) {
   const h = harnessOfFile(file);
   if (h === "opencode") return [SCRIPT("opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
-  if (h === "codex") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), "codex"];
+  if (h === "codex" || h === "pi") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), h];
   return [SCRIPT("extract.sh"), file, String(offset), String(chunk)];
 }
 
@@ -662,7 +699,7 @@ export default class Threads extends View {
       // The record names a session whose transcript is not written yet: keep what is shown
       // and watch for that file.
       this.watchFor = r.id;
-      // A Codex or OpenCode process that has written nothing yet says so only by not having
+      // A Codex, OpenCode or Pi process that has written nothing yet says so only by not having
       // a session: the 1 s timer looks again (poll).
       if (!cur) {
         this.res = r;
@@ -937,10 +974,10 @@ export default class Threads extends View {
     else if (this.lookPolled()) this.resolve(cx);
   }
 
-  // Codex and OpenCode report no status here and name a new session (/new) nowhere the pane is
+  // Codex, OpenCode and Pi report no status here and name a new session (/new) nowhere the pane is
   // told about, so a pane on one of them looks again every few seconds while it runs.
   lookPolled() {
-    if (this.pinned || !this.res?.live || !["codex", "opencode"].includes(this.res.harness)) return false;
+    if (this.pinned || !this.res?.live || !["codex", "opencode", "pi"].includes(this.res.harness)) return false;
     const at = Date.now();
     if (at - (this.lastPoll ?? 0) < POLL_MS) return false;
     this.lastPoll = at;
@@ -2346,11 +2383,11 @@ export default class Threads extends View {
     if (this.choosing) return this.chooser(t);
     if (r.kind === "resolving" && !s) return this.loading(t, "Finding the session…", null);
     if (r.kind === "remote") return this.empty(t, "messages", "Remote sessions aren't read yet", `${this.terminal} runs on another machine. This version reads sessions on this computer only.`);
-    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex and OpenCode sessions. Other terminal panes are left alone.", null,
+    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex, OpenCode and Pi sessions. Other terminal panes are left alone.", null,
       [h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(div().flex_none().size(12).rounded(3).bg(CLAUDE).flex().items_center().justify_center().child(svg(ICON("claude-mark")).size(8).text_color("#ffffff")))
         .child("Claude Code"),
-      ...[HARNESS.codex, HARNESS.opencode].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
+      ...[HARNESS.codex, HARNESS.opencode, HARNESS.pi].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(svg(ICON("square-terminal")).size(12).flex_none())
         .child(h.name))]);
     if (r.kind === "gone" && !s) return this.empty(t, "circle-x", "Terminal closed", `${this.terminal} is gone, and nothing was read from it.`, null, this.closeButtons(t));
@@ -2463,7 +2500,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).text_size(14).font_semibold().child(`No session found for ${this.terminal}`)))
       .child(div().text_size(12).text_color(t.muted).child(r.claude
         ? "Claude runs in this pane, but no transcript could be matched."
-        : `No Claude Code, Codex or OpenCode process runs in ${this.terminal}, and no transcript was matched for its folder.`))
+        : `No Claude Code, Codex, OpenCode or Pi process runs in ${this.terminal}, and no transcript was matched for its folder.`))
       .child(v_flex().rounded(8).bg(t.chrome).border_1().border_color(t.border).overflow_hidden()
         .child(div().px(10).pt(9).pb(7).text_size(10.5).font_semibold().text_color(t.dim).child("WHAT WE TRIED"))
         .children(steps.map((x) => h_flex().px(10).py(8).gap(8).items_start().border_t(1).border_color(t.border)
@@ -2482,7 +2519,7 @@ export default class Threads extends View {
     const list = this.choices ?? [];
     return v_flex().flex_1().min_h(0).p(12).gap(8)
       .child(div().text_size(13.5).font_semibold().child(`Choose the session for ${this.terminal}`))
-      .child(div().text_size(12).text_color(t.muted).child(this.res?.harness === "opencode" ? "Newest first. OpenCode doesn't record which terminal runs a session. Threads stays on the one you pick." : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
+      .child(div().text_size(12).text_color(t.muted).child(this.res?.harness === "opencode" || this.res?.harness === "pi" ? `Newest first. ${this.agent().name} doesn't record which terminal runs a session. Threads stays on the one you pick.` : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
       .children(list.map((c, i) => h_flex().id(`th-choice-${i}`).px(10).py(8).gap(9).items_center().rounded(7).cursor_pointer()
         .bg(t.raised).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); this.pick(c, cx); })
@@ -2639,7 +2676,7 @@ export default class Threads extends View {
   }
   statTexts(turn) { return this.statChips(turn).map((c) => c[2]); }
 
-  // Codex and OpenCode can leave a turn with no usage on record (one stopped early), and "0 tokens"
+  // Codex, OpenCode and Pi can leave a turn with no usage on record (one stopped early), and "0 tokens"
   // would claim a count nobody made. Claude Code's cards keep the chip they always had.
   showTokens(st) { return st.tokens > 0 || this.agent().key === "claude"; }
 

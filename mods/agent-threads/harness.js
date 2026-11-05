@@ -1,11 +1,12 @@
 // agent-threads: the agents the pane can read, as pure functions (no Herdr imports), so the
-// tests run them under bun. Claude Code and Codex append to a JSONL file. OpenCode keeps every
-// session in one SQLite database, so its "file" is "<database>#<session id>".
+// tests run them under bun. Claude Code, Codex and Pi append to a JSONL file. OpenCode keeps
+// every session in one SQLite database, so its "file" is "<database>#<session id>".
 
 export const HARNESS = {
   claude: { key: "claude", name: "Claude Code", short: "Claude", cmd: "claude" },
   codex: { key: "codex", name: "Codex", short: "Codex", cmd: "codex" },
   opencode: { key: "opencode", name: "OpenCode", short: "OpenCode", cmd: "opencode" },
+  pi: { key: "pi", name: "Pi", short: "Pi", cmd: "pi" },
 };
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -13,30 +14,70 @@ const WRAPPERS = new Set(["node", "bun", "deno"]);
 
 // Which agent a terminal's foreground program is, or null. A package manager's launcher runs
 // under node, so the script it runs counts too. A process named for a version ("2.1.316") is
-// how Claude Code's native build shows up.
+// how Claude Code's native build shows up. Pi runs under node and renames its process "pi".
 export function harnessOf(fg, pane) {
   const argv = fg?.argv ?? [];
   const cmd = base(argv[0] ?? fg?.name);
   const name = base(fg?.name);
   const script = WRAPPERS.has(cmd) ? base(argv[1]).replace(/\.[cm]?js$/, "") : null;
-  for (const key of ["codex", "opencode"]) {
+  for (const key of ["codex", "opencode", "pi"]) {
     if (cmd === key || name === key || script === key || pane?.app === key) return key;
   }
   if (cmd === "claude" || script === "claude" || /^\d+\.\d+\.\d+/.test(fg?.name ?? "") || pane?.app === "claude-code") return "claude";
   return null;
 }
 
+// Pi names a session file "<start time>_<id>.jsonl", the time with "-" for ":" and ".".
+const PI_FILE = /\/(\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)_([^/]+)\.jsonl$/;
+
 export function harnessOfFile(file) {
   const f = file ?? "";
   if (f.includes(".db#")) return "opencode";
+  if (PI_FILE.test(f)) return "pi";
   return /\/rollout-[^/]*\.jsonl$/.test(f) ? "codex" : "claude";
 }
 
+// When a Pi session began, from its file name, in ms, or null.
+export function piStartMs(file) {
+  const m = PI_FILE.exec(file ?? "");
+  if (!m) return null;
+  const t = Date.parse(m[1].replace(/T(\d\d)-(\d\d)-(\d\d)-(\d{3})Z$/, "T$1:$2:$3.$4Z"));
+  return Number.isNaN(t) ? null : t;
+}
+
+// The folder Pi keeps a working directory's sessions in, under its sessions folder: the path
+// without its leading "/", with "/", "\\" and ":" made "-", between "--" and "--".
+export function piFolder(sessions, cwd) {
+  return `${sessions}/--${String(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+// The session named on a Pi command line: { id, path, cont }. --session takes a path or an id
+// (or the start of one), --session-id names the new session's id, and --fork writes a new
+// session from the named one, so it names nothing. cont is --continue, the folder's newest.
+export function piArgv(argv) {
+  const args = argv ?? [];
+  if (args.includes("--fork") || args.includes("--no-session")) return { id: null, path: null, cont: false };
+  let named = null;
+  let cont = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--session" || a === "--session-id") named = args[i + 1] ?? null;
+    else if (a.startsWith("--session=") || a.startsWith("--session-id=")) named = a.slice(a.indexOf("=") + 1);
+    else if (a === "-c" || a === "--continue") cont = true;
+  }
+  if (!named) return { id: null, path: null, cont };
+  if (named.endsWith(".jsonl")) return { id: idOfFile(named), path: named, cont: false };
+  return { id: /^[0-9A-Za-z_-]+$/.test(named) ? named : null, path: null, cont: false };
+}
+
 // A session's id from its file: a Claude Code file is named for it, a Codex file ends with it
-// (rollout-<time>-<id>.jsonl), and an OpenCode "file" carries it after the "#".
+// (rollout-<time>-<id>.jsonl), a Pi file with it (<time>_<id>.jsonl), and an OpenCode "file"
+// carries it after the "#".
 export function idOfFile(file) {
   const f = file ?? "";
   if (f.includes(".db#")) return f.slice(f.lastIndexOf("#") + 1);
+  const pi = PI_FILE.exec(f);
+  if (pi) return pi[2];
   const name = f.split("/").pop().replace(/\.jsonl$/, "");
   const m = /^rollout-.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(name);
   return m ? m[1] : name;

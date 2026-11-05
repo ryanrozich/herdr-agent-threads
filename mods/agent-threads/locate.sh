@@ -1,5 +1,5 @@
 #!/bin/sh
-# agent-threads: read-only lookups for finding a terminal's Claude Code or Codex transcript.
+# agent-threads: read-only lookups for finding a terminal's Claude Code, Codex or Pi transcript.
 #   locate.sh find <claude-home> <id>                the transcript for a session id (real path)
 #   locate.sh folder <projects> <slug> [cwd-json]    the project folder for a working directory
 #                                                    (with cwd-json, also scans for a folder
@@ -10,6 +10,9 @@
 #   locate.sh codex-dir                              the folder Codex keeps its sessions in
 #   locate.sh codex-open <pid>                       the session file a Codex process has open
 #   locate.sh codex-find <id>                        the session file for a Codex session id
+#   locate.sh pi-dir                                 the folder Pi keeps its sessions in
+#   locate.sh pi-peers <pid> <folder>                how many other pi processes run there
+#   locate.sh pi-label <file>                        a Pi session's name, else its first prompt
 #   locate.sh etime <pid>                            how long a process has run (ps -o etime)
 # Exits 1 when nothing is found. Reads only; writes nothing.
 set -u
@@ -77,9 +80,25 @@ codex-find)
   f=$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name "rollout-*-$1.jsonl" 2>/dev/null | head -n 1)
   [ -n "$f" ] || exit 1
   printf '%s\n' "$f" ;;
+pi-dir)
+  printf '%s\n' "${PI_CODING_AGENT_SESSION_DIR:-${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions}" ;;
+pi-peers)
+  # Pi runs under node and names its process "pi".
+  n=0
+  for p in $(pgrep -x pi 2>/dev/null || true); do
+    [ "$p" = "$1" ] && continue
+    [ "$(lsof -a -d cwd -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)" = "$2" ] && n=$((n + 1))
+  done
+  printf '%s\n' "$n" ;;
+pi-label)
+  # /name writes a session_info line; the last one wins. Else the first prompt, 100 characters.
+  name=$(LC_ALL=C grep -F '"type":"session_info"' "$1" 2>/dev/null | tail -n 1 | jq -r '.name // empty' 2>/dev/null)
+  if [ -n "$name" ]; then printf '%s\n' "$name"; exit 0; fi
+  LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
+    | jq -r '.message.content | if type == "string" then . else ([.[]? | select(.type == "text") | .text] | join(" ")) end | .[0:100]' 2>/dev/null ;;
 etime)
   ps -o etime= -p "$1" 2>/dev/null ;;
 *)
-  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|etime ..." >&2
+  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|pi-dir|pi-peers|pi-label|etime ..." >&2
   exit 2 ;;
 esac

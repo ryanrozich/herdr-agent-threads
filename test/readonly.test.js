@@ -19,6 +19,7 @@ const IMAGE_SH_WRITES = [
   /^sqlite3 -readonly -batch -noheader "\$file" "select data from part where .*" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \}$/,
   /^sqlite3 -readonly -batch -noheader "\$file" "select f\.value from session_message m, json_each\(m\.data,'\\\$\.files'\) f where .*" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \}$/,
   /^LC_ALL=C grep -m 1 -F "\\"uuid\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
+  /^LC_ALL=C grep -m 1 -F "\\"id\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
   /^touch "\$dir\/\$name"$/,
   /^\| base64 --decode > "\$tmp" 2> \/dev\/null \|\| : > "\$tmp"$/,
   /^if \[ -s "\$tmp" \]; then mv "\$tmp" "\$dir\/\$name"; tmp=\$\(mktemp "\$\{TMPDIR:-\/tmp\}\/agent-threads-img\.XXXXXX"\); else i=\$\(\(i \+ 1\)\); continue; fi$/,

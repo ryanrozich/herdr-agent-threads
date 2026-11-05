@@ -1,6 +1,6 @@
 #!/bin/sh
-# agent-threads: read one chunk of a Claude Code or Codex transcript from a byte offset.
-# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex]
+# agent-threads: read one chunk of a Claude Code, Codex or Pi transcript from a byte offset.
+# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex|pi]
 # Prints {"k":"file","size":N,"head":"<first uuid>"}, {"k":"chunk","used":N} (bytes of
 # whole lines read), then extract.jq's events. Reads only the bytes between offset and
 # offset+max-bytes, so a 700 MB transcript is never loaded at once. A cut-off last line is
@@ -16,9 +16,11 @@ here=$(dirname "$0")
 limit=6291456
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
-# The first line uuid (a Codex file: its first timestamp) names the file's contents: a replaced
-# file has another one.
-if [ "$harness" = codex ]; then
+# The first line uuid (a Codex file: its first timestamp, a Pi file: its header's id) names the
+# file's contents: a replaced file has another one.
+if [ "$harness" = pi ]; then
+  head=$(head -c 400 "$file" | LC_ALL=C grep -m 1 -o '"id":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
+elif [ "$harness" = codex ]; then
   head=$(head -c 200 "$file" | LC_ALL=C grep -m 1 -o '"timestamp":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
 else
   head=$(head -c 65536 "$file" | LC_ALL=C grep -m 1 -o '"uuid":"[0-9a-f-]*"' | head -n 1 | cut -d '"' -f 4) || head=""
@@ -41,7 +43,13 @@ while :; do
   fi
   used=$((got - partial))
   if [ "$used" -gt 0 ]; then
-    if [ "$harness" = codex ]; then
+    if [ "$harness" = pi ]; then
+      # Tool results and system prompts (with every tool's schema) are most of a Pi file. A
+      # quote inside a string is escaped, so these patterns only match a message's own role.
+      head -c "$used" "$tmp" \
+        | LC_ALL=C grep -E -v '"role":"(toolResult|system|bashExecution)"' \
+        | jq -Rc -f "$here/extract-pi.jq" > "$out"
+    elif [ "$harness" = codex ]; then
       # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
       # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
       # ignores the same lines if one gets through.

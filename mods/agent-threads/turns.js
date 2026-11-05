@@ -235,8 +235,10 @@ export function apply(s, e) {
       return;
     case "d": {
       if (!cur) return;
-      cur.durationMs += e.ms ?? 0;
       const end = e.ts ? Date.parse(e.ts) : null;
+      // Pi records no turn time: the turn ran from its prompt to its last stop.
+      if (e.ms != null) cur.durationMs += e.ms;
+      else if (end && cur.ts) cur.durationMs = Math.max(cur.durationMs, end - cur.ts);
       for (const t of s.open) {
         t.done = true;
         if (end) t.endTs = end;

@@ -1,12 +1,13 @@
 #!/bin/sh
 # agent-threads: decode one prompt's pasted images to files the panel can draw.
-# Usage: image.sh <transcript> <line uuid> <cache root> <session id> [claude|codex|opencode]
+# Usage: image.sh <transcript> <line uuid> <cache root> <session id> [claude|codex|pi|opencode]
 # Finds the prompt line by its uuid, writes each image block to
 # <cache root>/<session id>/<uuid>-<i>.<ext> (kept when already there), and prints one
 # {"i":N,"file":"<name>","w":W,"h":H} line per image (w and h 0 when unknown). Then trims
 # the cache to MAX_KB, oldest files first. Only metadata is printed: image data never goes
 # through the panel. Codex: <line uuid> is <turn id>_<ordinal>, and the image data is on the
-# message line just before that prompt's line. OpenCode: <transcript> is <database>#<session>
+# message line just before that prompt's line. Pi: <line uuid> is the prompt entry's id.
+# OpenCode: <transcript> is <database>#<session>
 # and <line uuid> is the prompt's message id, in 1.x's part table or 2.x's session_message.
 set -eu
 file=$1
@@ -43,6 +44,10 @@ case $harness in
       back=$((back + 1))
       [ "$back" -le 3 ] || { echo "no line" >&2; exit 4; }
     done ;;
+  pi)
+    blocks='[.[0].message.content[]? | select(type == "object" and .type == "image") | {mt: (.mimeType // ""), data: (.data // "")}]'
+    # "id":"<id>" names the entry itself (parentId spells it with a capital I).
+    LC_ALL=C grep -m 1 -F "\"id\":\"$uuid\"" "$file" > "$line" || { echo "no line" >&2; exit 4; } ;;
   opencode)
     # 1.x keeps an image as a data URL in a file part. 2.x keeps it in the prompt's files, as
     # bare base64 in .data. 1.19 already has an empty session_message, so both 2.x tables decide.
