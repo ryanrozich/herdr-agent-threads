@@ -1,6 +1,6 @@
 # Agent Threads
 
-Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls and status lines, and finding it means a lot of scrolling. Agent Threads opens a pane beside your Claude Code, Codex, OpenCode or Pi terminal that shows only the conversation: each prompt you sent and the answer that came back.
+Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls, and finding it means scrolling. Agent Threads opens a pane beside your agent's terminal that shows only the conversation: each prompt you sent and the reply that came back, grouped by day. It works with Claude Code, Codex, OpenCode, Pi and Cursor.
 
 ![Agent Threads beside a Claude Code terminal](preview.png)
 
@@ -59,6 +59,8 @@ Some behaviour differs by agent:
 
 Select an image to open it full size. The session in these shots is made up.
 
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those.
+
 <table>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn with a list, a code block and stats"></a><br>An open turn shows the formatted reply, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
@@ -70,6 +72,10 @@ Select an image to open it full size. The session in these shots is made up.
 </tr>
 <tr>
 <td colspan="2" valign="top"><a href="docs/screenshots/quote.png"><img src="docs/screenshots/quote.png" alt="The terminal prompt holding a quoted line, beside the pane"></a><br>After <code>q</code>, the prompt holds the reply as a <code>&gt;</code> quote, with the cursor under it.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/days.png"><img src="docs/screenshots/days.png" alt="The list with a band for each day"></a><br>A session that runs over several days gets a band for each day, with its turn count.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi and Cursor sessions"></a><br>The pane beside Codex, OpenCode, Pi and Cursor. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open.</td>

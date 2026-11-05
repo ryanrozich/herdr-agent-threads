@@ -52,7 +52,8 @@ In a separate Herdr window on a Retina display, at zoom 1, with `promptLines` 2,
 ```sh
 mkdir -p ~/code/acme-web && git -C ~/code/acme-web init -q
 git -C ~/code/acme-web remote add origin https://github.com/acme/acme-web.git
-bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-02T20:05:00Z
+bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-03T20:05:00Z days   # three days: shoot on 5 Nov for Today and Yesterday
+bun test/make-agents.js agents ~/code/acme-web 2026-11-05T15:10:00Z       # Codex, OpenCode, Pi and Cursor sessions
 cc -o stage-claude test/hero/screen.c
 herdr-app do space.new --name acme-web --folder ~/code/acme-web --tab acme-web \
   --argv '["/abs/stage-claude","/abs/screen.txt","/abs/input.txt"]'
@@ -62,11 +63,12 @@ herdr-app do layout.resize --id <new pane> --px 500
 python3 test/hero/render.py <cols> <rows> /abs/screen.txt /abs/input.txt &    # size from: hc get <t> --json
 ```
 
-Start each shot from a fresh launch with the window size set in `window.json`. Then run its `agent-threads.<command>` commands with `herdr-app do`, and take `herdr-app shot`. Each crop is `sips -c <height> <width> --cropOffset <y> <x>`.
+Start each shot from a fresh launch with the window size set in `window.json`. Put the project under the app's own HOME, so the terminal header shows `~/code/acme-web`, and keep the app off the network (an unreachable `HTTPS_PROXY`) so no update toast covers the pane. Then run its `agent-threads.<command>` commands with `herdr-app do`, and take `herdr-app shot`. Each crop is `sips -c <height> <width> --cropOffset <y> <x>`.
 
 | File | Window | Commands | Crop |
 |---|---|---|---|
 | `preview.png` | 1460x1150 | `open` | `2136 2358`, offset `96 552` |
+| `days.png` | 1460x1150 | `first` | `2136 1012`, offset `96 1898` |
 | `panel.png` | 1460x1150 | `open` | `2136 1012`, offset `96 1898` |
 | `open-turn.png` | 1460x1150 | `open` | `1024 990`, offset `1074 1908` |
 | `search.png` | 1460x700 | `search:tests` | `1236 1012`, offset `96 1898` |
@@ -74,6 +76,7 @@ Start each shot from a fresh launch with the window size set in `window.json`. T
 | `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open` | `2136 1012`, offset `96 1898` |
 | `quote.png` | 1460x1150 | `search:#6`, `open`, `open`, `debugQuote` | `810 2356`, offset `1418 552` |
 | `light.png` | 1460x1150 | `open`, with `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `2136 2358`, offset `96 552` |
+| `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed | `first`, `open` | `1276 1012`, offset `96 1898` each, then `magick montage codex.png opencode.png pi.png cursor.png -tile 4x1 -geometry +20+20 -background '#0f1012' agents.png` |
 
 `quote.png` needs `"debug": true` in the props, because `debugQuote` runs only with it, and debug adds a timing text to the pane header, which that crop leaves out. `agents:on` saves to settings, so turn it off before the next shot.
 

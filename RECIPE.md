@@ -1,6 +1,6 @@
 # Agent Threads
 
-Agent Threads is a panel that opens next to an agent session. It lists your prompts and the agent's replies, so you can find an earlier answer without scrolling through the whole conversation. You can also search, copy or quote a reply, and see the images you pasted. It reads Claude Code, Codex, OpenCode and Pi sessions.
+Agent Threads opens a panel beside your agent's terminal and lists your prompts and its replies, so you can find an earlier answer without scrolling back through the session. You can search, copy a reply, quote it into your next prompt and see the images you pasted. It works with Claude Code, Codex, OpenCode, Pi and Cursor.
 
 ![Agent Threads](preview.png)
 
