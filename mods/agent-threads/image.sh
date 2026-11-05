@@ -7,7 +7,7 @@
 # the cache to MAX_KB, oldest files first. Only metadata is printed: image data never goes
 # through the panel. Codex: <line uuid> is <turn id>_<ordinal>, and the image data is on the
 # message line just before that prompt's line. OpenCode: <transcript> is <database>#<session>
-# and <line uuid> is the prompt's message id.
+# and <line uuid> is the prompt's message id, in 1.x's part table or 2.x's session_message.
 set -eu
 file=$1
 uuid=$2
@@ -44,8 +44,14 @@ case $harness in
       [ "$back" -le 3 ] || { echo "no line" >&2; exit 4; }
     done ;;
   opencode)
-    blocks='[.[] | select((.mime // "") | startswith("image/")) | {mt: .mime, data: ((.url // "") | split(";base64,")[1] // "")}]'
-    sqlite3 -readonly -batch -noheader "$file" "select data from part where session_id='$sid' and message_id='$uuid' and json_extract(data,'\$.type')='file' order by id;" > "$line" || { echo "no line" >&2; exit 4; } ;;
+    # 1.x keeps an image as a data URL in a file part. 2.x keeps it in the prompt's files, as
+    # bare base64 in .data. 1.19 already has an empty session_message, so both 2.x tables decide.
+    blocks='[.[] | select((.mime // "") | startswith("image/")) | {mt: .mime, data: (if .url then ((.url | split(";base64,"))[1] // "") elif ((.data // "") | startswith("data:")) then ((.data | split(";base64,"))[1] // "") else (.data // "") end)}]'
+    if [ "$(sqlite3 -readonly -batch -noheader "$file" "select count(*) from sqlite_master where type='table' and name in ('session_v2','session_message');")" = 2 ]; then
+      sqlite3 -readonly -batch -noheader "$file" "select f.value from session_message m, json_each(m.data,'\$.files') f where m.session_id='$sid' and m.id='$uuid' order by f.key;" > "$line" || { echo "no line" >&2; exit 4; }
+    else
+      sqlite3 -readonly -batch -noheader "$file" "select data from part where session_id='$sid' and message_id='$uuid' and json_extract(data,'\$.type')='file' order by id;" > "$line" || { echo "no line" >&2; exit 4; }
+    fi ;;
   *)
     blocks='[.[0].message.content[]? | select(type == "object" and .type == "image") | {mt: (.source.media_type // ""), data: (.source.data // "")}]'
     # "uuid":"<id>" names the line itself (parentUuid is spelled with a capital U).

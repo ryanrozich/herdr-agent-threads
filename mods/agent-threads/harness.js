@@ -94,7 +94,8 @@ export function etimeMs(text) {
 
 // OpenCode records no process for a session, so a terminal's session comes from its folder:
 // sessions updated since this process started are the ones it could be writing.
-//   list: the folder's root sessions, newest update first, { id, created, updated }.
+//   list: the folder's root sessions, newest update first, { id, created, updated, busy }, with
+//   busy (2.x only) when its last turn began.
 //   startMs: when the process started, or null. peers: other OpenCode processes in the folder.
 //   argv: opencodeArgv(). cur: the id the pane shows now, or null.
 // Returns { id, guess, via, choices }, with id null when no session belongs to it yet (a fresh
@@ -113,8 +114,10 @@ export function pickOpenCode(list, startMs, peers, argv, cur, termTitle) {
     const stay = live.find((x) => x.id === cur);
     return { id: (stay ?? live[0]).id, guess: true, via: "cwd", choices: live.slice(0, 5) };
   }
-  // Alone in the folder: its newest session, which is the one /new just made.
-  const newest = live.reduce((a, b) => (b.created > a.created ? b : a));
+  // Alone in the folder: its newest session, which is the one /new just made. OpenCode 2.x
+  // keeps every session the terminal opened as a tab, so there the one whose turn began last.
+  const at = (x) => Math.max(x.created ?? 0, x.busy ?? 0);
+  const newest = live.reduce((a, b) => (at(b) > at(a) ? b : a));
   return { id: newest.id, guess: false, via: "folder", choices: [] };
 }
 
@@ -133,7 +136,7 @@ export function openCodeTitleMatch(list, termTitle) {
 // A picker row's name: the session's title, or its first prompt while it has only the default title.
 export function openCodeLabel(x) {
   const title = String(x.title ?? "");
-  const text = /^New session\b/.test(title) ? String(x.first ?? "") : title;
+  const text = !title || /^New session\b/.test(title) ? String(x.first ?? "") : title;
   return text.replace(/\s+/g, " ").trim() || title || null;
 }
 

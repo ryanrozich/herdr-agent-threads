@@ -23,7 +23,7 @@ Agent Threads reads the agent's session on your computer. It sends nothing over 
 
 ## Which agents it reads
 
-Tested on Claude Code 2.1.318, Codex CLI 0.160.0 and OpenCode 1.19.5. None of these formats is a public promise, so a new version can change what the pane finds.
+Tested on Claude Code 2.1.318, Codex CLI 0.160.0, and OpenCode 1.19.5 and 2.2.5. OpenCode 2.x moved its sessions to new tables, and the pane reads whichever the database has. None of these formats is a public promise, so a new version can change what the pane finds.
 
 | | Claude Code | Codex | OpenCode |
 |---|---|---|---|
@@ -42,7 +42,7 @@ Where an agent has no data, the pane leaves the feature out:
 
 Some behaviour differs by agent:
 
-- **OpenCode shares one database between terminals and records no process for a session.** The pane reads `OC | <title>` from the terminal. Until a session has a title, or when two sessions in the folder share one, a second OpenCode in the same folder makes the pane say "guessed" and offer **Choose**. Its guess can be the other terminal's session, so check it when that banner shows.
+- **OpenCode shares one database between terminals and records no process for a session.** The pane reads `OC | <title>` from the terminal. Otherwise it takes the folder's session whose turn began last since that OpenCode started, which is exact while one OpenCode runs in the folder. OpenCode 2.x's background `opencode serve` does not count as a second one. Until a session has a title, or when two sessions in the folder share one, a second OpenCode in the same folder makes the pane say "guessed" and offer **Choose**. Its guess can be the other terminal's session, so check it when that banner shows.
 - **Quotes fold in OpenCode and Codex.** OpenCode shows a paste of three lines or more as `[Pasted ~N lines]`, and Codex shows a long one as `[Pasted Content N chars]`. The whole quote goes in when you submit. For OpenCode's folded paste the quote ends with one zero-width space, because OpenCode trims the blank line that keeps your reply out of the quote.
 - **OpenCode's `/undo` shows late.** The pane keeps an undone turn until OpenCode deletes it, at your next prompt.
 
