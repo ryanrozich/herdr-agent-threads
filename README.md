@@ -1,54 +1,65 @@
 # Agent Threads
 
-Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls and status lines, and finding it means a lot of scrolling. Agent Threads opens a pane beside your Claude Code, Codex or OpenCode terminal that shows only the conversation: each prompt you sent and the answer that came back.
+Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls, and finding it means scrolling. Agent Threads opens a pane beside your agent's terminal that shows only the conversation: each prompt you sent and the reply that came back, grouped by day. It works with Claude Code, Codex, OpenCode, Pi and Cursor.
 
 ![Agent Threads beside a Claude Code terminal](preview.png)
 
 ## What you can do
 
 - **Find an answer fast.** Scroll the list or press `/` to search. Each row shows your prompt, the start of the reply and when it happened, so you can see when you last asked for an update.
-- **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model.
+- **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
-- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode has none, see [Which agents it reads](#which-agents-it-reads).
+- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi and Cursor have none, see [Which agents it reads](#which-agents-it-reads).
 - **See the images you pasted.** Rows show small thumbnails. An open turn shows them larger, and a click shows one full size.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Choose how much each row shows.** Settings decide how many lines of your prompt and of the reply a row shows before you open it.
 
 ## How it works
 
-Press `Cmd-Shift-T` in a Claude Code, Codex or OpenCode terminal. Agent Threads opens to its right and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
+Press `Cmd-Shift-T` in a Claude Code, Codex, OpenCode, Pi or Cursor terminal. Agent Threads opens to its right and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
 
 Agent Threads reads the agent's session on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
 
 ## Which agents it reads
 
-Tested on Claude Code 2.1.318, Codex CLI 0.160.0 and OpenCode 1.19.5. None of these formats is a public promise, so a new version can change what the pane finds.
+Tested on Claude Code 2.1.318, Codex CLI 0.160.0, OpenCode 1.19.5 and 2.2.5, Pi 1.5.0 (the terminal agent, not Pi Durable), and the Cursor agent CLI 2026.11.05. OpenCode 2.x moved its sessions to new tables, and the pane reads whichever the database has. None of these formats is a public promise, so a new version can change what the pane finds.
 
-| | Claude Code | Codex | OpenCode |
-|---|---|---|---|
-| Prompts, replies, search, copy, quote, links | Yes | Yes | Yes |
-| Pasted images | Yes | Yes | Yes |
-| Tokens, time, model, tool count, cache hit | Yes | Yes | Yes |
-| Agent messages | Yes | Yes | No |
-| Reads its session from | A JSONL file | A JSONL file | A SQLite database, read-only |
-| Finds the terminal's session by | The process's session record | The file the process has open | The terminal's title, then its folder |
+| | Claude Code | Codex | OpenCode | Pi | Cursor |
+|---|---|---|---|---|---|
+| Prompts, replies, search, copy, quote, links | Yes | Yes | Yes | Yes | Yes |
+| Pasted images | Yes | Yes | Yes | Yes, while the temporary file Pi saved is on disk | No, the word `[Image]` shows in their place |
+| Tokens, time, model, tool count, cache hit | Yes | Yes | Yes | Yes | Tool count, and the time of a turn the pane watched. No tokens, model or cache |
+| Agent messages | Yes | Yes | No | No | No |
+| Reads its session from | A JSONL file | A JSONL file | A SQLite database, read-only | A JSONL file | A JSONL file |
+| Finds the terminal's session by | The process's session record | The file the process has open | The terminal's title, then its folder | Its command line, then its folder | The chat the process has open, then its command line, then its folder |
 
 Where an agent has no data, the pane leaves the feature out:
 
 - **OpenCode has no agent messages.** Its subagents run as separate sessions, so nothing arrives in the session you are reading, and the agents button and `a` hint stay hidden.
-- **A Codex or OpenCode turn with no usage on record**, such as one you stopped right away, shows no token count. Claude Code's cards still show theirs.
-- **Codex and OpenCode report no status to Herdr here**, so the pane looks for a new session every 3 seconds, and a quote pressed while they work has no "will queue it" message.
+- **Pi has no agent messages** either: it has no subagents of its own. Nor does Cursor's transcript.
+- **Pi pastes an image as a file path.** `Ctrl-V` in Pi saves the image to a temporary file and puts its path in your prompt. The pane shows `[Image #1]` in place of that path and the image as a thumbnail, after checking the file starts like a PNG, JPEG, GIF or WebP. It reads only files named `pi-clipboard-<id>` in the temp folder, the name Pi gives them. The pane keeps its own copy once shown. If macOS or a reboot clears the file before then, the open turn shows its path with "Image no longer on disk".
+- **Cursor records no tokens, model or turn time.** The pane leaves out tokens, model and cache. A turn shows a time only when the pane watched it run, from when Cursor wrote the prompt (a few seconds after you sent it) to the turn's end. A turn read from the file later shows none. A prompt's clock time is Cursor's own, to the minute.
+- **Cursor keeps no pasted image in its transcript.** It writes the word `[Image]` where the image was, and the pane shows that word.
+- **Cursor joins thinking onto the reply.** Thinking it hides is the word `[REDACTED]` after the reply, and the pane drops it. Thinking it keeps has no mark that tells it apart from the reply, so the pane shows the reply as Cursor stored it. In testing, Composer's thinking was hidden and Grok 4.7 stored none.
+- **A Codex, OpenCode or Pi turn with no usage on record**, such as one you stopped right away, shows no token count. Claude Code's cards still show theirs.
+- **Codex, OpenCode, Pi and Cursor report no status to Herdr here**, so the pane looks for a new session every 3 seconds, and a quote pressed while they work has no "will queue it" message.
 
 Some behaviour differs by agent:
 
-- **OpenCode shares one database between terminals and records no process for a session.** The pane reads `OC | <title>` from the terminal. Until a session has a title, or when two sessions in the folder share one, a second OpenCode in the same folder makes the pane say "guessed" and offer **Choose**. Its guess can be the other terminal's session, so check it when that banner shows.
+- **OpenCode shares one database between terminals and records no process for a session.** The pane reads `OC | <title>` from the terminal. Otherwise it takes the folder's session whose turn began last since that OpenCode started, which is exact while one OpenCode runs in the folder. OpenCode 2.x's background `opencode serve` does not count as a second one. Until a session has a title, or when two sessions in the folder share one, a second OpenCode in the same folder makes the pane say "guessed" and offer **Choose**. Its guess can be the other terminal's session, so check it when that banner shows.
 - **Quotes fold in OpenCode and Codex.** OpenCode shows a paste of three lines or more as `[Pasted ~N lines]`, and Codex shows a long one as `[Pasted Content N chars]`. The whole quote goes in when you submit. For OpenCode's folded paste the quote ends with one zero-width space, because OpenCode trims the blank line that keeps your reply out of the quote.
+- **Pi records no process for a session either.** The pane takes `--session` from Pi's command line, else the session in the folder that Pi wrote last since it started. With two Pi terminals in one folder that is a guess with **Choose**, as for OpenCode.
+- **Pi's `/tree` branches stay in the list.** Pi keeps a branch you left in the same file, and the pane reads the file in order, so both branches' turns show.
+- **Cursor is found by the chat it has open.** Cursor keeps each chat's database open, and the file's path names the chat. The pane reads that path and never the database. A new chat (`/clear`) opens its database with its first prompt, so until then the pane stays on the chat before it. Without an open chat the pane takes `--resume <id>` from Cursor's command line, else the folder's newest chat since Cursor started.
+- **Cursor sometimes writes its whole file again.** After `Esc`, for example, it writes the chat again from its own records, keeping only the last turn's end, and the pane reads the file again from the top. If you press `Esc` before Cursor has written your prompt, Cursor drops that prompt and marks the turn before it as stopped, so the pane shows that turn as stopped.
 - **OpenCode's `/undo` shows late.** The pane keeps an undone turn until OpenCode deletes it, at your next prompt.
 
 ## Screenshots
 
 Select an image to open it full size. The session in these shots is made up.
+
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those.
 
 <table>
 <tr>
@@ -63,6 +74,10 @@ Select an image to open it full size. The session in these shots is made up.
 <td colspan="2" valign="top"><a href="docs/screenshots/quote.png"><img src="docs/screenshots/quote.png" alt="The terminal prompt holding a quoted line, beside the pane"></a><br>After <code>q</code>, the prompt holds the reply as a <code>&gt;</code> quote, with the cursor under it.</td>
 </tr>
 <tr>
+<td width="50%" valign="top"><a href="docs/screenshots/days.png"><img src="docs/screenshots/days.png" alt="The list with a band for each day"></a><br>A session that runs over several days gets a band for each day, with its turn count.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi and Cursor sessions"></a><br>The pane beside Codex, OpenCode, Pi and Cursor. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
+</tr>
+<tr>
 <td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/light.png"><img src="docs/screenshots/light.png" alt="Agent Threads beside a terminal in the light theme"></a><br>The same session in Herdr's light theme.</td>
 </tr>
@@ -70,7 +85,7 @@ Select an image to open it full size. The session in these shots is made up.
 
 ## Install
 
-Needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and at least one of Claude Code, Codex or OpenCode. Codex also needs `lsof`, and OpenCode needs `sqlite3`, `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
+Needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and at least one of Claude Code, Codex, OpenCode, Pi or Cursor. Codex also needs `lsof`, OpenCode needs `sqlite3`, `pgrep` and `lsof`, and Pi and Cursor need `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
 
 ```sh
 git clone https://github.com/ryanrozich/herdr-agent-threads
@@ -94,7 +109,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `Enter`, `Space` or `o` | Open or close a turn |
 | `c` | Copy the reply |
 | `q` | Quote the reply into the terminal |
-| `s` | Select view: highlight part of the reply, `Cmd-C`, then `q` |
+| `s` | Select view: the reply's exact Markdown source, to highlight, `Cmd-C`, then `q` |
 | `/` | Search |
 | `g` | Jump to a turn number |
 | `End` or `G` | Newest turn |

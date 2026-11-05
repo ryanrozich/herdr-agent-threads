@@ -57,6 +57,8 @@ const never = () => new Promise(() => {});
 let lastList = null;
 // settings(): the person's Herdr settings (zoom, fonts).
 let herdrSettings = { font_family: "Mono" };
+// updates().app.version: Herdr's version.
+let herdrVersion = "0.1.13";
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: () => el, image: () => el }));
 mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
@@ -89,6 +91,7 @@ function execReal(cmd, args) {
 }
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
+  updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async () => null, writeTextFile: async () => null, watchFolder: never,
   theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => herdrSettings,
   panes: () => state.panes, terminals: () => state.terminals, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
@@ -260,8 +263,6 @@ test("Select text swaps the formatted reply for a selectable source view, and ba
   expect(v.selecting).toBe(null);
   expect([...v.open].sort()).toEqual(openBefore);
   expect(v.rows().map((r) => r.kind)).not.toContain("seltext");
-  // The formatted reply is never selectable (Herdr draws a Markdown selection over its text).
-  expect(readFileSync(join(modDir, "main.js"), "utf8")).not.toMatch(/TextView\.markdown\([^)]*\)[^;]*\.selectable\(true\)/);
 });
 
 test("a press in the Select view keeps the editor's selection: the panel does not take the keyboard", async () => {
@@ -643,14 +644,118 @@ test("the footer offers s select with a turn open and q quote with a local termi
   expect(v.selectHint()).toBe("Select text, ⌘C, then y quotes it · s or Esc returns");
 });
 
-test("the first click on a formatted reply says how to select, once", async () => {
+test("before Herdr 0.1.13 the first click on a formatted reply says how to select, once", async () => {
+  herdrVersion = "0.1.12";
   const { v, cx } = await quotePane();
+  v.replySelectable();
+  herdrVersion = "0.1.13";
   const md = v.rows().find((r) => r.kind === "md");
   v.click(md.key, cx);
   expect(v.toast.text).toBe("Press s to select text in this reply");
   v.toast = null;
   v.click(md.key, cx);
   expect(v.toast).toBe(null);
+});
+
+test("the formatted reply is selectable from Herdr 0.1.13, and a click there says nothing", async () => {
+  const selectable = (v) => {
+    views.length = 0;
+    const md = v.rows().find((r) => r.kind === "md");
+    v.item(theme, md, true, 100);
+    return views.flatMap((x) => x.calls).find((c) => c[0] === "selectable")?.[1];
+  };
+  const { v, cx } = await quotePane();
+  expect(selectable(v)).toBe(true);
+  v.click(v.rows().find((r) => r.kind === "md").key, cx);
+  expect(v.toast).toBe(null);
+  herdrVersion = "0.1.12";
+  const old = await quotePane();
+  old.v.replySelectable();
+  herdrVersion = "0.1.13";
+  expect(selectable(old.v)).toBe(false);
+});
+
+test("after ⌘C on the formatted reply q quotes what it copied, as long as the clipboard holds it", async () => {
+  const { v, cx } = await quotePane();
+  const key = v.sel;
+  const reply = v.replyText(v.findTurn(key));
+  // A part of the reply, the way Herdr copies it: no Markdown markers.
+  const part = reply.replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
+  const quoteNow = async () => {
+    log = [];
+    v.quoteAt = 0;
+    v.key(keyEv("q"), cx);
+    cx.flush();
+    await settleCx(cx);
+  };
+  // A press and drag in the list, ⌘C (the panel does not see it), then ⌘ released.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = part;
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(v.toast.text).toBe("Copied 3 words · q quotes them");
+  // Only once for the same text, and not while ⌘ is still down.
+  v.toast = null;
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  v.cmdUp({ modifiers: { platform: true } }, cx);
+  cx.flush();
+  expect(v.toast).toBe(null);
+  await quoteNow();
+  expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: false, pasted: true });
+  // The clipboard now holds the quote, so the next q quotes the whole reply.
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // Text from elsewhere says nothing, and q still quotes the whole reply.
+  v.toast = null;
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = "rm -rf / from some other window";
+  v.cmdUp({ modifiers: {} }, cx);
+  cx.flush();
+  expect(v.toast).toBe(null);
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // Reply text that was already on the clipboard at the press is not a new copy.
+  cx.clip = part;
+  v.notePress(cx);
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // No press yet in this pane: the whole reply.
+  const fresh = await quotePane();
+  fresh.cx.clip = part;
+  fresh.v.quoteAt = 0;
+  fresh.v.key(keyEv("q"), fresh.cx);
+  fresh.cx.flush();
+  await settleCx(fresh.cx);
+  expect(fresh.v.lastQuote).toMatchObject({ source: "reply" });
+});
+
+test("the Quote button's own press does not hide what ⌘C copied, and Copy reply ends it", async () => {
+  const { v, cx } = await quotePane();
+  const key = v.sel;
+  const part = v.replyText(v.findTurn(key)).replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = part;
+  v.notePress(cx); // the press on the Quote button
+  v.mouseX = v.pressX = v.bar(v.findTurn(key)).quote[0] + 4;
+  v.bodyW = v.width;
+  v.quoteAt = 0;
+  v.click(`cp:${key}`, cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  cx.clip = "older text";
+  v.notePress(cx);
+  v.copyReply(key, cx);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "reply" });
 });
 
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
@@ -1564,4 +1669,21 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   v.render(cx);
   const drawn = rec; rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
+});
+
+test("a session over several days draws a day band per day, with its shown turns counted", async () => {
+  // Four turns 12 hours apart from 1 Nov 09:12 UTC span three local days in any time zone.
+  const { v, cx } = await pane(fixture("--only", "4", "--gap", "43200"));
+  draw(v, cx);
+  const days = v.rows().filter((r) => r.kind === "day");
+  expect(days.length).toBeGreaterThan(1);
+  expect(days.reduce((n, r) => n + r.count, 0)).toBe(v.turnKeys(v.rows()).length);
+  for (const r of days) {
+    expect(r.name).toMatch(/^(Today|Yesterday|[A-Z][a-z]+day \d{1,2} [A-Z][a-z]{2})$/);
+    expect(v.height(r)).toBe(46);
+  }
+  expect(state.shared["threads.debug"].t4.rows.filter((x) => x === "day").length).toBe(days.length);
+  // A search shows no day bands.
+  v.query = "turn"; draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "day")).toBe(false);
 });

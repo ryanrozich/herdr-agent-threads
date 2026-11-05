@@ -207,6 +207,18 @@ test("image.sh decodes a prompt's file parts", () => {
   expect(readFileSync(join(cache, SID, got.file)).toString("base64")).toBe(PNG);
 });
 
+test("1.19's empty session_message does not make it read as 2.x", () => {
+  const o = session();
+  o.db.run("create table session_message (id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text)");
+  const s = read(o);
+  expect(s.turns.map((t) => reply(t))).toEqual(["It rounds tax per line."]);
+  user(o, "msg_0001user", "What colour?", 20000);
+  part(o, "msg_0001user", { type: "file", mime: "image/png", url: `data:image/png;base64,${PNG}` });
+  const cache = mkdtempSync(join(tmpdir(), "threads-img-"));
+  const got = JSON.parse(execFileSync("sh", [imager, `${o.path}#${SID}`, "msg_0001user", cache, SID, "opencode"], { encoding: "utf8" }).trim());
+  expect(readFileSync(join(cache, SID, got.file)).toString("base64")).toBe(PNG);
+});
+
 test("sessions lists a folder's root sessions with their first prompt", () => {
   const o = session();
   o.db.run("insert into session values ('ses_child', ?, '/home/dev/shop', 'A subagent', 1, 1, null)", [SID]);

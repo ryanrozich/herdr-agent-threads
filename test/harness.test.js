@@ -80,6 +80,14 @@ test("alone in the folder, OpenCode's session is the newest one since it started
   expect(pickOpenCode(later, 5000, 0, {}, null).id).toBe("ses_b");
 });
 
+test("OpenCode 2.x keeps its sessions as tabs, so the one whose turn began last is the terminal's", () => {
+  const list = [{ ...s("ses_a", 9500, 6000), busy: 9400 }, { ...s("ses_b", 9000, 7000), busy: 7100 }];
+  expect(pickOpenCode(list, 5000, 0, {}, null)).toEqual({ id: "ses_a", guess: false, via: "folder", choices: [] });
+  // A tab /new made, with no prompt yet, is newer than any turn.
+  const fresh = [...list, { ...s("ses_c", 9600, 9600), busy: null }];
+  expect(pickOpenCode(fresh, 5000, 0, {}, null).id).toBe("ses_c");
+});
+
 test("with another OpenCode in the folder it is a guess, and it stays on the one shown", () => {
   const list = [s("ses_b", 9000), s("ses_a", 8000)];
   const first = pickOpenCode(list, 5000, 1, {}, null);
@@ -121,6 +129,8 @@ test("a picker row is named by title, or by first prompt while the title is the 
   expect(openCodeLabel(s("a", 1, 1, "New session - 2026-01-02", "Reply\n  with fruit"))).toBe("Reply with fruit");
   expect(openCodeLabel(s("a", 1, 1, "New session - 2026-01-02", null))).toBe("New session - 2026-01-02");
   expect(openCodeLabel({ id: "a" })).toBe(null);
+  // OpenCode 2.x leaves the title empty until it names the session.
+  expect(openCodeLabel(s("a", 1, 1, null, "Reply with fruit"))).toBe("Reply with fruit");
 });
 
 test("only OpenCode's folded paste gets the zero-width line", () => {

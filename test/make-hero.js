@@ -2,11 +2,13 @@
 // storefront project, acme-web. Same line shapes as test/make-fixture.js. Nothing here
 // comes from a real session, and both pasted images are drawn below, with no text in them.
 // docs/develop.md has the steps that turn this into the screenshots.
-// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO>
+// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days]
+// With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
-const [out, cwd, start] = process.argv.slice(2);
+const [out, cwd, start, spread] = process.argv.slice(2);
+const DAY = spread === "days" ? 86400 - 3600 : 0;
 const sessionId = "00000000-0000-4000-8000-000000000042";
 const version = "2.1.316";
 const model = "claude-opus-5-5";
@@ -165,7 +167,7 @@ assistant([{ type: "text", text: "Below 640 px the table now sits in a scroll co
 end(52000);
 
 // Turn 3
-p = prompt("Add a loading skeleton to the product grid", 260);
+p = prompt("Add a loading skeleton to the product grid", 260 + DAY);
 tool("Grep", { pattern: "ProductGrid" }, "…", p);
 tool("Read", { file_path: `${cwd}/src/components/ProductGrid.tsx` }, "…", p);
 tool("Write", { file_path: `${cwd}/src/components/ProductGridSkeleton.tsx` }, "…", p);
@@ -193,7 +195,7 @@ assistant([{ type: "text", text: "The chips had a fixed `min-width`, so at table
 end(58000);
 
 // Turn 6
-p = prompt("Run the checkout e2e tests", 520);
+p = prompt("Run the checkout e2e tests", 520 + DAY);
 tool("Bash", { command: "bun run e2e --grep checkout" }, "…", p, 40);
 assistant([{ type: "text", text: "17 of 18 checkout tests pass in Chromium and WebKit. The one failure is `order total matches cart`: a three-item cart with tax comes out one cent higher than the cart page shows." }], { out: 190, read: 61000, write: 1900 });
 end(97000);

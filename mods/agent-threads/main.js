@@ -1,4 +1,4 @@
-// agent-threads: a pane beside a Claude Code, Codex or OpenCode terminal that lists each prompt
+// agent-threads: a pane beside a Claude Code, Codex, OpenCode, Pi or Cursor terminal that lists each prompt
 // and the agent's final reply, with tool calls hidden. Read-only toward the agent, with one
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
@@ -23,19 +23,19 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
-  focused, props, run, shared, setShared, closeOverlay, notify, nextCommand,
+  focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, matches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv } from "./harness.js";
 import {
-  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, jumpTarget,
+  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
@@ -97,7 +97,7 @@ const LATEST_LINES = 6;
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
 const idOf = (p) => idOfFile(p);
-const POLL_MS = 3000; // how often a pane on Codex or OpenCode looks for a new session
+const POLL_MS = 3000; // how often a pane on Codex, OpenCode, Pi or Cursor looks for a new session
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 const tilde = (p) => (p?.startsWith(home()) ? `~${p.slice(home().length)}` : p ?? "");
 const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -124,7 +124,7 @@ function launch() {
     return null;
   }
   if (!pane?.terminal) {
-    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex or OpenCode terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
+    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex, OpenCode, Pi or Cursor terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
     return null;
   }
   const known = shared(MAP_KEY)?.[pane.terminal];
@@ -208,6 +208,8 @@ async function resolve(address, claudeHome, current = null) {
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
   const harness = harnessOf(fg, pane);
   if (harness === "codex") return resolveCodex({ argv, pid, cwd, cmd });
+  if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
+  if (harness === "cursor") return resolveCursor({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
   const who = { claude, live, pid, cwd };
   tried.program = { what: "Program in pane", detail: `${claude ? `claude${version ? ` ${version}` : ""}` : cmd || "?"}${pid ? ` · pid ${pid}` : ""}`, ok: claude };
@@ -301,11 +303,90 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
   return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
 }
 
+// Pi keeps no session file open and records no process, so its sessions folder for the working
+// directory, the process's start time and the command line decide, as for OpenCode
+// (pickOpenCode). Pi writes only the session it is on, so a file's last write is when its last
+// turn ran.
+async function resolvePi({ argv, pid, cwd, cwds, cmd }, current) {
+  const who = { harness: "pi", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const root = (await locate("pi-dir")) ?? `${home()}/.pi/agent/sessions`;
+  const named = piArgv(argv);
+  // --session <path>: that file. One not written yet reads as missing until it is.
+  if (named.path)
+    return { kind: "found", id: named.id, file: named.path, via: "argv", ...who, guess: false, tried: [program] };
+  let dir = null;
+  let files = [];
+  for (const c of cwds) {
+    if (files.length) break;
+    dir = piFolder(root, c);
+    files = (await listFolder(dir)).filter((f) => harnessOfFile(f.path) === "pi");
+  }
+  const list = files.map((f) => ({ id: idOfFile(f.path), path: f.path, created: piStartMs(f.path) ?? f.mtime, updated: f.mtime, busy: f.mtime }));
+  const byId = named.id ? list.find((x) => x.id === named.id || x.id.startsWith(named.id)) : null;
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const peers = pid && cwd ? Number(await locate("pi-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickOpenCode(list, age == null ? null : Date.now() - age, peers, { id: byId?.id ?? null, cont: named.cont }, current, null);
+  const step = {
+    what: "Sessions in this folder since the process started",
+    detail: !pick.id ? "none yet" : `${pick.id.slice(0, 8)}${peers ? ` · ${plural(peers + 1, "Pi terminal")} here` : ""}`,
+    ok: Boolean(pick.id),
+  };
+  const choices = await Promise.all(pick.choices.map(async (x) => ({ mtime: x.updated, size: null, path: x.path, label: (await locate("pi-label", x.path)) || null })));
+  const found = pick.id && list.find((x) => x.id === pick.id);
+  // A fresh Pi writes its file with the first reply; the folder may not exist before then.
+  if (!found) return { kind: "pending", id: null, via: null, ...who, tried: [program, step], watch: files.length ? dir : root, choices };
+  return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
+}
+
+// A Cursor process keeps its chat's store open, and the store's path names the chat id and the
+// data folder; its transcript is written with the first reply. Without that, --resume <id>,
+// else the folder's newest transcript since the process started, as for Pi.
+async function resolveCursor({ argv, pid, cwd, cwds, cmd }, current) {
+  const who = { harness: "cursor", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const store = pid ? cursorStore(await locate("cursor-open", String(pid))) : null;
+  const openStep = { what: "Chat the process has open", detail: store ? store.id.slice(0, 8) : "none", ok: Boolean(store) };
+  const data = store?.data ?? (await locate("cursor-dir")) ?? `${home()}/.cursor`;
+  const named = cursorArgv(argv);
+  const id = store?.id ?? named.id;
+  if (id) {
+    const file = await locate("cursor-find", data, id);
+    const via = store ? "open file" : "argv";
+    if (file) return { kind: "found", id, file, via, ...who, guess: false, tried: [program, openStep] };
+    if (store) return { kind: "pending", id, via, ...who, tried: [program, openStep], watch: `${data}/projects` };
+  }
+  let dir = null;
+  let files = [];
+  for (const c of cwds) {
+    if (files.length) break;
+    dir = cursorFolder(data, c);
+    const out = await locate("cursor-list", dir);
+    files = (out ?? "").split("\n").filter(Boolean).map((l) => {
+      const [mtime, size, ...rest] = l.split(" ");
+      return { mtime: Number(mtime) * 1000, size: Number(size), path: rest.join(" ") };
+    });
+  }
+  const list = files.map((f) => ({ id: idOfFile(f.path), path: f.path, created: f.mtime, updated: f.mtime, busy: f.mtime }));
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const peers = pid && cwd ? Number(await locate("cursor-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickOpenCode(list, age == null ? null : Date.now() - age, peers, { id: null, cont: named.cont }, current, null);
+  const step = {
+    what: "Chats in this folder since the process started",
+    detail: !pick.id ? "none yet" : `${pick.id.slice(0, 8)}${peers ? ` · ${plural(peers + 1, "Cursor terminal")} here` : ""}`,
+    ok: Boolean(pick.id),
+  };
+  const choices = await Promise.all(pick.choices.map(async (x) => ({ mtime: x.updated, size: null, path: x.path, label: (await locate("cursor-label", x.path)) || null })));
+  const found = pick.id && list.find((x) => x.id === pick.id);
+  if (!found) return { kind: "pending", id: null, via: null, ...who, tried: [program, openStep, step], watch: files.length ? dir : `${data}/projects`, choices };
+  return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, openStep, step] };
+}
+
 // What a session's file takes to read one chunk.
 function readArgs(file, offset, chunk) {
   const h = harnessOfFile(file);
   if (h === "opencode") return [SCRIPT("opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
-  if (h === "codex") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), "codex"];
+  if (h === "codex" || h === "pi" || h === "cursor") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), h];
   return [SCRIPT("extract.sh"), file, String(offset), String(chunk)];
 }
 
@@ -462,7 +543,7 @@ export default class Threads extends View {
         const b = (on, label, icon) => (on ? label : `[${icon} icon]`);
         return `copy${n} ${L.labels.copy} + ${b(L.labels.select, this.selecting === `${r.si}:${r.turn.n}` ? "Formatted" : "Select", "select")}${L.quote ? ` + ${b(L.labels.quote, "Quote", "quote")}` : ""}${L.terminal ? ` + ${b(L.labels.terminal, "Terminal", "terminal")}` : ""}`;
       }
-      case "day": return `day ${r.label}`;
+      case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
       case "hidden": return `unmatched ${r.n}`;
       default: return null;
     }
@@ -478,7 +559,9 @@ export default class Threads extends View {
       const cmd = commandColor(c);
       const cmdSel = commandColor(c, true);
       const caps = cardLabelColor(c, c.raised);
-      return `${x.name ?? x.id ?? "?"}: ansi5 ${contrast(c.ansi5, c.background)} muted ${contrast(c.muted, c.background)} label ${label === c.ansi5 ? "ansi5" : `mix ${contrast(label, c.background)}`} card label ${caps === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.raised)} on raised) cmd ${cmd === c.muted ? "muted" : "foreground"}/${cmdSel === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.background)}/${contrast(c.muted, c.selected)} on background/selected)`;
+      const band = bandFill(c);
+      const bandWord = band === c.raised ? "raised" : band === c.selected ? "selected" : band;
+      return `${x.name ?? x.id ?? "?"}: ansi5 ${contrast(c.ansi5, c.background)} muted ${contrast(c.muted, c.background)} label ${label === c.ansi5 ? "ansi5" : `mix ${contrast(label, c.background)}`} card label ${caps === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.raised)} on raised) cmd ${cmd === c.muted ? "muted" : "foreground"}/${cmdSel === c.muted ? "muted" : "foreground"} (${contrast(c.muted, c.background)}/${contrast(c.muted, c.selected)} on background/selected) day band ${bandWord} (${contrast(band, c.background)} on background; raised ${contrast(c.raised, c.background)}, selected ${contrast(over(c.selected, c.background), c.background)})`;
     });
     return this.contrastMemo;
   }
@@ -662,7 +745,7 @@ export default class Threads extends View {
       // The record names a session whose transcript is not written yet: keep what is shown
       // and watch for that file.
       this.watchFor = r.id;
-      // A Codex or OpenCode process that has written nothing yet says so only by not having
+      // A Codex, OpenCode, Pi or Cursor process that has written nothing yet says so only by not having
       // a session: the 1 s timer looks again (poll).
       if (!cur) {
         this.res = r;
@@ -693,6 +776,8 @@ export default class Threads extends View {
     }
     const s = newSession(r.id, r.file);
     if (cur) s.reason = "new";
+    // Cursor records no turn times: the pane keeps the ones it watches (turns.js, clockStart).
+    if (harnessOfFile(r.file) === "cursor") s.clock = {};
     this.sessions.push(s);
     this.res = { ...r, ...this.endState(ended) };
     this.follow = true;
@@ -774,6 +859,11 @@ export default class Threads extends View {
             // From here until the offset moves, s holds part of this chunk.
             s.partial = true;
             if (c.rewind) rewindTail(s);
+            // Once read in full, a prompt or end of turn that turns up was seen as it happened.
+            if (s.clock && s.loaded) {
+              const at = Date.now();
+              for (const e of c.events) if (e.k === "p" || e.k === "d" || e.k === "i") e.at = at;
+            }
             if (!(await sliced(c.events, (e) => apply(s, e), cx))) return;
             s.offset += c.used;
             s.partial = false;
@@ -817,7 +907,7 @@ export default class Threads extends View {
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
   restart(s, fresh = false) {
-    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false });
+    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
 
@@ -937,10 +1027,10 @@ export default class Threads extends View {
     else if (this.lookPolled()) this.resolve(cx);
   }
 
-  // Codex and OpenCode report no status here and name a new session (/new) nowhere the pane is
+  // Codex, OpenCode, Pi and Cursor report no status here and name a new session (/new) nowhere the pane is
   // told about, so a pane on one of them looks again every few seconds while it runs.
   lookPolled() {
-    if (this.pinned || !this.res?.live || !["codex", "opencode"].includes(this.res.harness)) return false;
+    if (this.pinned || !this.res?.live || !["codex", "opencode", "pi", "cursor"].includes(this.res.harness)) return false;
     const at = Date.now();
     if (at - (this.lastPoll ?? 0) < POLL_MS) return false;
     this.lastPoll = at;
@@ -1022,13 +1112,13 @@ export default class Threads extends View {
       if (si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
       if (s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
-      // Day dividers when the session spans more than one day; ranges count shown turns.
+      // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
       s.turns.forEach((t, ti) => {
         const d = t.day === undefined ? (t.day = dayKey(t.ts)) : t.day;
         if (!d || !shown(t, ti)) return;
-        const r = days.get(d) ?? { first: t.n, last: t.n, ts: t.ts };
-        r.last = t.n;
+        const r = days.get(d) ?? { ts: t.ts, count: 0 };
+        r.count++;
         days.set(d, r);
       });
       let day = null;
@@ -1044,7 +1134,7 @@ export default class Threads extends View {
         if (days.size > 1 && !q && d && d !== day) {
           day = d;
           const r = days.get(d);
-          out.push({ kind: "day", key: `day:${si}:${d}`, label: `${dayLabel(r.ts).toUpperCase()} · TURNS ${r.first}–${r.last}` });
+          out.push({ kind: "day", key: `day:${si}:${d}`, ...dayParts(r.ts), count: r.count });
         }
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
         const live = this.isLive(s, si, ti, status);
@@ -1270,9 +1360,17 @@ export default class Threads extends View {
     cx.notify();
   }
 
-  // Select text: the reply as its Markdown source in a read-only editor, where a selection
-  // is drawn behind the text. (Herdr's Markdown view draws its selection over the text,
-  // which hides it, so the formatted reply is not selectable.) Opens the turn if needed.
+  // Whether the formatted reply can be selected: before Herdr 0.1.13 its Markdown view drew
+  // a selection over the text, which hid it.
+  replySelectable() {
+    if (this.selectableMemo == null) {
+      try { this.selectableMemo = atLeast(updates().app.version, "0.1.13"); } catch { this.selectableMemo = false; }
+    }
+    return this.selectableMemo;
+  }
+
+  // Select view: the reply as its exact Markdown source in a read-only editor. Opens the turn
+  // if needed. It also works before Herdr 0.1.13, where the formatted reply cannot be selected.
   toggleSelect(key, cx) {
     if (this.selecting === key) { this.endSelect(); cx.notify(); return; }
     this.endSelect();
@@ -1345,9 +1443,12 @@ export default class Threads extends View {
         try {
           const r = await exec("sh", [SCRIPT("image.sh"), job.file, job.u, `${appHome()}/${IMG_DIR}`, job.sid, harnessOfFile(job.file)]);
           if (r.code === 0) {
-            files = r.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
-              .filter((x) => x && Number.isInteger(x.i) && /^[0-9A-Za-z_-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
-              .map((x) => ({ i: x.i, path: `${IMG_DIR}/${job.sid}/${x.file}`, w: Number(x.w) || 0, h: Number(x.h) || 0 }));
+            const lines = r.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+              .filter((x) => x && Number.isInteger(x.i));
+            // A Pi paste whose temp file is gone: the card says so instead of showing an image.
+            files = [...lines.filter((x) => /^[0-9A-Za-z_-]+-\d+\.(png|jpg|gif|webp)$/.test(String(x.file)))
+              .map((x) => ({ i: x.i, path: `${IMG_DIR}/${job.sid}/${x.file}`, w: Number(x.w) || 0, h: Number(x.h) || 0 })),
+            ...lines.filter((x) => x.gone === true).map((x) => ({ i: x.i, gone: true }))];
           }
         } catch { files = null; }
         this.imgs.set(job.u, files?.length ? { st: "ok", files } : { st: "err" });
@@ -1358,8 +1459,10 @@ export default class Threads extends View {
     });
   }
 
-  // The decoded file for a turn's image i ({path, w, h}), or null; and the state.
-  imgFile(turn, i) { return this.imgs?.get(turn.imgLine)?.files?.find((f) => f.i === i) ?? null; }
+  // The decoded file for a turn's image i ({path, w, h}), or null; whether its file is gone;
+  // and the state.
+  imgFile(turn, i) { return this.imgs?.get(turn.imgLine)?.files?.find((f) => f.i === i && !f.gone) ?? null; }
+  imgGone(turn, i) { return Boolean(this.imgs?.get(turn.imgLine)?.files?.some((f) => f.i === i && f.gone)); }
   imgState(turn) { return this.imgs?.get(turn.imgLine)?.st ?? "wait"; }
 
   // An open card's image box, in design px: the image at the card's text width or its own
@@ -1367,7 +1470,7 @@ export default class Threads extends View {
   imgBox(r) {
     const w = this.inner();
     const f = this.imgFile(r.turn, r.i);
-    if (!f) return { w, h: this.imgState(r.turn) === "err" ? 44 : 120 };
+    if (!f) return { w, h: this.imgState(r.turn) === "wait" ? 120 : 44 };
     if (!(f.w > 0 && f.h > 0)) return { w, h: r.full ? 600 : 200 };
     const natural = Math.min(f.h, (f.h * w) / f.w);
     const h = Math.max(24, Math.round(Math.min(natural, r.full ? IMG_FULL_H : IMG_MAX_H)));
@@ -1454,6 +1557,7 @@ export default class Threads extends View {
       this.say("Couldn't copy", "circle-x", cx);
       return false;
     }
+    this.clipAtPress = null;
     const at = this.say(label, "check", cx);
     this.copied = { id, at };
     return true;
@@ -1483,9 +1587,9 @@ export default class Threads extends View {
 
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
-  // What is quoted for the turn: in Select view what ⌘C copied, only when it is part of this
-  // reply (so text from anywhere else is never pasted); otherwise the whole reply as
-  // Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
+  // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
+  // copied, only when it is part of this reply (so text from anywhere else is never pasted);
+  // otherwise the whole reply as Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
   // the highlight, so it never falls back to the whole reply: when the clipboard holds
   // nothing from this reply, the quote says how instead.
   quoteSource(key, cx) {
@@ -1497,6 +1601,8 @@ export default class Threads extends View {
       if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection" };
       return { refuse: `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
+    const part = this.copiedPart(cx);
+    if (part?.key === key) return { text: part.text, source: "selection" };
     return { text: reply, source: "reply" };
   }
 
@@ -1517,10 +1623,49 @@ export default class Threads extends View {
     });
   }
 
+  // ---- what ⌘C copied from the formatted reply ----
+  // A mod cannot read a highlight, and it never sees ⌘C once Herdr's copy action has handled
+  // it. So the clipboard is noted at each press in the list: text that arrived after the press
+  // and comes from an open reply is what ⌘C copied, and q quotes it.
+  notePress(cx) {
+    this.clipBefore = this.clipAtPress;
+    this.clipAtPress = readClip(cx);
+  }
+  // { key, text } when the clipboard holds text copied since the last press, or null.
+  copiedPart(cx) {
+    if (this.clipAtPress == null || !this.replySelectable()) return null;
+    const clip = readClip(cx);
+    if (!clip.trim() || clip === this.clipAtPress) return null;
+    const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
+    const key = keys.find((k) => {
+      const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
+      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? ""));
+    });
+    return key ? { key, text: clip } : null;
+  }
+  // ⌘ released: the one moment after ⌘C that reaches the panel. Says once that q quotes it.
+  cmdUp(e, cx) {
+    if (e?.modifiers?.platform) return;
+    if (this.selecting) {
+      const clip = readClip(cx);
+      if (clip !== this.toldPart) { this.toldPart = clip; this.sawCopy(this.selecting, cx); }
+      return;
+    }
+    cx.timer.after(60, (cx) => {
+      const part = this.copiedPart(cx);
+      if (!part || part.text === this.toldPart) return;
+      this.toldPart = part.text;
+      this.sel = part.key;
+      const words = part.text.trim().split(/\s+/).length;
+      this.say(`Copied ${plural(words, "word")} · ${this.quoteKey} quotes ${words === 1 ? "it" : "them"}`, "copy", cx, 2500);
+      cx.notify();
+    });
+  }
+
   // A quote press (the quote key, the Quote button, or debugQuote in tests). Returns false
   // when it did nothing, so the key can reach Herdr. Key repeat is ignored by the caller,
   // and a second press within 1 s does nothing.
-  quote(cx, via, key = this.selecting ?? this.sel) {
+  quote(cx, via, key = this.selecting ?? this.copiedPart(cx)?.key ?? this.sel) {
     if (this.settingsOpen || this.choosing) return false;
     const at = Date.now();
     if (this.quoteAt && at - this.quoteAt < 1000) return true;
@@ -1562,6 +1707,7 @@ export default class Threads extends View {
       if (!gate.ok) {
         if (gate.why === "panel") { record({ ...base, pasted: false }); return; }
         cx.write_to_clipboard(out.text);
+        this.clipAtPress = null;
         const agent = this.agent();
         const why = {
           blocked: `${agent.short} is waiting on a prompt in ${t4}. Quote copied.`, shell: `${t4} is at a shell. Quote copied.`,
@@ -1602,6 +1748,7 @@ export default class Threads extends View {
   // could race the paste and send that instead.
   quoteToTerminal(text, pane, cx, done) {
     cx.write_to_clipboard(text);
+    this.clipAtPress = null;
     run("pane.focus", { pane });
     let tries = 0;
     const step = (cx) => {
@@ -1701,6 +1848,7 @@ export default class Threads extends View {
     }
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    if (kind === "cp") this.clipAtPress = this.clipBefore;
     if (kind === "cp" && this.selecting === id) {
       const hit = this.barHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width, this.findTurn(id));
       if (hit === "quote") { this.pressX = null; this.lastBarHit = { hit }; this.quote(cx, "button", id); return cx.notify(); }
@@ -1742,8 +1890,9 @@ export default class Threads extends View {
       if (hit === "quote") { this.sel = id; this.quote(cx, "button", id); return cx.notify(); }
       return;
     }
-    // The formatted reply cannot be selected: say once per pane how to select its text.
-    if (kind === "md" && !this.selectTold) { this.selectTold = true; this.say("Press s to select text in this reply", "text-cursor", cx, 3000); }
+    // Before Herdr 0.1.13 the formatted reply cannot be selected: say once per pane how to
+    // select its text.
+    if (kind === "md" && !this.replySelectable() && !this.selectTold) { this.selectTold = true; this.say("Press s to select text in this reply", "text-cursor", cx, 3000); }
     if (kind === "cc") {
       const [si, n, i] = id.split(":");
       const ct = this.findTurn(`${si}:${n}`);
@@ -1943,6 +2092,7 @@ export default class Threads extends View {
       .id("threads-root")
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
+      .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
       .on_size_change((size, cx) => {
         const w = size.width / this.zoom();
@@ -2291,11 +2441,11 @@ export default class Threads extends View {
     if (this.choosing) return this.chooser(t);
     if (r.kind === "resolving" && !s) return this.loading(t, "Finding the session…", null);
     if (r.kind === "remote") return this.empty(t, "messages", "Remote sessions aren't read yet", `${this.terminal} runs on another machine. This version reads sessions on this computer only.`);
-    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex and OpenCode sessions. Other terminal panes are left alone.", null,
+    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex, OpenCode, Pi and Cursor sessions. Other terminal panes are left alone.", null,
       [h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(div().flex_none().size(12).rounded(3).bg(CLAUDE).flex().items_center().justify_center().child(svg(ICON("claude-mark")).size(8).text_color("#ffffff")))
         .child("Claude Code"),
-      ...[HARNESS.codex, HARNESS.opencode].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
+      ...[HARNESS.codex, HARNESS.opencode, HARNESS.pi, HARNESS.cursor].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(svg(ICON("square-terminal")).size(12).flex_none())
         .child(h.name))]);
     if (r.kind === "gone" && !s) return this.empty(t, "circle-x", "Terminal closed", `${this.terminal} is gone, and nothing was read from it.`, null, this.closeButtons(t));
@@ -2343,11 +2493,12 @@ export default class Threads extends View {
       .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom(); })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
-      .on_mouse_down("left", (e) => {
+      .on_mouse_down("left", (e, cx) => {
         const x = e.local_position?.x;
         const w = e.bounds?.width;
         this.pressX = x == null ? null : x / this.zoom();
         this.bodyW = w == null ? null : w / this.zoom();
+        this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
       .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i].key,
@@ -2407,7 +2558,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).text_size(14).font_semibold().child(`No session found for ${this.terminal}`)))
       .child(div().text_size(12).text_color(t.muted).child(r.claude
         ? "Claude runs in this pane, but no transcript could be matched."
-        : `No Claude Code, Codex or OpenCode process runs in ${this.terminal}, and no transcript was matched for its folder.`))
+        : `No Claude Code, Codex, OpenCode, Pi or Cursor process runs in ${this.terminal}, and no transcript was matched for its folder.`))
       .child(v_flex().rounded(8).bg(t.chrome).border_1().border_color(t.border).overflow_hidden()
         .child(div().px(10).pt(9).pb(7).text_size(10.5).font_semibold().text_color(t.dim).child("WHAT WE TRIED"))
         .children(steps.map((x) => h_flex().px(10).py(8).gap(8).items_start().border_t(1).border_color(t.border)
@@ -2426,7 +2577,7 @@ export default class Threads extends View {
     const list = this.choices ?? [];
     return v_flex().flex_1().min_h(0).p(12).gap(8)
       .child(div().text_size(13.5).font_semibold().child(`Choose the session for ${this.terminal}`))
-      .child(div().text_size(12).text_color(t.muted).child(this.res?.harness === "opencode" ? "Newest first. OpenCode doesn't record which terminal runs a session. Threads stays on the one you pick." : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
+      .child(div().text_size(12).text_color(t.muted).child(["opencode", "pi", "cursor"].includes(this.res?.harness) ? `Newest first. ${this.agent().name} doesn't record which terminal runs a session. Threads stays on the one you pick.` : "Newest first. Transcripts another running claude writes are left out. Threads stays on the one you pick."))
       .children(list.map((c, i) => h_flex().id(`th-choice-${i}`).px(10).py(8).gap(9).items_center().rounded(7).cursor_pointer()
         .bg(t.raised).border_1().border_color(t.border).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); this.pick(c, cx); })
@@ -2583,7 +2734,7 @@ export default class Threads extends View {
   }
   statTexts(turn) { return this.statChips(turn).map((c) => c[2]); }
 
-  // Codex and OpenCode can leave a turn with no usage on record (one stopped early), and "0 tokens"
+  // Codex, OpenCode, Pi and Cursor can leave a turn with no usage on record (one stopped early), and "0 tokens"
   // would claim a count nobody made. Claude Code's cards keep the chip they always had.
   showTokens(st) { return st.tokens > 0 || this.agent().key === "claude"; }
 
@@ -2708,7 +2859,7 @@ export default class Threads extends View {
       case "turn": case "wrow": return r.shape.height;
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
-      case "day": return 30;
+      case "day": return 46;
       case "hidden": return 28;
       case "note": return 34;
       case "working": {
@@ -2866,9 +3017,7 @@ export default class Threads extends View {
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
-      case "day": return h_flex().px(16).pt(10).gap(8).items_center()
-        .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.dim).child(r.label))
-        .child(div().flex_1().h(1).bg(t.border));
+      case "day": return this.dayItem(t, r);
       case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
       case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
@@ -3039,6 +3188,25 @@ export default class Threads extends View {
           : "This turn has no final reply yet. It may have been stopped.")));
   }
 
+  // A day divider: a band across the whole pane, 12 px below the turn above, with a rule
+  // above and below, a calendar icon in the accent colour, the day and its date, and the
+  // day's shown turns on the right. Its fill is ui.js bandFill.
+  dayItem(t, r) {
+    return v_flex().pt(12)
+      .child(h_flex().h(30).px(16).gap(8).items_center().bg(this.bandFill(t)).border_t_1().border_b_1().border_color(t.border)
+        .child(svg(ICON("calendar")).size(13).flex_none().text_color(t.accent))
+        .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(r.name))
+        .when(Boolean(r.date), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(r.date)))
+        .child(div().flex_1())
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(plural(r.count, "turn"))));
+  }
+
+  bandFill(t) {
+    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
+    if (this.bandMemo?.k !== k) this.bandMemo = { k, fill: bandFill(t) };
+    return this.bandMemo.fill;
+  }
+
   dividerItem(t, r) {
     return h_flex().px(16).py(8).gap(8).items_center()
       .child(svg(ICON(r.s.clearAt ? "eraser" : "messages")).size(13).flex_none().text_color(t.dim))
@@ -3126,7 +3294,7 @@ export default class Threads extends View {
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
       case "latest": {
         if (r.md) return v_flex().mt(6)
-          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(false).w_full()))
+          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
           .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
@@ -3142,7 +3310,7 @@ export default class Threads extends View {
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
         return div().mt(6).text_size(13)
-          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(false).w_full());
+          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)
@@ -3193,13 +3361,14 @@ export default class Threads extends View {
         const box = this.imgBox(r);
         const n = turn.images[r.i]?.n;
         const st = this.imgState(turn);
-        const label = [`[Image #${n ?? r.i + 1}]`, f?.w ? `${f.w}×${f.h}` : null,
+        const gone = !f && this.imgGone(turn, r.i);
+        const label = [`[Image #${n ?? r.i + 1}]`, gone ? turn.images[r.i]?.src : null, f?.w ? `${f.w}×${f.h}` : null,
           f ? (r.full ? "click to shrink" : "click to enlarge") : null].filter(Boolean).join(" · ");
         return v_flex().pt(8).gap(4)
           .child(f
             ? div().w(box.w).h(box.h).rounded(6).overflow_hidden().border_1().border_color(t.border).bg(t.background).child(image(f.path).size_full())
             : h_flex().w_full().h(box.h).gap(6).rounded(6).bg(t.background).items_center().justify_center().text_size(12).text_color(t.dim)
-              .child(svg(ICON("image")).size(13)).child(st === "err" ? "This image could not be shown" : "Loading image…"))
+              .child(svg(ICON("image")).size(13)).child(gone ? "Image no longer on disk" : st === "wait" ? "Loading image…" : "This image could not be shown"))
           .child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim).child(label));
       }
       case "legend":
