@@ -10,7 +10,7 @@ const stub = () => null;
 mock.module("herdr", () => ({
   writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; },
   ...Object.fromEntries(["exec", "hc", "home", "appHome", "readTextFile", "watchFolder", "theme", "themes", "settings", "panes", "terminals",
-    "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "notify", "nextCommand"].map((k) => [k, stub])),
+    "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
 const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS } = await import("../mods/agent-threads/settings.js");
 const { linkify, linkPieces, fillUrl, parseRemote, promptMd } = await import("../mods/agent-threads/ui.js");

@@ -2,7 +2,7 @@
 // command colour, the action bar, the quote text pasted into a terminal and its gate.
 import { test, expect } from "bun:test";
 import {
-  promptParts, quoteRows, rowShape, clipYou, promptMd, escapeMd, quoteText, inReply, canQuote, foreground,
+  promptParts, quoteRows, rowShape, clipYou, promptMd, escapeMd, quoteText, inReply, atLeast, canQuote, foreground,
   commandColor, contrast, barLayout, keyAction, TAKEN_LETTERS, rowTextWidth, rowHeight,
 } from "../mods/agent-threads/ui.js";
 
@@ -190,6 +190,45 @@ test("inReply: only text that is part of this reply's source", () => {
   expect(inReply("something else", reply)).toBe(false);
   expect(inReply("", reply)).toBe(false);
   expect(inReply("   ", reply)).toBe(false);
+});
+
+test("inReply: what Herdr copies from the formatted reply counts as part of it", () => {
+  const reply = [
+    "## The **cart** test", "",
+    "It rounds *tax* per `line`, see [the docs](https://example.com/tax \"Tax\") and [more][m].", "",
+    "- item **one**", "1. item two", "",
+    "| Name | Rate |", "|---|---|", "| AT&amp;T | 5% |", "",
+    "```python", "print(1)", "```", "",
+    "After the ~~old~~ code.", "",
+    "[m]: https://example.com/more",
+  ].join("\n");
+  // Markers, link targets and entities are gone from a formatted copy.
+  expect(inReply("The cart test", reply)).toBe(true);
+  expect(inReply("rounds tax per line, see the docs and more.", reply)).toBe(true);
+  expect(inReply("AT&T", reply)).toBe(true);
+  // Each block is its own line, and a list marker may or may not come along.
+  expect(inReply("item one\nitem two", reply)).toBe(true);
+  expect(inReply("• item one\n2. item two", reply)).toBe(true);
+  // A code block between two blocks is not in the copy (its editor is not part of the selection).
+  expect(inReply("The cart test\nAfter the old code.", reply)).toBe(true);
+  expect(inReply("print(1)", reply)).toBe(true);
+  // Lines out of order, a link's address alone, and outside text are not from this reply.
+  expect(inReply("After the old code.\nThe cart test", reply)).toBe(false);
+  expect(inReply("example.com/tax rate", reply)).toBe(false);
+  expect(inReply("rm -rf / from some other window", reply)).toBe(false);
+  expect(inReply("The cart test\nrm -rf /", reply)).toBe(false);
+  // Symbols alone count only when they are there as written.
+  expect(inReply("---", "a --- b")).toBe(true);
+  expect(inReply("***", "plain words")).toBe(false);
+});
+
+test("atLeast compares versions by number", () => {
+  expect(atLeast("0.1.13", "0.1.13")).toBe(true);
+  expect(atLeast("0.1.14", "0.1.13")).toBe(true);
+  expect(atLeast("0.2.0", "0.1.13")).toBe(true);
+  expect(atLeast("0.1.12", "0.1.13")).toBe(false);
+  expect(atLeast("0.1.9", "0.1.13")).toBe(false);
+  expect(atLeast(undefined, "0.1.13")).toBe(false);
 });
 
 test("canQuote: every refusal, and the idle and busy cases", () => {

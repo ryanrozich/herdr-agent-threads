@@ -23,7 +23,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
-  focused, props, run, shared, setShared, closeOverlay, notify, nextCommand,
+  focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, matches,
@@ -35,7 +35,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor,
 } from "./ui.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
@@ -1270,9 +1270,17 @@ export default class Threads extends View {
     cx.notify();
   }
 
-  // Select text: the reply as its Markdown source in a read-only editor, where a selection
-  // is drawn behind the text. (Herdr's Markdown view draws its selection over the text,
-  // which hides it, so the formatted reply is not selectable.) Opens the turn if needed.
+  // Whether the formatted reply can be selected: before Herdr 0.1.13 its Markdown view drew
+  // a selection over the text, which hid it.
+  replySelectable() {
+    if (this.selectableMemo == null) {
+      try { this.selectableMemo = atLeast(updates().app.version, "0.1.13"); } catch { this.selectableMemo = false; }
+    }
+    return this.selectableMemo;
+  }
+
+  // Select view: the reply as its exact Markdown source in a read-only editor. Opens the turn
+  // if needed. It also works before Herdr 0.1.13, where the formatted reply cannot be selected.
   toggleSelect(key, cx) {
     if (this.selecting === key) { this.endSelect(); cx.notify(); return; }
     this.endSelect();
@@ -1454,6 +1462,7 @@ export default class Threads extends View {
       this.say("Couldn't copy", "circle-x", cx);
       return false;
     }
+    this.clipAtPress = null;
     const at = this.say(label, "check", cx);
     this.copied = { id, at };
     return true;
@@ -1483,9 +1492,9 @@ export default class Threads extends View {
 
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
-  // What is quoted for the turn: in Select view what ⌘C copied, only when it is part of this
-  // reply (so text from anywhere else is never pasted); otherwise the whole reply as
-  // Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
+  // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
+  // copied, only when it is part of this reply (so text from anywhere else is never pasted);
+  // otherwise the whole reply as Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
   // the highlight, so it never falls back to the whole reply: when the clipboard holds
   // nothing from this reply, the quote says how instead.
   quoteSource(key, cx) {
@@ -1497,6 +1506,8 @@ export default class Threads extends View {
       if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection" };
       return { refuse: `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
+    const part = this.copiedPart(cx);
+    if (part?.key === key) return { text: part.text, source: "selection" };
     return { text: reply, source: "reply" };
   }
 
@@ -1517,10 +1528,49 @@ export default class Threads extends View {
     });
   }
 
+  // ---- what ⌘C copied from the formatted reply ----
+  // A mod cannot read a highlight, and it never sees ⌘C once Herdr's copy action has handled
+  // it. So the clipboard is noted at each press in the list: text that arrived after the press
+  // and comes from an open reply is what ⌘C copied, and q quotes it.
+  notePress(cx) {
+    this.clipBefore = this.clipAtPress;
+    this.clipAtPress = readClip(cx);
+  }
+  // { key, text } when the clipboard holds text copied since the last press, or null.
+  copiedPart(cx) {
+    if (this.clipAtPress == null || !this.replySelectable()) return null;
+    const clip = readClip(cx);
+    if (!clip.trim() || clip === this.clipAtPress) return null;
+    const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
+    const key = keys.find((k) => {
+      const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
+      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? ""));
+    });
+    return key ? { key, text: clip } : null;
+  }
+  // ⌘ released: the one moment after ⌘C that reaches the panel. Says once that q quotes it.
+  cmdUp(e, cx) {
+    if (e?.modifiers?.platform) return;
+    if (this.selecting) {
+      const clip = readClip(cx);
+      if (clip !== this.toldPart) { this.toldPart = clip; this.sawCopy(this.selecting, cx); }
+      return;
+    }
+    cx.timer.after(60, (cx) => {
+      const part = this.copiedPart(cx);
+      if (!part || part.text === this.toldPart) return;
+      this.toldPart = part.text;
+      this.sel = part.key;
+      const words = part.text.trim().split(/\s+/).length;
+      this.say(`Copied ${plural(words, "word")} · ${this.quoteKey} quotes ${words === 1 ? "it" : "them"}`, "copy", cx, 2500);
+      cx.notify();
+    });
+  }
+
   // A quote press (the quote key, the Quote button, or debugQuote in tests). Returns false
   // when it did nothing, so the key can reach Herdr. Key repeat is ignored by the caller,
   // and a second press within 1 s does nothing.
-  quote(cx, via, key = this.selecting ?? this.sel) {
+  quote(cx, via, key = this.selecting ?? this.copiedPart(cx)?.key ?? this.sel) {
     if (this.settingsOpen || this.choosing) return false;
     const at = Date.now();
     if (this.quoteAt && at - this.quoteAt < 1000) return true;
@@ -1562,6 +1612,7 @@ export default class Threads extends View {
       if (!gate.ok) {
         if (gate.why === "panel") { record({ ...base, pasted: false }); return; }
         cx.write_to_clipboard(out.text);
+        this.clipAtPress = null;
         const agent = this.agent();
         const why = {
           blocked: `${agent.short} is waiting on a prompt in ${t4}. Quote copied.`, shell: `${t4} is at a shell. Quote copied.`,
@@ -1602,6 +1653,7 @@ export default class Threads extends View {
   // could race the paste and send that instead.
   quoteToTerminal(text, pane, cx, done) {
     cx.write_to_clipboard(text);
+    this.clipAtPress = null;
     run("pane.focus", { pane });
     let tries = 0;
     const step = (cx) => {
@@ -1701,6 +1753,7 @@ export default class Threads extends View {
     }
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    if (kind === "cp") this.clipAtPress = this.clipBefore;
     if (kind === "cp" && this.selecting === id) {
       const hit = this.barHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width, this.findTurn(id));
       if (hit === "quote") { this.pressX = null; this.lastBarHit = { hit }; this.quote(cx, "button", id); return cx.notify(); }
@@ -1742,8 +1795,9 @@ export default class Threads extends View {
       if (hit === "quote") { this.sel = id; this.quote(cx, "button", id); return cx.notify(); }
       return;
     }
-    // The formatted reply cannot be selected: say once per pane how to select its text.
-    if (kind === "md" && !this.selectTold) { this.selectTold = true; this.say("Press s to select text in this reply", "text-cursor", cx, 3000); }
+    // Before Herdr 0.1.13 the formatted reply cannot be selected: say once per pane how to
+    // select its text.
+    if (kind === "md" && !this.replySelectable() && !this.selectTold) { this.selectTold = true; this.say("Press s to select text in this reply", "text-cursor", cx, 3000); }
     if (kind === "cc") {
       const [si, n, i] = id.split(":");
       const ct = this.findTurn(`${si}:${n}`);
@@ -1943,6 +1997,7 @@ export default class Threads extends View {
       .id("threads-root")
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
+      .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
       .on_size_change((size, cx) => {
         const w = size.width / this.zoom();
@@ -2343,11 +2398,12 @@ export default class Threads extends View {
       .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom(); })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
-      .on_mouse_down("left", (e) => {
+      .on_mouse_down("left", (e, cx) => {
         const x = e.local_position?.x;
         const w = e.bounds?.width;
         this.pressX = x == null ? null : x / this.zoom();
         this.bodyW = w == null ? null : w / this.zoom();
+        this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
       .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i].key,
@@ -3126,7 +3182,7 @@ export default class Threads extends View {
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
       case "latest": {
         if (r.md) return v_flex().mt(6)
-          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(false).w_full()))
+          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
           .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
@@ -3142,7 +3198,7 @@ export default class Threads extends View {
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
         return div().mt(6).text_size(13)
-          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(false).w_full());
+          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)

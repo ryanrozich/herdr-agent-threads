@@ -7,7 +7,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 ## What you can do
 
 - **Find an answer fast.** Scroll the list or press `/` to search. Each row shows your prompt, the start of the reply and when it happened, so you can see when you last asked for an update.
-- **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model.
+- **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode has none, see [Which agents it reads](#which-agents-it-reads).
@@ -94,7 +94,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `Enter`, `Space` or `o` | Open or close a turn |
 | `c` | Copy the reply |
 | `q` | Quote the reply into the terminal |
-| `s` | Select view: highlight part of the reply, `Cmd-C`, then `q` |
+| `s` | Select view: the reply's exact Markdown source, to highlight, `Cmd-C`, then `q` |
 | `/` | Search |
 | `g` | Jump to a turn number |
 | `End` or `G` | Newest turn |

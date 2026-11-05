@@ -819,12 +819,51 @@ export function quoteText(source, { maxLines = 40, maxChars = 2000 } = {}) {
   return { text: `${out.join("\n")}\n\n`, lines: out.length, capped: Boolean(cut), cut };
 }
 
-// Whether clipboard text came from this reply: its text, with whitespace runs made one
-// space, is part of the reply's Markdown source treated the same way.
+// Whether clipboard text came from this reply. It may be Markdown source (Select view) or
+// what Herdr copies from the formatted reply: plain text, without markers, fences or link
+// targets, with one line per block, and with a code block between two blocks left out. So
+// each copied line is compared by its letters and digits alone, and must be found in the
+// reply after the line before it.
+const LIST_MARK = /^\s*(?:\d+[.)]|[-*+\u2022\u25e6\u25aa])\s+/gm;
+const lettersOf = (x) => (x.match(/[\p{L}\p{N}]+/gu) ?? []).join("").toLowerCase();
+function visibleMd(md) {
+  return md
+    .replace(/^\s*(?:```|~~~).*$/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
+    .replace(/^\s*\[[^\]]+\]:\s+\S+.*$/gm, "")
+    .replace(/<\/?[a-z][^<>]*>/gi, "")
+    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, " ")
+    .replace(LIST_MARK, "");
+}
 export function inReply(clip, reply) {
   const norm = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const c = norm(clip);
-  return Boolean(c) && norm(reply).includes(c);
+  if (!c) return false;
+  if (norm(reply).includes(c)) return true;
+  const hay = lettersOf(visibleMd(String(reply ?? "")));
+  let from = 0;
+  let any = false;
+  for (const line of String(clip).replace(LIST_MARK, "").split("\n")) {
+    const want = lettersOf(line);
+    if (!want) continue;
+    const at = hay.indexOf(want, from);
+    if (at < 0) return false;
+    from = at + want.length;
+    any = true;
+  }
+  return any;
+}
+
+// Whether a version like "0.1.13" is at least min.
+export function atLeast(version, min) {
+  const parts = (x) => String(x ?? "").split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const a = parts(version);
+  const b = parts(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return true;
 }
 
 // The terminal's foreground program, from `hc get --json` and its pane: which agent it is
