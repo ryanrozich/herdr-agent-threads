@@ -1,5 +1,5 @@
 #!/bin/sh
-# agent-threads: read-only lookups for finding a terminal's Claude Code transcript.
+# agent-threads: read-only lookups for finding a terminal's Claude Code or Codex transcript.
 #   locate.sh find <claude-home> <id>                the transcript for a session id (real path)
 #   locate.sh folder <projects> <slug> [cwd-json]    the project folder for a working directory
 #                                                    (with cwd-json, also scans for a folder
@@ -7,6 +7,10 @@
 #   locate.sh list <folder>                          "<mtime> <bytes> <path>", newest first, 20 at most
 #   locate.sh names <folder>                         every transcript path in the folder
 #   locate.sh held <claude-home> [own-pid]           session ids other live claude processes record
+#   locate.sh codex-dir                              the folder Codex keeps its sessions in
+#   locate.sh codex-open <pid>                       the session file a Codex process has open
+#   locate.sh codex-find <id>                        the session file for a Codex session id
+#   locate.sh etime <pid>                            how long a process has run (ps -o etime)
 # Exits 1 when nothing is found. Reads only; writes nothing.
 set -u
 cmd=${1:-}
@@ -53,7 +57,29 @@ held)
     jq -r '.sessionId // empty' "$f" 2>/dev/null
   done
   exit 0 ;;
+codex-dir)
+  printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/sessions" ;;
+codex-open)
+  # A process keeps its session file open, and its subagents' too, so the newest file whose
+  # first line does not mark it a subagent is the terminal's. A launcher runs the real program
+  # as a child.
+  pids="$1 $(pgrep -P "$1" 2>/dev/null | tr '\n' ' ')"
+  # shellcheck disable=SC2086 # the pids are meant to split
+  files=$(for p in $pids; do lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -E '/rollout-[^/]*\.jsonl$' || true; done | sort -u)
+  [ -n "$files" ] || exit 1
+  printf '%s\n' "$files" | while IFS= read -r f; do
+    [ -f "$f" ] && printf '%s %s\n' "$(date -r "$f" +%s)" "$f"
+  done | sort -rn | cut -d ' ' -f 2- | while IFS= read -r f; do
+    if ! head -c 65536 "$f" | head -n 1 | LC_ALL=C grep -q '"source":{"subagent"'; then printf '%s\n' "$f"; exit 0; fi
+  done
+  exit 0 ;;
+codex-find)
+  f=$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name "rollout-*-$1.jsonl" 2>/dev/null | head -n 1)
+  [ -n "$f" ] || exit 1
+  printf '%s\n' "$f" ;;
+etime)
+  ps -o etime= -p "$1" 2>/dev/null ;;
 *)
-  echo "usage: locate.sh find|folder|list|names|held ..." >&2
+  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|etime ..." >&2
   exit 2 ;;
 esac

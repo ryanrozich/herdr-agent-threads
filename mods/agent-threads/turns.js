@@ -27,6 +27,7 @@ export function newSession(id, file) {
   return {
     id, file, offset: 0, size: null, head: null, title: null, turns: [], seg: null, startedAt: null,
     open: [], pendingCmd: null, clearAt: null, followActive: false, version: 0,
+    ctx: null, settled: 0, anchor: null,
   };
 }
 
@@ -135,8 +136,9 @@ function newTurn(s, e) {
     tools: 0,
     toolNames: {},
     usage: {},
-    model: null,
-    effort: null,
+    // Codex names the model before the prompt it applies to (a "ctx" event).
+    model: s.ctx?.m ?? null,
+    effort: s.ctx?.e ?? null,
     durationMs: 0,
     done: false,
     interrupted: false,
@@ -147,10 +149,11 @@ function newTurn(s, e) {
     answeredBy: null,
     latest: "", // the final text of the last background update that said something
     latestParts: [],
-    // Pasted images: media type and paste number ([Image #N]) each, and the prompt line's
-    // uuid, which image.sh uses to find and decode them.
+    // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
+    // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
+    // message id (OpenCode).
     images: Array.isArray(e.img) ? e.img.map((mt, i) => ({ mt: String(mt), n: Number.isInteger(e.ids?.[i]) ? e.ids[i] : null })) : [],
-    imgLine: typeof e.u === "string" && /^[0-9a-f-]{8,64}$/.test(e.u) ? e.u : null,
+    imgLine: typeof e.u === "string" && /^[0-9A-Za-z_-]{8,80}$/.test(e.u) ? e.u : null,
   };
 }
 
@@ -259,7 +262,26 @@ export function apply(s, e) {
     case "title":
       if (e.t) s.title = e.t;
       return;
+    case "ctx":
+      s.ctx = { m: e.m ?? null, e: e.e ?? null };
+      return;
+    case "settle":
+      s.settled = s.turns.length;
+      if (e.id) s.anchor = e.id;
+      return;
   }
+}
+
+// OpenCode rewrites its last turn in place while it streams, so a read gets that turn again
+// each time: rows after the last settled one are dropped before the new events apply. The
+// turn numbers come out the same.
+export function rewindTail(s) {
+  s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
+  s.open = [];
+  s.seg = null;
+  s.pendingCmd = null;
+  s.followActive = false;
+  s.version++;
 }
 
 // Parses extractor stdout. Returns { size, used, events, missing }.
@@ -268,21 +290,23 @@ export function parseChunk(stdout) {
   for (const line of stdout.split("\n")) parseLine(out, line);
   return out;
 }
-export function newChunk() { return { size: null, head: null, used: 0, events: [], missing: false }; }
+export function newChunk() { return { size: null, head: null, used: 0, events: [], missing: false, rewind: false }; }
 // One line of extractor stdout into a chunk (the panel parses a chunk in slices).
 export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
-  if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; }
-  else if (e.k === "chunk") out.used = e.used;
+  if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
 
 // True when a chunk shows the file was replaced since the last read: transcripts only
 // grow, so a shorter file, or one whose first line has another uuid, starts over.
+// OpenCode's undo can also swap a settled prompt for a new one, which the anchor catches.
 export function replaced(s, c) {
-  return (c.size != null && c.size < s.offset) || Boolean(c.head && s.head && c.head !== s.head);
+  return (c.size != null && c.size < s.offset) || Boolean(c.head && s.head && c.head !== s.head)
+    || Boolean(s.anchor && "anchor" in c && c.anchor !== s.anchor);
 }
 
 export function reply(turn) {
@@ -382,6 +406,8 @@ export function fmtBytes(n) {
 // "claude-opus-5-5" -> "opus 5.5"; "claude-haiku-4-5-20251001" -> "haiku 4.5".
 export function shortModel(m) {
   if (!m) return "";
+  // Other makers' names read as they are written ("gpt-6.1-sol", "glm-5.3").
+  if (!/^(claude-|opus|sonnet|haiku|fable)/.test(m)) return m;
   const x = m.replace(/^claude-/, "").replace(/\[.*\]$/, "").replace(/-\d{8}$/, "");
   const parts = x.split("-");
   const name = parts.shift();

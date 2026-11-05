@@ -1,20 +1,28 @@
 #!/bin/sh
 # agent-threads: decode one prompt's pasted images to files the panel can draw.
-# Usage: image.sh <transcript> <line uuid> <cache root> <session id>
+# Usage: image.sh <transcript> <line uuid> <cache root> <session id> [claude|codex|opencode]
 # Finds the prompt line by its uuid, writes each image block to
 # <cache root>/<session id>/<uuid>-<i>.<ext> (kept when already there), and prints one
 # {"i":N,"file":"<name>","w":W,"h":H} line per image (w and h 0 when unknown). Then trims
 # the cache to MAX_KB, oldest files first. Only metadata is printed: image data never goes
-# through the panel.
+# through the panel. Codex: <line uuid> is <turn id>_<ordinal>, and the image data is on the
+# message line just before that prompt's line. OpenCode: <transcript> is <database>#<session>
+# and <line uuid> is the prompt's message id.
 set -eu
 file=$1
 uuid=$2
 root=$3
 sid=$4
+harness=${5:-claude}
 max_kb=${HERDR_THREADS_IMAGE_KB:-204800}
-case $uuid in "" | *[!0-9a-f-]*) echo "bad uuid" >&2; exit 2 ;; esac
+if [ "$harness" = claude ]; then
+  case $uuid in "" | *[!0-9a-f-]*) echo "bad uuid" >&2; exit 2 ;; esac
+else
+  case $uuid in "" | *[!0-9A-Za-z_-]*) echo "bad uuid" >&2; exit 2 ;; esac
+fi
 case $sid in "" | *[!0-9A-Za-z_-]*) echo "bad session id" >&2; exit 2 ;; esac
 case $file in /*) ;; *) file=./$file ;; esac
+[ "$harness" = opencode ] && file=${file%%#*}
 [ -f "$file" ] || { echo "no transcript" >&2; exit 3; }
 dir="$root/$sid"
 mkdir -p "$dir"
@@ -22,8 +30,27 @@ mkdir -p "$dir"
 line=$(mktemp "${TMPDIR:-/tmp}/agent-threads-img.XXXXXX")
 tmp=$(mktemp "${TMPDIR:-/tmp}/agent-threads-img.XXXXXX")
 trap 'rm -f "$line" "$tmp"' EXIT INT TERM
-# "uuid":"<id>" names the line itself (parentUuid is spelled with a capital U).
-LC_ALL=C grep -m 1 -F "\"uuid\":\"$uuid\"" "$file" > "$line" || { echo "no line" >&2; exit 4; }
+# Each kind of file's image blocks as [{mt, data}], from the slurped line or lines.
+case $harness in
+  codex)
+    blocks='[.[0].payload.content[]? | select(type == "object" and .type == "input_image") | (.image_url // "") | select(startswith("data:")) | split(";base64,") | {mt: (.[0] | ltrimstr("data:")), data: (.[1] // "")}]'
+    ord=${uuid##*_}
+    case $ord in "" | *[!0-9]*) echo "bad uuid" >&2; exit 2 ;; esac
+    back=1
+    while :; do
+      LC_ALL=C grep -m 1 -E "^\{\"timestamp\":\"[^\"]*\",\"ordinal\":$((ord - back))," "$file" > "$line" || :
+      [ -s "$line" ] && [ "$(jq -s "$blocks | length" "$line" 2> /dev/null || echo 0)" -gt 0 ] && break
+      back=$((back + 1))
+      [ "$back" -le 3 ] || { echo "no line" >&2; exit 4; }
+    done ;;
+  opencode)
+    blocks='[.[] | select((.mime // "") | startswith("image/")) | {mt: .mime, data: ((.url // "") | split(";base64,")[1] // "")}]'
+    sqlite3 -readonly -batch -noheader "$file" "select data from part where session_id='$sid' and message_id='$uuid' and json_extract(data,'\$.type')='file' order by id;" > "$line" || { echo "no line" >&2; exit 4; } ;;
+  *)
+    blocks='[.[0].message.content[]? | select(type == "object" and .type == "image") | {mt: (.source.media_type // ""), data: (.source.data // "")}]'
+    # "uuid":"<id>" names the line itself (parentUuid is spelled with a capital U).
+    LC_ALL=C grep -m 1 -F "\"uuid\":\"$uuid\"" "$file" > "$line" || { echo "no line" >&2; exit 4; } ;;
+esac
 
 dims() {
   if command -v sips > /dev/null 2>&1; then
@@ -35,7 +62,7 @@ dims() {
   fi
 }
 
-types=$(jq -r '[.message.content[]? | select(type == "object" and .type == "image") | (.source.media_type // "")] | .[]' "$line")
+types=$(jq -rs "$blocks | .[].mt" "$line")
 i=0
 for mt in $types; do
   case $mt in
@@ -49,7 +76,7 @@ for mt in $types; do
   if [ -s "$dir/$name" ]; then
     touch "$dir/$name"
   else
-    jq -r --argjson i "$i" '[.message.content[]? | select(type == "object" and .type == "image")][$i].source.data // empty' "$line" \
+    jq -rs --argjson i "$i" "$blocks | .[\$i].data // empty" "$line" \
       | base64 --decode > "$tmp" 2> /dev/null || : > "$tmp"
     if [ -s "$tmp" ]; then mv "$tmp" "$dir/$name"; tmp=$(mktemp "${TMPDIR:-/tmp}/agent-threads-img.XXXXXX"); else i=$((i + 1)); continue; fi
   fi

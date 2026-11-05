@@ -15,6 +15,9 @@ import { join } from "node:path";
 const IMAGE_SH_WRITES = [
   /^trap 'rm -f "\$line" "\$tmp"' EXIT INT TERM$/,
   /^LC_ALL=C grep -m 1 -F "\\"uuid\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \}$/,
+  /^LC_ALL=C grep -m 1 -E "\^\\\{\\"timestamp\\":\\"\[\^\\"\]\*\\",\\"ordinal\\":\$\(\(ord - back\)\)," "\$file" > "\$line" \|\| :$/,
+  /^sqlite3 -readonly -batch -noheader "\$file" "select data from part where .*" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
+  /^LC_ALL=C grep -m 1 -F "\\"uuid\\":\\"\$uuid\\"" "\$file" > "\$line" \|\| \{ echo "no line" >&2; exit 4; \} ;;$/,
   /^touch "\$dir\/\$name"$/,
   /^\| base64 --decode > "\$tmp" 2> \/dev\/null \|\| : > "\$tmp"$/,
   /^if \[ -s "\$tmp" \]; then mv "\$tmp" "\$dir\/\$name"; tmp=\$\(mktemp "\$\{TMPDIR:-\/tmp\}\/agent-threads-img\.XXXXXX"\); else i=\$\(\(i \+ 1\)\); continue; fi$/,
@@ -112,6 +115,17 @@ function violations(modDir, installSh, recipe = join(root, "RECIPE.md")) {
     });
   }
   if (qt && pastes !== 1) out.push(`main.js quoteToTerminal() pastes ${pastes} times; exactly one paste is allowed`);
+  // OpenCode's database is opened read-only, always, and its SQL only selects.
+  for (const f of readdirSync(modDir).filter((n) => n.endsWith(".sh"))) {
+    readFileSync(join(modDir, f), "utf8").split("\n").forEach((raw, i) => {
+      const line = raw.replace(/^\s*#.*$/, "");
+      if (/\bsqlite3\b/.test(line) && !/\bsqlite3 -readonly\b/.test(line)) out.push(`${f}:${i + 1} sqlite3 without -readonly`);
+    });
+  }
+  for (const f of readdirSync(modDir).filter((n) => n.endsWith(".sql"))) {
+    const sql = readFileSync(join(modDir, f), "utf8").replace(/--.*$/gm, "");
+    if (/\b(insert|update|delete|drop|alter|create|replace\s+into|attach|pragma|vacuum)\b/i.test(sql)) out.push(`${f} changes the database`);
+  }
   return out;
 }
 

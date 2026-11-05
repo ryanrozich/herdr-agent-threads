@@ -28,10 +28,12 @@ jobs:
         run: shellcheck -S warning $(git ls-files '*.sh')
 
       - name: Extractor syntax (jq)
-        run: echo '"x"' | jq -R -f mods/*/extract.jq > /dev/null
+        run: for f in mods/*/extract*.jq; do echo '"x"' | jq -R -f "$f" > /dev/null; done
 
       - name: Tests
-        run: bun test
+        run: |
+          command -v sqlite3 || { sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3; }
+          bun test
 
       # The commits this push or pull request adds. A full-history scan is a one-time manual pass.
       - name: Secrets in new commits (gitleaks)
