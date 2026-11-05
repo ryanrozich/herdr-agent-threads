@@ -1,12 +1,13 @@
 // agent-threads: the agents the pane can read, as pure functions (no Herdr imports), so the
-// tests run them under bun. Claude Code, Codex and Pi append to a JSONL file. OpenCode keeps
-// every session in one SQLite database, so its "file" is "<database>#<session id>".
+// tests run them under bun. Claude Code, Codex, Pi and Cursor append to a JSONL file. OpenCode
+// keeps every session in one SQLite database, so its "file" is "<database>#<session id>".
 
 export const HARNESS = {
   claude: { key: "claude", name: "Claude Code", short: "Claude", cmd: "claude" },
   codex: { key: "codex", name: "Codex", short: "Codex", cmd: "codex" },
   opencode: { key: "opencode", name: "OpenCode", short: "OpenCode", cmd: "opencode" },
   pi: { key: "pi", name: "Pi", short: "Pi", cmd: "pi" },
+  cursor: { key: "cursor", name: "Cursor", short: "Cursor", cmd: "cursor-agent" },
 };
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -15,11 +16,15 @@ const WRAPPERS = new Set(["node", "bun", "deno"]);
 // Which agent a terminal's foreground program is, or null. A package manager's launcher runs
 // under node, so the script it runs counts too. A process named for a version ("2.1.316") is
 // how Claude Code's native build shows up. Pi runs under node and renames its process "pi".
+// Cursor's launcher (cursor-agent, also installed as agent) runs node on
+// <install>/cursor-agent/versions/<version>/index.js.
 export function harnessOf(fg, pane) {
   const argv = fg?.argv ?? [];
   const cmd = base(argv[0] ?? fg?.name);
   const name = base(fg?.name);
   const script = WRAPPERS.has(cmd) ? base(argv[1]).replace(/\.[cm]?js$/, "") : null;
+  if (cmd === "cursor-agent" || name === "cursor-agent" || script === "cursor-agent" || pane?.app === "cursor"
+    || argv.slice(0, 4).some((a) => CURSOR_SCRIPT.test(a ?? ""))) return "cursor";
   for (const key of ["codex", "opencode", "pi"]) {
     if (cmd === key || name === key || script === key || pane?.app === key) return key;
   }
@@ -27,12 +32,17 @@ export function harnessOf(fg, pane) {
   return null;
 }
 
+const CURSOR_SCRIPT = /\/cursor-agent\/versions\/[^/]+\/index\.js$/;
+
 // Pi names a session file "<start time>_<id>.jsonl", the time with "-" for ":" and ".".
 const PI_FILE = /\/(\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)_([^/]+)\.jsonl$/;
+// Cursor writes a chat to <data>/projects/<folder>/agent-transcripts/<id>/<id>.jsonl.
+const CURSOR_FILE = /\/agent-transcripts\/([^/]+)\/\1\.jsonl$/;
 
 export function harnessOfFile(file) {
   const f = file ?? "";
   if (f.includes(".db#")) return "opencode";
+  if (CURSOR_FILE.test(f)) return "cursor";
   if (PI_FILE.test(f)) return "pi";
   return /\/rollout-[^/]*\.jsonl$/.test(f) ? "codex" : "claude";
 }
@@ -81,6 +91,37 @@ export function idOfFile(file) {
   const name = f.split("/").pop().replace(/\.jsonl$/, "");
   const m = /^rollout-.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(name);
   return m ? m[1] : name;
+}
+
+// The folder Cursor keeps a working directory's transcripts in, under its data folder: every
+// run of characters other than letters and digits made one "-", with none at either end.
+export function cursorFolder(data, cwd) {
+  const name = String(cwd).replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+  return `${data}/projects/${name}/agent-transcripts`;
+}
+
+// The chat a Cursor process has open, from its store's path
+// (<data>/chats/<folder hash>/<chat id>/store.db): { data, id }, or null.
+export function cursorStore(path) {
+  const m = /^(.+)\/chats\/[^/]+\/([0-9A-Za-z_-]+)\/store\.db$/.exec(path ?? "");
+  return m ? { data: m[1], id: m[2] } : null;
+}
+
+// The chat named on a Cursor command line: { id, cont }. --resume takes a chat id, or none to
+// pick one in the terminal; --continue is the folder's newest chat.
+export function cursorArgv(argv) {
+  const args = argv ?? [];
+  let id = null;
+  let cont = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--resume") {
+      const next = args[i + 1] ?? "";
+      if (/^[0-9A-Za-z_-]{8,}$/.test(next)) id = next;
+    } else if (a.startsWith("--resume=")) id = a.slice(9);
+    else if (a === "--continue") cont = true;
+  }
+  return { id: /^[0-9A-Za-z_-]{8,}$/.test(id ?? "") ? id : null, cont };
 }
 
 // The database of an OpenCode "file".

@@ -1,5 +1,5 @@
 #!/bin/sh
-# agent-threads: read-only lookups for finding a terminal's Claude Code, Codex or Pi transcript.
+# agent-threads: read-only lookups for finding a terminal's Claude Code, Codex, Pi or Cursor transcript.
 #   locate.sh find <claude-home> <id>                the transcript for a session id (real path)
 #   locate.sh folder <projects> <slug> [cwd-json]    the project folder for a working directory
 #                                                    (with cwd-json, also scans for a folder
@@ -13,6 +13,12 @@
 #   locate.sh pi-dir                                 the folder Pi keeps its sessions in
 #   locate.sh pi-peers <pid> <folder>                how many other pi processes run there
 #   locate.sh pi-label <file>                        a Pi session's name, else its first prompt
+#   locate.sh cursor-dir                             the folder Cursor keeps its data in
+#   locate.sh cursor-open <pid>                      the chat store a Cursor process has open
+#   locate.sh cursor-find <data> <id>                the transcript for a Cursor chat id
+#   locate.sh cursor-list <folder>                   a project's transcripts, as list prints them
+#   locate.sh cursor-peers <pid> <folder>            how many other Cursor processes run there
+#   locate.sh cursor-label <file>                    a Cursor chat's first prompt
 #   locate.sh etime <pid>                            how long a process has run (ps -o etime)
 # Exits 1 when nothing is found. Reads only; writes nothing.
 set -u
@@ -96,9 +102,52 @@ pi-label)
   if [ -n "$name" ]; then printf '%s\n' "$name"; exit 0; fi
   LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
     | jq -r '.message.content | if type == "string" then . else ([.[]? | select(.type == "text") | .text] | join(" ")) end | .[0:100]' 2>/dev/null ;;
+cursor-dir)
+  printf '%s\n' "${CURSOR_DATA_DIR:-$HOME/.cursor}" ;;
+cursor-open)
+  # A Cursor process keeps its chat's store.db open (<data>/chats/<folder hash>/<chat id>/), so
+  # the path names the chat. Only the path is read, never the database. After a new chat the
+  # newest store wins. A launcher runs the real program as a child.
+  pids="$1 $(pgrep -P "$1" 2>/dev/null | tr '\n' ' ')"
+  # shellcheck disable=SC2086 # the pids are meant to split
+  files=$(for p in $pids; do lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -E '/chats/[^/]+/[^/]+/store\.db$' || true; done | sort -u)
+  [ -n "$files" ] || exit 1
+  printf '%s\n' "$files" | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    t=$(date -r "$f" +%s)
+    [ -f "$f-wal" ] && w=$(date -r "$f-wal" +%s) && [ "$w" -gt "$t" ] && t=$w
+    printf '%s %s\n' "$t" "$f"
+  done | sort -rn | head -n 1 | cut -d ' ' -f 2- ;;
+cursor-find)
+  for f in "$1"/projects/*/agent-transcripts/"$2"/"$2".jsonl; do
+    [ -f "$f" ] && printf '%s\n' "$f" && exit 0
+  done
+  exit 1 ;;
+cursor-list)
+  # Each chat is <folder>/<id>/<id>.jsonl.
+  cd -P "$1" 2>/dev/null || exit 1
+  d=$(pwd -P)
+  for c in */; do
+    f="${c%/}/${c%/}.jsonl"
+    [ -f "$f" ] && printf '%s %s %s/%s\n' "$(date -r "$f" +%s)" "$(wc -c < "$f" | tr -d ' ')" "$d" "$f"
+  done | sort -rn | head -n 20 ;;
+cursor-peers)
+  # Cursor runs under node; its script path names it.
+  n=0
+  for p in $(pgrep -f '/cursor-agent/versions/' 2>/dev/null || true); do
+    [ "$p" = "$1" ] && continue
+    [ "$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" = "$1" ] && continue
+    [ "$(lsof -a -d cwd -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)" = "$2" ] && n=$((n + 1))
+  done
+  printf '%s\n' "$n" ;;
+cursor-label)
+  # The first prompt as typed, 100 characters, read as the pane reads it.
+  LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
+    | jq -Rc -f "$(dirname "$0")/extract-cursor.jq" 2>/dev/null \
+    | jq -r 'select(.k == "p") | .t | gsub("\\s+"; " ") | .[0:100]' 2>/dev/null ;;
 etime)
   ps -o etime= -p "$1" 2>/dev/null ;;
 *)
-  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|pi-dir|pi-peers|pi-label|etime ..." >&2
+  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|pi-dir|pi-peers|pi-label|cursor-dir|cursor-open|cursor-find|cursor-list|cursor-peers|cursor-label|etime ..." >&2
   exit 2 ;;
 esac

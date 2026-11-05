@@ -27,8 +27,22 @@ export function newSession(id, file) {
   return {
     id, file, offset: 0, size: null, head: null, title: null, turns: [], seg: null, startedAt: null,
     open: [], pendingCmd: null, clearAt: null, followActive: false, version: 0,
-    ctx: null, settled: 0, anchor: null,
+    ctx: null, settled: 0, anchor: null, clock: null,
   };
+}
+
+// Cursor records no turn times. The pane gives a prompt and an end of turn it sees arrive the
+// time it saw them ("at", in ms): s.clock (an object, set by the panel) keeps them by turn
+// number, so a turn's time is only what the pane watched. A turn first read from the file
+// keeps a null start, and a file read again from the top keeps the times it had.
+function clockStart(s, turn, e) {
+  if (s.clock && !(turn.n in s.clock)) s.clock[turn.n] = { start: typeof e.at === "number" ? e.at : null, end: null };
+}
+function clockEnd(s, turn, e) {
+  const c = s.clock?.[turn.n];
+  if (!c || c.start == null) return;
+  if (c.end == null && typeof e.at === "number") c.end = e.at;
+  if (c.end != null) { turn.durationMs = Math.max(0, c.end - c.start); turn.endTs = c.end; }
 }
 
 // A tag's attribute value, or null: attr('<hc from="t7 review">', "from") is "t7 review".
@@ -198,7 +212,7 @@ export function apply(s, e) {
         return;
       }
       if (OWN_ROW.has(e.o) || !cur) {
-        openRow(s, e);
+        clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
         // A notification while the row is open: Claude still owes this row its reply.
         cur.followups++;
@@ -248,6 +262,7 @@ export function apply(s, e) {
         // Answered together with a later prompt: its reply is on that row.
         if (t !== cur && !t.after.length) t.answeredBy = cur.n;
       }
+      if (s.clock) for (const t of s.open) clockEnd(s, t, e);
       s.open = [];
       s.followActive = false;
       return;
@@ -256,6 +271,7 @@ export function apply(s, e) {
       if (!s.open.length) { s.followActive = false; return; }
       const last = s.open[s.open.length - 1];
       for (const t of s.open) t.done = true;
+      if (s.clock) for (const t of s.open) clockEnd(s, t, e);
       last.interrupted = true;
       s.open = [];
       s.followActive = false;
