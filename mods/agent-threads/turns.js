@@ -23,6 +23,11 @@
 // reply waits: Claude answers both in one model turn, and the next close marks it answered
 // together. Only an interrupt line marks a row interrupted.
 //
+// A restart or a usage limit can end a turn with no reply: only "No response requested." or
+// a limit message. When the next prompt's turn then replies, the first row says "Answered in
+// #N" (turn.answeredIn), since that reply follows on from it. Who sent the next prompt does
+// not matter: text sent through hc is written just as typed text is.
+//
 // Every row has a sender: the person ("you"), an hc report or request (a human-origin
 // prompt wrapped in <hc from="...">), a peer session (<agent-message from="...">), a
 // schedule or the SDK. turn.agent is true for every sender but the person, and the shown
@@ -168,6 +173,7 @@ function newTurn(s, e) {
     compactions: 0,
     endTs: null,
     answeredBy: null,
+    answeredIn: null,
     latest: "", // the final text of the last background update that said something
     latestParts: [],
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
@@ -212,6 +218,19 @@ function promote(s) {
   openRow(s, e);
 }
 
+// What a turn ends with when it was cut off, not refused or broken.
+const CUT_OFF = /^No response requested\b|\bhit your\b.*\blimit\b|\b(usage|rate) limit\b|\blimit reached\b|^API Error: 429\b/i;
+
+// The rows before a turn with a reply that had no reply of their own and were only cut off.
+function linkAnswer(s, cur) {
+  if (!cur.after.length) return;
+  for (let i = cur.n - 2; i >= 0; i--) {
+    const t = s.turns[i];
+    if (t.after.length || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
+    t.answeredIn = cur.n;
+  }
+}
+
 // Every open row is done: the shared end of "d" and "s".
 function closeOpen(s, cur, end, e) {
   for (const t of s.open) {
@@ -223,6 +242,7 @@ function closeOpen(s, cur, end, e) {
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
   s.followActive = false;
+  linkAnswer(s, cur);
 }
 
 // Applies one extractor event to a session, in file order.
@@ -521,6 +541,19 @@ export function matches(turn, q) {
   const needle = q.toLowerCase();
   return turn.prompt.toLowerCase().includes(needle) || reply(turn).toLowerCase().includes(needle)
     || Boolean(turn.sender?.name?.toLowerCase().includes(needle));
+}
+
+// A row whose answer is on another row, and that row, find each other: the first by the
+// answer's words, the second by the question's.
+export function threadMatches(turns, turn, q) {
+  if (!q) return true;
+  if (matches(turn, q)) return true;
+  const needle = q.toLowerCase();
+  const n = turn.answeredIn ?? turn.answeredBy;
+  if (n && reply(turns[n - 1] ?? { after: [] }).toLowerCase().includes(needle)) return true;
+  for (let i = turn.n - 2; i >= 0 && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--)
+    if (turns[i].prompt.toLowerCase().includes(needle)) return true;
+  return false;
 }
 
 // After one extractor call: the chunk size for the next call, or 0 when caught up.

@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, threadMatches } from "../mods/agent-threads/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/extract.sh");
@@ -336,4 +336,104 @@ test("an API error ends the turn", () => {
   const s = read(t.file());
   expect(s.turns[0].done).toBe(true);
   expect(s.turns[0].errors).toEqual(["API Error: overloaded"]);
+});
+
+// A line Claude Code writes itself when a turn is cut off.
+function cutOff(t, text) {
+  t.lines.push(JSON.stringify({ parentUuid: null, isSidechain: false, type: "assistant", uuid: `00000000-0000-4000-8000-${String(t.lines.length).padStart(12, "0")}`, timestamp: "2026-11-01T10:00:00.000Z",
+    message: { id: `cut${t.lines.length}`, model: "<synthetic>", role: "assistant", content: [{ type: "text", text }], stop_reason: "stop_sequence" } }));
+}
+
+test("a row with only No response requested is answered in the next prompt's row", () => {
+  const t = transcript();
+  t.prompt("The question");
+  cutOff(t, "No response requested.");
+  t.prompt("You were restarted, carry on");
+  t.tool("m1");
+  t.say("m2", "The answer.");
+  t.hooks();
+  const s = read(t.file());
+  expect(s.turns[0].answeredIn).toBe(2);
+  expect(s.turns[0].answeredBy).toBe(null);
+  expect(reply(s.turns[0])).toBe("");
+  expect(s.turns[1].answeredIn).toBe(null);
+});
+
+for (const text of ["You've hit your weekly limit · resets Nov 7 at 2pm (America/Chicago)", "You've hit your session limit · resets 3:30am (America/Chicago)", "Claude usage limit reached. Your limit will reset at 5pm", "API Error: 429 rate limited"]) {
+  test(`a limit message counts as cut off: ${text.slice(0, 32)}`, () => {
+    const t = transcript();
+    t.prompt("The question");
+    cutOff(t, text);
+    t.prompt("Try again");
+    t.say("m1", "The answer.");
+    expect(read(t.file()).turns[0].answeredIn).toBe(2);
+  });
+}
+
+for (const text of ["API Error: Can't reach the API server", "Claude Code can't use your Claude subscription", "Please run /login · API Error: 401 Invalid bearer token"]) {
+  test(`other errors stay what they are: ${text.slice(0, 32)}`, () => {
+    const t = transcript();
+    t.prompt("The question");
+    cutOff(t, text);
+    t.prompt("Try again");
+    t.say("m1", "The answer.");
+    const s = read(t.file());
+    expect(s.turns[0].answeredIn).toBe(null);
+    expect(s.turns[0].errors).toEqual([text]);
+  });
+}
+
+test("several rows cut off in a row all point at the reply that follows", () => {
+  const t = transcript();
+  t.prompt("Earlier");
+  t.say("m0", "An earlier reply.");
+  t.hooks();
+  t.prompt("The question");
+  cutOff(t, "No response requested.");
+  t.prompt("Restarted once");
+  cutOff(t, "You've hit your session limit · resets 3pm");
+  t.prompt("Restarted twice");
+  t.say("m1", "The answer.");
+  t.hooks();
+  const s = read(t.file());
+  expect(s.turns.map((x) => x.answeredIn)).toEqual([null, 4, 4, null]);
+});
+
+test("no row claims an answer until a reply comes, and an interrupted row claims none", () => {
+  const t = transcript();
+  t.prompt("The question");
+  cutOff(t, "No response requested.");
+  t.prompt("Restarted");
+  t.tool("m1");
+  let s = read(t.file());
+  expect(s.turns[0].answeredIn).toBe(null);
+  t.user("[Request interrupted by user]", {});
+  s = read(t.file());
+  expect(s.turns[0].answeredIn).toBe(null);
+  expect(s.turns[1].interrupted).toBe(true);
+  t.prompt("Once more");
+  t.say("m2", "A reply.");
+  s = read(t.file());
+  // The interrupted row between them ends the chain.
+  expect(s.turns[1].answeredIn).toBe(null);
+  expect(s.turns[0].answeredIn).toBe(null);
+});
+
+test("a row and its answer find each other in a search, and nothing else does", () => {
+  const t = transcript();
+  t.prompt("Why do walruses have tusks?");
+  cutOff(t, "No response requested.");
+  t.prompt("You were restarted, carry on");
+  t.say("m1", "They use them to haul out on ice.");
+  t.hooks();
+  t.prompt("Something else");
+  t.say("m2", "Another reply.");
+  t.hooks();
+  const s = read(t.file());
+  const found = (q) => s.turns.filter((x) => threadMatches(s.turns, x, q)).map((x) => x.n);
+  expect(found("haul out")).toEqual([1, 2]);
+  expect(found("walruses")).toEqual([1, 2]);
+  expect(found("carry on")).toEqual([2]);
+  expect(found("Another")).toEqual([3]);
+  expect(found("")).toEqual([1, 2, 3]);
 });

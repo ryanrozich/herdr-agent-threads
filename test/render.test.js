@@ -1793,3 +1793,45 @@ test("a resume in the other terminal does not move a pane to its session", async
   hcBy = {};
   recordFiles = {};
 });
+
+// ---- a turn cut off, and answered on the next row ----------------------------------------
+
+test("a row cut off shows Answered in #N, goes there, and search finds the answer from it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-cut-"));
+  const file = join(dir, "f.jsonl");
+  const line = (o) => JSON.stringify({ isSidechain: false, timestamp: new Date(Date.parse("2026-11-01T09:00:00Z") + 60000 * ++line.n).toISOString(), uuid: `u${line.n}`, ...o });
+  line.n = 0;
+  const user = (content) => line({ type: "user", origin: { kind: "human" }, message: { role: "user", content } });
+  const said = (id, text, model = "claude-opus-5-5", stop = "end_turn") => line({ type: "assistant", message: { id, model, role: "assistant", content: [{ type: "text", text }], stop_reason: stop } });
+  writeFileSync(file, `${[
+    user("What is a walrus?"),
+    said("m0", "No response requested.", "<synthetic>", "stop_sequence"),
+    user("You were restarted, carry on"),
+    said("m1", "A walrus is a large marine mammal with tusks."),
+    user("And an otter?"),
+    said("m2", "A small one."),
+  ].join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  const [cut, answer, other] = v.current().turns;
+  expect(cut.answeredIn).toBe(2);
+  expect(cut.errors).toEqual(["No response requested."]);
+  expect([v.shape(cut).reply].flat().join(" ")).toBe("Answered in #2");
+  expect(v.shape(cut).tone).toBe("note");
+  expect(v.failed(cut)).toBe(false);
+  expect(v.noReplyText(cut)).toBe("Answered in #2. This turn itself ended with: No response requested.");
+  // Open, the note goes to the answer.
+  v.goToAnswer(cut);
+  expect(v.sel).toBe("0:2");
+  expect(v.scrollTo).toEqual({ key: "0:2", how: "center" });
+  const listed = (q) => { v.query = q; return v.rows().filter((r) => r.kind === "turn").map((r) => r.turn.n); };
+  // The answer's words list the row cut off, and its words list the answer.
+  expect(listed("marine mammal")).toEqual([1, 2]);
+  expect(listed("walrus?")).toEqual([1, 2]);
+  expect(listed("otter")).toEqual([3]);
+  v.query = "marine mammal";
+  expect(v.filterCount()).toBe("2 of 3");
+  v.query = "";
+  draw(v, cx);
+  expect(reply(answer)).toStartWith("A walrus");
+  expect(reply(other)).toBe("A small one.");
+});
