@@ -8,13 +8,20 @@
 //
 // A slash command line (/usage, /clear, a skill) waits as s.pendingCmd. Local commands
 // never start a model turn, so they never become rows; a skill or custom command does,
-// and becomes a row titled "/name args" when the model starts working on it. A command
-// line logged while a row is still open never becomes a row: the model events after it
-// belong to the open row.
+// and becomes a row titled "/name args". Its text is a meta line naming the command line as
+// parent, which makes the row at once, even with another row open. Failing that, the row
+// comes when the model starts working between turns. A command line logged during a turn
+// with no such meta line never becomes a row: the model events after it belong to that turn.
+//
+// A row closes when the model finishes a reply (an "s" event). Claude Code writes the
+// turn_duration line ("d") for most turns but not all: it can stop for days in one session,
+// so that line alone would leave a row open and pile every later turn onto it. When it does
+// come, its time replaces the estimate an "s" made. A tool call never holds a row open.
 //
 // A prompt that arrives while a row is still open (a peer message, a queued or scheduled
-// prompt) does not end that row: Claude answers both in one model turn, and the next
-// turn_duration closes every open row. Only an interrupt line marks a row interrupted.
+// prompt) takes everything after it. An open row that has its reply ends there. One with no
+// reply waits: Claude answers both in one model turn, and the next close marks it answered
+// together. Only an interrupt line marks a row interrupted.
 //
 // Every row has a sender: the person ("you"), an hc report or request (a human-origin
 // prompt wrapped in <hc from="...">), a peer session (<agent-message from="...">), a
@@ -27,7 +34,7 @@ export function newSession(id, file) {
   return {
     id, file, offset: 0, size: null, head: null, title: null, turns: [], seg: null, startedAt: null,
     open: [], pendingCmd: null, clearAt: null, followActive: false, version: 0,
-    ctx: null, settled: 0, anchor: null, clock: null,
+    ctx: null, settled: 0, anchor: null, clock: null, since: null, guess: null,
   };
 }
 
@@ -174,7 +181,21 @@ function newTurn(s, e) {
   };
 }
 
+// A model turn starts: an "s" estimates its time from here.
+function startModelTurn(s, e) {
+  s.since = e.ts ? Date.parse(e.ts) : null;
+  s.guess = null;
+}
+
 function openRow(s, e) {
+  // Later events go to the new row, so an open row with its reply has nothing more to come.
+  s.open = s.open.filter((t) => {
+    if (!t.after.length) return true;
+    t.done = true;
+    if (!t.durationMs && t.endTs && t.ts) t.durationMs = Math.max(0, t.endTs - t.ts);
+    return false;
+  });
+  startModelTurn(s, e);
   const turn = newTurn(s, e);
   s.turns.push(turn);
   s.open.push(turn);
@@ -191,12 +212,29 @@ function promote(s) {
   openRow(s, e);
 }
 
+// Every open row is done: the shared end of "d" and "s".
+function closeOpen(s, cur, end, e) {
+  for (const t of s.open) {
+    t.done = true;
+    if (end) t.endTs = end;
+    // Answered together with a later prompt: its reply is on that row.
+    if (t !== cur && !t.after.length) t.answeredBy = cur.n;
+  }
+  if (s.clock) for (const t of s.open) clockEnd(s, t, e);
+  s.open = [];
+  s.followActive = false;
+}
+
 // Applies one extractor event to a session, in file order.
 export function apply(s, e) {
   s.version++;
-  // Only between turns: a command line logged while a row is still open (a local /usage
-  // during a long turn) is not what the model is working on, so it never takes a row.
-  if (s.pendingCmd && !s.open.length && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
+  if (e.k === "b") {
+    if (s.pendingCmd?.u && s.pendingCmd.u === e.pu) promote(s);
+    return;
+  }
+  // Only between turns: a command line logged during a turn (a local /usage), with no text
+  // of its own for the model, is not what the model is working on, so it never takes a row.
+  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
   if (s.pendingCmd && e.k !== "c" && e.k !== "title") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
@@ -221,6 +259,7 @@ export function apply(s, e) {
         cur.latestParts = [];
         s.seg = "follow";
         s.followActive = true;
+        startModelTurn(s, e);
       }
       return;
     }
@@ -254,17 +293,26 @@ export function apply(s, e) {
       if (!cur) return;
       const end = e.ts ? Date.parse(e.ts) : null;
       // Pi records no turn time: the turn ran from its prompt to its last stop.
-      if (e.ms != null) cur.durationMs += e.ms;
-      else if (end && cur.ts) cur.durationMs = Math.max(cur.durationMs, end - cur.ts);
-      for (const t of s.open) {
-        t.done = true;
-        if (end) t.endTs = end;
-        // Answered together with a later prompt: its reply is on that row.
-        if (t !== cur && !t.after.length) t.answeredBy = cur.n;
+      if (e.ms != null) {
+        if (s.guess?.turn === cur) cur.durationMs -= s.guess.ms;
+        cur.durationMs += e.ms;
+        s.since = null;
+        s.guess = null;
+      } else if (end && cur.ts) cur.durationMs = Math.max(cur.durationMs, end - cur.ts);
+      closeOpen(s, cur, end, e);
+      return;
+    }
+    case "s": {
+      if (!cur) return;
+      const end = e.ts ? Date.parse(e.ts) : null;
+      // This model turn's time so far, in place of the estimate before it. A turn_duration
+      // right after replaces it with the real figure.
+      if (end && s.since != null) {
+        const ms = Math.max(0, end - s.since);
+        cur.durationMs += ms - (s.guess?.turn === cur ? s.guess.ms : 0);
+        s.guess = { turn: cur, ms };
       }
-      if (s.clock) for (const t of s.open) clockEnd(s, t, e);
-      s.open = [];
-      s.followActive = false;
+      closeOpen(s, cur, end, e);
       return;
     }
     case "i": {

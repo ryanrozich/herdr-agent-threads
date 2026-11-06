@@ -477,7 +477,7 @@ if (blocks) {
   // A task notification between two blocks of the reply.
   b = prompt("Run the retry tests and summarise");
   tool("Bash", { command: "bun test retry" }, "…", b);
-  assistant([{ type: "text", text: "First part of the summary: all retry tests pass." }], { out: 30 });
+  assistant([{ type: "text", text: "First part of the summary: all retry tests pass." }], { out: 30, stop: null });
   prompt("<task-notification>lint finished: 0 warnings</task-notification>", "task-notification", 3);
   assistant([{ type: "text", text: "Second part, after the notification: lint is clean too." }], { out: 30 });
   end(15000);

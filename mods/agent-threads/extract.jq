@@ -1,18 +1,26 @@
 # agent-threads extractor: transcript lines in (jq -R, whole lines only), compact events
 # out, one JSON object per line, in file order:
-#   p  prompt that opens a model turn   {o: origin kind, ts, t: text}; t only for own origins;
+#   p  prompt                           {o: origin kind, ts, t: text}; t only for own origins;
 #                                       a peer's origin name as n ("general-purpose");
 #                                       with pasted images also {img: [media types], u: line
 #                                       uuid, ids: imagePasteIds} (the data stays in the file:
-#                                       image.sh decodes a prompt's images when it is shown)
-#      slash command line               {cmd: true, o, ts, t: "/name args"}
+#                                       image.sh decodes a prompt's images when it is shown).
+#                                       A prompt sent while Claude works is an attachment line
+#                                       (queued_command), with no user line of its own.
+#      slash command line               {cmd: true, o, ts, t: "/name args", u: line uuid}
+#   b  a meta line, by its parent       {pu: parent uuid}: a skill or custom command's text
+#                                       follows its command line this way; a local command
+#                                       has no such line
 #   i  "[Request interrupted"           {ts}
 #   t  assistant text block             {t}
 #   u  tool call                        {n: tool name}
 #   m  assistant usage, per message id  {id, m: model, e: effort, u: {i,o,cr,cc}, ts}
 #      (once per message: on the apiBlockIndex 0 line; every block line repeats it)
 #   e  synthetic or API error message   {t}
-#   d  end of a model turn              {ms, ts}
+#   s  the model finished replying      {ts}: a final reply block, a synthetic or API error,
+#                                       or a stop_hook_summary line
+#   d  end of a model turn              {ms, ts}: Claude Code does not write this line for
+#                                       every turn, so "s" is what closes a row
 #   c  compaction                       {ts}
 #   title  /rename title                {t}
 # Thinking blocks, tool inputs, tool results and bookkeeping lines are dropped. Texts are
@@ -46,7 +54,8 @@ def user_event:
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.
-    elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then empty
+    elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
+      if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
     else ($c | text_of) as $t
       | if ($t | startswith("[Request interrupted")) then {k: "i", ts: $l.timestamp}
         # Slash commands, in either tag order, with or without origin: local ones (/clear,
@@ -54,7 +63,7 @@ def user_event:
         # Only text that starts with a command tag: a prompt that merely mentions one is a
         # prompt.
         elif ($t | test("^\\s*<command-(name|message|args)>")) and ($t | test("<command-name>")) then
-          {k: "p", cmd: true, o: ($l.origin.kind // "human"), ts: $l.timestamp,
+          {k: "p", cmd: true, o: ($l.origin.kind // "human"), ts: $l.timestamp, u: $l.uuid,
            t: ([("/" + (tag($t; "command-name") | ltrimstr("/"))), tag($t; "command-args")]
                | map(select(. != "" and . != "/")) | join(" ") | cap)}
         # A command line with no command-name (malformed, or another build's shape): its
@@ -79,10 +88,32 @@ def user_event:
         end
     end;
 
+# A prompt sent while Claude works. Task notifications stay out: their user line, when there
+# is one, counts them, and one in mid-turn changes no row.
+def queued_event:
+  . as $l
+  | $l.attachment as $a
+  | ($a.origin.kind? // "human") as $o
+  | ($a.prompt | text_of) as $t
+  | {uuid: $l.uuid, imagePasteIds: ($a.imagePasteIds // null)} as $img
+  | if (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
+    elif $a.isMeta == true and $o != "peer" then empty
+    elif ($t | startswith("<task-notification>")) then empty
+    elif ($t | length) == 0 and (imgs($img; $a.prompt) == {}) then empty
+    else {k: "p", o: $o, ts: ($l.timestamp // $a.timestamp), t: ($t | cap)} + imgs($img; $a.prompt)
+      + (if $o == "peer" and ($a.origin.name | type) == "string" then {n: ($a.origin.name | .[0:80])} else {} end)
+    end;
+
+# A message that ends the reply: no tool call follows it. A message's thinking has a line of
+# its own with the same stop_reason, and its reply text comes after, so only text counts.
+def ends_reply:
+  (.message.stop_reason == "end_turn" or .message.stop_reason == "stop_sequence" or .message.stop_reason == "refusal")
+  and any(.message.content[]?; type == "object" and .type == "text");
+
 def assistant_event:
   . as $l
   | if ($l.message.model == "<synthetic>") or ($l.isApiErrorMessage == true) then
-      {k: "e", t: ($l.message.content | text_of)}
+      {k: "e", t: ($l.message.content | text_of)}, {k: "s", ts: $l.timestamp}
     else
       ( $l.message.content[]?
         | select(type == "object")
@@ -92,7 +123,8 @@ def assistant_event:
       ( select($l.message.id != null and $l.message.usage != null and ($l.apiBlockIndex // 0) == 0)
         | {k: "m", id: $l.message.id, m: $l.message.model, e: ($l.effort // $l.perTurnEffort // null), ts: $l.timestamp,
            u: ($l.message.usage | {i: (.input_tokens // 0), o: (.output_tokens // 0),
-                                   cr: (.cache_read_input_tokens // 0), cc: (.cache_creation_input_tokens // 0)})} )
+                                   cr: (.cache_read_input_tokens // 0), cc: (.cache_creation_input_tokens // 0)})} ),
+      ( select($l | ends_reply) | {k: "s", ts: $l.timestamp} )
     end;
 
 def event:
@@ -100,6 +132,8 @@ def event:
   elif .type == "user" then user_event
   elif .type == "assistant" then assistant_event
   elif .type == "system" and .subtype == "turn_duration" then {k: "d", ms: .durationMs, ts: .timestamp}
+  elif .type == "system" and .subtype == "stop_hook_summary" then {k: "s", ts: .timestamp}
+  elif .type == "attachment" then (if .attachment.type? == "queued_command" then queued_event else empty end)
   elif .type == "system" and .subtype == "compact_boundary" then {k: "c", ts: .timestamp}
   elif .type == "custom-title" then {k: "title", t: .customTitle}
   else empty end;

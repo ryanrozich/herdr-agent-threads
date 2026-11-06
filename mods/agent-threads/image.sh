@@ -61,7 +61,8 @@ case $harness in
       sqlite3 -readonly -batch -noheader "$file" "select data from part where session_id='$sid' and message_id='$uuid' and json_extract(data,'\$.type')='file' order by id;" > "$line" || { echo "no line" >&2; exit 4; }
     fi ;;
   *)
-    blocks='[.[0].message.content[]? | select(type == "object" and .type == "image") | {mt: (.source.media_type // ""), data: (.source.data // "")}]'
+    # A prompt sent while Claude works keeps its blocks on an attachment line.
+    blocks='[(.[0].message.content, .[0].attachment.prompt) | .[]? | select(type == "object" and .type == "image") | {mt: (.source.media_type // ""), data: (.source.data // "")}]'
     # "uuid":"<id>" names the line itself (parentUuid is spelled with a capital U).
     LC_ALL=C grep -m 1 -F "\"uuid\":\"$uuid\"" "$file" > "$line" || { echo "no line" >&2; exit 4; } ;;
 esac
