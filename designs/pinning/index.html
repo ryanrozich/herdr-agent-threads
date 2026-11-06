@@ -133,7 +133,7 @@ button.th:focus-visible { outline:2px solid var(--accent); outline-offset:2px; b
 <tr><td>The 44% and 3% reply figures</td><td><span class="tag t-no">Estimate</span> Counted from your real replies at about 75 characters a line and 21 pixels a line, not measured on screen.</td></tr>
 <tr><td>Dot, spinner, chip style, spacing and wording as drawn in the frames. Enter handing keys back after search. Trimming the file after 200 sessions or 90 days</td><td><span class="tag t-prop">Proposal</span></td></tr>
 </table></div>
-<p>There is no browser recording, because this is a native Herdr window, not a web page. The images below are screenshots of the real panel running a throwaway patch, not the feature. They show the test session, debug timings in the header, and sometimes an older left-margin pin that I later dropped.</p>
+<p>There is no browser recording of the panel, because it is a native Herdr window, not a web page. This review page itself passed 8 checks in the cloud browser: it loads from the link, opens images full size, steps with the arrow keys, closes with Esc, switches states and fits a phone. The images below are screenshots of the real panel running a throwaway patch, not the feature. They show the test session, debug timings in the header, and sometimes an older left-margin pin that I later dropped.</p>
 <div class="g3" id="evidence"></div>
 
 <h2 id="build">Build size</h2>
@@ -185,6 +185,7 @@ document.getElementById("evidence").innerHTML = [
   ["11-pin-new-reply", "A pin with a new reply"], ["12-search-visit", "Visiting a pin outside the search"], ["13-turn-gone", "A removed turn shows Gone, and the others follow by fingerprint"],
   ["14-after-restart", "After a full restart, pin and place restored"], ["15-short-pane-folds", "A short pane folds to chips"],
 ].map(([n, c]) => fig(E(n), "Real panel, test patch: " + c)).join("");
+document.getElementById("evidence").innerHTML += fig(E("review-page-check"), "Not the panel: cloud browser frames of this review page");
 
 const LB = document.getElementById("lb"), LI = LB.querySelector("img"), LC = LB.querySelector(".cap");
 let cur = -1, last = null;
