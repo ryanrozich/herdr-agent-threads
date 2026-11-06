@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Threads pinning</title>
+<style>
+:root { --bg:#fff; --fg:#1b1b1e; --muted:#5f5f63; --dim:#85858a; --line:#00000018; --soft:#f4f4f2; --accent:#1f62d0; --ok:#1a7f37; --warn:#9a6700; --no:#c93c2c; color-scheme: light dark; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#17191d; --fg:#eeeeef; --muted:#a6a7a9; --dim:#7c7d80; --line:#ffffff1c; --soft:#212327; --accent:#96b2d7; --ok:#a6bd91; --warn:#e5c07b; --no:#f0705f; } }
+:root[data-theme="dark"] { --bg:#17191d; --fg:#eeeeef; --muted:#a6a7a9; --dim:#7c7d80; --line:#ffffff1c; --soft:#212327; --accent:#96b2d7; --ok:#a6bd91; --warn:#e5c07b; --no:#f0705f; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+main { max-width:1040px; margin:0 auto; padding:24px 16px 80px; }
+h1 { font-size:28px; line-height:1.2; margin:0 0 6px; }
+h2 { font-size:20px; margin:48px 0 8px; padding-top:8px; }
+h3 { font-size:15px; margin:20px 0 4px; }
+p { margin:8px 0; max-width:72ch; }
+.sub { color:var(--muted); }
+nav { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:8px 0; display:flex; gap:12px; flex-wrap:wrap; font-size:13px; z-index:5; }
+a { color:var(--accent); }
+nav a { text-decoration:none; }
+.tag { display:inline-block; font-size:11px; font-weight:600; padding:1px 7px; border-radius:99px; border:1px solid currentColor; white-space:nowrap; }
+.t-prop { color:var(--warn); } .t-proven { color:var(--ok); } .t-no { color:var(--no); }
+.box { background:var(--soft); border-radius:8px; padding:12px 16px; margin:12px 0; }
+.box p { max-width:none; }
+kbd { font:12px ui-monospace,Menlo,monospace; padding:1px 5px; border:1px solid var(--line); border-radius:4px; background:var(--bg); }
+.tw { overflow-x:auto; margin:12px 0; }
+table { border-collapse:collapse; width:100%; font-size:14px; }
+th,td { text-align:left; vertical-align:top; padding:8px 10px 8px 0; border-bottom:1px solid var(--line); }
+th { font-size:12px; color:var(--muted); font-weight:600; }
+td:first-child { min-width:120px; font-weight:500; }
+.dec { border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:12px 0; }
+.dec h3 { margin:0 0 4px; }
+figure { margin:0; }
+figcaption { font-size:12.5px; color:var(--muted); margin-top:4px; }
+.zoom { display:block; width:100%; height:auto; cursor:zoom-in; border-radius:6px; border:1px solid var(--line); background:var(--soft); padding:0; }
+button.th { all:unset; display:block; cursor:zoom-in; width:100%; }
+button.th:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+.g4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:12px 0; align-items:start; }
+.g2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:12px 0; align-items:start; }
+.g3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:12px 0; align-items:start; }
+.mx { display:grid; grid-template-columns:5fr 2.6fr 5fr 2.6fr; gap:10px; margin:10px 0 24px; align-items:start; }
+.tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.tabs button { font:inherit; font-size:13px; color:var(--fg); background:none; border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; }
+.tabs button[aria-selected="true"] { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+@media (max-width:720px) { .g4,.g3,.g2 { grid-template-columns:repeat(2,minmax(0,1fr)); } .mx { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+#lb { position:fixed; inset:0; background:#000000e6; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:20; padding:12px; }
+#lb.on { display:flex; }
+#lb img { max-width:100%; max-height:calc(100vh - 80px); object-fit:contain; }
+#lb .cap { color:#eee; font-size:13px; margin-top:8px; text-align:center; max-width:80ch; }
+#lb button { position:absolute; background:#ffffff22; color:#fff; border:0; border-radius:6px; width:44px; height:44px; font-size:20px; cursor:pointer; }
+#lb .x { top:12px; right:12px; } #lb .l { left:12px; top:50%; } #lb .r { right:12px; top:50%; }
+</style>
+</head>
+<body>
+<main>
+<h1>Pinning for Agent Threads</h1>
+<p class="sub">Design for review. Nothing here is built. All content is made up.</p>
+<nav>
+<a href="#rec">Recommendation</a><a href="#moment">The moment</a><a href="#you">Your decisions</a><a href="#layouts">Two layouts</a><a href="#states">All states</a><a href="#answers">Each question</a><a href="#agents">Five agents</a><a href="#proof">Proven or not</a><a href="#build">Build size</a>
+</nav>
+
+<h2 id="rec">Recommendation</h2>
+<p>Press <kbd>p</kbd> on the turn you are reading. It joins a short tray that sits just above the footer, and the text you are reading does not move. Press <kbd>1</kbd> to come back later, and you land at the paragraph where you stopped. Press <kbd>p</kbd> again to unpin, and <kbd>u</kbd> if you unpinned by mistake.</p>
+<p>Up to five pins, kept per session in a small file, so they survive closing the panel, restarting Herdr and resuming the session.</p>
+<div class="box"><p><strong>How to read this page.</strong> <span class="tag t-prop">Proposal</span> is design only. <span class="tag t-proven">Proven</span> ran in a throwaway patched copy of the panel, in an isolated test window on the mini. <span class="tag t-no">Not tested</span> could not be run. The frames are drawings. The images under "Proven or not" are the real panel.</p></div>
+
+<h2 id="moment">The moment</h2>
+<p>You are partway through a long reply, and a newer reply needs you. Four steps, and only two keys. Click any image to see it full size. Arrow keys step through every image on the page, and Esc closes.</p>
+<div class="g4" id="story"></div>
+
+<h2 id="you">Your decisions</h2>
+<p>Everything else is settled below, with reasons. These four are yours.</p>
+<div class="dec"><h3>1. Should the pins sit at the bottom or the top?</h3><p>At the bottom they sit just above the footer. At the top they sit under the header, next to the pin button. <strong>I recommend the bottom.</strong> In the real panel, pinning at the top pushed the text you are reading down 35 pixels, and it moves again each time you add or remove a pin. At the bottom it stayed still. See <a href="#layouts">Two layouts</a>.</p></div>
+<div class="dec"><h3>2. What should happen with a sixth pin?</h3><p><strong>I recommend refusing it</strong> and saying "Pins are full (5). Unpin one first." The other choice is to drop the oldest pin and offer undo. Refusing costs one extra step. Dropping can quietly lose the reply you most meant to come back to. The number five fits the keys <kbd>1</kbd> to <kbd>5</kbd> and takes about 140 pixels of height.</p></div>
+<div class="dec"><h3>3. When you come back, how exact should the landing be?</h3><p>Herdr does not let a mod read or set the scroll position to the pixel, only jump to an item in the list. Today a reply's text between code blocks is one item. So returning lands at the start of that whole block. In your real sessions, an estimated 44% of replies (325 of 734) have a block taller than a 500 pixel pane, so you could land more than a screen above where you stopped.</p><p><strong>I recommend drawing long replies one paragraph at a time</strong>, which brings that down to an estimated 3% (25 of 734), and you land at the top of your paragraph. I tested this and it works. The cost is more build, and the spacing around headings and lists needs tuning, because it shifted in the test. Reply selection is not affected, since selecting already uses the separate Select view. The other choice is to land at the block and skip this work.</p></div>
+<div class="dec"><h3>4. Is a second file on disk fine?</h3><p>The docs promise that settings.json is the only file Threads writes. Pins need <code>pins.json</code> beside it, holding the session id, a turn fingerprint, the place you stopped and the first 80 characters of the prompt. It stays on your machine. <strong>I recommend yes</strong>, and I would update the docs. The other choice is Herdr's per-mod local storage, which saves no visible file. I have not proven it survives a restart or reaches a second pane, and <code>pins.json</code> did both.</p></div>
+
+<h2 id="layouts">Two layouts</h2>
+<p>Same rows, different place. These are the only two I would choose between. A permanent one-line strip of numbers lost out because it shows no prompt text, so you have to remember what #7 was. It is kept as the fold for short panes.</p>
+<div class="g2" id="layouts-g"></div>
+<h3>The real panel: what pinning does to the text you are reading</h3>
+<p>Comparing the bottom pair over the reply area, 191 of 576,000 pixels differ. In the top pair, the text moved down 35 pixels. <span class="tag t-proven">Proven</span></p>
+<div class="g4" id="shift"></div>
+
+<h2 id="states">All states</h2>
+<p>Pick a state. Each shows the wide pane (500 px) and narrow pane (260 px), in dark and light. The tray is at the bottom, as recommended.</p>
+<div class="tabs" id="tabs" role="tablist"></div>
+<p id="note"></p>
+<div class="mx" id="matrix"></div>
+
+<h2 id="answers">Each question</h2>
+<div class="tw"><table>
+<tr><th>Question</th><th>Answer</th><th>Why</th></tr>
+<tr><td>Pin and unpin by keyboard</td><td><kbd>p</kbd> toggles the selected turn. <kbd>1</kbd> to <kbd>5</kbd> return. <kbd>u</kbd> undoes the last unpin.</td><td>All are free in the panel's key table. If you set your quote key to <kbd>p</kbd> or <kbd>u</kbd>, quote keeps the letter and pin gives it up. The header button still works. Herdr owns chords, so a chord is not available.</td></tr>
+<tr><td>Pin and unpin by mouse</td><td>The pin button in the header, which acts on the selected turn. The pin icon in the open card's head. The unpin icon on each tray row.</td><td>You may be mid-reply with the card head scrolled away, so one control must always be on screen. Herdr's list rows cannot have their own buttons, and the panel can only tell where you clicked from left to right, not up and down. I tried a pin in the left margin of each row. It overlapped the selection ring, so I dropped it.</td></tr>
+<tr><td>Finding out about it</td><td>The footer hint, the header tooltip ("Pin #7"), and the first toast: "Pinned #7 · press 1 to come back". Tray rows show their digit.</td><td>The moment you pin is when you need the return key, so that is when it is taught.</td></tr>
+<tr><td>Where pins live</td><td>A tray outside the list, between the list and footer. Rows are 26 px. It folds to one line of chips when rows would take over 30% of the pane.</td><td>Being outside the list keeps it on screen while the list scrolls, and normal click and hover work there. The fold protects short panes.</td></tr>
+<tr><td>Coming back</td><td>Click the tray row or press its digit. The card opens at the place you stopped.</td><td>The place is saved when you pin, and updated while you keep reading that turn. Moving to another turn does not overwrite it. Near the end of the list, the list cannot scroll far enough, so your place may sit lower on screen.</td></tr>
+<tr><td>The row in its normal place</td><td>It stays there, with a small accent pin in its top line and on the open card's head.</td><td>The list is the record of the session. Moving rows would break the order and the day bands.</td></tr>
+<tr><td>The limit</td><td>Five. A sixth is refused with a toast. See decision 2.</td><td>Digits stay in pin order, new pins go last, so a number keeps meaning the same turn until you unpin one before it.</td></tr>
+<tr><td>A new reply</td><td>A dot and "New reply" until you visit. Short panes show only the dot.</td><td>One thing to know: in Threads a follow-up prompt is its own row. A pinned turn only changes if it was still running, a background update arrived, or a cut-off row was answered. So this mostly helps when you pin the newest turn while it runs.</td></tr>
+<tr><td>Still running</td><td>A spinner and "Working", using the panel's existing live state. "No reply yet" when there is no live state.</td><td>Same words and colours as the list, so nothing new to learn.</td></tr>
+<tr><td>With search</td><td>The tray stays and is never filtered. Returning to a turn outside the search shows that one turn with "Pinned, not in this search", and the search stays.</td><td>Pins are your way out of a search, so search should not hide them. While the cursor is in the search field, <kbd>p</kbd> types a letter. Enter or a click on a result hands the keys back to the list, with the search kept.</td></tr>
+<tr><td>With day bands</td><td>Bands do not change. Tray rows show the time for today, then "Yesterday" or "4 Nov".</td><td>A bare "5:54 AM" would mislead on an older pin.</td></tr>
+<tr><td>Closing, restarting, resuming</td><td>Pins survive all three. They belong to one session.</td><td>Stored by agent and session id. Another session's pins wait until you open it. A forked session gets a new id, so pins stay with the original. After <code>/clear</code>, a pane showing both sessions shows both sets. Two panes on one session share pins.</td></tr>
+<tr><td>A turn that is gone</td><td>The row stays, dimmed, with its saved text and "Gone". Clicking says so. You remove it yourself.</td><td>Removing it silently would look like a bug and lose your note of what it was. "Gone" only shows once the session is fully read, and "Reading…" shows before that.</td></tr>
+<tr><td>Unpinning by accident</td><td>A toast says "Unpinned #7 · u to undo". <kbd>u</kbd> puts it back in the same place, with your reading place.</td><td>No confirmation dialog, since unpinning should stay one action. Undo history lasts until the pane closes.</td></tr>
+</table></div>
+
+<h2 id="agents">All five agents</h2>
+<p>Row numbers are not stable. Comparing an older build of the row model with the current one on your real Claude sessions, the old number still pointed at the same turn for only 21 of 529 rows. So a pin stores a fingerprint instead: the prompt's time, a hash of its text, and a count for repeats. That found 529 of 529. It needs no change to how any agent is read. No agent's records make a pin unstable in what I tested.</p>
+<div class="tw"><table>
+<tr><th>Agent</th><th>What I ran</th><th>Result</th><th>Still open</th></tr>
+<tr><td>Claude Code</td><td>6 real sessions, read for counts only. On the mini, <code>--continue</code>, <code>--resume</code> and <code>--fork-session</code> in a test folder.</td><td>Every turn unique. Resume keeps the same file and all pins. Fork makes a new session. The mini's account was at its weekly limit, so those replies were only the limit message. The prompts and files behaved normally.</td><td>None.</td></tr>
+<tr><td>Codex</td><td>Real <code>codex exec</code>, then <code>resume --last</code>.</td><td>Same file, the pin's turn found.</td><td>Small sample, 2 turns.</td></tr>
+<tr><td>OpenCode 1.19</td><td>Real <code>opencode run</code>, then resume with <code>-s</code>.</td><td>Same session, the pin's turn found.</td><td>Undo was not run for real. It can swap or remove a turn, and that turn then shows "Gone". The panel's existing tests cover the row side of undo.</td></tr>
+<tr><td>Pi</td><td>3 real session files, made with the local stub model.</td><td>Every turn unique.</td><td>Resume and <code>/tree</code> were not run. <code>/tree</code> keeps the old branch in the file, so I expect pins to hold.</td></tr>
+<tr><td>Cursor</td><td>Real agent, 4 prompts, Esc mid-turn, one more prompt, then quit and <code>--resume</code>.</td><td>The Esc rewrote the file. All 4 turns kept the same fingerprint and number through the rewrite and the resume. Prompts keep their minute stamp.</td><td>Cursor only records the minute. Two identical prompts in one minute are told apart by order, which I tested only with made-up files. My real repeat prompts fell in different minutes.</td></tr>
+</table></div>
+
+<h2 id="proof">Proven or not</h2>
+<div class="tw"><table>
+<tr><th>Claim</th><th>Status</th></tr>
+<tr><td>A tray outside the list draws correctly, and the list keeps working</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Bottom tray leaves the text still, top tray moves it 35 px</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Returning lands on the same list item, including a paragraph inside a long reply</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Pins and reading place survive a full quit and relaunch of Herdr</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Two panes on one session share pins, within about 3 seconds</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Sixth pin refused. "No reply yet", "New reply", "Gone". Visiting a pin outside a search. Undo restores place and order</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Fold in a short pane, narrow pane, light theme</td><td><span class="tag t-proven">Proven</span></td></tr>
+<tr><td>Real <kbd>p</kbd>, digit and <kbd>u</kbd> key presses, real clicks, hover and tooltips</td><td><span class="tag t-no">Not tested</span> The official Herdr app accepts no simulated input, so I drove everything through the panel's own commands.</td></tr>
+<tr><td>The 44% and 3% reply figures</td><td><span class="tag t-no">Estimate</span> Counted from your real replies at about 75 characters a line and 21 pixels a line, not measured on screen.</td></tr>
+<tr><td>Dot, spinner, chip style, spacing and wording as drawn in the frames. Enter handing keys back after search. Trimming the file after 200 sessions or 90 days</td><td><span class="tag t-prop">Proposal</span></td></tr>
+</table></div>
+<p>There is no browser recording, because this is a native Herdr window, not a web page. The images below are screenshots of the real panel running a throwaway patch, not the feature. They show the test session, debug timings in the header, and sometimes an older left-margin pin that I later dropped.</p>
+<div class="g3" id="evidence"></div>
+
+<h2 id="build">Build size</h2>
+<p>About one pull request, smaller than the last one (775 lines across 9 files). Roughly 400 to 500 lines in the panel, plus about 200 lines of tests and a docs update. The throwaway patch was already 191 lines. Drawing long replies by paragraph (decision 3) is the riskiest part and could ship as a separate step. Real key presses and clicks would need you to try them, since I cannot send them.</p>
+
+<p class="sub" style="margin-top:48px" id="foot">Source: <code>designs/pinning/</code> on branch <code>design/pinning</code> of ryanrozich/herdr-agent-threads, from main at ae27c6f. Design revision __REV__.</p>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Image viewer">
+<button class="x" aria-label="Close">×</button><button class="l" aria-label="Previous">‹</button><button class="r" aria-label="Next">›</button>
+<img alt=""><div class="cap"></div>
+</div>
+
+<script>
+const fig = (src, cap, alt) => `<figure><button class="th" data-src="${src}" data-cap="${cap}"><img class="zoom" loading="lazy" src="${src}" alt="${alt || cap}"></button><figcaption>${cap}</figcaption></figure>`;
+const P = (n) => `previews/${n}.png`, E = (n) => `evidence/${n}.png`;
+document.getElementById("story").innerHTML = [
+  ["story-1-reading", "1. Reading a long reply"],
+  ["story-2-pinned", "2. Press p. The text stays put, and a toast teaches the return key"],
+  ["story-3-newer-reply", "3. Go and deal with the newer reply"],
+  ["story-4-back", "4. Press 1. Back at the same paragraph"],
+].map(([n, c]) => fig(P(n), c)).join("");
+document.getElementById("layouts-g").innerHTML = fig(P("dark-wide-03-several-pins"), "A. Bottom, recommended. Pinning does not move your text. It is next to the footer hints and the newest turn.") + fig(P("dark-wide-layout-b-top"), "B. Top. It is next to the pin button, but each pin or unpin moves your text.") + fig(P("light-wide-03-several-pins"), "A in light") + fig(P("light-wide-layout-b-top"), "B in light") + fig(P("dark-narrow-03-several-pins"), "A, narrow") + fig(P("dark-narrow-layout-b-top"), "B, narrow");
+document.getElementById("shift").innerHTML = fig(E("01-bottom-before-pin"), "Bottom: before pinning") + fig(E("02-bottom-after-pin"), "Bottom: after. Text in the same place") + fig(E("03-top-before-pin"), "Top: before pinning") + fig(E("04-top-after-pin"), "Top: after. Text moved down");
+const STATES = [
+  ["01-no-pins", "No pins", "No tray and no space used. The only signs are the header button, the card's pin icon and the footer hint."],
+  ["02-one-pin", "One pin", "One row. The toast teaches the return key. The header button and card icon light up."],
+  ["03-several-pins", "Several pins", "Pinned #10 keeps its place in the list, with an accent pin in its top line."],
+  ["04-at-limit", "At the limit", "The sixth is refused and nothing is dropped. The toast says what to do."],
+  ["05-new-reply", "New reply", "A dot and words in the wide pane, only the dot in the narrow one. It clears when you visit."],
+  ["06-running", "Still running", "A spinner and \"Working\". The row in the list shows the same spinner."],
+  ["07-during-search", "During search", "The tray stays. #3 is outside the search, so it shows alone with a note, and the search is kept."],
+  ["08-turn-gone", "Turn gone", "Dimmed with its saved text. Clicking shows the toast. Your other pins are not affected."],
+  ["short-folded", "Short pane", "At 320 px high, rows would take too much, so they fold to one line. Click a chip to return, then press p to unpin."],
+];
+const M = document.getElementById("matrix"), N = document.getElementById("note"), T = document.getElementById("tabs");
+function show(i) {
+  const [id, name, note] = STATES[i];
+  [...T.children].forEach((b, j) => b.setAttribute("aria-selected", String(i === j)));
+  N.textContent = note;
+  M.innerHTML = [["dark", "wide"], ["dark", "narrow"], ["light", "wide"], ["light", "narrow"]].map(([m, w]) => fig(P(`${m}-${w}-${id}`), `${name}, ${w}, ${m}`)).join("");
+}
+T.innerHTML = STATES.map((s, i) => `<button role="tab" data-i="${i}">${s[1]}</button>`).join("");
+T.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) show(+b.dataset.i); });
+show(2);
+document.getElementById("evidence").innerHTML = [
+  ["05-reading-paragraph", "Reading inside a long reply, split by paragraph"], ["06-newer-reply", "Moved to a newer reply"], ["07-back-at-paragraph", "Returned: the same paragraph is at the top"],
+  ["08-five-pins", "Five pins"], ["09-limit-refused", "A sixth pin refused"], ["10-pin-no-reply-yet", "A pin with no reply yet"],
+  ["11-pin-new-reply", "A pin with a new reply"], ["12-search-visit", "Visiting a pin outside the search"], ["13-turn-gone", "A removed turn shows Gone, and the others follow by fingerprint"],
+  ["14-after-restart", "After a full restart, pin and place restored"], ["15-short-pane-folds", "A short pane folds to chips"],
+].map(([n, c]) => fig(E(n), "Real panel, test patch: " + c)).join("");
+
+const LB = document.getElementById("lb"), LI = LB.querySelector("img"), LC = LB.querySelector(".cap");
+let cur = -1, last = null;
+const items = () => [...document.querySelectorAll("button.th")];
+function open(i) { const a = items(); cur = (i + a.length) % a.length; LI.src = a[cur].dataset.src; LI.alt = a[cur].dataset.cap; LC.textContent = a[cur].dataset.cap; LB.classList.add("on"); }
+function close() { LB.classList.remove("on"); cur = -1; if (last) last.focus(); }
+document.addEventListener("click", (e) => { const b = e.target.closest("button.th"); if (b) { last = b; open(items().indexOf(b)); } });
+LB.querySelector(".x").onclick = close; LB.querySelector(".l").onclick = () => open(cur - 1); LB.querySelector(".r").onclick = () => open(cur + 1);
+LB.addEventListener("click", (e) => { if (e.target === LB) close(); });
+document.addEventListener("keydown", (e) => { if (!LB.classList.contains("on")) return; if (e.key === "Escape") close(); if (e.key === "ArrowLeft") open(cur - 1); if (e.key === "ArrowRight") open(cur + 1); });
+</script>
+</body>
+</html>
