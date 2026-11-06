@@ -4,9 +4,9 @@
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, mock } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments } from "../mods/agent-threads/turns.js";
+import { stats, segments, reply } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -35,6 +35,9 @@ let state = { panes: [], terminals: [], props: {}, shared: {} };
 // What the pane did through Herdr: run() calls, the clipboard, and hc get's answer.
 let log = [];
 let hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
+// hc get's answer per terminal, and session records by path, for the binding tests.
+let hcBy = {};
+let recordFiles = {};
 let focusNow = null;
 let afterFocus = (args) => { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
 const mdSources = [];
@@ -82,7 +85,7 @@ mock.module("herdr", () => ({
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
-  hc: async (args) => { log.push(["hc", ...args]); return { code: 0, stdout: hcOut, stderr: "" }; },
+  hc: async (args) => { log.push(["hc", ...args]); return { code: 0, stdout: hcBy[args[1]] ?? hcOut, stderr: "" }; },
   ...herdrRest(),
 }));
 function execReal(cmd, args) {
@@ -92,7 +95,7 @@ function execReal(cmd, args) {
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
   updates: () => ({ app: { version: herdrVersion } }),
-  readTextFile: async () => null, writeTextFile: async () => null, watchFolder: never,
+  readTextFile: async (p) => recordFiles[p] ?? null, writeTextFile: async () => null, watchFolder: never,
   theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => herdrSettings,
   panes: () => state.panes, terminals: () => state.terminals, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
   focused: () => focusNow, props: () => state.props,
@@ -1686,4 +1689,107 @@ test("a session over several days draws a day band per day, with its shown turns
   // A search shows no day bands.
   v.query = "turn"; draw(v, cx);
   expect(v.rows().some((r) => r.kind === "day")).toBe(false);
+});
+
+// ---- two Claude terminals that share a transcript folder --------------------------------
+
+const SESSION_A = "00000000-0000-4000-8000-00000000000a";
+const SESSION_B = "00000000-0000-4000-8000-00000000000b";
+// A claude home with one project folder holding both sessions. B's file is newer, as a busier
+// session's is. Each has one made-up turn.
+function sharedFolder() {
+  const home = mkdtempSync(join(tmpdir(), "threads-home-"));
+  const cwd = "/tmp/threads-shared";
+  const folder = join(home, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+  execFileSync("mkdir", ["-p", folder, join(home, "sessions")]);
+  const write = (id, text, secs) => {
+    const file = join(folder, `${id}.jsonl`);
+    const at = new Date(Date.parse("2026-11-01T09:00:00Z") + secs * 1000).toISOString();
+    writeFileSync(file, `${JSON.stringify({ type: "user", origin: { kind: "human" }, uuid: id, timestamp: at, message: { role: "user", content: text } })}\n`);
+    utimesSync(file, new Date(Date.now() + secs * 1000), new Date(Date.now() + secs * 1000));
+    return file;
+  };
+  const a = write(SESSION_A, "Prompt in session A", 0);
+  const b = write(SESSION_B, "Prompt in session B", 5);
+  const record = (pid, id) => {
+    const path = join(home, "sessions", `${pid}.json`);
+    const text = JSON.stringify({ pid, sessionId: id, cwd });
+    writeFileSync(path, text);
+    recordFiles[path] = text;
+  };
+  return { home, cwd, a, b, record };
+}
+function fg(pid, cwd, argv = ["claude"]) {
+  return JSON.stringify({ foreground: { name: "claude", argv, pid, cwd }, cwd });
+}
+function sharedState(f, terminal) {
+  state = {
+    terminals: [{ address: "t3b", status: "idle", cwd: f.cwd }, { address: "t3c", status: "idle", cwd: f.cwd }],
+    panes: ["t3b", "t3c"].map((t) => ({ pane: `p${t}`, tab: "A", terminal: t, app: "claude-code", cwd: f.cwd, program: { key: "claude", name: "Claude Code" } }))
+      .concat([{ pane: "pm", tab: "A", terminal: null, mod: "agent-threads" }]),
+    props: { terminal, claudeHome: f.home, debug: true }, shared: {},
+  };
+  const v = new Threads();
+  const cx = makeCx();
+  v.init(state.props, cx);
+  return { v, cx };
+}
+async function looked(v) {
+  // The watch and command loops never end, so wait on the flags, not on cx.pending.
+  await new Promise((r) => setTimeout(r, 30));
+  await until(() => !v.resolving && !v.reading, "the lookup");
+  await new Promise((r) => setTimeout(r, 30));
+  await until(() => !v.resolving && !v.reading, "the read");
+}
+const shownPrompts = (v) => v.sessions.flatMap((s) => s.turns.map((t) => t.prompt));
+
+test("each terminal in a shared folder binds its own session, whichever file is newer", async () => {
+  const f = sharedFolder();
+  f.record(5101, SESSION_A);
+  f.record(5102, SESSION_B);
+  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  const c = sharedState(f, "t3c");
+  await looked(c.v);
+  expect(c.v.current().file).toEndWith(`${SESSION_A}.jsonl`);
+  expect(c.v.res.guess).toBe(false);
+  expect(shownPrompts(c.v)).toEqual(["Prompt in session A"]);
+  const b = sharedState(f, "t3b");
+  await looked(b.v);
+  expect(b.v.current().file).toEndWith(`${SESSION_B}.jsonl`);
+  // With the record unread, --resume on its command line names the session too.
+  delete recordFiles[join(f.home, "sessions/5101.json")];
+  hcBy.t3c = fg(5101, f.cwd, ["claude", "--resume", SESSION_A]);
+  const again = sharedState(f, "t3c");
+  await looked(again.v);
+  expect(again.v.res.guess).toBe(false);
+  expect(shownPrompts(again.v)).toEqual(["Prompt in session A"]);
+  hcBy = {};
+  recordFiles = {};
+});
+
+test("a resume in the other terminal does not move a pane to its session", async () => {
+  const f = sharedFolder();
+  f.record(5101, SESSION_A);
+  f.record(5102, SESSION_B);
+  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  const { v, cx } = sharedState(f, "t3c");
+  await looked(v);
+  // The other terminal restarts: its old record goes, then a new pid records the same session.
+  execFileSync("rm", [join(f.home, "sessions/5102.json")]);
+  delete recordFiles[join(f.home, "sessions/5102.json")];
+  v.resolve(cx);
+  await looked(v);
+  expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+  f.record(5103, SESSION_B);
+  hcBy.t3b = fg(5103, f.cwd, ["claude", "--resume", SESSION_B]);
+  v.resolve(cx);
+  await looked(v);
+  expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+  // Even a look that cannot read this terminal's record keeps what it was told.
+  delete recordFiles[join(f.home, "sessions/5101.json")];
+  v.resolve(cx);
+  await looked(v);
+  expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+  hcBy = {};
+  recordFiles = {};
 });
