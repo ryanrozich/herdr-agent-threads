@@ -26,7 +26,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, matches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -1128,7 +1128,7 @@ export default class Threads extends View {
         const key = `${si}:${turn.n}`;
         // Agent turns while they are hidden: skipped, and counted in the header instead.
         if (!shown(turn, ti)) return;
-        if (q && !matches(turn, q)) { unmatched++; return; }
+        if (q && !threadMatches(s.turns, turn, q)) { unmatched++; return; }
         flush();
         const d = turn.day;
         if (days.size > 1 && !q && d && d !== day) {
@@ -1197,7 +1197,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const text = this.replyText(turn);
-    const key = `${Math.round(this.width)}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
+    const key = `${Math.round(this.width)}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
@@ -1206,6 +1206,7 @@ export default class Threads extends View {
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
     else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))));
+    else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
     else if (turn.answeredBy) {
       const by = this.findTurn(`${this.sessions.findIndex((x) => x.turns.includes(turn))}:${turn.answeredBy}`);
@@ -1312,13 +1313,14 @@ export default class Threads extends View {
   turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow"].includes(r.kind)).map((r) => r.key); }
 
   // The hidden agent turn whose reply this turn shares: Claude answered the person's prompt
-  // and an agent message that came while it was open in one reply, which landed on the
-  // agent turn. While agent turns are hidden the person's row borrows that reply, so it
-  // still shows one and "c" copies it.
+  // and an agent message that came while it was open in one reply, or a later one after this
+  // turn was cut off, which landed on the agent turn. While agent turns are hidden the
+  // person's row borrows that reply, so it still shows one and "c" copies it.
   borrowedFrom(turn) {
-    if (!turn?.answeredBy || turn.after.length || this.prefs.agentTurns) return null;
+    const n = turn?.answeredBy ?? turn?.answeredIn;
+    if (!n || turn.after.length || this.prefs.agentTurns) return null;
     const s = this.sessions.find((x) => x.turns[turn.n - 1] === turn);
-    const by = s?.turns[turn.answeredBy - 1];
+    const by = s?.turns[n - 1];
     return by?.agent && reply(by) ? by : null;
   }
 
@@ -1326,6 +1328,16 @@ export default class Threads extends View {
   replyText(turn) {
     const by = this.borrowedFrom(turn);
     return by ? reply(by) : reply(turn);
+  }
+  // From a row cut off to the row that has its answer. An open filter stays: threadMatches
+  // lists that row whenever it lists this one.
+  goToAnswer(turn) {
+    const si = this.sessions.findIndex((x) => x.turns[turn.n - 1] === turn);
+    if (si < 0 || !turn.answeredIn) return;
+    const key = `${si}:${turn.answeredIn}`;
+    this.sel = key;
+    this.follow = false;
+    this.scrollTo = { key, how: "center" };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
@@ -2275,7 +2287,7 @@ export default class Threads extends View {
     let shown = 0, hit = 0, hiddenHit = 0;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
       const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status) });
-      const m = matches(t, q);
+      const m = threadMatches(s.turns, t, q);
       if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
     }));
     return `${hit} of ${shown}${hiddenHit ? ` · ${hiddenHit} hidden` : ""}`;
@@ -2610,9 +2622,12 @@ export default class Threads extends View {
     return out.join(" ");
   }
 
+  // An error is all this row has: no reply, and none on a later row.
+  failed(turn) { return turn.errors.length > 0 && !turn.answeredIn && !this.replyText(turn); }
+
   statusIcon(t, turn) {
     if (turn.interrupted) return svg(ICON("ban")).size(12).flex_none().text_color(t.blocked);
-    if (turn.errors.length && !this.replyText(turn)) return svg(ICON("alert")).size(12).flex_none().text_color(t.blocked);
+    if (this.failed(turn)) return svg(ICON("alert")).size(12).flex_none().text_color(t.blocked);
     return svg(ICON("circle-check")).size(12).flex_none().text_color(t.done);
   }
 
@@ -3006,6 +3021,7 @@ export default class Threads extends View {
   }
 
   noReplyText(turn) {
+    if (turn.answeredIn) return `Answered in #${turn.answeredIn}. This turn itself ended with: ${turn.errors.at(-1)}`;
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
       : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
   }
@@ -3115,7 +3131,7 @@ export default class Threads extends View {
     const icon = tone === "why" ? "ban" : tone === "error" ? "alert" : "reply";
     const color = tone === "why" ? t.blocked : t.dim;
     // Agent rows leave out the done check; interrupted and error icons still show.
-    const status = turn.agent && !turn.interrupted && !(turn.errors.length && !this.replyText(turn)) ? null : this.statusIcon(t, turn);
+    const status = turn.agent && !turn.interrupted && !this.failed(turn) ? null : this.statusIcon(t, turn);
     return this.rowFrame(t, r, sel, focusedPanel, false, [
       this.metaLine(t, turn, status, fmtTime(turn.ts)),
       this.promptBlock(t, turn, sh, sel),
@@ -3305,6 +3321,11 @@ export default class Threads extends View {
           .when(this.latestCut(r), (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show all")));
       }
       case "noreply":
+        if (turn.answeredIn && !probe) {
+          return div().id(`th-answer-${r.key}`).mt(6).text_size(12.5).text_color(t.accent).cursor_pointer()
+            .on_click((_e, cx) => { cx.stop_propagation(); this.goToAnswer(turn); cx.notify(); })
+            .child(this.noReplyText(turn));
+        }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls

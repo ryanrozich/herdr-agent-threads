@@ -79,10 +79,12 @@ while :; do
         | jq -Rc -f "$here/extract-codex.jq" > "$out"
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
-      # type except user, assistant, system and custom-title, and every tool result, before
-      # jq parses anything. extract.jq drops the same lines again if one gets through.
+      # type except user, assistant, attachment, system and custom-title, every attachment but
+      # a queued prompt, and every tool result, before jq parses anything. A quote inside a
+      # string is escaped, so these patterns only match a line's own keys. extract.jq drops the
+      # same lines again if one gets through.
       head -c "$used" "$tmp" \
-        | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^s]|s[^y]|c[^u])' \
+        | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^st]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
         | LC_ALL=C grep -v -F '"type":"tool_result"' \
         | jq -Rc -f "$here/extract.jq" > "$out"
     fi
