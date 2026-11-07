@@ -27,6 +27,8 @@ With `debug`, the pane writes what it shows to `shared("threads.debug")` in the 
 
 With `"debug": true` the pane publishes what it shows (header, banners, rows, timings) to `shared("threads.debug")[<terminal>]`, which lands in `$HERDR_APP_HOME/shared.json`, so a check works even when the window is not drawing. Drive it with mod commands, for example `herdr-app do "agent-threads.search:#3"`, `agent-threads.nextDay` or `agent-threads.choose` then `"agent-threads.pick:2"`, and read the report again.
 
+Pins can be driven the same way: `pin`, `go:1` and `undoUnpin` are the keys `p`, `1` and `u`. With `debug`, `debugScroll:<list item key>` puts a list item at the top as a person's scroll would, and `debugWhole` opens the whole reply. `shared("threads.debug")[<terminal>].pins` reports the pins, the list item at the top, the fold and the last save error. These go through the same code as a key press, but they are not one: check real keys, clicks and hovers by hand.
+
 Session mapping, `/clear`, "claude exited" and the guess banner need a claude process and a Claude home, but never a real one. For tests and demos only, a pane takes `"claudeHome": "/abs/fake-claude"` in place of `~/.claude` (the launcher never sets it):
 
 ```sh
