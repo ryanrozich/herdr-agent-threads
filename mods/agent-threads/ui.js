@@ -9,6 +9,9 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend",
 };
+// Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
+// chose it still has the header's pin button.
+const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -18,7 +21,7 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (m.shift) return k === "g" || k === "G" ? "latest" : null;
   if (k === "G") return "latest";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
 // Letters the panel already uses, so the quote key cannot be one of them.
 export const TAKEN_LETTERS = Object.freeze(Object.keys(KEYS).filter((k) => /^[a-z]$/.test(k)));
@@ -1013,6 +1016,13 @@ export function barLayout(w, { quote = true, terminal = true } = {}) {
     if (right + 6 <= (term ? term[0] : w - 16 + 6)) return out;
   }
   return out;
+}
+
+// Whether a press at x falls on the pin icon of an open card's head, in a body w wide. Its
+// inner edge is w - 16 (the card's margin, border and padding); the chevron takes 14 px of
+// that, then a 6 px gap, then the 13 px pin. The zone stops short of the chevron.
+export function headPinHit(x, w) {
+  return x != null && w != null && x >= w - 54 && x <= w - 33;
 }
 
 // ---- colour -----------------------------------------------------------------------------

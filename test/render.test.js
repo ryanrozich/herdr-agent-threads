@@ -88,6 +88,7 @@ mock.module("herdr", () => ({
   hc: async (args) => { log.push(["hc", ...args]); return { code: 0, stdout: hcBy[args[1]] ?? hcOut, stderr: "" }; },
   ...herdrRest(),
 }));
+let pinWrites = 0;
 function execReal(cmd, args) {
     try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
     catch (e) { return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
@@ -95,7 +96,15 @@ function execReal(cmd, args) {
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
   updates: () => ({ app: { version: herdrVersion } }),
-  readTextFile: async (p) => recordFiles[p] ?? null, writeTextFile: async () => null, watchFolder: never,
+  readTextFile: async (p) => recordFiles[p] ?? null,
+  writeTextFile: async (p, text, expected) => {
+    if (!p.endsWith("pins.json")) return null;
+    if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
+    recordFiles[p] = text;
+    pinWrites++;
+    return null;
+  },
+  watchFolder: never,
   theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => herdrSettings,
   panes: () => state.panes, terminals: () => state.terminals, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
   focused: () => focusNow, props: () => state.props,
@@ -628,7 +637,7 @@ test("the footer offers s select with a turn open and q quote with a local termi
   v.toggle(v.sel, cx);
   expect(hints()).not.toContain("s select");
   v.width = 240;
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter"]);
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin"]);
   // quoteKey from the settings file.
   v.width = 380;
   v.applyPrefs('{"quoteKey": "y"}');
@@ -1834,4 +1843,415 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   draw(v, cx);
   expect(reply(answer)).toStartWith("A walrus");
   expect(reply(other)).toBe("A small one.");
+});
+
+// ---- pins ----
+
+const PINS = join(app, "data/agent-threads/pins.json");
+async function pinPane(...flags) {
+  delete recordFiles[PINS];
+  const { v, cx } = await pane(fixture(...flags));
+  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  return { v, cx, keys: () => v.turnKeys(v.rows()) };
+}
+const saved = async () => { await new Promise((r) => setTimeout(r, 30)); return JSON.parse(recordFiles[PINS] ?? "{}"); };
+const allPins = (j) => Object.values(j.sessions ?? {}).flatMap((x) => x.pins);
+const toastText = (v) => v.toast?.text ?? null;
+
+test("p pins the selected turn, teaches the return key, and saves; p again unpins and u undoes", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const [a, b] = keys();
+  v.sel = a;
+  v.key(keyEv("p"), cx);
+  expect(v.isPinned(a)).toBe(true);
+  expect(toastText(v)).toMatch(/^Pinned #\d+ · press 1 to come back$/);
+  expect(allPins(await saved()).length).toBe(1);
+  v.sel = b;
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/press 2 to come back$/);
+  const order = () => v.pinnedList().map((p) => p.key);
+  expect(order()).toEqual([a, b]);
+  v.sel = a;
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Unpinned #\d+ · u to undo$/);
+  expect(order()).toEqual([b]);
+  v.key(keyEv("u"), cx);
+  expect(order()).toEqual([a, b]); // back in the same place
+  await saved();
+  expect(allPins(JSON.parse(recordFiles[PINS])).length).toBe(2);
+  expect(v.key(keyEv("u"), cx)).toBeUndefined(); // nothing left to undo, and no error
+  draw(v, cx);
+});
+
+test("a sixth pin is refused in the design's words, and undo cannot pass the limit", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "8");
+  const k = keys();
+  for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
+  v.sel = k[5];
+  v.action("pin", cx);
+  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
+  expect(v.pinnedList().length).toBe(5);
+  v.sel = k[0];
+  v.action("pin", cx);
+  v.sel = k[6];
+  v.action("pin", cx);
+  v.action("undoUnpin", cx);
+  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
+  expect(v.pinnedList().length).toBe(5);
+  draw(v, cx);
+});
+
+test("a digit returns: the turn opens, stays selected, and lands on the place it was left", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = keys()[0];
+  v.toggle(a, cx);
+  v.topKey = `rhead:${a}`;
+  v.action("pin", cx);
+  expect(v.pinnedList()[0].pin.anchor).toEqual(["rhead", null]);
+  v.toggle(a, cx); // closed
+  v.sel = keys().at(-1);
+  v.follow = true;
+  v.key(keyEv("1"), cx);
+  expect(v.sel).toBe(a);
+  expect(v.open.has(a)).toBe(true);
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toMatchObject({ key: `rhead:${a}`, how: "land", head: a });
+  v.scrollTo.until = 0; // no wait for measures here
+  draw(v, cx);
+  expect(v.scrollTo).toBe(null);
+  expect(v.key(keyEv("3"), cx)).toBeUndefined(); // no third pin: the key does nothing
+});
+
+test("the place follows reading the selected turn, not a landing and not another turn", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const [a, b] = keys();
+  v.toggle(a, cx);
+  v.topKey = a;
+  v.action("pin", cx);
+  const pin = () => v.pinnedList()[0].pin;
+  expect(pin().anchor).toEqual(["head"]);
+  v.topKey = `rhead:${a}`;
+  v.trackPlace();
+  expect(pin().anchor).toEqual(["rhead", null]);
+  // Another turn selected: its parts say nothing about this pin.
+  v.sel = b;
+  v.topKey = `rhead:${b}`;
+  v.trackPlace();
+  expect(pin().anchor).toEqual(["rhead", null]);
+  // A landing near the end of the list leaves an earlier item at the top: that is no reading.
+  v.goPin(0, cx);
+  v.placeHold = Date.now() - 1;
+  v.topKey = `you:${a}`;
+  v.trackPlace();
+  expect(pin().anchor).toEqual(["rhead", null]);
+  v.trackPlace();
+  expect(pin().anchor).toEqual(["rhead", null]);
+  // The top moves: reading again.
+  v.topKey = a;
+  v.trackPlace();
+  expect(pin().anchor).toEqual(["head"]);
+});
+
+test("a place that no longer exists falls back to the block, then the card", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = keys()[0];
+  v.toggle(a, cx);
+  v.action("pin", cx);
+  v.pinnedList()[0].pin.anchor = ["md", "99.3"];
+  v.goPin(0, cx);
+  v.scrollTo.until = 0;
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
+  cx.timers = [];
+  draw(v, cx);
+  expect(v.scrollTo).toBe(null);
+  cx.flush();
+  // The card: its last part, then its head.
+  const head = v.rows().findIndex((r) => r.key === a);
+  expect(scrolled.at(-1)).toEqual([head, "top"]);
+});
+
+test("a return lands from below, so the place reaches the top of the pane, and waits for measures", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = keys()[0];
+  v.toggle(a, cx);
+  const place = v.rows().findIndex((r) => r.key === `rhead:${a}`);
+  v.topKey = `rhead:${a}`;
+  v.action("pin", cx);
+  v.listH = 60;
+  v.goPin(0, cx);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
+  v.probeDue = () => [[v.rows().find((r) => r.kind === "md"), "sig"]];
+  cx.timers = [];
+  v.render(cx);
+  expect(v.scrollTo).toMatchObject({ how: "land" }); // still waiting
+  v.probeDue = () => [];
+  cx.timers = [];
+  v.render(cx);
+  expect(v.scrollTo).toBe(null);
+  cx.flush();
+  expect(scrolled.length).toBe(2);
+  expect(scrolled[0][0]).toBeGreaterThan(place);
+  expect(scrolled[1]).toEqual([place, "top"]);
+});
+
+test("a whole reply comes back whole, after a restart too", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = keys().find((k) => v.findTurn(k) && reply(v.findTurn(k)).length > 3000) ?? keys()[0];
+  v.sel = a;
+  v.toggle(a, cx);
+  v.full.add(`r:${a}`);
+  v.rows();
+  v.topKey = `rhead:${a}`;
+  v.action("pin", cx);
+  expect(v.pinnedList()[0].pin.whole).toBe(true);
+  await saved();
+  // A new pane reads the same file.
+  const file = state.props.transcript;
+  const v2 = new Threads();
+  const cx2 = makeCx();
+  v2.init(state.props, cx2);
+  await settle(v2);
+  await new Promise((r) => setTimeout(r, 30));
+  expect(v2.current().file).toBe(file);
+  expect(v2.pinnedList().length).toBe(1);
+  v2.goPin(0, cx2);
+  expect(v2.full.has(`r:${a}`)).toBe(true);
+  expect(v2.open.has(a)).toBe(true);
+});
+
+test("a turn that is gone stays dim with its saved text, clicking says so, and unpinning clears it", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  await saved();
+  const s = v.current();
+  const pin = v.pinnedList()[0].pin;
+  pin.id = "1|nothing|1";
+  v.pinVer++;
+  expect(v.pinnedList()[0].state).toBe("gone");
+  draw(v, cx);
+  v.goPin(0, cx);
+  expect(toastText(v)).toBe(`#${pin.n} is no longer in this session. Unpin to clear it.`);
+  expect(v.sel).toBe(keys()[0]); // nothing moved
+  v.unpin(v.pinnedList()[0], cx);
+  expect(v.pinnedList().length).toBe(0);
+  v.undoUnpin(cx);
+  expect(v.pinnedList()[0].state).toBe("gone");
+  // While the session is still being read, it is not gone yet.
+  s.loaded = false;
+  v.pinVer++;
+  expect(v.pinnedList()[0].state).toBe("loading");
+  draw(v, cx);
+  s.loaded = true;
+});
+
+test("a new reply shows until the turn is read", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const [a, b] = keys();
+  v.sel = a;
+  v.action("pin", cx);
+  v.sel = b;
+  v.pinnedList()[0].turn.followups = 3;
+  v.pinVer++;
+  expect(v.pinnedList()[0].state).toBe("new");
+  draw(v, cx);
+  v.goPin(0, cx);
+  expect(v.pinnedList()[0].state).toBe("quiet");
+});
+
+test("search: the tray stays, a visit shows the one turn with a note, and the search is kept", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const a = keys()[0];
+  v.sel = a;
+  v.action("pin", cx);
+  const word = "zzz-no-such-word";
+  v.action(`search:${word}`, cx);
+  expect(v.rows().some((r) => r.key === a)).toBe(false);
+  expect(v.pinnedList().length).toBe(1);
+  expect(v.key(keyEv("p"), cx)).toBeUndefined();
+  expect(v.pinnedList().length).toBe(1); // p typed into the field
+  v.toList();
+  expect(v.filtering).toBe(false);
+  expect(v.query).toBe(word);
+  v.key(keyEv("1"), cx);
+  expect(v.query).toBe(word);
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.key === a);
+  expect(i).toBeGreaterThan(-1);
+  expect(rows.some((r) => r.kind === "note" && r.text === "Pinned, not in this search")).toBe(true);
+  draw(v, cx);
+  expect(v.pinVisit).toBe(a); // drawing, with its timing report, does not end the visit
+  expect(toastText(v)).toBe("Pinned, not in this search");
+  // Moving away ends the visit.
+  v.sel = null;
+  draw(v, cx);
+  expect(v.rows().some((r) => r.key === a)).toBe(false);
+  expect(v.rows().some((r) => r.kind === "note")).toBe(false);
+});
+
+test("Enter on a search result hands the keys to the list and keeps the search", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const before = keys().length;
+  expect(before).toBeGreaterThan(1);
+  const t = v.findTurn(keys()[1]);
+  v.action(`search:${t.prompt.slice(0, 12)}`, cx);
+  const q = v.query;
+  v.key(keyEv("enter"), cx);
+  expect(v.filtering).toBe(false);
+  expect(v.query).toBe(q);
+  v.key(keyEv("p"), cx);
+  expect(v.pinnedList().length).toBe(1);
+});
+
+test("a search for #12 still jumps with Enter, and digits type into the field", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.action("jump", cx);
+  expect(v.filtering).toBe(true);
+  expect(v.key(keyEv("1"), cx)).toBeUndefined();
+  expect(v.pinnedList().length).toBe(0);
+  v.action("search:#2", cx);
+  v.key(keyEv("enter"), cx);
+  expect(v.query).toBe("");
+});
+
+test("pins belong to one session, and another pane's save is kept", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  await saved();
+  // Another pane adds a session and this pane writes after it: both stay.
+  const j = JSON.parse(recordFiles[PINS]);
+  j.sessions["codex:other"] = { at: Date.now(), pins: [{ id: "elsewhere", n: 1, text: "made up" }] };
+  recordFiles[PINS] = JSON.stringify(j);
+  v.sel = keys()[1];
+  v.action("pin", cx);
+  const back = await saved();
+  expect(back.sessions["codex:other"].pins[0].id).toBe("elsewhere");
+  expect(allPins(back).length).toBe(3);
+  expect(v.pinnedList().length).toBe(2); // the other session's pin is not this pane's
+});
+
+test("pins.json that does not parse is left alone, and pins still work until it is fixed", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  recordFiles[PINS] = "{ half an edit";
+  v.sel = keys()[0];
+  const before = pinWrites;
+  v.action("pin", cx);
+  await saved0();
+  expect(recordFiles[PINS]).toBe("{ half an edit");
+  expect(pinWrites).toBe(before);
+  expect(v.pinsError).toMatch(/not valid JSON/);
+  expect(v.pinnedList().length).toBe(1);
+  delete recordFiles[PINS];
+});
+const saved0 = () => new Promise((r) => setTimeout(r, 30));
+
+test("a click on the open card's pin pins it, and a click elsewhere on the head still closes it", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const a = keys()[0];
+  v.toggle(a, cx);
+  v.bodyW = 500;
+  v.pressX = 500 - 42;
+  v.click(a, cx);
+  expect(v.isPinned(a)).toBe(true);
+  expect(v.open.has(a)).toBe(true);
+  v.pressX = 200;
+  v.click(a, cx);
+  expect(v.open.has(a)).toBe(false);
+  expect(v.isPinned(a)).toBe(true);
+  // A collapsed row's click there opens it, since it has no pin to hit.
+  v.pressX = 500 - 42;
+  v.click(a, cx);
+  expect(v.open.has(a)).toBe(true);
+  expect(v.isPinned(a)).toBe(true);
+});
+
+test("a click in the list gives the search field's keys back to the panel", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.action("search:the", cx);
+  expect(v.filtering).toBe(true);
+  const k = keys()[0];
+  if (k) {
+    v.click(k, cx);
+    expect(v.filtering).toBe(false);
+    expect(v.query).toBe("the");
+  }
+});
+
+test("pin keys work in a focused read-only editor, and do nothing when held", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.sel = keys()[0];
+  v.editorFocused = true;
+  v.key(keyEv("p"), cx);
+  expect(v.pinnedList().length).toBe(1);
+  v.editorFocused = false;
+  v.key(keyEv("p", { is_held: true }), cx);
+  expect(v.pinnedList().length).toBe(1);
+});
+
+test("the tray draws at every state and width, folds in a short pane, and marks rows", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "8", "--agents");
+  const k = keys();
+  for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
+  for (const width of [240, 380, 500]) {
+    v.width = width;
+    for (const h of [0, 300, 900]) {
+      v.rootH = h;
+      draw(v, cx);
+      expect(v.trayFold).toBe(h === 300);
+    }
+  }
+  v.rootH = 900;
+  v.width = 500;
+  const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
+  v.sel = k[0];
+  expect(btn()[2]).toMatch(/^Unpin #\d+ \(p\)$/);
+  expect(btn()[4]).toBe(true);
+  v.sel = k[6];
+  expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
+  expect(btn()[4]).toBe(false);
+  expect(v.footerHints().map((x) => x[1])).toContain("pin");
+  v.sel = k[0];
+  expect(v.footerHints().map((x) => x[1])).toContain("unpin");
+  v.quoteKey = "p";
+  expect(v.footerHints().filter((x) => x[0] === "p").map((x) => x[1])).toEqual(["quote"]);
+  v.quoteKey = "q";
+  const r = v.report();
+  expect(state.shared["threads.debug"].t4.pins.list.length).toBe(5);
+  expect(r).toBeUndefined();
+});
+
+test("a block taller than the pane is drawn by paragraph; one that fits stays one item for selection", async () => {
+  const { v, cx } = await pinPane("--extra", "2");
+  const para = (i) => `Paragraph ${i} ${"word ".repeat(70)}`.trim();
+  const long = [0, 1, 2, 3, 4, 5, 6, 7].map(para).join("\n\n");
+  v.width = 500;
+  v.rootH = 500;
+  expect(v.mdHeight(long)).toBeGreaterThan(360);
+  expect(v.mdPieces(long).length).toBe(8);
+  expect(v.mdPieces(long).join("\n\n")).toBe(long);
+  const short = [para(0), para(1)].join("\n\n");
+  expect(v.mdPieces(short)).toEqual([short]);
+  v.rootH = 3000;
+  expect(v.mdPieces(long)).toEqual([long]);
+  // A piece's height holds its own gap, and a heading's gap is the larger.
+  const r = { kind: "md", src: long, md: long, key: "md:0:1:0" };
+  expect(v.height({ ...r, gap: 12 }) - v.height(r)).toBe(6);
+  draw(v, cx);
+});
+
+test("adding a pin to the tray does not change how a reply is split", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  v.rootH = 500;
+  v.listH = 400;
+  const a = keys()[0];
+  v.toggle(a, cx);
+  v.full.add(`r:${a}`);
+  const items = () => v.rows().filter((r) => r.kind === "md").map((r) => r.key).join(",");
+  const before = items();
+  v.action("pin", cx);
+  v.listH = 366; // the tray took room from the list
+  expect(items()).toBe(before);
 });

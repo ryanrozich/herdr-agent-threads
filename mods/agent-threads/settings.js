@@ -11,7 +11,8 @@
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
-// This is the only file in the mod that writes, and it writes only this one file.
+// This is the only file in the mod that writes, and it writes only this file and pins.json
+// beside it (pins.js has the format).
 
 import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS } from "./ui.js";
@@ -23,6 +24,7 @@ export const FILE = "settings.json";
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }
 export function settingsPath(appHome) { return `${settingsDir(appHome)}/${FILE}`; }
+export function pinsPath(appHome) { return `${settingsDir(appHome)}/pins.json`; }
 
 const clampInt = (v, [lo, hi], dflt) => {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
@@ -180,6 +182,12 @@ export const NOT_SAVED = "settings.json is not valid JSON, so it was left as it 
 export function saveSettings(appHome, values, expected) {
   if (!writable(expected)) return Promise.reject(new Error(NOT_SAVED));
   return writeTextFile(settingsPath(appHome), settingsText(values, expected), expected ?? null);
+}
+
+// Writes the pins file. expected: its text as just read (null when there was no file), so a
+// save from one pane never overwrites another pane's; Herdr rejects a stale snapshot.
+export function savePinsText(appHome, text, expected) {
+  return writeTextFile(pinsPath(appHome), text, expected ?? null);
 }
 
 // A settings file saved under one of the mod's earlier names (name.js PREVIOUS), adopted

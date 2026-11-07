@@ -59,7 +59,7 @@ Some behaviour differs by agent:
 
 Select an image to open it full size. The session in these shots is made up.
 
-To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those.
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. In a block of text too tall for the pane, a drag stops at the end of the paragraph, because each paragraph is drawn on its own so a pin can return to it. `s` selects across paragraphs.
 
 <table>
 <tr>
@@ -117,8 +117,26 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `t` | Focus the terminal |
 | `a` | Show or hide agent messages |
 | `i` | Explain the stats on an open turn |
+| `p` | Pin or unpin the selected turn |
+| `1` to `5` | Return to that pin |
+| `u` | Undo the last unpin |
 | `,` | Settings |
 | `Esc` | Back out: search, Select view, settings, the open turn |
+
+## Pins
+
+Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the paragraph where you stopped.
+
+- Up to five pins. A sixth is refused: unpin one first.
+- A pinned turn stays in its place in the list, with a pin icon. The tray shows "New reply" until you read it, and "Working" while it runs.
+- `p` again unpins, or use the icon on the tray row. `u` undoes it, in the same place and with your reading place.
+- The header's pin button and the pin on an open turn's top line do the same with the mouse. Click a tray row to return.
+- Search leaves the tray alone. Press `Enter` or click a result to give the keys back to the list, so `p` and the digits work with the search kept. Returning to a turn the search hides shows that one turn.
+- Pins belong to one session and survive closing the pane, restarting Herdr and resuming. A forked session starts with none. A turn that no longer exists stays dim with its text and "Gone" until you unpin it.
+
+If your `quoteKey` is `p` or `u`, quote keeps the letter. The buttons still pin.
+
+Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the session id, a fingerprint of the turn, your place and the first 80 characters of the prompt. Sessions untouched for 90 days are dropped. It stays on your machine, and you can delete it at any time.
 
 ## Settings
 
