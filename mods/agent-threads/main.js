@@ -808,7 +808,7 @@ export default class Threads extends View {
     this.pinTurns = new Set(out.map((p) => p.turn).filter(Boolean));
     return out;
   }
-  // What the tray and the digits show: a pane with two sessions can hold more than the limit.
+  // What the Pinned view and the digits show: a pane with two sessions can hold more than the limit.
   pinnedList() { return this.pinnedAll().slice(0, PIN_LIMIT); }
   isPinned(key) { this.pinnedAll(); return this.pinKeys.has(key); }
   isPinnedTurn(turn) { this.pinnedAll(); return this.pinTurns.has(turn); }
@@ -835,7 +835,7 @@ export default class Threads extends View {
   unpin(p, cx) {
     const k = this.sessionKey(p.s);
     const rec = this.pinStore.sessions[k];
-    // By id: a save or another pane's change can have replaced the object since the tray drew.
+    // By id: a save or another pane's change can have replaced the object since the Pinned view drew.
     const at = rec?.pins.findIndex((x) => x.id === p.pin.id) ?? -1;
     if (at < 0) return false;
     const [pin] = rec.pins.splice(at, 1);
@@ -2279,7 +2279,7 @@ export default class Threads extends View {
       if (seg) this.copy(seg.text, `code:${id}`, `Code copied · ${plural(seg.text.split("\n").length, "line")}`, cx);
       return;
     }
-    // The stats part ends in an info chip: a click on it shows or hides what the chips mean.
+    // The stats part ends in an info icon: a click on it shows or hides what the figures mean.
     if (kind === "st") { this.legendOn = !this.legendOn; this.sel = id; return cx.notify(); }
     if (["rhead", "md", "nr", "code", "lh", "sx", "lg"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
@@ -3731,12 +3731,9 @@ export default class Threads extends View {
     return { prompt, lines, note, noteText };
   }
 
-  // A day divider: a band across the whole pane, 12 px below the turn above, with a rule
-  // above and below, a calendar icon in the accent colour, the day and its date, and the
-  // day's shown turns on the right. Its fill is ui.js bandFill.
+  // A day: its name, date and shown turns centred between two hairlines, 10 px below the
+  // exchange above.
   dayItem(t, r) {
-    // A day: its name, date and shown turns centred between two hairlines, 10 px below the
-    // exchange above.
     return v_flex().pt(10).pb(6)
       .child(h_flex().h(30).px(16).gap(10).items_center()
         .child(div().flex_1().h(1).bg(t.border))
@@ -3745,12 +3742,6 @@ export default class Threads extends View {
           .when(Boolean(r.date), (el) => el.child(div().text_color(t.dim).child(`· ${r.date}`)))
           .child(div().text_color(t.dim).child(`· ${plural(r.count, "turn")}`)))
         .child(div().flex_1().h(1).bg(t.border)));
-  }
-
-  bandFill(t) {
-    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
-    if (this.bandMemo?.k !== k) this.bandMemo = { k, fill: bandFill(t) };
-    return this.bandMemo.fill;
   }
 
   dividerItem(t, r) {
@@ -4033,7 +4024,7 @@ export default class Threads extends View {
   footer(t) {
     const hint = (k, label) => h_flex().gap(4).items_center().child(this.kbd(t, k)).child(div().text_size(11.5).text_color(t.dim).child(label));
     return h_flex().id("th-footer").flex_none().pl(10).pr(16).py(7).gap(10).flex_wrap().items_center().border_t(1).border_color(t.border)
-      // The hints wrap to two lines or more, and a toast has to clear them when there is a tray.
+      // The hints wrap to two lines or more, and a toast sits above them.
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
         if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }

@@ -6,14 +6,15 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## What you can do
 
-- **Find an answer fast.** Scroll the list or press `/` to search. Each row shows your prompt, the start of the reply and when it happened, so you can see when you last asked for an update.
+- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a bubble on the right, the start of the reply sits under it, the turn's number and time are above, and its tokens, time and model are below.
 - **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi and Cursor have none, see [Which agents it reads](#which-agents-it-reads).
 - **See the images you pasted.** Rows show small thumbnails. An open turn shows them larger, and a click shows one full size.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
-- **Choose how much each row shows.** Settings decide how many lines of your prompt and of the reply a row shows before you open it.
+- **Keep a few turns at hand.** `p` pins a turn and `v` shows your pins in a Pinned pane beside the list. See [Pins](#pins).
+- **Choose how much each row shows.** A row shows 4 lines of your prompt and 6 of the reply before "Show more". Settings change both.
 
 ## How it works
 
@@ -118,6 +119,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `a` | Show or hide agent messages |
 | `i` | Explain the stats on an open turn |
 | `p` | Pin or unpin the selected turn |
+| `v` | Show the pins: a Pinned pane beside the list, or the same pane when it is under 600 px wide |
 | `1` to `5` | Return to that pin |
 | `u` | Undo the last unpin |
 | `,` | Settings |
@@ -125,27 +127,28 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 
 ## Pins
 
-Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the turn. It opens with the turn's number and your prompt at the top of the pane, the same first line as its row in the tray. If you were reading further down, press `1` again: the turn opens at the start of that block of text, under a line that says the turn starts above. Click the line to see the prompt.
+Partway through a long reply and a newer one needs you? Press `p`. The turn gets a pin and a number, and the text you are reading does not move. Press `1` to come back to the turn. It opens with the turn's number and your message at the top of the pane, the same first line as its row in the Pinned view. If you were reading further down, press `1` again: the turn opens at the start of that block of text, under a line that says the turn starts above. Click the line to see your message.
 
 - Up to five pins. A sixth is refused: unpin one first.
-- A pinned turn stays in its place in the list, with a pin icon. The tray shows "New reply" until you read it, and "Working" while it runs.
-- `p` again unpins, or use the icon on the tray row. `u` undoes it, in the same place and with your reading place.
-- The header's pin button and the pin on an open turn's top line do the same with the mouse. Click a tray row to return.
-- Search leaves the tray alone. Press `Enter` or click a result to give the keys back to the list, so `p` and the digits work with the search kept. Returning to a turn the search hides shows that one turn.
-- Pins belong to one session and survive closing the pane, restarting Herdr and resuming. A forked session starts with none. A turn that no longer exists stays dim with its text and "Gone" until you unpin it.
+- A pinned turn stays in its place in the list, with a pin icon and its number above the bubble.
+- `v` opens a Pinned pane to the right of the list with only the pinned turns, in pin order. In the Pinned pane `v` goes back to the list, `↑` `↓` move between pins, and `p` unpins. Under 600 px there is no room to split, so the list itself shows the pins until you press `v` again.
+- `p` again unpins. `u` undoes it, in the same place and with your reading place.
+- The header's pin button and the pin on a turn's top line do the same with the mouse. The header's list button opens the Pinned view.
+- Search leaves the pins alone. Press `Enter` or click a result to give the keys back to the list, so `p` and the digits work with the search kept. Returning to a turn the search hides shows that one turn.
+- Pins belong to one session and survive closing the pane, restarting Herdr and resuming. A forked session starts with none. A pinned turn that no longer exists shows in the Pinned view as "no longer in this session", and a click unpins it.
 
-If your `quoteKey` is `p` or `u`, quote keeps the letter. The buttons still pin.
+If your `quoteKey` is `p` or `u`, quote keeps the letter. The buttons still pin. `v` is taken, so a `quoteKey` of `v` falls back to `q` with a note in the settings panel.
 
 Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the session id, a fingerprint of the turn, your place and the first 80 characters of the prompt. Sessions untouched for 90 days are dropped. It stays on your machine, and you can delete it at any time.
 
 ## Settings
 
-`,` opens the settings panel. It saves to `~/.config/herdr-app/data/agent-threads/settings.json`, which you can also edit by hand; open panes pick up a save within a second.
+`,` opens the settings panel. It saves to `~/.config/herdr-app/data/agent-threads/settings.json`, which you can also edit by hand; open panes pick up a save within a second. A file saved by an older version with the old defaults, 2 and 3, reads as the new defaults, 4 and 6.
 
 | Key | Default | What it sets |
 |---|---|---|
-| `promptLines` | 2 | Lines of your prompt a row shows (1 to 6) |
-| `replyLines` | 3 | Lines of the reply a row shows (1 to 8) |
+| `promptLines` | 4 | Lines of your prompt a row shows (1 to 10) |
+| `replyLines` | 6 | Lines of the reply a row shows (1 to 12) |
 | `agentTurns` | false | Show agent messages |
 | `quoteKey` | `"q"` | The quote key: one lowercase letter the pane does not already use |
 | `links` | none | Link rules, below |

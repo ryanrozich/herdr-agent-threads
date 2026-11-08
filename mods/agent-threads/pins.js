@@ -1,5 +1,5 @@
 // agent-threads: pins as data (no Herdr imports), tested under bun. A pin keeps a turn one
-// key away while the person reads something newer. The panel draws the tray and saves the
+// key away while the person reads something newer. The panel draws the pins and saves the
 // file (settings.js savePinsText), $HERDR_APP_HOME/data/agent-threads/pins.json:
 //
 //   { "version": 1, "sessions": { "claude:<session id>": { "at": 1794000000000, "pins": [
