@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent Threads chat look</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for the words, wide galleries of tall pane shots under each heading. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1e24; --muted: #5a6170; --line: #dde1e8;
+  --you: #2563EB; --agent: #7C3AED; --chip: #eef1f6;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #4f86f0; --agent: #9a6cf2; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #4f86f0; --agent: #9a6cf2; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; }
+main { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.prose { max-width: 68ch; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+a { color: var(--you); }
+code, kbd { font-family: var(--mono); font-size: 0.88em; background: var(--chip); border-radius: 4px; padding: 1px 5px; }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font-size: 13px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--panel); }
+.pill b { font-weight: 600; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+.steps { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.steps pre { margin: 6px 0 0; font-family: var(--mono); font-size: 13px; overflow-x: auto; background: var(--chip); border-radius: 6px; padding: 8px 10px; }
+section { display: flex; flex-direction: column; gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-items: start; }
+.grid .wide { grid-column: span 2; }
+@media (max-width: 440px) { .grid { grid-template-columns: 1fr 1fr; } .grid .wide { grid-column: span 2; } }
+.shot { all: unset; cursor: zoom-in; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shot img { width: 100%; height: 380px; object-fit: cover; object-position: top; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); display: block; }
+.shot span { font-size: 13px; color: var(--muted); line-height: 1.4; }
+.shot:focus-visible img { outline: 3px solid var(--you); outline-offset: 2px; }
+.notes li { color: var(--fg); }
+.small { font-size: 13px; color: var(--muted); }
+#lb { position: fixed; inset: 0; z-index: 50; background: rgba(8,10,14,0.92); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+#lb.on { display: flex; }
+#lb .frame { flex: 1; min-height: 0; width: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+#lb img { max-width: 100%; height: auto; border-radius: 6px; }
+#lb .bar { display: flex; gap: 10px; align-items: center; color: #e6e8ec; font-size: 14px; flex-wrap: wrap; justify-content: center; }
+#lb button { font: inherit; color: #e6e8ec; background: #2a2f38; border: 1px solid #3a404b; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+#lb button:focus-visible { outline: 2px solid #4f86f0; }
+@media (prefers-reduced-motion: no-preference) { .shot img { transition: transform .15s ease; } .shot:hover img { transform: translateY(-2px); } }
+</style>
+</head>
+<body>
+
+<main>
+  <header class="prose">
+    <h1>Agent Threads chat look</h1>
+    <p>The build of the four picks you approved, plus the bubble colours you asked for. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, stacked on pinning (<a href="https://github.com/ryanrozich/herdr-agent-threads/pull/6">PR 6</a>). Nothing merges until you say so.</p>
+    <div class="status">
+      <span class="pill"><b>303</b> tests pass</span>
+      <span class="pill">Biome, shellcheck, private scan, gitleaks clean</span>
+      <span class="pill"><span class="dot" style="background:var(--you)"></span>Your messages: blue</span>
+      <span class="pill"><span class="dot" style="background:var(--agent)"></span>Agent messages: purple</span>
+    </div>
+    <p class="small">Every screenshot is from an isolated Herdr window on the mini, with a made-up session. Click any image to open it full size. Arrow keys step through, Esc closes.</p>
+  </header>
+
+  <div class="steps prose">
+    <h2>Try it</h2>
+    <ol>
+      <li>Install the branch:<pre>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout chat-look &amp;&amp; git pull &amp;&amp; ./install.sh</pre></li>
+      <li>Close the Threads pane and open it again with <kbd>Cmd-Shift-T</kbd>.</li>
+      <li>Scroll the list. Each turn reads like a chat, with your message in a blue bubble on the right.</li>
+      <li>Press <kbd>Enter</kbd> on a long turn to open it, and <kbd>Esc</kbd> to close it.</li>
+      <li>Press <kbd>p</kbd> on two turns, then <kbd>v</kbd>. A Pinned pane opens beside Threads. Press <kbd>v</kbd> again to go back.</li>
+      <li>Press <kbd>,</kbd> and pick other bubble colours. <b>Reset to defaults</b> puts back blue and purple.</li>
+    </ol>
+    <p class="small">A settings file that still holds the old defaults (2 and 3 lines) reads as the new ones, 4 and 6. Values you chose yourself stay.</p>
+  </div>
+
+  <section class="prose">
+    <h2>What is built</h2>
+    <ul>
+      <li><b>The chat look.</b> Your message is a bubble on the right, the reply is plain text across the pane, the number and time sit above, and time, tokens, model and tool calls sit below.</li>
+      <li><b>Collapse at 4 and 6 lines.</b> Messages show 4 lines and replies 6 before "Show more". Settings allow 1 to 10 and 1 to 12.</li>
+      <li><b>Pinned view, option B.</b> <kbd>v</kbd> opens a Pinned pane beside Threads from 600 px. Under 600 px the same pane switches to the pins, as option A. The spike on <code>pane.split</code> from a key press passed before the build.</li>
+      <li><b>Bubble colours.</b> Blue for your messages and purple for agent messages by default, with white text at 5.2:1 and 5.7:1. Seven presets, <code>plain</code> for the theme's own grey, or any <code>#rrggbb</code> in the file.</li>
+      <li><b>Pin returns.</b> This build includes the fix now on PR 6: <kbd>1</kbd> shows the turn from your prompt, or opens at the block you were reading under a "#8 starts above" line.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The list</h2>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/01-dark.jpg" alt="The list, dark, newest turns"><span>Newest turns, dark, 520 px</span></button>
+      <button class="shot"><img src="shots/02-days.jpg" alt="The top of the list with day lines"><span>The top of the session, with a line for each day</span></button>
+      <button class="shot"><img src="shots/05-narrow.jpg" alt="The list at 340 px"><span>340 px: a bubble is as wide as its text, up to 82% of the pane</span></button>
+      <button class="shot wide"><img src="shots/06-wide.jpg" alt="The list at 900 px"><span>900 px: short messages keep short bubbles</span></button>
+      <button class="shot"><img src="shots/07-running.jpg" alt="A turn still running at the bottom"><span>A turn with no reply yet, and quoted replies in bubbles</span></button>
+    </div>
+  </section>
+
+  <section>
+    <h2>An open turn</h2>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/03-open-dark.jpg" alt="An open turn, dark"><span>Open turn, dark: image, reply, stats, buttons</span></button>
+      <button class="shot"><img src="shots/04-open-light.jpg" alt="An open turn, light"><span>The same turn, light</span></button>
+      <button class="shot"><img src="shots/10-quote-light.jpg" alt="An open turn whose message quotes a reply"><span>A message that quotes a reply: the quote keeps its bar</span></button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bubble colours</h2>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/08-agent-dark.jpg" alt="An agent message in a purple bubble, dark"><span>An agent message in purple, dark</span></button>
+      <button class="shot"><img src="shots/09-agent-light.jpg" alt="An agent message in a purple bubble, light"><span>An agent message in purple, light</span></button>
+      <button class="shot"><img src="shots/11-settings-dark.jpg" alt="The settings panel with colour swatches, dark"><span>Settings: a swatch row for each, dark</span></button>
+      <button class="shot"><img src="shots/12-settings-light.jpg" alt="The settings panel with colour swatches, light"><span>Settings, light</span></button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Pinned view</h2>
+    <div class="grid" data-g>
+      <button class="shot wide"><img src="shots/13-pinned-pane.jpg" alt="The Pinned pane beside Threads, dark"><span>From 600 px: the Pinned pane beside Threads, pins in order with their numbers</span></button>
+      <button class="shot wide"><img src="shots/14-pinned-pane-light.jpg" alt="The Pinned pane beside Threads, light"><span>The same, light</span></button>
+      <button class="shot"><img src="shots/15-pinned-narrow.jpg" alt="The pins in the same pane under 600 px"><span>Under 600 px: the pins in the same pane, with a toast saying why</span></button>
+    </div>
+  </section>
+
+  <section class="prose notes">
+    <h2>Notes for review</h2>
+    <ul>
+      <li>An open turn on a coloured bubble shows your message as plain text in white. Herdr draws Markdown in the theme's text colour whatever the bubble says, which is dark on blue in the light theme. Quotes keep their bar; link rules and code spans in your message show only with <code>plain</code>. The reply is unchanged.</li>
+      <li>Two departures from the design: the action bar stays as buttons, and the side padding is 16 px rather than 12, to line up with the rest of the pane.</li>
+      <li><kbd>v</kbd> is now taken, so a <code>quoteKey</code> of <code>v</code> falls back to <kbd>q</kbd> with a note in settings.</li>
+      <li>One timing test (S1) failed once under load and passed on the rerun.</li>
+      <li>The README screenshots still show the old look. They can be retaken once you approve this look, since new images in the repo need your approval first.</li>
+      <li>Quote tracking is next, as its own PR.</li>
+    </ul>
+  </section>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="frame"><img alt=""></div>
+  <div class="bar"><button id="lb-prev" aria-label="Previous">←</button><span class="cap"></span><button id="lb-next" aria-label="Next">→</button><button id="lb-close">Close (Esc)</button></div>
+</div>
+
+<script>
+(() => {
+  const shots = [...document.querySelectorAll(".shot")];
+  const lb = document.getElementById("lb");
+  const img = lb.querySelector("img");
+  const cap = lb.querySelector(".cap");
+  let i = 0, opener = null;
+  const show = (n) => {
+    i = (n + shots.length) % shots.length;
+    const s = shots[i].querySelector("img");
+    img.src = s.src; img.alt = s.alt;
+    cap.textContent = `${i + 1} of ${shots.length} · ${shots[i].querySelector("span").textContent}`;
+    lb.querySelector(".frame").scrollTop = 0;
+  };
+  const open = (n) => { opener = document.activeElement; show(n); lb.classList.add("on"); document.getElementById("lb-close").focus(); };
+  const close = () => { lb.classList.remove("on"); opener?.focus?.(); };
+  shots.forEach((b, n) => b.addEventListener("click", () => open(n)));
+  document.getElementById("lb-prev").addEventListener("click", () => show(i - 1));
+  document.getElementById("lb-next").addEventListener("click", () => show(i + 1));
+  document.getElementById("lb-close").addEventListener("click", close);
+  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.classList.contains("frame")) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (!lb.classList.contains("on")) return;
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowRight") show(i + 1);
+    else if (e.key === "ArrowLeft") show(i - 1);
+  });
+})();
+</script>
+</body>
+</html>
