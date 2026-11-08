@@ -2223,26 +2223,43 @@ test("the tray draws at every state and width, folds in a short pane, and marks 
   expect(r).toBeUndefined();
 });
 
-test("a block taller than the pane is drawn by paragraph; one that fits stays one item for selection", async () => {
-  const { v, cx } = await pinPane("--extra", "2");
-  const para = (i) => `Paragraph ${i} ${"word ".repeat(70)}`.trim();
-  const long = [0, 1, 2, 3, 4, 5, 6, 7].map(para).join("\n\n");
+test("a reply block is one list item however tall, so a drag can cross its paragraphs", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   v.width = 500;
-  v.rootH = 500;
-  expect(v.mdHeight(long)).toBeGreaterThan(360);
-  expect(v.mdPieces(long).length).toBe(8);
-  expect(v.mdPieces(long).join("\n\n")).toBe(long);
-  const short = [para(0), para(1)].join("\n\n");
-  expect(v.mdPieces(short)).toEqual([short]);
-  v.rootH = 3000;
-  expect(v.mdPieces(long)).toEqual([long]);
-  // A piece's height holds its own gap, and a heading's gap is the larger.
-  const r = { kind: "md", src: long, md: long, key: "md:0:1:0" };
-  expect(v.height({ ...r, gap: 12 }) - v.height(r)).toBe(6);
+  v.rootH = 300; // a short pane, so the long reply's prose is taller than it
+  v.listH = 200;
+  for (const k of keys()) { v.toggle(k, cx); v.full.add(`r:${k}`); }
+  const md = v.rows().filter((r) => r.kind === "md");
+  const tall = md.find((r) => r.src.includes("Paragraph 1:"));
+  expect(v.mdHeight(tall.src)).toBeGreaterThan(v.rootH);
+  for (const i of [1, 2, 3, 4, 5, 6]) expect(tall.src).toContain(`Paragraph ${i}:`);
+  expect(md.filter((r) => r.src.includes("Paragraph")).length).toBe(1);
+  expect(md.every((r) => !/^md:.*\.\d+$/.test(r.key))).toBe(true);
   draw(v, cx);
 });
 
-test("adding a pin to the tray does not change how a reply is split", async () => {
+test("a pin left on a paragraph by the earlier build returns to the start of its block", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = keys()[0];
+  v.toggle(a, cx);
+  v.full.add(`r:${a}`);
+  v.action("pin", cx);
+  const pin = v.pinnedList()[0].pin;
+  pin.anchor = ["md", "0.2"]; // a paragraph item, which no longer exists
+  pin.whole = true;
+  v.toggle(a, cx);
+  v.sel = keys().at(-1);
+  v.key(keyEv("1"), cx);
+  v.scrollTo.until = 0;
+  const rows = v.rows();
+  expect(rows.some((r) => r.key === `md:${a}:0.2`)).toBe(false);
+  expect(v.scrollTo).toMatchObject({ key: `md:${a}:0.2`, or: [`md:${a}:0`] });
+  expect(rows.some((r) => r.key === `md:${a}:0`)).toBe(true);
+  draw(v, cx);
+  expect(v.scrollTo).toBe(null);
+});
+
+test("adding a pin to the tray does not change the list items of a reply", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   v.rootH = 500;
   v.listH = 400;

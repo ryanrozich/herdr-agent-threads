@@ -503,34 +503,6 @@ export function shortModel(m) {
   return parts.length ? `${name} ${parts.join(".")}` : name;
 }
 
-// Prose as pieces that each make sense drawn alone, split at blank lines. A list stays whole,
-// since its items would be renumbered; indented text stays with what it continues, since
-// alone it would draw as code; a heading stays with the text under it; quote lines stay
-// together. Text with link definitions stays whole, since a piece could lose its link.
-export function paragraphs(md) {
-  const text = md ?? "";
-  if (/^\s*\[[^\]]+\]:\s/m.test(text) || /^\s*(```|~~~)/m.test(text)) return [text];
-  const blocks = text.split(/\n[ \t]*\n+/).filter((b) => b.trim() !== "");
-  const isList = (b) => /^\s*([-*+]|\d+[.)])\s/.test(b);
-  const out = [];
-  let prev = null;
-  for (const b of blocks) {
-    const join = prev != null && (
-      /^[ \t]/.test(b)
-      || (isList(b) && isList(prev.first))
-      || (/^>/.test(b) && /^>/.test(prev.first))
-      || /^#{1,6}\s/.test(prev.last));
-    if (join) {
-      out[out.length - 1] += `\n\n${b}`;
-      prev = { first: prev.first, last: b };
-    } else {
-      out.push(b);
-      prev = { first: b, last: b };
-    }
-  }
-  return out.length ? out : [text];
-}
-
 // Markdown split into prose and fenced code blocks, in order.
 export function segments(md) {
   const out = [];

@@ -59,7 +59,7 @@ Some behaviour differs by agent:
 
 Select an image to open it full size. The session in these shots is made up.
 
-To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. In a block of text too tall for the pane, a drag stops at the end of the paragraph, because each paragraph is drawn on its own so a pin can return to it. `s` selects across paragraphs.
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. A drag can cross paragraphs, but not into a code block, which is a separate part of the turn. `s` selects across everything.
 
 <table>
 <tr>
@@ -125,7 +125,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 
 ## Pins
 
-Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the paragraph where you stopped.
+Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the turn, at the start of the block of text you were reading.
 
 - Up to five pins. A sixth is refused: unpin one first.
 - A pinned turn stays in its place in the list, with a pin icon. The tray shows "New reply" until you read it, and "Working" while it runs.

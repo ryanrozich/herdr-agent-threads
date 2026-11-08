@@ -2,7 +2,6 @@
 import { test, expect, describe } from "bun:test";
 import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, pinWhen, trayFolds } from "../mods/agent-threads/pins.js";
 import { keyAction, TAKEN_LETTERS, headPinHit } from "../mods/agent-threads/ui.js";
-import { paragraphs } from "../mods/agent-threads/turns.js";
 
 const DAY = 86400000;
 const T0 = new Date(2026, 10, 6, 15, 30).getTime();
@@ -131,7 +130,7 @@ describe("the reading place", () => {
     expect(partOf("bar:1", "0:4")).toBe(null);
   });
 
-  test("a place survives another turn number, and a block and its paragraphs stand in for each other", () => {
+  test("a place survives another turn number, and a pin saved on a paragraph by an earlier build falls back to its block", () => {
     expect(partKeys(["md", "0.2"], "1:9")).toEqual(["md:1:9:0.2", "md:1:9:0"]);
     expect(partKeys(["md", "1"], "0:4")).toEqual(["md:0:4:1", "md:0:4:1.0"]);
     expect(partKeys(["rhead", null], "0:4")).toEqual(["rhead:0:4"]);
@@ -169,42 +168,5 @@ describe("keys", () => {
     expect(headPinHit(w - 23, w)).toBe(false); // the chevron's middle
     expect(headPinHit(100, w)).toBe(false);
     expect(headPinHit(null, w)).toBe(false);
-  });
-});
-
-describe("paragraphs", () => {
-  test("splits at blank lines, and every word stays in order", () => {
-    const md = "One line.\n\nTwo\nlines.\n\n\nThree.";
-    expect(paragraphs(md)).toEqual(["One line.", "Two\nlines.", "Three."]);
-  });
-
-  test("a heading stays with the text under it", () => {
-    expect(paragraphs("Intro.\n\n## Next\n\nBody.\n\nMore.")).toEqual(["Intro.", "## Next\n\nBody.", "More."]);
-  });
-
-  test("a list stays whole, so its numbers hold, even with blank lines between items", () => {
-    expect(paragraphs("Lead.\n\n1. a\n\n2. b\n\n3. c\n\nAfter.")).toEqual(["Lead.", "1. a\n\n2. b\n\n3. c", "After."]);
-    expect(paragraphs("- a\n\n- b")).toEqual(["- a\n\n- b"]);
-  });
-
-  test("indented text stays with what it continues, so it does not draw as code", () => {
-    expect(paragraphs("- item\n\n  more of it\n\nAfter.")).toEqual(["- item\n\n  more of it", "After."]);
-    expect(paragraphs("Text.\n\n    indented")).toEqual(["Text.\n\n    indented"]);
-  });
-
-  test("quote lines stay together", () => {
-    expect(paragraphs("> one\n\n> two\n\nAfter.")).toEqual(["> one\n\n> two", "After."]);
-  });
-
-  test("link definitions and stray fences keep the text whole", () => {
-    const refs = "See [a][1].\n\nMore.\n\n[1]: https://example.com";
-    expect(paragraphs(refs)).toEqual([refs]);
-    const fence = "Text.\n\n```\ncode\n\nmore\n```";
-    expect(paragraphs(fence)).toEqual([fence]);
-  });
-
-  test("empty text is one empty piece", () => {
-    expect(paragraphs("")).toEqual([""]);
-    expect(paragraphs(null)).toEqual([""]);
   });
 });

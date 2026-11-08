@@ -26,7 +26,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, paragraphs, firstLine, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, firstLine, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -74,7 +74,6 @@ const REPLY_BUDGET = 1600; // characters of prose shown before "Show full reply"
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
 // (measured against the same text drawn whole: 748 px and 748 px).
 const visitNote = (search) => (search ? "Pinned, not in this search" : "Pinned, hidden agent message");
-const pieceGap = (md) => (/^#{1,6}\s/.test(md) ? 16 : 12);
 const CODE_LINES = 12;
 const LINE = 18; // one line of 13 px text in a box of that height (rows, code)
 // gpui's default line height is about 1.618 times the text size: 21 px for 13 px TextView
@@ -1548,11 +1547,10 @@ export default class Threads extends View {
         }
         used += md.length;
         // Link rules (settings.json links) on the text shown; heights use the text as written.
-        const pieces = this.mdPieces(md);
-        pieces.forEach((pc, j) => {
-          const lk = pieces.length === 1 && linked?.[i] && md === seg.text ? linked[i] : this.linkOne(pc);
-          out.push({ ...item, kind: "md", key: `md:${key}:${i}${pieces.length > 1 ? `.${j}` : ""}`, md: lk.md, src: pc, links: lk.links, gap: j > 0 ? pieceGap(pc) : 6 });
-        });
+        // A block is one list item however tall, so a drag can select across its paragraphs
+        // (it cannot cross list items). A return to a pin lands at the start of the block.
+        const lk = linked?.[i] && md === seg.text ? linked[i] : this.linkOne(md);
+        out.push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
       } else {
         used += Math.min(seg.text.length, 400);
         out.push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
@@ -3036,15 +3034,6 @@ export default class Threads extends View {
 
   // First-frame estimate of Markdown at the card width: 21 px lines, 12 px between blocks,
   // and one spare line so it does not run short. The probe's measure replaces it.
-  // A mod can only scroll to a list item, so a return to a pin lands at the top of one. A
-  // block taller than the pane is drawn a paragraph at a time, so the landing is on the
-  // paragraph. A block that fits stays one item: the place is on screen when it lands, and a
-  // drag can select across its paragraphs, which it cannot across list items. The pane's
-  // height is the whole pane's, which adding a pin to the tray does not change.
-  mdPieces(md) {
-    return this.mdHeight(md) > Math.max(200, (this.rootH || 640) - 140) ? paragraphs(md) : [md];
-  }
-
   mdHeight(md) {
     const w = this.inner();
     let h = 0;
