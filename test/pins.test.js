@@ -1,6 +1,6 @@
 // bun test: pins as data. Everything here is made up.
 import { test, expect, describe } from "bun:test";
-import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, pinWhen, trayFolds } from "../mods/agent-threads/pins.js";
+import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, pinWhen, trayFolds, placeAtTop, placeItem, NOT_A_PLACE } from "../mods/agent-threads/pins.js";
 import { keyAction, TAKEN_LETTERS, headPinHit } from "../mods/agent-threads/ui.js";
 
 const DAY = 86400000;
@@ -136,6 +136,18 @@ describe("the reading place", () => {
     expect(partKeys(["rhead", null], "0:4")).toEqual(["rhead:0:4"]);
     expect(partKeys(["head"], "0:4")).toEqual([]);
     expect(partKeys(null, "0:4")).toEqual([]);
+  });
+
+  test("a place near the top of a turn, or at its end, returns to the head; a later block returns to that block", () => {
+    for (const a of [null, ["head"], ["you", null], ["img", "0"], ["rhead", null], ["nr", null], ["md", "0"], ["md", "0.3"], ["cc", "0"], ["code", "0"], ["st", null], ["cp", null], ["lg", null], ["more", null]]) {
+      expect(placeAtTop(a)).toBe(true);
+    }
+    for (const a of [["md", "2"], ["md", "2.1"], ["cc", "1"], ["code", "1"], ["lh", null], ["lt", null]]) expect(placeAtTop(a)).toBe(false);
+    expect(placeItem(["code", "1"])).toEqual(["cc", "1"]);
+    expect(placeItem(["lt", null])).toEqual(["lh", null]);
+    expect(placeItem(["md", "2"])).toEqual(["md", "2"]);
+    for (const k of ["st", "cp", "lg", "more", "resume"]) expect(NOT_A_PLACE.has(k)).toBe(true);
+    for (const k of ["md", "cc", "code", "lh", "lt", "you", "rhead"]) expect(NOT_A_PLACE.has(k)).toBe(false);
   });
 });
 

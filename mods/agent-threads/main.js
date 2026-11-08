@@ -37,7 +37,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
-import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, pinWhen, trayFolds } from "./pins.js";
+import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, pinWhen, trayFolds } from "./pins.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
@@ -94,7 +94,7 @@ const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext"]);
+const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -460,6 +460,7 @@ export default class Threads extends View {
     this.pinDueAt = null; // when a changed reading place is saved
     this.pinUndo = []; // unpinned this pane's life, newest last
     this.pinVisit = null; // a pinned turn shown although the search or a setting hides it
+    this.pinResume = null; // { key, part }: the "starts above" line a return put over a place
     this.topKey = null; // the list item at the top of the pane
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
@@ -847,7 +848,7 @@ export default class Threads extends View {
   // Keeps the pin's reading place when the top of the pane is in its turn.
   notePlace(pin, key) {
     const a = this.topKey && partOf(this.topKey, key);
-    if (!a) return false;
+    if (!a || NOT_A_PLACE.has(a[0])) return false;
     const whole = this.full.has(`r:${key}`);
     if (pin.anchor?.[0] === a[0] && pin.anchor?.[1] === a[1] && Boolean(pin.whole) === whole) return false;
     pin.anchor = a;
@@ -894,9 +895,12 @@ export default class Threads extends View {
     this.pinVisit = hidden ? key : null;
     // The note above the turn can be out of view when the place is further down.
     if (hidden) this.say(visitNote(Boolean(q && !threadMatches(s.turns, turn, q))), "pin", cx, 3000);
-    const [first, ...rest] = partKeys(pin.anchor, key);
+    // A place near the top of the turn returns to its head: the prompt and the start of the
+    // reply. A place further down returns there, under a line that says the turn starts above.
+    const [first, ...rest] = placeAtTop(pin.anchor) ? [] : partKeys(placeItem(pin.anchor), key);
     const until = Date.now() + 400;
-    this.scrollTo = first ? { key: first, how: "land", or: rest, head: key, until } : { key, how: "card", until };
+    this.pinResume = null;
+    this.scrollTo = first ? { key: first, how: "land", or: rest, head: key, until, resume: true } : { key, how: "card", until };
     this.placeHold = until + 300;
     this.placeBase = null;
     pin.seen = seenOf(turn);
@@ -1326,7 +1330,7 @@ export default class Threads extends View {
       [...this.open].join(","), [...this.full].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH),
+      this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
@@ -1508,8 +1512,13 @@ export default class Threads extends View {
 
   // One expanded turn becomes several list items, so each clickable part has its own key
   // (a virtual list allows one click handler, on the list, reporting the item key).
+  // The item a return put the "starts above" line over, while that turn stays selected.
+  resumeAt() { return this.pinResume && this.sel === this.pinResume.key ? this.pinResume.part : null; }
+
   expanded(item, out) {
     const { key, turn } = item;
+    const resume = this.resumeAt();
+    const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
     (turn.images ?? []).forEach((_, i) => out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: this.full.has(`i:${key}:${i}`) }));
@@ -1550,10 +1559,10 @@ export default class Threads extends View {
         // A block is one list item however tall, so a drag can select across its paragraphs
         // (it cannot cross list items). A return to a pin lands at the start of the block.
         const lk = linked?.[i] && md === seg.text ? linked[i] : this.linkOne(md);
-        out.push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
+        push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
       } else {
         used += Math.min(seg.text.length, 400);
-        out.push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
+        push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
         out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...this.codeShape(seg.text) });
       }
     });
@@ -1568,7 +1577,7 @@ export default class Threads extends View {
       // until the probe has measured it.
       const text = flattenMd(late.slice(0, 4000));
       const l = rowLines(text, LATEST_LINES + 1, this.inner() / MD_CHAR);
-      out.push({ ...item, kind: "lhead", key: `lh:${key}` });
+      push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
     }
     out.push({ ...item, kind: "stats", key: `st:${key}` });
@@ -2138,6 +2147,13 @@ export default class Threads extends View {
     }
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    if (kind === "resume") {
+      this.toList();
+      this.sel = id;
+      this.pinResume = null;
+      this.scrollTo = { key: id, how: "card" };
+      return cx.notify();
+    }
     if (kind === "cp") this.clipAtPress = this.clipBefore;
     if (kind === "cp" && this.selecting === id) {
       const hit = this.barHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width, this.findTurn(id));
@@ -2392,6 +2408,7 @@ export default class Threads extends View {
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
+    if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
     this.publishDrawError(cx);
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering;
@@ -2802,6 +2819,21 @@ export default class Threads extends View {
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
       if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
       this.scrollTo = null;
+      // A return to a place further down the turn: when the place shows with the head at the
+      // top of the pane, the head; otherwise the place, under a line that says the turn
+      // starts above, which the next frame's rows carry.
+      if (i >= 0 && how === "land" && st.resume) {
+        const h = rows.findIndex((x) => x.key === st.head);
+        let above = 0;
+        for (let k = h; h >= 0 && k < i; k++) above += slots[k];
+        if (h >= 0 && above <= this.listH * 0.6) { i = h; how = "card"; }
+        else {
+          this.pinResume = { key: st.head, part: rows[i].key };
+          this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400 };
+          i = -1;
+          cx.timer.after(0, (cx) => cx.notify());
+        }
+      }
       if (i >= 0 && how === "card") {
         // The card's last part to the near edge, then its head: a card that fits ends up
         // wholly on screen, and a taller one shows from its head down.
@@ -3196,6 +3228,7 @@ export default class Threads extends View {
       case "day": return 46;
       case "hidden": return 28;
       case "note": return 34;
+      case "resume": return 30;
       case "working": {
         const prompt = clipPrompt(r.turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
         // The working card's text is 2 px narrower than other card text (its 10 px padding),
@@ -3404,6 +3437,7 @@ export default class Threads extends View {
       case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
       case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
+      case "resume": return this.resumeItem(t, r, size);
       default: return this.cardPart(t, r, size);
     }
   }
@@ -3608,6 +3642,15 @@ export default class Threads extends View {
   // raised fill and side borders, so slices stack into one card with no seam. Only the
   // first part has the top edge and the last the bottom edge. The card keeps the border
   // stroke whether or not it is selected.
+  // The line a return to a pin puts over a place further down the turn: the prompt and the
+  // start of the reply are above it. A click shows the turn from its head.
+  resumeItem(t, r, size) {
+    return v_flex().h(size).px(6).child(v_flex().h(size).flex_none().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).justify_center()
+      .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
+        .child(svg(ICON("chevron-up")).size(12).flex_none())
+        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`))));
+  }
+
   cardPart(t, r, size) {
     const { turn } = r;
     // Flex containers, so a child's top margin stays inside the card instead of collapsing

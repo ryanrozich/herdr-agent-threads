@@ -1901,7 +1901,7 @@ test("a sixth pin is refused in the design's words, and undo cannot pass the lim
   draw(v, cx);
 });
 
-test("a digit returns: the turn opens, stays selected, and lands on the place it was left", async () => {
+test("a digit returns: the turn opens, stays selected, and shows from its head when the place is near its top", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = keys()[0];
   v.toggle(a, cx);
@@ -1915,7 +1915,7 @@ test("a digit returns: the turn opens, stays selected, and lands on the place it
   expect(v.sel).toBe(a);
   expect(v.open.has(a)).toBe(true);
   expect(v.follow).toBe(false);
-  expect(v.scrollTo).toMatchObject({ key: `rhead:${a}`, how: "land", head: a });
+  expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
   v.scrollTo.until = 0; // no wait for measures here
   draw(v, cx);
   expect(v.scrollTo).toBe(null);
@@ -1971,15 +1971,20 @@ test("a place that no longer exists falls back to the block, then the card", asy
   expect(scrolled.at(-1)).toEqual([head, "top"]);
 });
 
-test("a return lands from below, so the place reaches the top of the pane, and waits for measures", async () => {
+// Turn 8 of the --long fixture has a reply in two blocks around a code block: md 0, cc 1, md 2.
+const twoBlocks = (keys) => keys().find((k) => k.endsWith(":8"));
+
+test("a return to a place far down the turn lands from below under a line that says the turn starts above, after the measures", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
-  const a = keys()[0];
+  const a = twoBlocks(keys);
+  v.sel = a;
   v.toggle(a, cx);
-  const place = v.rows().findIndex((r) => r.key === `rhead:${a}`);
-  v.topKey = `rhead:${a}`;
+  v.topKey = `md:${a}:2`;
   v.action("pin", cx);
+  expect(v.pinnedList()[0].pin.anchor).toEqual(["md", "2"]);
   v.listH = 60;
   v.goPin(0, cx);
+  expect(v.scrollTo).toMatchObject({ key: `md:${a}:2`, how: "land", head: a, resume: true });
   const scrolled = [];
   v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
   v.probeDue = () => [[v.rows().find((r) => r.kind === "md"), "sig"]];
@@ -1989,11 +1994,80 @@ test("a return lands from below, so the place reaches the top of the pane, and w
   v.probeDue = () => [];
   cx.timers = [];
   v.render(cx);
+  // The head would push the place out of view: the place, under the line, next frame.
+  expect(v.scrollTo).toMatchObject({ key: `resume:${a}`, how: "land", or: [`md:${a}:2`] });
+  expect(scrolled.length).toBe(0);
+  const rows = v.rows();
+  const line = rows.findIndex((r) => r.key === `resume:${a}`);
+  expect(rows[line + 1].key).toBe(`md:${a}:2`);
+  cx.timers = [];
+  v.render(cx);
   expect(v.scrollTo).toBe(null);
   cx.flush();
   expect(scrolled.length).toBe(2);
-  expect(scrolled[0][0]).toBeGreaterThan(place);
-  expect(scrolled[1]).toEqual([place, "top"]);
+  expect(scrolled[0][0]).toBeGreaterThan(line);
+  expect(scrolled[1]).toEqual([line, "top"]);
+  draw(v, cx);
+});
+
+test("a place far down that shows under the head returns to the head; the starts-above line shows the head", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = twoBlocks(keys);
+  v.sel = a;
+  v.toggle(a, cx);
+  v.topKey = `md:${a}:2`;
+  v.action("pin", cx);
+  v.listH = 5000;
+  v.goPin(0, cx);
+  v.scrollTo.until = 0;
+  draw(v, cx);
+  expect(v.scrollTo).toBe(null);
+  expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
+  // A short pane: the line, and a click on it goes to the head.
+  v.listH = 60;
+  v.goPin(0, cx);
+  v.scrollTo.until = 0;
+  draw(v, cx);
+  expect(v.rows().some((r) => r.key === `resume:${a}`)).toBe(true);
+  v.click(`resume:${a}`, cx);
+  expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
+  expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
+  // Selecting another turn drops the line too.
+  v.goPin(0, cx);
+  v.scrollTo.until = 0;
+  draw(v, cx);
+  v.sel = keys()[0];
+  v.action("next", cx);
+  expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
+});
+
+test("scrolling down past a pinned turn keeps its place in the reply, not on its stats or action bar", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = twoBlocks(keys);
+  v.sel = a;
+  v.toggle(a, cx);
+  v.topKey = a;
+  v.action("pin", cx);
+  const pin = () => v.pinnedList()[0].pin;
+  v.placeHold = null;
+  for (const top of [`you:${a}`, `md:${a}:0`, `md:${a}:2`, `lh:${a}`, `st:${a}`, `cp:${a}`, keys()[8]]) {
+    v.topKey = top;
+    v.trackPlace();
+  }
+  expect(pin().anchor).toEqual(["lh", null]);
+});
+
+test("a place an earlier build saved on a turn's stats or action bar returns to the head", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--long");
+  const a = twoBlocks(keys);
+  v.sel = a;
+  v.toggle(a, cx);
+  v.action("pin", cx);
+  for (const anchor of [["st", null], ["cp", null], ["lg", null], ["more", null]]) {
+    v.pinnedList()[0].pin.anchor = anchor;
+    v.goPin(0, cx);
+    expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
+  }
 });
 
 test("a whole reply comes back whole, after a restart too", async () => {
@@ -2240,21 +2314,25 @@ test("a reply block is one list item however tall, so a drag can cross its parag
 
 test("a pin left on a paragraph by the earlier build returns to the start of its block", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
-  const a = keys()[0];
+  const a = twoBlocks(keys);
   v.toggle(a, cx);
   v.full.add(`r:${a}`);
   v.action("pin", cx);
   const pin = v.pinnedList()[0].pin;
-  pin.anchor = ["md", "0.2"]; // a paragraph item, which no longer exists
+  pin.anchor = ["md", "2.1"]; // a paragraph item, which no longer exists
   pin.whole = true;
   v.toggle(a, cx);
   v.sel = keys().at(-1);
+  v.listH = 60;
   v.key(keyEv("1"), cx);
   v.scrollTo.until = 0;
   const rows = v.rows();
-  expect(rows.some((r) => r.key === `md:${a}:0.2`)).toBe(false);
-  expect(v.scrollTo).toMatchObject({ key: `md:${a}:0.2`, or: [`md:${a}:0`] });
-  expect(rows.some((r) => r.key === `md:${a}:0`)).toBe(true);
+  expect(rows.some((r) => r.key === `md:${a}:2.1`)).toBe(false);
+  expect(v.scrollTo).toMatchObject({ key: `md:${a}:2.1`, or: [`md:${a}:2`] });
+  expect(rows.some((r) => r.key === `md:${a}:2`)).toBe(true);
+  draw(v, cx);
+  expect(v.scrollTo).toMatchObject({ key: `resume:${a}`, or: [`md:${a}:2`] });
+  v.scrollTo.until = 0;
   draw(v, cx);
   expect(v.scrollTo).toBe(null);
 });

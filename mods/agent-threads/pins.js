@@ -114,6 +114,32 @@ export function partOf(itemKey, turnKey) {
   return [m[0], m[3] ?? null];
 }
 
+// Parts of an open turn that are not a reading place: the stats, their legend, the action
+// bar, Show full reply, and the line a return puts above a place. Scrolling down past a turn
+// leaves one of these at the top of the pane last, and a return there would show only the
+// end of the reply, with the prompt out of view.
+export const NOT_A_PLACE = new Set(["st", "lg", "cp", "more", "resume"]);
+
+// Whether a return to this place starts at the turn's head: a place in the head, the
+// message, an image, the caption or the reply's first block, a place a build before this one
+// saved at the end of the turn, and no place at all. A later reply block or the latest
+// update is a place further down.
+export function placeAtTop(anchor) {
+  if (!anchor) return true;
+  const [kind, sub] = anchor;
+  if (kind === "md" || kind === "cc" || kind === "code") return String(sub ?? "0").split(".")[0] === "0";
+  return kind !== "lh" && kind !== "lt";
+}
+
+// The list item a place shows as: a code block's place is its header, and the latest
+// update's is its label, so the line above a place sits over the whole block.
+export function placeItem(anchor) {
+  if (!anchor) return anchor;
+  if (anchor[0] === "code") return ["cc", anchor[1]];
+  if (anchor[0] === "lt") return ["lh", null];
+  return anchor;
+}
+
 // The list items that show a place, best first. A reply drawn as one block and as
 // paragraphs has different items (the pane may have been resized), so each stands in for
 // the other. Empty for the head, which the panel scrolls to as a whole card.
