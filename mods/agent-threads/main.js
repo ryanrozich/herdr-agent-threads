@@ -3,8 +3,9 @@
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
-// other commands it runs are pane.split (to open itself), pane.focus (the Terminal
-// button, and before the quote's paste) and pane.close (its own pane). The only programs
+// other commands it runs are pane.split (to open itself, and v's Pinned pane beside it),
+// layout.resize (to give that pane half the width), pane.focus (the Terminal button, v
+// between the two panes, and before the quote's paste) and pane.close (its own pane). The only programs
 // it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
@@ -26,7 +27,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, firstLine, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -37,7 +38,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
-import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, pinWhen, trayFolds } from "./pins.js";
+import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
@@ -64,6 +65,11 @@ const EXEC_STALL = 30000;
 // the read's clock starts again instead of the read being judged stalled.
 const TICK_GAP = 3000;
 const MAP_KEY = "threads.byTerminal";
+// shared("threads.pinnedByTerminal"): terminal -> its Pinned pane (v), kept apart from the
+// map above so Cmd-Shift-T still finds the main Threads pane.
+const PIN_MAP_KEY = "threads.pinnedByTerminal";
+// Under this width v shows Pinned in the same pane: two panes would each be under 300 px.
+const SPLIT_MIN = 600;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
@@ -118,7 +124,8 @@ function launch() {
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (pane?.mod === MOD) {
     // Pressed on a Threads pane: go back to the terminal it reads.
-    const term = Object.entries(shared(MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0];
+    const term = Object.entries(shared(MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0]
+      ?? Object.entries(shared(PIN_MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0];
     if (term && terminals().some((t) => t.address === term)) {
       // By pane id: pane.focus {terminal} prefers a layout block showing the terminal, which
       // may be outside this tab.
@@ -147,12 +154,13 @@ function launch() {
 }
 
 // shared("threads.byTerminal"): terminal -> its Threads pane, so the launcher focuses an
-// open one instead of splitting again, and a pane knows its own id.
-function remember(terminal, pane) {
-  const map = { ...(shared(MAP_KEY) ?? {}) };
+// open one instead of splitting again, and a pane knows its own id. The Pinned pane is kept
+// in its own map (PIN_MAP_KEY).
+function remember(terminal, pane, key = MAP_KEY) {
+  const map = { ...(shared(key) ?? {}) };
   for (const [k, v] of Object.entries(map)) if (!panes().some((p) => p.pane === v.pane)) delete map[k];
   map[terminal] = { pane };
-  setShared(MAP_KEY, map);
+  setShared(key, map);
 }
 
 // ---- finding the session ----------------------------------------------------------------
@@ -415,6 +423,11 @@ export default class Threads extends View {
     this.pinnedVia = "props";
     this.claudeHome = typeof p?.claudeHome === "string" && p.claudeHome.startsWith("/") ? p.claudeHome.replace(/\/+$/, "") : null;
     this.debug = Boolean(p?.debug);
+    // props().view "pinned": this pane is the Pinned pane that v split off a Threads pane.
+    // view is what the list shows: "all" turns, or the "pinned" ones (the Pinned pane, or
+    // the switch in a pane too narrow to split).
+    this.pinnedPane = p?.view === "pinned";
+    this.view = this.pinnedPane ? "pinned" : "all";
     // Tests only, with debug: a pane width to lay out for when the window does not draw
     // (a window behind another never reports its size). Never set by the launcher.
     this.forcedWidth = this.debug && Number(p?.width) > 0 ? Number(p.width) : null;
@@ -495,7 +508,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
-      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, fold: this.trayFold ?? null, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       header: this.headerText(),
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -921,49 +934,6 @@ export default class Threads extends View {
     this.editorFocused = false;
   }
 
-  // The tray: outside the list, so it stays on screen while the list scrolls and a tray row
-  // can have its own click handlers; below the list, so adding a pin does not move the text.
-  pinTray(t) {
-    const L = this.pinnedList();
-    this.trayFold = L.length ? trayFolds(L.length, this.rootH) : null;
-    if (!L.length) return null;
-    const narrow = this.narrow();
-    const go = (i) => (_e, cx) => { cx.stop_propagation(); this.toList(); this.goPin(i, cx); cx.notify(); };
-    const wrap = v_flex().id("th-pins").flex_none().bg(this.bandFill(t)).border_t(1).border_color(t.border);
-    const dot = () => div().flex_none().size(6).rounded(3).bg(t.accent);
-    if (this.trayFold) {
-      return wrap.child(h_flex().h(32).px(10).gap(6).items_center().overflow_hidden()
-        .child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent))
-        .children(L.map((p, i) => h_flex().id(`th-pin-${i}`).flex_none().h(22).px(6).gap(4).items_center().rounded(5).border_1().border_color(t.border).cursor_pointer()
-          .when(this.sel === p.key, (el) => el.bg(t.selected))
-          .hover((x) => x.bg(t.hover))
-          .tooltip(firstLine(p.turn?.prompt ?? p.pin.text))
-          .on_click(go(i))
-          .child(div().text_size(11).text_color(p.state === "gone" ? t.dim : t.foreground).child(`${i + 1}`))
-          .when(!narrow, (el) => el.child(div().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(p.turn ? `#${p.turn.n}` : "gone")))
-          .when(p.state === "new", (el) => el.child(dot()))
-          .when(p.state === "live", (el) => el.child(this.liveIcon(this.liveState(t), 10))))));
-    }
-    return wrap.py(4).children(L.map((p, i) => {
-      const gone = p.state === "gone";
-      const live = p.state === "live" ? this.liveState(t) : null;
-      const label = live ? live.label : p.state === "new" ? "New reply" : gone ? "Gone" : p.state === "loading" ? "Reading…" : pinWhen(p.turn?.ts);
-      const color = live ? live.color : p.state === "new" ? t.accent : t.dim;
-      return h_flex().id(`th-pin-${i}`).h(26).pl(10).pr(8).gap(6).items_center().cursor_pointer()
-        .when(this.sel === p.key, (el) => el.bg(t.selected))
-        .hover((x) => x.bg(t.hover))
-        .on_click(go(i))
-        .child(this.kbd(t, String(i + 1)))
-        .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(`#${p.pin.n}`))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(gone ? t.dim : t.foreground).child(firstLine(p.turn?.prompt ?? p.pin.text) || "No text"))
-        .when(p.state === "new", (el) => el.child(dot()))
-        .when(Boolean(live), (el) => el.child(this.liveIcon(live, 11)))
-        // A narrow pane keeps the signs above and the one word that has no sign.
-        .when(Boolean(label) && (!narrow || gone), (el) => el.child(div().flex_none().text_size(11.5).text_color(color).child(label)))
-        .child(this.iconButton(t, `th-unpin-${i}`, "pin-off", `Unpin #${p.pin.n}`, (_e, cx) => { this.unpin(p, cx); cx.notify(); }));
-    }));
-  }
-
   // ---- data ----
 
   current() { return this.sessions[this.sessions.length - 1] ?? null; }
@@ -972,18 +942,35 @@ export default class Threads extends View {
   me() {
     const own = props()?.pane ?? this.myPane;
     if (own) return panes().find((p) => p.pane === own) ?? null;
+    if (this.pinnedPane) return this.pinnedSelf();
     const known = shared(MAP_KEY)?.[this.terminal];
     const mine = known ? panes().find((p) => p.pane === known.pane) : null;
     if (mine) return mine;
     // Opened some other way (props() carries no pane id): the only Threads pane in the
     // terminal's tab that no other terminal has claimed is this one.
     const tab = this.pane()?.tab;
-    const claimed = new Set(Object.entries(shared(MAP_KEY) ?? {}).filter(([t]) => t !== this.terminal).map(([, v]) => v.pane));
+    const claimed = new Set([...Object.entries(shared(MAP_KEY) ?? {}).filter(([t]) => t !== this.terminal).map(([, v]) => v.pane),
+      ...Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane)]);
     const here = panes().filter((p) => p.mod === MOD && p.tab === tab && !claimed.has(p.pane));
     if (here.length === 1) return here[0];
     const anywhere = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane));
     return anywhere.length === 1 ? anywhere[0] : null;
   }
+  // The Pinned pane's own pane: the one in its map, or else the only Threads pane in the
+  // main pane's tab that no map claims (it was split from there, and props carry no id).
+  pinnedSelf() {
+    const known = shared(PIN_MAP_KEY)?.[this.terminal];
+    const mine = known ? panes().find((p) => p.pane === known.pane) : null;
+    if (mine) return mine;
+    const main = shared(MAP_KEY)?.[this.terminal]?.pane;
+    const claimed = new Set([...Object.values(shared(MAP_KEY) ?? {}), ...Object.values(shared(PIN_MAP_KEY) ?? {})].map((v) => v.pane));
+    const tab = panes().find((p) => p.pane === main)?.tab;
+    const here = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane) && (!tab || p.tab === tab));
+    return here.length === 1 ? here[0] : null;
+  }
+  // The main Threads pane of this terminal, and its Pinned pane, when open.
+  mainPane() { const id = shared(MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
+  pinnedPaneOpen() { const id = shared(PIN_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   status() { return this.pane()?.status ?? this.term()?.status ?? null; }
 
   resolve(cx) {
@@ -1278,7 +1265,8 @@ export default class Threads extends View {
     const mine = this.me()?.pane ?? null;
     if (!mine) return;
     this.myPane = mine;
-    if (shared(MAP_KEY)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine));
+    const key = this.pinnedPane ? PIN_MAP_KEY : MAP_KEY;
+    if (shared(key)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine, key));
   }
 
   // Live data changed: a new turn or status in the terminal means look again.
@@ -1295,6 +1283,7 @@ export default class Threads extends View {
   poll(cx) {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
+    this.settleSplit();
     this.lookRepo(cx);
     const t = this.term();
     const now = { turn: t?.turn ?? null, status: t?.status ?? null, there: Boolean(t), fg: this.pane()?.program?.key ?? null };
@@ -1337,6 +1326,7 @@ export default class Threads extends View {
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
+      this.view, this.view === "pinned" ? this.pinVer : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
@@ -1387,6 +1377,7 @@ export default class Threads extends View {
   }
 
   buildRows(status) {
+    if (this.view === "pinned") return this.pinnedRows(status);
     const out = [];
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
@@ -1432,6 +1423,74 @@ export default class Threads extends View {
       flush();
     });
     return out;
+  }
+
+  // The Pinned view: the pinned turns in pin order (the order of the keys 1 to 5), each
+  // closed or open like any turn, with its number on its meta line.
+  pinnedRows(status) {
+    const L = this.pinnedList();
+    if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];
+    const out = [];
+    L.forEach((p, i) => {
+      if (!p.turn) {
+        out.push({ kind: "note", key: `pins:${i}`, pinNo: i + 1, text: p.state === "gone" ? `${i + 1} · #${p.pin.n} is no longer in this session. Click to unpin it.` : `${i + 1} · #${p.pin.n} · reading this session…` });
+        return;
+      }
+      const si = this.sessions.indexOf(p.s);
+      const live = this.isLive(p.s, si, p.turn.n - 1, status);
+      const item = { kind: "turn", key: p.key, turn: p.turn, s: p.s, si, last: false, live, pinNo: i + 1 };
+      if (live) out.push({ ...item, kind: "wrow", shape: this.shape(p.turn, true) });
+      else if (this.open.has(p.key)) this.expanded(item, out);
+      else out.push({ ...item, shape: this.shape(p.turn) });
+    });
+    return out;
+  }
+
+  // Shows all turns or the pinned ones in this pane, keeping the selection.
+  setView(view) {
+    if (this.view === view) return;
+    this.view = view;
+    this.pinVisit = null;
+    if (view === "pinned") {
+      const L = this.pinnedList();
+      if (!L.some((p) => p.key === this.sel)) this.sel = L.find((p) => p.key)?.key ?? null;
+    }
+    this.follow = false;
+    if (this.sel) this.scrollTo = { key: this.sel, how: "center" };
+  }
+
+  // v: the Pinned pane beside this one, from SPLIT_MIN wide; narrower, the switch in this
+  // pane. In the Pinned pane, v goes back to the main pane.
+  openPinned(cx) {
+    if (this.pinnedPane) {
+      const main = this.mainPane();
+      if (main) run("pane.focus", { pane: main.pane });
+      return true;
+    }
+    const open = this.pinnedPaneOpen();
+    if (open) { run("pane.focus", { pane: open.pane }); return true; }
+    if (this.view === "pinned") { this.setView("all"); return true; }
+    const me = this.me();
+    if (!me || this.width < SPLIT_MIN) {
+      this.setView("pinned");
+      if (me) this.say("Pinned shows here: the pane is too narrow to split", "pin", cx, 3000);
+      return true;
+    }
+    this.splitAsk = { before: panes().map((p) => p.pane), half: Math.floor(this.width / 2), until: Date.now() + 4000 };
+    run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
+    return true;
+  }
+
+  // Once the split has applied: the new pane goes in the Pinned map and gets half the width.
+  settleSplit() {
+    const a = this.splitAsk;
+    if (!a) return;
+    const made = panes().find((p) => p.mod === MOD && !a.before.includes(p.pane));
+    if (made) {
+      this.splitAsk = null;
+      remember(this.terminal, made.pane, PIN_MAP_KEY);
+      run("layout.resize", { id: made.pane, px: a.half });
+    } else if (Date.now() > a.until) this.splitAsk = null;
   }
 
   // Counts for the header, the Agents button and the empty state, kept until the turns,
@@ -2173,6 +2232,11 @@ export default class Threads extends View {
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
+    if (kind === "pins" && /^\d+$/.test(id)) {
+      const p = this.pinnedList()[Number(id)];
+      if (p && !p.turn && p.state === "gone") { this.unpin(p, cx); return cx.notify(); }
+      return;
+    }
     if (kind === "img") {
       const k = `i:${id}`;
       this.full.has(k) ? this.full.delete(k) : this.full.add(k);
@@ -2293,6 +2357,11 @@ export default class Threads extends View {
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         // A search: Enter also hands the keys to the list, so p and the digits work on a result.
         if (this.filtering && this.query) this.toList();
+        // In the Pinned view a closed pin opens at its place, as its number key does.
+        if (this.view === "pinned" && this.sel && !this.open.has(this.sel)) {
+          const i = this.pinnedList().findIndex((p) => p.key === this.sel);
+          if (i >= 0) return this.goPin(i, cx);
+        }
         if (this.sel && keys.includes(this.sel)) this.toggle(this.sel, cx);
         return true;
       case "jump": this.filtering = true; this.input.set_value("#"); this.query = "#"; this.input.focus(); return true;
@@ -2306,6 +2375,7 @@ export default class Threads extends View {
       }
       case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
       case "undoUnpin": return this.undoUnpin(cx);
+      case "pinned": return this.openPinned(cx);
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -2329,6 +2399,7 @@ export default class Threads extends View {
         if (this.selecting) { this.endSelect(); return true; }
         if (this.filtering || this.query) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         if (this.sel && this.open.has(this.sel)) { this.toggle(this.sel, cx); return true; }
+        if (this.view === "pinned" && !this.pinnedPane) { this.setView("all"); return true; }
         return false;
     }
     if (name.startsWith("go:")) { this.editorFocused = false; this.h.focus(); return this.goPin(Number(name.slice(3)) - 1, cx); }
@@ -2382,7 +2453,9 @@ export default class Threads extends View {
         const me = this.me();
         const threads = panes().filter((p) => p.mod === MOD);
         const focusedOne = threads.find((p) => p.focused);
-        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me) {
+        const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
+        const mains = threads.filter((p) => !pinnedIds.has(p.pane));
+        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
           if (this.action(c, cx)) cx.notify();
         }
       }
@@ -2438,7 +2511,6 @@ export default class Threads extends View {
       .child(this.header(t))
       .children(this.banners(t))
       .child(this.body(t, focusedPanel, cx))
-      .children([this.pinTray(t)].filter(Boolean))
       .child(this.footer(t))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -2503,6 +2575,9 @@ export default class Threads extends View {
     const pinned = Boolean(this.sel && this.isPinned(this.sel));
     const n = this.sel ? this.findTurn(this.sel)?.n : null;
     out.push(["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null]);
+    const pins = this.pinnedList().length;
+    out.push(["th-pinned", "list", this.pinnedPane ? "Back to all turns (v)" : this.view === "pinned" ? "All turns (v)" : `Pinned${pins ? ` · ${pins}` : ""} (v)`,
+      "pinned", this.view === "pinned" || Boolean(this.pinnedPaneOpen()), pins && !this.pinnedPane ? String(pins) : null]);
     out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null]);
     return out;
@@ -2567,6 +2642,8 @@ export default class Threads extends View {
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null ? ` ${this.readPct(s)}%` : ""}`;
+    // The Pinned view: "Pinned · 3 of 5".
+    if (this.view === "pinned") return `Pinned · ${this.pinnedList().length} of ${PIN_LIMIT}`;
     const c = this.counts();
     // "98 turns · 43 hidden": the newest session's shown turns, then the agent messages
     // hidden in the whole list, the same number as the Agents button's count and tooltip
@@ -3476,7 +3553,7 @@ export default class Threads extends View {
   // The line over the message: "📌 🔔 3 🖼 1 #7 · 8:43 AM" on the right for the person's
   // own messages; "<icon> t7 review · #7 · 8:43 AM" on the left for an agent's. A stopped
   // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
-  metaLine(t, turn, lead = null, time = fmtTime(turn.ts)) {
+  metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null) {
     const agent = turn.agent;
     const ac = this.agentColor(t);
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
@@ -3490,6 +3567,7 @@ export default class Threads extends View {
         .child(div().flex_none().child("·")))
       .when(Boolean(icon), (el) => el.child(icon))
       .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
       .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
       .when(Boolean(turn.images?.length) && this.narrow(), (el) => el.child(count("image", String(turn.images.length))))
       .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
@@ -3577,7 +3655,7 @@ export default class Threads extends View {
     const tone = sh.tone;
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     return this.rowFrame(t, sel, focusedPanel, false, [
-      this.metaLine(t, turn),
+      this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null),
       this.bubble(t, turn, [
         this.promptBlock(t, turn, sh, sel),
         ...(sh.thumbs ? [div().mt(6).child(this.thumbStrip(t, turn, key))] : []),
@@ -3929,10 +4007,20 @@ export default class Threads extends View {
     const narrow = this.narrow();
     if (this.selecting) return narrow ? [["⌘C", "copy"], [this.quoteKey, "quote"], ["Esc", "back"]]
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
+    if (this.view === "pinned") {
+      const pv = [["↑↓", "next pin"], ["↵", "open"], ["p", "unpin"]];
+      if (narrow) return [...pv, ["v", this.pinnedPane ? "back" : "all"]];
+      pv.push(["1-5", "go to pin"], ["u", "undo"], ["c", "copy reply"]);
+      if (this.quotable()) pv.push([this.quoteKey, "quote"]);
+      pv.push(["v", this.pinnedPane ? "back to all" : "all turns"]);
+      if (this.pane()) pv.push(["t", "terminal"]);
+      return pv;
+    }
     const out = [["↑↓", "move"], ["↵", "open"], ["c", narrow ? "copy" : "copy reply"]];
     if (!narrow && this.quotable()) out.push([this.quoteKey, "quote"]);
     out.push(["/", "filter"]);
     if (this.quoteKey !== "p") out.push(["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]);
+    out.push(["v", "pinned"]);
     if (narrow) return out;
     if (this.sel && this.open.has(this.sel)) out.push(["s", "select"], ["i", "explain"]);
     out.push(["g", "jump"], ["End", "latest"]);
@@ -3961,10 +4049,8 @@ export default class Threads extends View {
   }
 
   toastView(t) {
-    // Above the tray when there is one, so it never covers a pin. With no tray it keeps its old
-    // place over the footer.
-    const tray = !this.pinnedList().length ? 0 : this.trayFold ? 33 : this.pinnedList().length * 26 + 9;
-    return h_flex().absolute().bottom(tray ? (this.footerH ?? 61) + tray + 6 : 44).left(0).right(0).justify_center()
+    // Just above the footer, whose hints can wrap to two lines.
+    return h_flex().absolute().bottom((this.footerH ?? 38) + 6).left(0).right(0).justify_center()
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))

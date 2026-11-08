@@ -638,7 +638,7 @@ test("the footer offers s select with a turn open and q quote with a local termi
   v.toggle(v.sel, cx);
   expect(hints()).not.toContain("s select");
   v.width = 240;
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin"]);
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin", "v pinned"]);
   // quoteKey from the settings file.
   v.width = 380;
   v.applyPrefs('{"quoteKey": "y"}');
@@ -2159,7 +2159,7 @@ test("a new reply shows until the turn is read", async () => {
   expect(v.pinnedList()[0].state).toBe("quiet");
 });
 
-test("search: the tray stays, a visit shows the one turn with a note, and the search is kept", async () => {
+test("search: the pins stay, a visit shows the one turn with a note, and the search is kept", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const a = keys()[0];
   v.sel = a;
@@ -2289,18 +2289,15 @@ test("pin keys work in a focused read-only editor, and do nothing when held", as
   expect(v.pinnedList().length).toBe(1);
 });
 
-test("the tray draws at every state and width, folds in a short pane, and marks rows", async () => {
+test("the pins show in the Pinned view at every width; the header and footer say how to reach it", async () => {
   const { v, cx, keys } = await pinPane("--extra", "8", "--agents");
   const k = keys();
   for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
   for (const width of [240, 380, 500]) {
     v.width = width;
-    for (const h of [0, 300, 900]) {
-      v.rootH = h;
-      draw(v, cx);
-      expect(v.trayFold).toBe(h === 300);
-    }
+    for (const view of ["all", "pinned"]) { v.setView(view); for (const h of [0, 300, 900]) { v.rootH = h; draw(v, cx); } }
   }
+  v.setView("all");
   v.rootH = 900;
   v.width = 500;
   const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
@@ -2310,7 +2307,10 @@ test("the tray draws at every state and width, folds in a short pane, and marks 
   v.sel = k[6];
   expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
+  const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
+  expect(pinned().slice(1, 6)).toEqual(["list", "Pinned · 5 (v)", "pinned", false, "5"]);
   expect(v.footerHints().map((x) => x[1])).toContain("pin");
+  expect(v.footerHints().map((x) => x.join(" "))).toContain("v pinned");
   v.sel = k[0];
   expect(v.footerHints().map((x) => x[1])).toContain("unpin");
   v.quoteKey = "p";
@@ -2319,6 +2319,93 @@ test("the tray draws at every state and width, folds in a short pane, and marks 
   const r = v.report();
   expect(state.shared["threads.debug"].t4.pins.list.length).toBe(5);
   expect(r).toBeUndefined();
+});
+
+test("v in a pane under 600 px shows Pinned in the same pane: pins in pin order, Enter opens one at its place, Esc goes back", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  for (const i of [3, 0, 5]) { v.sel = k[i]; v.action("pin", cx); }
+  v.width = 380;
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(v.view).toBe("pinned");
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  expect(toastText(v)).toBe("Pinned shows here: the pane is too narrow to split");
+  expect(v.headerText()).toBe("Pinned · 3 of 5");
+  const rows = v.rows();
+  expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
+  expect(v.footerHints().map((x) => x.join(" "))).toEqual(expect.arrayContaining(["↑↓ next pin", "p unpin", "1-5 go to pin", "v all turns"]));
+  // The selection moves from pin to pin, and Enter opens the pin at its place.
+  v.sel = k[3];
+  v.key(keyEv("down"), cx);
+  expect(v.sel).toBe(k[0]);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(k[0])).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: k[0] });
+  draw(v, cx);
+  // p unpins in the view, and u brings it back.
+  v.key(keyEv("p"), cx);
+  expect(v.rows().filter((r) => r.kind === "turn" || r.kind === "head").map((r) => r.key)).toEqual([k[3], k[5]]);
+  v.key(keyEv("u"), cx);
+  expect(v.pinnedList().length).toBe(3);
+  // Esc closes the open pin, then returns to all turns.
+  v.key(keyEv("escape"), cx);
+  v.key(keyEv("escape"), cx);
+  expect(v.view).toBe("all");
+  expect(v.rows().filter((r) => r.kind === "turn").length).toBe(k.length);
+  // With no pins the view says how to make one.
+  for (const p of [...v.pinnedList()]) v.unpin(p, cx);
+  v.setView("pinned");
+  expect(v.rows()).toEqual([expect.objectContaining({ kind: "note", key: "pins:none" })]);
+  draw(v, cx);
+});
+
+test("v in a pane from 600 px splits a Pinned pane beside it, kept apart from the main pane; v moves between them", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.sel = keys()[1];
+  v.action("pin", cx);
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
+  draw(v, cx);
+  expect(v.me().pane).toBe("p2");
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(v.view).toBe("all");
+  const split = log.find(([, n]) => n === "pane.split");
+  expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "pinned" } });
+  // The split applies: the new pane goes in its own map and gets half the width.
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  expect(log.find(([, n]) => n === "layout.resize")[2]).toEqual({ id: "p3", px: 350 });
+  // v again, with the Pinned pane open, focuses it instead of splitting a second one.
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
+  // The Pinned pane: a second panel with view "pinned", which finds its own pane and shows the pins.
+  await saved(); // the main pane's pins.json, which the Pinned pane reads
+  const props = state.props;
+  state.props = { ...props, view: "pinned" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(w.pinnedPane).toBe(true);
+  expect(w.view).toBe("pinned");
+  expect(w.me().pane).toBe("p3");
+  expect(w.rows().filter((r) => r.kind === "turn").length).toBe(1);
+  expect(w.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Back to all turns (v)");
+  draw(w, cx2);
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  // v in the Pinned pane goes back to the main pane; Esc does not leave the Pinned view there.
+  log = [];
+  w.key(keyEv("v"), cx2);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  w.key(keyEv("escape"), cx2);
+  expect(w.view).toBe("pinned");
+  state.props = props;
 });
 
 test("a reply block is one list item however tall, so a drag can cross its paragraphs", async () => {
@@ -2362,7 +2449,7 @@ test("a pin left on a paragraph by the earlier build: a second press returns to 
   expect(v.scrollTo).toBe(null);
 });
 
-test("adding a pin to the tray does not change the list items of a reply", async () => {
+test("adding a pin does not change the list items of a reply", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   v.rootH = 500;
   v.listH = 400;
@@ -2372,7 +2459,6 @@ test("adding a pin to the tray does not change the list items of a reply", async
   const items = () => v.rows().filter((r) => r.kind === "md").map((r) => r.key).join(",");
   const before = items();
   v.action("pin", cx);
-  v.listH = 366; // the tray took room from the list
   expect(items()).toBe(before);
 });
 

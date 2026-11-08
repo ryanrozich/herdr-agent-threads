@@ -9,8 +9,7 @@
 // A turn's number can change when the way rows are built changes, so a pin keeps a
 // fingerprint: the prompt's time in seconds, a hash of its text, and a count for repeats.
 
-import { reply, firstLine, fmtTime } from "./turns.js";
-import { dayKey, dayLabel } from "./ui.js";
+import { reply, firstLine } from "./turns.js";
 
 export const PIN_LIMIT = 5; // the keys 1 to 5
 export const PIN_TEXT = 80; // characters of the prompt kept, shown when the turn is gone
@@ -152,17 +151,3 @@ export function partKeys(anchor, turnKey) {
   return out;
 }
 
-// A tray row's time: the clock for today, then the day alone ("Yesterday", "4 Nov"), since
-// a bare clock would mislead on an older pin.
-export function pinWhen(ts, now = Date.now()) {
-  if (!ts) return "";
-  return dayKey(ts) === dayKey(now) ? fmtTime(ts) : dayLabel(ts, now);
-}
-
-// Whether the tray folds to one line of chips: when its 26 px rows would take over 30% of
-// the pane below the header and above the footer. A pane that has not reported its height
-// does not fold.
-export function trayFolds(count, paneH) {
-  const room = paneH - 96;
-  return paneH > 0 && count * 26 + 8 > room * 0.3;
-}

@@ -7,7 +7,7 @@ import { harnessOf } from "./harness.js";
 const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
-  "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend",
+  "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
 // chose it still has the header's pin button.
