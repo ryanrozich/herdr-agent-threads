@@ -309,7 +309,7 @@ export function middle(text, max) {
 // stats line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px
 // of padding each side and 6 px above and below.
 export const ROW = Object.freeze({
-  PROMPT_LINE: 18, REPLY_LINE: 18, META: 16, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
+  PROMPT_LINE: 18, REPLY_LINE: 18, META: 16, NAME: 18, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
   BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
 });
 // The widest a bubble can be, and the width of the text inside it.
@@ -318,10 +318,37 @@ export function rowTextWidth(width, _agent = false) { return Math.max(60, bubble
 // The reply's text width: the pane less the exchange's padding.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
 
+// ---- pasted images over a message ----
+// Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
+// (56 to 120 px), and as wide as its image's shape allows between 0.75 and 1.5 times that.
+export const TILE_GAP = 6;
+export function thumbSize(width) { return Math.max(56, Math.min(120, Math.floor(bubbleMax(width) / 3) - 4)); }
+// dims: per image { w, h } once decoded, else null. The tiles that fit in the widest bubble,
+// in order, with "+N" for the rest: { size, tiles: [{ i, w, x }], more, width }, x from the
+// strip's left edge. The "+N" chip takes a tile's place when some do not fit.
+export function tileRow(dims, width) {
+  const size = thumbSize(width);
+  const room = bubbleMax(width);
+  const ws = dims.map((d) => (d && d.w > 0 && d.h > 0 ? Math.round(Math.max(size * 0.75, Math.min(size * 1.5, (size * d.w) / d.h))) : size));
+  const chip = 44;
+  const tiles = [];
+  let x = 0;
+  for (let i = 0; i < ws.length; i++) {
+    const last = i === ws.length - 1;
+    const need = x + ws[i] + (last ? 0 : TILE_GAP + chip);
+    if (tiles.length && need > room) break;
+    tiles.push({ i, w: ws[i], x });
+    x += ws[i] + TILE_GAP;
+  }
+  const more = ws.length - tiles.length;
+  return { size, tiles, more, width: x - TILE_GAP + (more ? TILE_GAP + chip : 0) };
+}
+
 // Height of a collapsed exchange with p prompt lines and r reply lines, and `more` Show
-// more lines (one under a cut message, one under a cut reply).
+// more lines (one under a cut message, one under a cut reply). The reply has its agent's
+// name over it.
 export function rowHeight(p, r, more = 0) {
-  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + ROW.PROMPT_LINE * p + ROW.GAP + ROW.REPLY_LINE * r
+  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + ROW.PROMPT_LINE * p + ROW.GAP + ROW.NAME + ROW.REPLY_LINE * r
     + ROW.GAP + ROW.STATS + ROW.PAD_B + ROW.MORE * more;
 }
 
@@ -1151,12 +1178,13 @@ export function youHeight(text, innerW, { link = false, max = 420, line = 18, ch
 }
 
 // ---- bubble colours (settings.json bubbleColor and agentBubbleColor) ----
-// A preset name or "#rrggbb". Every preset reads at 4.5:1 or more with white text. "plain"
-// is the theme's own look: the person's bubble is the text colour at 8% over the pane, an
-// agent's bubble is outlined on the pane.
+// A preset name or "#rrggbb". Every preset reads at 5:1 or more with white text. The
+// defaults, slate and plum, are muted; blue and purple are the bright pair. "plain" is the
+// theme's own look: the person's bubble is the text colour at 8% over the pane, an agent's
+// bubble is outlined on the pane.
 export const BUBBLES = Object.freeze({
-  blue: "#2563EB", purple: "#7C3AED", teal: "#0F766E", green: "#15803D",
-  orange: "#C2410C", pink: "#BE185D", gray: "#4B5563", plain: null,
+  slate: "#47648F", plum: "#715C91", blue: "#2563EB", purple: "#7C3AED", teal: "#36706D",
+  green: "#4A6E4F", amber: "#87643A", rose: "#8A5068", gray: "#5B6170", plain: null,
 });
 
 const BUBBLE_NAMES = new Set(Object.keys(BUBBLES));

@@ -3,14 +3,15 @@
 // reinstall, which replaces mods/agent-threads/, leaves it alone). A person can edit it by
 // hand; the pane watches it and applies a change at once.
 //
-//   { "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "blue",
-//     "agentBubbleColor": "purple", "quoteKey": "q",
+//   { "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "slate",
+//     "agentBubbleColor": "plum", "youName": "You", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
 // promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
 // bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "plain" is the theme's own look) or "#rrggbb".
+// youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
@@ -21,7 +22,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "blue", agentBubbleColor: "purple" });
+export const DEFAULTS = Object.freeze({ promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" });
 export const RANGES = Object.freeze({ promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -38,6 +39,14 @@ const clampInt = (v, [lo, hi], dflt) => {
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : dflt;
 };
 
+// A name to show: one line of 1 to 40 characters, trimmed, or null.
+export const NAME_MAX = 40;
+export function nameValue(v) {
+  if (typeof v !== "string") return null;
+  const s = v.replace(/\s+/g, " ").trim();
+  return s ? [...s].slice(0, NAME_MAX).join("") : null;
+}
+
 // { values, error }: values always complete; error is a one-line note when the text is not
 // a JSON object (the defaults apply then). A missing file (null) is not an error.
 export function parseSettings(text) {
@@ -53,6 +62,7 @@ export function parseSettings(text) {
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
       bubbleColor: bubbleValue(raw.bubbleColor) ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
+      youName: nameValue(raw.youName) ?? DEFAULTS.youName,
     },
     error: null,
   };

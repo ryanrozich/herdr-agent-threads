@@ -65,7 +65,7 @@ let herdrVersion = "0.1.13";
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: () => el, image: () => el }));
 mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
-  InputState: { new: () => ({ on() {}, value: () => "", set_value() {}, focus() {} }) },
+  InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
@@ -117,6 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
+const { thumbSize, tileRow, bubbleMax, ROW } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -1637,7 +1638,7 @@ test("the Quote button in Select view quotes what ⌘C copied and leaves the key
   } finally { v.h.focus = focus; v.barHit = hit; }
 });
 
-test("pasted images: thumbnails in rows from 300 px, a count when narrower, decoded on first draw, larger in the open card", async () => {
+test("pasted images: tiles over the message at any width, decoded on first draw, opened full size one at a time", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--images"));
   const turns = v.current().turns.filter((t) => t.images.length);
   expect(turns.map((t) => t.images.map((i) => i.n))).toEqual([[1], [2, 3], [4]]);
@@ -1645,14 +1646,13 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   expect(turns[2].prompt).toBe("[Image #4]");
   const two = turns[1];
   const key = `0:${two.n}`;
-  // 380 px: a strip of thumbnails adds a 40 px line and a 6 px gap to the message bubble;
-  // 240 px: none, the meta line counts them.
-  v.width = 380;
-  const at380 = v.shape(two).height;
-  expect(v.shape(two).thumbs).toBe(true);
-  expect(at380 - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(46);
-  v.width = 240;
-  expect(v.shape(two).thumbs).toBeUndefined();
+  // A row of tiles over the bubble: a third of the widest bubble high (56 to 120 px), and a gap.
+  for (const [w, size] of [[240, 58], [380, 91], [640, 120]]) {
+    v.width = w;
+    expect(thumbSize(w)).toBe(size);
+    expect(v.shape(two).thumbs).toBe(true);
+    expect(v.shape(two).height - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(size + ROW.GAP);
+  }
   v.width = 380;
   // Nothing is decoded until a row with images is drawn; then one prompt at a time.
   expect(v.imgs?.size ?? 0).toBe(0);
@@ -1665,26 +1665,42 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   expect(f).toEqual({ i: 0, path: `data/agent-threads/images/f/${two.imgLine}-0.png`, w: 300, h: 600 });
   expect(existsSync(join(app, f.path))).toBe(true);
   expect(v.imgFile(two, 1)).toMatchObject({ w: 400, h: 400 });
-  // Open: one part per image after YOU, at most 260 px tall, never wider than its own size;
-  // a click shows it at full size, and again folds it.
+  // Tiles take their image's shape: a tall one is 0.75 of the height wide, a square one square.
+  const L = v.tileLayout(two);
+  expect(L.tiles).toEqual([{ i: 0, w: 68, x: 0 }, { i: 1, w: 91, x: 74 }]);
+  expect(L.more).toBe(0);
+  // Open: the tiles over the message; a press on the second tile opens it full size under
+  // them, and again closes it.
   v.toggle(key, cx);
-  const parts = v.rows().filter((r) => r.kind === "img" && r.key.startsWith(`img:${key}:`));
-  expect(parts.map((r) => r.i)).toEqual([0, 1]);
-  const rows = v.rows();
-  expect(rows[rows.findIndex((r) => r.key === `you:${key}`) + 1].kind).toBe("img");
-  expect(v.imgBox(parts[0])).toEqual({ w: 130, h: 260 });
-  expect(v.height(parts[0])).toBe(8 + 4 + 18 + 260);
-  v.click(parts[0].key, cx);
-  const big = v.rows().find((r) => r.key === parts[0].key);
-  expect(big.full).toBe(true);
-  expect(v.imgBox(big)).toEqual({ w: 300, h: 600 });
-  v.click(parts[0].key, cx);
-  expect(v.rows().find((r) => r.key === parts[0].key).full).toBe(false);
+  let rows = v.rows();
+  const at = (k) => rows.findIndex((r) => r.key === k);
+  expect(at(`imgs:${key}`)).toBe(at(key) + 1);
+  expect(at(`you:${key}`)).toBe(at(`imgs:${key}`) + 1);
+  expect(v.height(rows[at(`imgs:${key}`)])).toBe(8 + 91);
+  v.bodyW = 380;
+  v.pressX = 380 - ROW.PAD_X - 10; // inside the right-hand tile
+  v.click(`imgs:${key}`, cx);
+  rows = v.rows();
+  const big = rows[at(`imgs:${key}`) + 1];
+  expect(big).toMatchObject({ kind: "img", key: `img:${key}:1`, full: true });
+  const side = Math.min(400, v.inner()); // at the card's width, never enlarged
+  expect(v.imgBox(big)).toEqual({ w: side, h: side });
+  v.click(big.key, cx);
+  expect(v.rows().some((r) => r.kind === "img")).toBe(false);
   // Drawn rows and cards hold image elements with the cached paths.
   rec = [];
   v.render(cx);
   const drawn = rec; rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
+});
+
+test("tiles that do not fit the widest bubble end in +N", () => {
+  const sq = { w: 400, h: 400 };
+  const L = tileRow([sq, sq, sq, sq, sq], 380);
+  expect(L.tiles.map((c) => c.i)).toEqual([0, 1]);
+  expect(L.more).toBe(3);
+  expect(L.width).toBeLessThanOrEqual(bubbleMax(380));
+  expect(tileRow([null], 240).tiles).toEqual([{ i: 0, w: 58, x: 0 }]);
 });
 
 test("a session over several days draws a day band per day, with its shown turns counted", async () => {
@@ -2498,20 +2514,20 @@ test("the list measuring its first item does not move a pin's place", async () =
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });
 
-test("bubbles are blue for the person and purple for agents by default, white text on both, and the panel's swatches change them", async () => {
+test("bubbles are slate for the person and plum for agents by default, white text on both, and the panel's swatches change them", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   const you = () => v.bubbleLook(theme, false);
   const agent = () => v.bubbleLook(theme, true);
-  expect(you().style).toMatchObject({ fill: "#2563EB", ink: "#FFFFFF", outline: false });
-  expect(agent().style).toMatchObject({ fill: "#7C3AED", ink: "#FFFFFF", outline: false });
+  expect(you().style).toMatchObject({ fill: "#47648F", ink: "#FFFFFF", outline: false });
+  expect(agent().style).toMatchObject({ fill: "#715C91", ink: "#FFFFFF", outline: false });
   // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
   // a command and Show more read on it.
-  expect(you().theme).toMatchObject({ foreground: "#FFFFFF", accent: "#FFFFFF", background: "#2563EB" });
+  expect(you().theme).toMatchObject({ foreground: "#FFFFFF", accent: "#FFFFFF", background: "#47648F" });
   v.settingsOpen = true;
   draw(v, cx);
   expect(v.action("bubbleColor:teal", cx)).toBe(true);
   expect(v.prefs.bubbleColor).toBe("teal");
-  expect(you().style.fill).toBe("#0F766E");
+  expect(you().style.fill).toBe("#36706D");
   expect(v.action("agentBubbleColor:#abc", cx)).toBe(true);
   expect(agent().style.fill).toBe("#AABBCC");
   expect(agent().style.ink).toBe("#111111"); // light fill: dark text
@@ -2524,8 +2540,10 @@ test("bubbles are blue for the person and purple for agents by default, white te
   expect(you().style.fill).toBe("#e6e6e614");
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
+  v.action("youName:Sam", cx);
+  expect(v.prefs.youName).toBe("Sam");
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "purple" });
+  expect(v.prefs).toMatchObject({ bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -2542,3 +2560,43 @@ test("a coloured bubble draws the open message as plain text in its ink, quotes 
   expect(you().every((y) => !y.plain && y.md != null)).toBe(true);
   draw(v, cx);
 });
+
+test("names: yours over your message, the agent's over its reply, Agent when the session records none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  expect(v.current().agentName).toBe("shop-agent");
+  expect(drawn(row)).toEqual(expect.arrayContaining(["You", "shop-agent"]));
+  expect(v.captionParts(row.turn)[0]).toEqual(["name", "shop-agent"]);
+  // A name the reply itself records (OpenCode's agent) wins; with neither, "Agent".
+  expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
+  v.current().agentName = null;
+  expect(v.agentName(row.turn)).toBe("Agent");
+  // The settings panel's field: typing names you, Esc gives the keys back.
+  const field = v.nameInput;
+  expect(field.value()).toBe("You");
+  field.handlers.focus({}, cx);
+  expect(v.naming).toBe(true);
+  const pins = v.pinnedAll().length;
+  expect(v.key(keyEv("p"), cx)).toBeUndefined(); // the field types it; no pin
+  expect(v.pinnedAll().length).toBe(pins);
+  field.set_value("  Sam ");
+  field.handlers.change({}, cx);
+  expect(v.prefs.youName).toBe("Sam");
+  expect(drawn(row)).toContain("Sam");
+  expect(v.key(keyEv("escape"), cx)).toBe(true);
+  expect(v.naming).toBe(false);
+  expect(field.value()).toBe("Sam");
+  // A cleared field shows the name in use again when it loses the keys.
+  field.handlers.focus({}, cx);
+  field.set_value("");
+  field.handlers.change({}, cx);
+  field.handlers.blur({}, cx);
+  expect(field.value()).toBe("Sam");
+  v.settingsOpen = true;
+  draw(v, cx);
+  v.action("resetSettings", cx);
+  expect(field.value()).toBe("You");
+  await new Promise((r) => setTimeout(r, 20));
+});
+

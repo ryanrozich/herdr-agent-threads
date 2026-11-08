@@ -5,7 +5,7 @@ import { test, expect, mock } from "bun:test";
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
-const COLORS = { bubbleColor: "blue", agentBubbleColor: "purple" };
+const COLORS = { bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...COLORS });
@@ -98,6 +98,16 @@ test("bubble colours take a preset name or #rrggbb, and anything else the defaul
   const v = (j) => parseSettings(JSON.stringify(j)).values;
   expect(v({ bubbleColor: "Teal", agentBubbleColor: "plain" })).toMatchObject({ bubbleColor: "teal", agentBubbleColor: "plain" });
   expect(v({ bubbleColor: "#1a2b3c", agentBubbleColor: "#abc" })).toMatchObject({ bubbleColor: "#1A2B3C", agentBubbleColor: "#AABBCC" });
-  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("blue");
-  expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "purple" });
+  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("slate");
+  expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "plum" });
+  expect(v({ bubbleColor: "Blue", agentBubbleColor: "purple" })).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "purple" }); // the bright pair
+});
+
+test("your name is one line of 1 to 40 characters, and anything else is You", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values.youName;
+  expect(v({ youName: "  Sam  " })).toBe("Sam");
+  expect(v({ youName: "Sam\nLee" })).toBe("Sam Lee");
+  expect(v({ youName: "x".repeat(60) })).toBe("x".repeat(40));
+  for (const bad of ["", "   ", 7, null, ["Sam"]]) expect(v({ youName: bad })).toBe("You");
+  expect(JSON.parse(settingsText({ youName: "Sam" }, null))).toMatchObject({ youName: "Sam" });
 });

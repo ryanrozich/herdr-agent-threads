@@ -6,12 +6,12 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## What you can do
 
-- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a blue bubble on the right, the start of the reply sits under it, the turn's number and time are above, and its tokens, time and model are below.
+- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a slate-blue bubble on the right under "You", the start of the reply sits under it with the agent's name, the turn's number and time are above, and its tokens, time and model are below.
 - **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi and Cursor have none, see [Which agents it reads](#which-agents-it-reads).
-- **See the images you pasted.** Rows show small thumbnails. An open turn shows them larger, and a click shows one full size.
+- **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image full size.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Keep a few turns at hand.** `p` pins a turn and `v` shows your pins in a Pinned pane beside the list. See [Pins](#pins).
 - **Choose how much each row shows.** A row shows 4 lines of your prompt and 6 of the reply before "Show more". Settings change both.
@@ -150,8 +150,9 @@ Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the sessio
 | `promptLines` | 4 | Lines of your prompt a row shows (1 to 10) |
 | `replyLines` | 6 | Lines of the reply a row shows (1 to 12) |
 | `agentTurns` | false | Show agent messages |
-| `bubbleColor` | `"blue"` | Your message bubbles: `blue`, `purple`, `teal`, `green`, `orange`, `pink`, `gray`, `plain` (the theme's own grey) or `"#rrggbb"` |
-| `agentBubbleColor` | `"purple"` | Agent message bubbles, from the same choices |
+| `bubbleColor` | `"slate"` | Your message bubbles: `slate`, `plum`, `blue`, `purple`, `teal`, `green`, `amber`, `rose`, `gray`, `plain` (the theme's own grey) or `"#rrggbb"` |
+| `agentBubbleColor` | `"plum"` | Agent message bubbles, from the same choices |
+| `youName` | `"You"` | The name over your messages, up to 40 characters. The settings panel has a field for it |
 | `quoteKey` | `"q"` | The quote key: one lowercase letter the pane does not already use |
 | `links` | none | Link rules, below |
 

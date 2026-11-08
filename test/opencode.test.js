@@ -35,7 +35,7 @@ function part(o, mid, data, sid = SID) {
 const user = (o, id, text, t) => { msg(o, id, { role: "user" }, t); part(o, id, { type: "text", text }); };
 const tokens = (input, output, read = 0, write = 0, reasoning = 0) => ({ input, output, reasoning, total: input + output + read + write + reasoning, cache: { read, write } });
 function assistant(o, id, parent, t, { finish = "stop", done = t + 1000, usage = tokens(10, 5), error, model = "glm-5.3-flash-free", variant = "high" } = {}) {
-  msg(o, id, { role: "assistant", parentID: parent, modelID: model, variant, finish, tokens: usage, time: { created: T0 + t, completed: done == null ? undefined : T0 + done }, ...(error ? { error } : {}) }, t);
+  msg(o, id, { role: "assistant", parentID: parent, agent: "build", modelID: model, variant, finish, tokens: usage, time: { created: T0 + t, completed: done == null ? undefined : T0 + done }, ...(error ? { error } : {}) }, t);
 }
 
 function read(o, s = newSession(SID, `${o.path}#${SID}`)) {
@@ -81,6 +81,7 @@ test("builds a finished turn", () => {
   expect(reply(t)).toBe("It rounds tax per line.");
   expect(t.tools).toBe(1);
   expect(t.model).toBe("glm-5.3-flash-free");
+  expect(t.by).toBe("build"); // the OpenCode agent that replied
   expect(t.durationMs).toBe(4000);
   const st = stats(t);
   expect(st.cacheRead).toBe(60);

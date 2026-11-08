@@ -74,17 +74,20 @@ while :; do
       # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
       # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
       # ignores the same lines if one gets through.
+      # A subagent's thread names it in session_meta, near the start of the first line.
+      nick=$(head -c 4096 "$file" | LC_ALL=C grep -m 1 -o '"agent_nickname":"[^"\\]*"' | head -n 1 | cut -d '"' -f 4) || nick=""
+      { [ -z "$nick" ] || jq -cn --arg t "$nick" '{k: "an", t: $t[0:80]}'
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '"type":"(session_meta|world_state|token_usage_record|reasoning|function_call_output|custom_tool_call_output|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"' \
-        | jq -Rc -f "$here/extract-codex.jq" > "$out"
+        | jq -Rc -f "$here/extract-codex.jq"; } > "$out"
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
-      # type except user, assistant, attachment, system and custom-title, every attachment but
+      # type except user, assistant, attachment, system, custom-title and agent-name, every attachment but
       # a queued prompt, and every tool result, before jq parses anything. A quote inside a
       # string is escaped, so these patterns only match a line's own keys. extract.jq drops the
       # same lines again if one gets through.
       head -c "$used" "$tmp" \
-        | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^st]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
+        | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^gst]|ag[^e]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
         | LC_ALL=C grep -v -F '"type":"tool_result"' \
         | jq -Rc -f "$here/extract.jq" > "$out"
     fi

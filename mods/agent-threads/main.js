@@ -37,9 +37,10 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  thumbSize, tileRow, TILE_GAP,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
-import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -47,8 +48,6 @@ const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
 // Pasted images, decoded by image.sh into the mod's data folder (kept across installs, never
 // in the repo, trimmed to 200 MB). image() takes paths from the app home.
 const IMG_DIR = `data/${MOD}/images`;
-const THUMB_W = 64;
-const THUMB_H = 40;
 const IMG_MAX_H = 260;
 const IMG_FULL_H = 1600;
 // Bytes per extractor call. A 6.7 MB busy transcript reads in 4 calls, so the header's
@@ -100,7 +99,7 @@ const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -453,6 +452,17 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
+    // The settings panel's name field: while it has the keyboard, keys type (this.naming).
+    this.nameInput = InputState.new({ placeholder: DEFAULTS.youName, value: DEFAULTS.youName });
+    this.naming = false;
+    this.nameInput.on("focus", (_e, cx) => { this.naming = true; cx.notify(); });
+    this.nameInput.on("blur", (_e, cx) => { this.endNaming(cx); });
+    this.nameInput.on("submit", (_e, cx) => { this.endNaming(cx); this.h.focus(); });
+    this.nameInput.on("change", (_e, cx) => {
+      const v = nameValue(this.nameInput.value());
+      if (v && v !== this.prefs.youName) this.changePrefs({ youName: v }, cx);
+      cx.notify();
+    });
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -667,8 +677,18 @@ export default class Threads extends View {
   setPrefs(values) {
     const was = this.prefs;
     this.prefs = values;
+    // The name field shows the name in use, except while the person is typing in it.
+    if (!this.naming && this.nameInput && this.nameInput.value() !== values.youName) this.nameInput.set_value(values.youName);
     // Hiding agent turns: a hidden selected turn hands the selection to the turn before it.
     if (was.agentTurns && !values.agentTurns) this.reselect = true;
+  }
+
+  // The name field gives the keyboard back and shows the name in use, trimmed. A cleared
+  // field changed nothing, so it shows the name it had.
+  endNaming(cx) {
+    this.naming = false;
+    if (this.nameInput.value() !== this.prefs.youName) this.nameInput.set_value(this.prefs.youName);
+    cx?.notify();
   }
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
@@ -1569,7 +1589,8 @@ export default class Threads extends View {
     sh.cmd = cmd;
     // Pasted images: a strip of thumbnails under the prompt from 300 px; narrower, the count
     // in the meta line says they are there.
-    if (turn.images?.length && !this.narrow()) { sh.thumbs = true; sh.height += THUMB_H + 6; sh.bubbleW = Math.max(sh.bubbleW, Math.min(bubbleMax(this.width), Math.min(turn.images.length, 3) * (THUMB_W + 4) + 2 * ROW.BUBBLE_PX)); }
+    // Pasted images: a row of tiles over the bubble.
+    if (turn.images?.length) { sh.thumbs = true; sh.height += thumbSize(this.width) + ROW.GAP; }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     return sh;
@@ -1585,8 +1606,12 @@ export default class Threads extends View {
     const resume = this.resumeAt();
     const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
+    // Pasted images: their tiles over the message, and under the tiles each one opened full size.
+    if (turn.images?.length) {
+      out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
+      turn.images.forEach((_, i) => { if (this.full.has(`i:${key}:${i}`)) out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: true }); });
+    }
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
-    (turn.images ?? []).forEach((_, i) => out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: this.full.has(`i:${key}:${i}`) }));
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
@@ -1841,21 +1866,35 @@ export default class Threads extends View {
     return { w: Math.min(w, Math.round((h * f.w) / f.h)), h };
   }
 
-  // A collapsed row's thumbnails: as many 64 x 40 boxes as fit, then "+N".
-  thumbStrip(t, turn, key) {
+  // The tiles over a message (ui.js tileRow): the images that fit, then "+N". In an open
+  // card a tile shows a ring while that image is open full size below.
+  tileLayout(turn) { return tileRow(turn.images.map((_, i) => this.imgFile(turn, i)), this.width); }
+  thumbStrip(t, turn, key, open = false) {
     this.wantImages(turn, key);
-    const room = rowTextWidth(this.width, turn.agent);
-    const fit = Math.max(1, Math.floor((room + 4) / (THUMB_W + 4)));
-    const n = turn.images.length;
-    const shown = n > fit ? Math.max(1, fit - 1) : n;
-    return h_flex().h(THUMB_H).gap(4).items_center().overflow_hidden()
-      .children(turn.images.slice(0, shown).map((_, i) => {
+    const L = this.tileLayout(turn);
+    return h_flex().h(L.size).gap(TILE_GAP).justify_end().items_center().min_w(0)
+      .children(L.tiles.map(({ i, w }) => {
         const f = this.imgFile(turn, i);
-        return div().flex_none().w(THUMB_W).h(THUMB_H).rounded(5).overflow_hidden().border_1().border_color(t.border).bg(t.background)
+        const on = open && this.full.has(`i:${key}:${i}`);
+        return div().flex_none().w(w).h(L.size).rounded(10).overflow_hidden().border_1().border_color(on ? t.accent : t.border).bg(t.background)
           .when(Boolean(f), (el) => el.child(image(f.path).size_full()))
-          .when(!f, (el) => el.flex().items_center().justify_center().child(svg(ICON("image")).size(14).text_color(t.dim)));
+          .when(!f, (el) => el.flex().items_center().justify_center().child(svg(ICON("image")).size(16).text_color(t.dim)));
       }))
-      .when(n > shown, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(`+${n - shown}`)));
+      .when(L.more > 0, (el) => el.child(div().flex_none().w(44).h(L.size).rounded(10).border_1().border_color(t.border).flex().items_center().justify_center()
+        .text_size(12).text_color(t.muted).child(`+${L.more}`)));
+  }
+
+  // The image a press on an open card's tiles landed on, or the first one. The tiles sit on
+  // the right of the card's text width.
+  tileAt(turn) {
+    const L = this.tileLayout(turn);
+    const x = this.pressX;
+    const w = this.bodyW ?? this.width;
+    if (x == null || !(w > 0)) return L.tiles[0]?.i ?? 0;
+    const left = w - ROW.PAD_X - L.width;
+    const hit = L.tiles.find((c) => x >= left + c.x && x < left + c.x + c.w);
+    if (hit) return hit.i;
+    return x >= left + L.width - 44 && L.more ? L.tiles.length : L.tiles[0]?.i ?? 0;
   }
 
   flushCode(cx) {
@@ -2237,6 +2276,17 @@ export default class Threads extends View {
       if (p && !p.turn && p.state === "gone") { this.unpin(p, cx); return cx.notify(); }
       return;
     }
+    if (kind === "imgs") {
+      const turn = this.findTurn(id);
+      if (!turn?.images?.length) return;
+      const i = this.tileAt(turn);
+      this.pressX = null;
+      // "+N" opens the first image the tiles leave out.
+      const k = `i:${id}:${Math.min(i, turn.images.length - 1)}`;
+      this.full.has(k) ? this.full.delete(k) : this.full.add(k);
+      this.sel = id;
+      return cx.notify();
+    }
     if (kind === "img") {
       const k = `i:${id}`;
       this.full.has(k) ? this.full.delete(k) : this.full.add(k);
@@ -2314,7 +2364,15 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
-    const name = keyAction(e, this.filtering, this.quoteKey);
+    const name = keyAction(e, this.filtering || this.naming, this.quoteKey);
+    // In the name field Esc gives the keyboard back to the list; other keys type.
+    if (this.naming) {
+      if (name !== "escape") return;
+      this.endNaming(cx);
+      this.h.focus();
+      cx.stop_propagation();
+      return true;
+    }
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -2392,7 +2450,7 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) this.filtering = false; return true;
-      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor }, cx); return true;
+      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
       case "escape":
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
@@ -2416,7 +2474,12 @@ export default class Threads extends View {
       this.pick(c, cx);
       return true;
     }
-    // "bubbleColor:teal", "agentBubbleColor:#7C3AED": a preset name or #rrggbb.
+    // "youName:Sam": the name over the person's messages; an empty one is the default.
+    if (name.startsWith("youName:")) {
+      this.changePrefs({ youName: nameValue(name.slice(8)) ?? DEFAULTS.youName }, cx);
+      return true;
+    }
+    // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
       const v = bubbleValue(bc[2]);
@@ -2440,6 +2503,14 @@ export default class Threads extends View {
     if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
     if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land" }; return true; }
+    // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
+    if (this.debug && /^debugClick:\d+:/.test(name)) {
+      const [, x, ...k] = name.split(":");
+      this.pressX = Number(x);
+      this.bodyW = this.width;
+      this.click(k.join(":"), cx);
+      return true;
+    }
     // Tests only (props.debug, which the launcher never sets): a quote press on the selected
     // turn, since keys cannot reach a window that does not draw.
     if (this.debug && name === "debugQuote") return this.quote(cx, "debug") !== false;
@@ -2499,7 +2570,7 @@ export default class Threads extends View {
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
     const t = theme();
-    const focusedPanel = this.h.is_focused() || this.input && this.filtering;
+    const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
     if (this.debug) this.measure();
     return v_flex()
       .id("threads-root")
@@ -2740,6 +2811,11 @@ export default class Threads extends View {
       .child(stepper("promptLines", "Prompt lines"))
       .child(stepper("replyLines", "Reply lines"))
       .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
+      .child(h_flex().gap(6).items_center()
+        .child(label("Your name"))
+        .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
+          .border_color(this.naming ? t.accent : t.border).bg(t.background).items_center()
+          .child(Input.new(this.nameInput).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))))
       .child(this.swatches(t, "bubbleColor", "Your messages"))
       .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
@@ -3313,7 +3389,7 @@ export default class Threads extends View {
 
   // The FINAL REPLY caption's parts: [icon, text].
   captionParts(turn) {
-    const out = [];
+    const out = [["name", this.agentName(turn)]];
     if (turn.tools > 0) out.push(["wrench", `${plural(turn.tools, "tool call")} (not shown)`]);
     if (turn.followups > 0) out.push(["bell", plural(turn.followups, "background update")]);
     const by = this.borrowedFrom(turn);
@@ -3329,7 +3405,7 @@ export default class Threads extends View {
     let rows = 1;
     let x = 0;
     for (const [, text] of parts) {
-      const cw = (x ? 10 : 0) + 12 + 4 + text.length * 6.3;
+      const cw = (x ? 10 : 0) + 12 + 4 + [...text].length * 6.3;
       if (x && x + 6 + cw > w) { rows++; x = cw; } else x += (x ? 6 : 0) + cw;
     }
     return rows;
@@ -3349,6 +3425,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return r.h;
       case "turn": case "wrow": return r.shape.height;
+      case "imgs": return 8 + thumbSize(this.width);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
       case "day": return 46;
@@ -3361,7 +3438,7 @@ export default class Threads extends View {
       }
       case "head": return ROW.PAD_T + 18;
       case "you": return this.youHeight(r);
-      case "rhead": { const n = this.captionRows(r.turn); return n ? 8 + n * 18 : 4; }
+      case "rhead": return 8 + this.captionRows(r.turn) * 18;
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
@@ -3596,7 +3673,10 @@ export default class Threads extends View {
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
     const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
-      .when(!agent, (el) => el.justify_end())
+      .when(!agent, (el) => el.justify_end()
+        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
+          .font_semibold().text_color(t.muted).child(this.prefs.youName))
+        .child(div().flex_none().child("·")))
       .when(agent, (el) => el
         .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
         .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
@@ -3606,7 +3686,6 @@ export default class Threads extends View {
       .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
       .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
       .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
-      .when(Boolean(turn.images?.length) && this.narrow(), (el) => el.child(count("image", String(turn.images.length))))
       .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
       .child(div().flex_none().child("·"))
       .child(div().flex_none().truncate().child(time));
@@ -3713,16 +3792,31 @@ export default class Threads extends View {
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, false, [
       this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null),
+      ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
       this.bubble(t, turn, [
         this.promptBlock(bt, turn, sh, sel),
-        ...(sh.thumbs ? [div().mt(6).child(this.thumbStrip(t, turn, key))] : []),
         ...(sh.pMore ? [this.moreLine(bt)] : []),
       ], sh.bubbleW),
       v_flex().min_w(0)
+        .child(this.nameLine(t, turn))
         .child(this.lines(t, sh.reply, color, 13, ROW.REPLY_LINE))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.statsLine(t, this.statsText(turn)),
     ]);
+  }
+
+  // The agent's name over its reply (ROW.NAME high).
+  nameLine(t, turn) {
+    return div().h(ROW.NAME).pb(2).flex().items_center().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.muted)
+      .child(this.agentName(turn));
+  }
+
+  // Who replied: the name the harness records for the turn (OpenCode's agent) or the session
+  // (Claude Code's agent name, a Codex subagent's nickname), else "Agent".
+  agentName(turn) {
+    if (turn.by) return turn.by;
+    for (const s of this.sessions) if (s.turns[turn.n - 1] === turn) return s.agentName || "Agent";
+    return "Agent";
   }
 
   liveState(t) {
@@ -3752,7 +3846,7 @@ export default class Threads extends View {
       h_flex().h(ROW.REPLY_LINE).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
-          .child([st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
+          .child([this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ]);
   }
@@ -3766,7 +3860,7 @@ export default class Threads extends View {
     const st = this.liveState(t);
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const g = this.workingGeom(turn);
-    const live = [st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
+    const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
       this.bubble(t, turn, [div().h(g.lines * TV_LINE).overflow_hidden().text_size(13).line_height(`${TV_LINE}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width)),
@@ -3898,11 +3992,13 @@ export default class Threads extends View {
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
       case "rhead":
-        // Under the message, before the reply: what the reply does not show, wrapping
-        // ("🔧 9 tool calls (not shown) · 🔔 144 background updates"), or a small gap.
-        return h_flex().mt(this.captionParts(turn).length ? 8 : 4).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
+        // Under the message, before the reply: who replied, then what the reply does not
+        // show, wrapping ("Agent · 🔧 9 tool calls (not shown) · 🔔 144 background updates").
+        return h_flex().mt(8).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
           .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
-            .when(i > 0, (el) => el.child(div().child("·"))).child(svg(ICON(icon)).size(11).flex_none()).child(text)));
+            .when(i > 0, (el) => el.child(div().child("·")))
+            .when(icon === "name", (el) => el.child(div().font_semibold().text_color(t.muted).child(text)))
+            .when(icon !== "name", (el) => el.child(svg(ICON(icon)).size(11).flex_none()).child(text))));
       case "lhead":
         return h_flex().mt(14).gap(6).items_center().text_size(10.5)
           .child(div().font_semibold().text_color(this.labelInk(t, t.background)).child("LATEST UPDATE"))
@@ -3976,6 +4072,7 @@ export default class Threads extends View {
               .child(svg(ICON("info")).size(12).text_color(this.legendOn ? t.accent : t.dim))))
           .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t, t.background)).child(this.countsLine(turn))));
       }
+      case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey, true));
       case "img": {
         this.wantImages(turn, tkey);
         const f = this.imgFile(turn, r.i);

@@ -28,6 +28,7 @@ test("assembles turns from the fixture", () => {
   const s = read(fixture, 1 << 20);
   expect(s.offset).toBe(s.size);
   expect(s.title).toBe("login flake");
+  expect(s.agentName).toBe("shop-agent"); // an agent-name line gets past extract.sh's filter
   expect(s.turns.map((t) => t.prompt.split("\n")[0])).toEqual([
     "What does the auth mock warning in the test output mean?",
     "Fix the flaky login test so it stops timing out in CI",
@@ -205,7 +206,7 @@ test("the new extractor gives the old event stream, less repeated usage, non-own
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });

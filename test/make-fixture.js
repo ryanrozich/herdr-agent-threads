@@ -539,6 +539,7 @@ if (open) {
 }
 
 if (only == null) push({ type: "custom-title", customTitle: "login flake", sessionId });
+if (only == null) push({ type: "agent-name", agentName: "shop-agent", sessionId });
 push({ type: "last-prompt", lastPrompt: "Add a retry note to the README", sessionId });
 
 writeFileSync(out, `${lines.join("\n")}\n`);

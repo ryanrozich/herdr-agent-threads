@@ -54,7 +54,7 @@ ev as (
   union all
   -- A reply's tokens. input leaves out the cached tokens, output leaves out reasoning.
   select m.un, m.ut, m.uid, 2, m.mt, m.id, '~',
-    json_object('k','m','id', m.id, 'm', json_extract(m.data,'$.modelID'), 'e', json_extract(m.data,'$.variant'),
+    json_object('k','m','id', m.id, 'a', json_extract(m.data,'$.agent'), 'm', json_extract(m.data,'$.modelID'), 'e', json_extract(m.data,'$.variant'),
       'ts', strftime('%Y-%m-%dT%H:%M:%fZ', coalesce(json_extract(m.data,'$.time.completed'), m.mt) / 1000.0, 'unixepoch'),
       'u', json_object('i', coalesce(json_extract(m.data,'$.tokens.input'),0),
         'o', coalesce(json_extract(m.data,'$.tokens.output'),0) + coalesce(json_extract(m.data,'$.tokens.reasoning'),0),
