@@ -325,14 +325,15 @@ test("the working card's estimate uses the 21 px prompt and 20 px note lines it 
     const r = v.rows().find((x) => x.kind === "working");
     if (!r) continue;
     seen++;
-    const tw = v.inner() - 2;
     const est = v.estimate(r);
-    // The smallest it can be: one prompt line, one chip row, one note line.
-    expect(est).toBeGreaterThanOrEqual(8 + 2 + 20 + 18 + 8 + 21 + 8 + 27 + 3 + 20);
-    // Each prompt line counts 21 px and each note line 20 px, at the card's text width.
-    const prompt = v.wrapped(r.turn.prompt.split("\n").slice(0, 3).join("\n"), tw, 6.2);
-    const note = v.wrapped("No final reply yet. It appears here when Claude finishes this turn.", tw, 6.0);
-    expect(est).toBeGreaterThanOrEqual(8 + 2 + 20 + 18 + 8 + Math.min(6, prompt) * 21 + 8 + 27 + 3 + note * 20 - 21 * 3);
+    // The smallest it can be: padding, meta, one prompt line in the bubble, the live line,
+    // one note line, padding.
+    expect(est).toBeGreaterThanOrEqual(8 + 16 + 6 + 12 + 21 + 6 + 18 + 6 + 20 + 10);
+    // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
+    const g = v.workingGeom(r.turn);
+    expect(est).toBe(8 + 16 + 6 + 12 + g.lines * 21 + 6 + 18 + 6 + g.note * 20 + 10);
+    const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
+    expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
@@ -1517,7 +1518,7 @@ test("C2: plain chip names, and i or a click on the stats shows a legend of the 
 
 // ---- round 3: D1 ----------------------------------------------------------------------------
 
-test("D1: FINAL REPLY, LATEST UPDATE, YOU and the counts line draw in muted, or foreground where muted is faint", async () => {
+test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where muted is faint; the chat look has no FINAL REPLY or YOU label", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
@@ -1529,14 +1530,15 @@ test("D1: FINAL REPLY, LATEST UPDATE, YOU and the counts line draw in muted, or 
   };
   const counts = v.countsLine(t);
   let calls = frame(v, cx);
-  for (const label of ["FINAL REPLY", "LATEST UPDATE", "YOU", counts]) expect(colourOf(calls, label)).toBe(theme.muted);
+  for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.muted);
+  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU"))).toBe(false);
   // A theme whose muted reads under 4.5:1 on the card: foreground.
   const faint = { ...theme, muted: "#5a5a5a" };
   const real = theme.muted;
   try {
     Object.assign(theme, faint);
     calls = frame(v, cx);
-    for (const label of ["FINAL REPLY", "LATEST UPDATE", "YOU", counts]) expect(colourOf(calls, label)).toBe(theme.foreground);
+    for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.foreground);
   } finally { theme.muted = real; }
   draw(v, cx);
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);

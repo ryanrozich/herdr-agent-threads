@@ -552,7 +552,7 @@ export default class Threads extends View {
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
       case "md": return `md${n} links ${r.links ?? 0} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
-      case "rhead": return `rhead${n} FINAL REPLY${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
+      case "rhead": return `rhead${n}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
@@ -3065,9 +3065,8 @@ export default class Threads extends View {
   // 5.4 to 5.8 px a character; the estimates allow a little more for word wrapping.
 
   wrapped(text, width, charW) { return wrappedLines(text, Math.floor(width / charW)); }
-  // Card text width: 6 px list margin, 1 px border and 9 px padding each side, so card text
-  // starts 16 px in, where row text starts.
-  inner() { return Math.max(120, this.width - 12 - 18 - 2); }
+  // An open turn's text width: 16 px in from each side, where a closed exchange's text is.
+  inner() { return Math.max(120, replyWidth(this.width)); }
   perLine() { return Math.max(8, Math.floor((this.inner() - 20) / YOU_CHAR)); }
 
   // First-frame estimate of Markdown at the card width: 21 px lines, 12 px between blocks,
@@ -3164,7 +3163,7 @@ export default class Threads extends View {
     const src = this.youSource(r.turn);
     const q = this.filterText();
     const hl = Boolean(q) && src.toLowerCase().includes(q.toLowerCase());
-    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}`;
+    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
@@ -3173,13 +3172,17 @@ export default class Threads extends View {
     const m = hl ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
       : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
     const extra = 6 * m.quotes + 16 * m.code;
-    const per = Math.max(8, Math.floor((this.inner() - 20) / YOU_CHAR));
+    // The bubble: as wide as the widest line, at most bubbleMax.
+    const bmax = bubbleMax(this.width);
+    const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
+    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, Math.ceil(widest * YOU_CHAR) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
+    const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / YOU_CHAR));
     const n = wrappedLines(c.text, per);
     // One spare line, so the first frame's estimate does not run short.
     const raw = c.text ? (n + 1) * TV_LINE + extra : 0;
     // Taller than YOU_MAX: a box of that height that scrolls (Show all on a long paste).
     const capped = raw >= YOU_MAX;
-    const v = { ...m, text: c.text, more: c.more, hl, parts, extra, bodyH: Math.min(YOU_MAX, raw), capped };
+    const v = { ...m, text: c.text, more: c.more, hl, parts, extra, bw, bodyH: Math.min(YOU_MAX, raw), capped };
     r.turn.youMemo = { sig, v };
     return v;
   }
@@ -3189,8 +3192,9 @@ export default class Threads extends View {
     const clipped = !r.full && y.more > 0;
     const canLess = r.full && this.youClip(r.turn).more > 0;
     const chip = r.turn.cmd ? ROW.PROMPT_LINE + 4 : 0;
-    const body = y.text ? 8 + 10 + 16 + 4 + y.bodyH + 10 + (clipped || canLess ? 22 : 0) + 10 : 8 + 10 + 16 + 10 + 10;
-    return body + chip;
+    const label = r.turn.agent ? 16 + 4 : 0;
+    // 6 above, 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
+    return 6 + 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
   }
 
   // The FINAL REPLY caption's parts: [icon, text].
@@ -3206,11 +3210,13 @@ export default class Threads extends View {
   // Lines the caption takes when it wraps: the label, then each part (icon + text).
   captionRows(turn) {
     const w = this.inner();
+    const parts = this.captionParts(turn);
+    if (!parts.length) return 0;
     let rows = 1;
-    let x = 11 * 6.6;
-    for (const [, text] of this.captionParts(turn)) {
-      const cw = 10 + 12 + 4 + text.length * 6.3;
-      if (x + 6 + cw > w) { rows++; x = cw; } else x += 6 + cw;
+    let x = 0;
+    for (const [, text] of parts) {
+      const cw = (x ? 10 : 0) + 12 + 4 + text.length * 6.3;
+      if (x && x + 6 + cw > w) { rows++; x = cw; } else x += (x ? 6 : 0) + cw;
     }
     return rows;
   }
@@ -3236,18 +3242,12 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
-        const prompt = clipPrompt(r.turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
-        // The working card's text is 2 px narrower than other card text (its 10 px padding),
-        // and its prompt and note have explicit line heights, so this is the drawn height
-        // when the wrap estimate holds (F3).
-        const tw = w - 2;
-        const lines = Math.min(6, this.wrapped(prompt, tw, YOU_CHAR));
-        const note = this.wrapped(`No final reply yet. It appears here when ${this.agent().short} finishes this turn.`, tw, 6.0);
-        return 8 + 2 + 20 + 18 + 8 + lines * TV_LINE + 8 + this.chipRows(["00 tool calls", "000.0k tokens", "00:00"]) * 27 + 3 + note * NOTE_LINE;
+        const g = this.workingGeom(r.turn);
+        return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + g.lines * TV_LINE + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
-      case "head": return 4 + 1 + 10 + 18;
+      case "head": return ROW.PAD_T + 18;
       case "you": return this.youHeight(r);
-      case "rhead": return 10 + this.captionRows(r.turn) * 18;
+      case "rhead": { const n = this.captionRows(r.turn); return n ? 8 + n * 18 : 4; }
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
@@ -3258,15 +3258,15 @@ export default class Threads extends View {
       case "more": return 8 + 26;
       case "stats": {
         const line = this.countsLine(r.turn);
-        // The info chip at the end is about as wide as an empty labelled one.
-        return 10 + this.chipRows([...this.statTexts(r.turn), ""]) * 27 - 5 + (line ? this.countsHeight(line) : 0);
+        const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
+        return 10 + lines * 16 + (line ? this.countsHeight(line) : 0);
       }
       case "legend": {
         const per = (w - 17) / 5.9;
         const lines = this.legendEntries(r.turn).reduce((n, [, text]) => n + wrappedLines(text, Math.floor(per)), 0);
         return 6 + (lines + 1) * 19 + (this.legendEntries(r.turn).length - 1) * 4;
       }
-      case "copy": return 10 + 28 + 10 + 1 + 4;
+      case "copy": return 10 + 28 + ROW.PAD_B;
     }
     return 30;
   }
@@ -3448,11 +3448,11 @@ export default class Threads extends View {
     }
   }
 
-  // The frame of a collapsed exchange: 12 px in from each side, the meta line, the message,
+  // The frame of a collapsed exchange: 16 px in from each side, the meta line, the message,
   // the reply and the stats line 6 px apart (ui.js rowHeight). The selected exchange has a
   // light fill across the pane and a 2 px bar on its left edge, in the accent colour while
   // the pane has the keyboard.
-  rowFrame(t, r, sel, focusedPanel, live, kids) {
+  rowFrame(t, sel, focusedPanel, live, kids) {
     return v_flex().w_full().relative().px(ROW.PAD_X).pt(ROW.PAD_T).pb(ROW.PAD_B).gap(ROW.GAP).min_w(0)
       .when(sel && !live, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
@@ -3502,11 +3502,15 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)
-      .when(!agent, (el) => el.bg(t.bubble ?? t.raised).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+      .when(!agent, (el) => el.bg(this.bubbleFill(t)).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.bg(t.background).border_1().border_color(t.border).rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
       .children(kids);
     return h_flex().w_full().min_w(0).when(!agent, (el) => el.justify_end()).child(box);
   }
+
+  // The bubble's fill: the text colour at 8% over whatever is under it, so it shows on the
+  // pane and on a selected exchange's fill, in dark and light themes.
+  bubbleFill(t) { return alpha(t.foreground, 0.08); }
 
   // "Show more" under a message or reply that was cut: Enter or a click opens the turn.
   moreLine(t) {
@@ -3525,6 +3529,14 @@ export default class Threads extends View {
     if (!narrow && turn.model) parts.push(shortModel(turn.model));
     if (turn.tools > 0) parts.push(narrow ? plural(turn.tools, "tool") : plural(turn.tools, "tool call"));
     return parts.join(" · ");
+  }
+  // An open turn's stats: the closed exchange's, then cache hit and a compaction.
+  statsFull(turn) {
+    const st = stats(turn);
+    const parts = [this.statsText(turn)];
+    if (st.cachePct != null) parts.push(`cache hit ${fmtPct(st.cachePct)}`);
+    if (turn.compactions) parts.push("context compacted");
+    return parts.filter(Boolean).join(" · ") || "no stats";
   }
   statsLine(t, text, color = t.dim) {
     return h_flex().h(ROW.STATS).min_w(0).items_center().text_size(11.5).font_family(this.mono()).text_color(color)
@@ -3564,7 +3576,7 @@ export default class Threads extends View {
     const sh = r.shape;
     const tone = sh.tone;
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
-    return this.rowFrame(t, r, sel, focusedPanel, false, [
+    return this.rowFrame(t, sel, focusedPanel, false, [
       this.metaLine(t, turn),
       this.bubble(t, turn, [
         this.promptBlock(t, turn, sh, sel),
@@ -3599,7 +3611,7 @@ export default class Threads extends View {
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
-    return this.rowFrame(t, r, sel, focusedPanel, true, [
+    return this.rowFrame(t, sel, focusedPanel, true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
       this.bubble(t, turn, [this.promptBlock(t, turn, sh), ...(sh.pMore ? [this.moreLine(t)] : [])], sh.bubbleW),
       h_flex().h(ROW.REPLY_LINE).gap(6).items_center().min_w(0)
@@ -3610,42 +3622,51 @@ export default class Threads extends View {
     ]);
   }
 
-  // The running turn when selected: the working card, with live counts and a clock.
+  // The running turn when selected: the message in full (up to 6 lines), the live state with
+  // its clock, tool calls and tokens so far, and a note on where the reply will appear.
+  // Every line has a fixed height, so the drawn height is the estimate (F3).
   workingItem(t, r) {
     const { turn } = r;
     const s = stats(turn);
     const st = this.liveState(t);
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
-    const chip = (icon, text) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).bg(t.raised)
-      .text_size(11.5).font_family(this.mono()).text_color(t.muted).child(svg(ICON(icon)).size(11).text_color(t.dim)).child(text);
-    return div().px(6).py(4).child(v_flex().p(10).gap(8).rounded(9).bg(alpha(st.color, 0.08)).border_1().border_color(alpha(st.color, 0.55))
-      .child(h_flex().h(18).gap(6).items_center().text_size(11.5)
-        .child(div().text_color(t.dim).font_family(this.mono()).child(`#${turn.n}`))
-        .when(this.isPinned(r.key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-        .child(this.liveIcon(st, 12))
-        .child(div().text_color(st.color).font_medium().child(`${st.label}${clock ? ` · ${clock}` : ""}`)))
-      .child(div().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text))
-      .child(h_flex().gap(5).flex_wrap()
-        .child(chip("wrench", plural(turn.tools, "tool call")))
-        .when(this.showTokens(s), (el) => el.child(chip("arrows", `${fmtTokens(s.tokens)} tokens`)))
-        .when(Boolean(clock), (el) => el.child(chip("clock", clock))))
-      .child(div().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(st.label === "Needs you"
-        ? `${this.agent().short} is waiting for you in the terminal.`
-        : st.spin ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
-          : "This turn has no final reply yet. It may have been stopped.")));
+    const g = this.workingGeom(turn);
+    const live = [st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
+    return this.rowFrame(t, true, this.h.is_focused(), true, [
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
+      this.bubble(t, turn, [div().h(g.lines * TV_LINE).overflow_hidden().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(g.prompt)], bubbleMax(this.width)),
+      h_flex().h(18).gap(6).items_center().min_w(0)
+        .child(this.liveIcon(st, 13))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
+      div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
+    ]);
+  }
+  workingGeom(turn) {
+    const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
+    const tw = bubbleMax(this.width) - 2 * ROW.BUBBLE_PX;
+    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, YOU_CHAR)));
+    const st = this.status();
+    const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
+      : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
+        : "This turn has no final reply yet. It may have been stopped.";
+    const note = this.wrapped(noteText, this.inner(), 6.0);
+    return { prompt, lines, note, noteText };
   }
 
   // A day divider: a band across the whole pane, 12 px below the turn above, with a rule
   // above and below, a calendar icon in the accent colour, the day and its date, and the
   // day's shown turns on the right. Its fill is ui.js bandFill.
   dayItem(t, r) {
-    return v_flex().pt(12)
-      .child(h_flex().h(30).px(16).gap(8).items_center().bg(this.bandFill(t)).border_t_1().border_b_1().border_color(t.border)
-        .child(svg(ICON("calendar")).size(13).flex_none().text_color(t.accent))
-        .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(r.name))
-        .when(Boolean(r.date), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(r.date)))
-        .child(div().flex_1())
-        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(plural(r.count, "turn"))));
+    // A day: its name, date and shown turns centred between two hairlines, 10 px below the
+    // exchange above.
+    return v_flex().pt(10).pb(6)
+      .child(h_flex().h(30).px(16).gap(10).items_center()
+        .child(div().flex_1().h(1).bg(t.border))
+        .child(h_flex().flex_none().gap(6).items_center().text_size(11.5)
+          .child(div().font_semibold().text_color(t.muted).child(r.name))
+          .when(Boolean(r.date), (el) => el.child(div().text_color(t.dim).child(`· ${r.date}`)))
+          .child(div().text_color(t.dim).child(`· ${plural(r.count, "turn")}`)))
+        .child(div().flex_1().h(1).bg(t.border)));
   }
 
   bandFill(t) {
@@ -3662,31 +3683,30 @@ export default class Threads extends View {
   }
 
   // The line a return to a pin puts over a place further down the turn: the prompt and the
-  // start of the reply are above it. A click shows the turn from its head.
+  // start of the reply are above it. A click shows the turn from its head. It carries the
+  // turn's fill and bar when selected, like the turn's other slices.
   resumeItem(t, r, size) {
-    return v_flex().h(size).px(6).child(v_flex().h(size).flex_none().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).justify_center()
+    const sel = this.sel === r.key.slice("resume:".length);
+    return v_flex().h(size).w_full().relative().justify_center().px(ROW.PAD_X)
+      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(this.h.is_focused() ? t.accent : t.border)))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
         .child(svg(ICON("chevron-up")).size(12).flex_none())
-        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`))));
+        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`)));
   }
 
-  // One slice of an expanded turn's card: exactly its slot's height, with the card's
-  // raised fill and side borders, so slices stack into one card with no seam. Only the
-  // first part has the top edge and the last the bottom edge. The card keeps the border
-  // stroke whether or not it is selected.
+  // One slice of an open turn: exactly its slot's height, 16 px in from each side like a
+  // closed exchange. The first part has the 8 px top padding and the last the 10 px bottom
+  // padding. The selected turn's slices carry its fill and the bar on the left, so they
+  // read as one exchange with no seam.
   cardPart(t, r, size) {
-    const { turn } = r;
-    // Flex containers, so a child's top margin stays inside the card instead of collapsing
-    // through it and leaving a gap between list items.
-    const h = size - (r.part === "top" ? 4 : 0) - (r.part === "bottom" ? 4 : 0);
-    // An agent turn's card keeps a 3 px ansi5 rail down its left edge, so a slice scrolled
-    // into view on its own still says who spoke.
-    const rail = turn.agent;
-    return v_flex().h(size).px(6).child(v_flex().h(h).flex_none().overflow_hidden().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).relative()
-      .when(r.part === "top", (el) => el.mt(4).pt(10).border_t(1).rounded_t(9))
-      .when(r.part === "bottom", (el) => el.mb(4).pb(10).border_b(1).rounded_b(9))
-      .when(rail, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(3).bg(t.ansi5)))
-      .child(this.partContent(t, r, false)));
+    const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
+    const sel = this.sel === tkey;
+    const focusedPanel = this.h.is_focused();
+    return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
+      .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
+      .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
+      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .child(this.partContent(t, r, false));
   }
 
   // What a card part shows. probe: drawn in the hidden probe (own TextView ids, no scroll,
@@ -3698,12 +3718,15 @@ export default class Threads extends View {
     const mono = this.mono();
     switch (r.kind) {
       case "head":
-        return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim)
-          .child(div().font_family(mono).child(`#${turn.n}`))
-          .child(this.statusIcon(t, turn))
-          .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))))
-          .child(div().flex_1().min_w(0).truncate().child([when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
-          // A list item takes one click handler, so click() tells the pin by position (headPinHit).
+        // The meta line of an open turn, on the right like a closed one's: "#7 · Sat 8:43 AM ·
+        // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
+        // handler, so click() tells the pin by position (headPinHit).
+        return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim).pr(4)
+          .when(turn.interrupted || this.failed(turn), (el) => el.child(this.statusIcon(t, turn)))
+          .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
+            .child(div().flex_none().max_w(this.labelRoom(turn, this.inner())).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+              .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
+          .child(div().flex_1().min_w(0).truncate().text_right().child([`#${turn.n}`, when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
           .child(svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim))
           .child(svg(ICON("chevron-up")).size(14).flex_none());
       case "you": {
@@ -3728,25 +3751,33 @@ export default class Threads extends View {
         const cmd = commandParts(turn);
         const ac = this.agentColor(t);
         const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.hl ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
-        return v_flex().mt(8).p(10).gap(4).rounded(7).bg(turn.agent ? alpha(t.ansi5, 0.08) : t.background)
-          .child(h_flex().gap(5).items_center()
-            .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac)))
-            .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(10.5).font_semibold()
-              .text_color(turn.agent ? ac : this.labelInk(t, t.background)).child(this.youLabel(turn))))
-          .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(t, middle(cmd.name, Math.floor((this.inner() - 32) / ROW.CHIP_CHAR)), this.inner() - 20, !cmd.args))))
-          .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(t.foreground).child(text)))
-          .when(c.more > 0, (el) => el.child(div().text_size(12).text_color(t.accent).child(`+ ${plural(c.more, "more line")} · Show all`)))
-          .when(canLess, (el) => el.child(div().text_size(12).text_color(t.accent).child("Show less")));
+        // The message in its bubble, on the right (an agent's outlined, on the left, under its
+        // sender), as wide as its widest line.
+        const agent = turn.agent;
+        return h_flex().w_full().mt(6).when(!agent, (el) => el.justify_end())
+          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+            .when(!agent, (el) => el.bg(this.bubbleFill(t)).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+            .when(agent, (el) => el.bg(t.background).border_1().border_color(t.border).rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+            .when(agent, (el) => el.child(h_flex().gap(5).items_center()
+              .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
+              .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(11.5).font_semibold()
+                .text_color(ac).child(this.youLabel(turn)))))
+            .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(t, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
+            .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(t.foreground).child(text)))
+            .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(t.accent)
+              .child(`Show all · ${plural(c.more, "more line")}`).child(svg(ICON("chevron-down")).size(12))))
+            .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(t.accent)
+              .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
       case "rhead":
-        // "FINAL REPLY · 🔧 9 tool calls (not shown) · 🔔 144 background updates", wrapping.
-        return h_flex().mt(10).gap_x(6).flex_wrap().items_center().text_size(10.5)
-          .child(div().h(18).flex().items_center().font_semibold().text_color(this.labelInk(t)).child("FINAL REPLY"))
-          .children(this.captionParts(turn).map(([icon, text]) => h_flex().h(18).gap(4).items_center().text_size(11.5).text_color(t.dim)
-            .child(div().child("·")).child(svg(ICON(icon)).size(11).flex_none()).child(text)));
+        // Under the message, before the reply: what the reply does not show, wrapping
+        // ("🔧 9 tool calls (not shown) · 🔔 144 background updates"), or a small gap.
+        return h_flex().mt(this.captionParts(turn).length ? 8 : 4).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
+          .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
+            .when(i > 0, (el) => el.child(div().child("·"))).child(svg(ICON(icon)).size(11).flex_none()).child(text)));
       case "lhead":
         return h_flex().mt(14).gap(6).items_center().text_size(10.5)
-          .child(div().font_semibold().text_color(this.labelInk(t)).child("LATEST UPDATE"))
+          .child(div().font_semibold().text_color(this.labelInk(t, t.background)).child("LATEST UPDATE"))
           .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim).min_w(0)
             .child(div().child("·")).child(svg(ICON("bell")).size(11).flex_none())
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
@@ -3807,16 +3838,15 @@ export default class Threads extends View {
           .child(svg(ICON(r.less ? "chevron-up" : "chevron-down")).size(12))
           .child(r.less ? "Show less" : `Show full reply · ${r.words.toLocaleString()} words`));
       case "stats": {
-        const chip = (icon, text) => h_flex().flex_none().h(22).px(7).gap(5).items_center().rounded(5).bg(t.background)
-          .text_size(11.5).font_family(mono).text_color(t.muted).child(svg(ICON(icon)).size(11).text_color(t.dim)).child(text);
-        return h_flex().mt(10).gap(5).flex_wrap()
-          .children(this.statChips(turn).map(([, icon, text]) => chip(icon, text)))
-          // The info chip: a click anywhere on the stats (or i) explains the chips.
-          .child(h_flex().flex_none().h(22).px(6).items_center().rounded(5).bg(this.legendOn ? t.raised : t.background)
-            .border_1().border_color(this.legendOn ? t.accent : t.background)
-            .child(svg(ICON("info")).size(11).text_color(this.legendOn ? t.foreground : t.dim)))
-          // The exact counts, 16 px lines (C1): its height is measured with the chips.
-          .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t)).child(this.countsLine(turn))));
+        // The stats under the reply, as on a closed exchange, with what only an open turn
+        // shows after them: cache hit and a compaction. The info icon (or i, or a click on
+        // the line) explains them. The exact counts follow on their own 16 px lines (C1).
+        return v_flex().mt(10)
+          .child(h_flex().gap(6).items_start()
+            .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").font_family(mono).text_color(t.dim).child(this.statsFull(turn)))
+            .child(h_flex().flex_none().h(16).items_center()
+              .child(svg(ICON("info")).size(12).text_color(this.legendOn ? t.accent : t.dim))))
+          .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t, t.background)).child(this.countsLine(turn))));
       }
       case "img": {
         this.wantImages(turn, tkey);

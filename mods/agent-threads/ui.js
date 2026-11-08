@@ -304,12 +304,12 @@ export function middle(text, max) {
 }
 
 // Row geometry, shared by the drawing and the stated heights. A collapsed turn is drawn as
-// a chat exchange: 12 px in from each side, the meta line, the person's message in a bubble
+// a chat exchange: 16 px in from each side (where an open turn's text starts), the meta line, the person's message in a bubble
 // on the right (an agent's on the left), the reply as plain text across the pane, then the
 // stats line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px
 // of padding each side and 6 px above and below.
 export const ROW = Object.freeze({
-  PROMPT_LINE: 18, REPLY_LINE: 18, META: 16, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 12,
+  PROMPT_LINE: 18, REPLY_LINE: 18, META: 16, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
   BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
 });
 // The widest a bubble can be, and the width of the text inside it.

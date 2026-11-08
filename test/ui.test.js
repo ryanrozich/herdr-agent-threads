@@ -236,8 +236,8 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
   expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 18 + 6 + 18 + 6 + 16 + 10);
   expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 72 + 6 + 108 + 6 + 16 + 10);
   expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
-  expect(bubbleMax(380)).toBe(Math.floor(356 * 0.82));
-  expect(bubbleMax(280)).toBe(Math.floor(256 * 0.9));
+  expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
+  expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {
