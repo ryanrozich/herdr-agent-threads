@@ -3638,10 +3638,6 @@ export default class Threads extends View {
       .child(div().flex_1().h(1).bg(t.border));
   }
 
-  // One slice of an expanded turn's card: exactly its slot's height, with the card's
-  // raised fill and side borders, so slices stack into one card with no seam. Only the
-  // first part has the top edge and the last the bottom edge. The card keeps the border
-  // stroke whether or not it is selected.
   // The line a return to a pin puts over a place further down the turn: the prompt and the
   // start of the reply are above it. A click shows the turn from its head.
   resumeItem(t, r, size) {
@@ -3651,6 +3647,10 @@ export default class Threads extends View {
         .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`))));
   }
 
+  // One slice of an expanded turn's card: exactly its slot's height, with the card's
+  // raised fill and side borders, so slices stack into one card with no seam. Only the
+  // first part has the top edge and the last the bottom edge. The card keeps the border
+  // stroke whether or not it is selected.
   cardPart(t, r, size) {
     const { turn } = r;
     // Flex containers, so a child's top margin stays inside the card instead of collapsing
