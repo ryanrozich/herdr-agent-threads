@@ -801,8 +801,8 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   draw(v, cx);
   const snap = () => state.shared["threads.debug"].t4;
   const turn = (n) => snap().detail.find((d) => d.startsWith(`turn#${n} `));
-  // "> two lines\n\ncomment" at Prompt lines 2: one quote line, one comment line.
-  expect(turn(3)).toMatch(/^turn#3 p2\/r\d q1 h\d+ /);
+  // "> two lines\n\ncomment": one quote line, then the comment's lines.
+  expect(turn(3)).toMatch(/^turn#3 p[23]\/r\d q1 h\d+ /);
   expect(turn(3)).toContain("▎The retry path");
   expect(turn(1)).toMatch(/^turn#1 p\d\/r\d q\d qonly /);
   expect(turn(2)).toMatch(/^turn#2 p\d\/r\d h/);
@@ -810,7 +810,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   // Heights match the units.
   const { rowShape } = await import("../mods/agent-threads/ui.js");
   const t3 = v.current().turns[2];
-  expect(v.shape(t3).height).toBe(rowShape({ prompt: t3.prompt.slice(0, 1200), reply: v.shape(t3).reply.join(" "), width: 380, promptLines: 2, replyLines: 3 }).height);
+  expect(v.shape(t3).height).toBe(rowShape({ prompt: t3.prompt.slice(0, 1200), reply: v.shape(t3).reply.join(" "), width: 380, promptLines: v.prefs.promptLines, replyLines: v.prefs.replyLines }).height);
   // With Prompt lines 1 a quote and a comment show the comment only.
   v.prefs = { ...v.prefs, promptLines: 1 };
   draw(v, cx);
@@ -1354,7 +1354,7 @@ test("V3b: reply and latest TextViews never scroll, and only the YOU box over 42
   for (const x of views.filter((y) => y.id.startsWith("th-probe-"))) expect(x.calls.some(([n]) => n === "scrollable")).toBe(false);
 });
 
-test("V3b: the first-frame estimate is never under the 21 px line reference, and at most a line and 18 px over", async () => {
+test("V3b: the first-frame estimate is never under the reading-line reference, and at most a line and 18 px over", async () => {
   const { wrappedLines } = await import("../mods/agent-threads/ui.js");
   const { v, cx } = await pane(fixture("--extra", "4", "--langs", "--edge", "--blocks"));
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
@@ -1363,11 +1363,13 @@ test("V3b: the first-frame estimate is never under the 21 px line reference, and
     let n = 0;
     for (const r of v.rows().filter((x) => x.kind === "md")) {
       const blocks = r.src.split(/\n{2,}/);
-      const per = Math.floor(v.inner() / 6.1);
-      const ref = 6 + blocks.reduce((h, b) => h + wrappedLines(b.replace(/[*_`#>]/g, ""), per) * 21, 0) + (blocks.length - 1) * 12;
+      // The reading line (14 px text on 21 px lines, at most about 70 characters wide).
+      const per = Math.floor(v.prose() / v.charW(6.1));
+      const line = v.rt().line;
+      const ref = 6 + blocks.reduce((h, b) => h + wrappedLines(b.replace(/[*_`#>]/g, ""), per) * line, 0) + (blocks.length - 1) * v.paraGap();
       const est = v.estimate(r);
       expect(est).toBeGreaterThanOrEqual(ref);
-      expect(est).toBeLessThanOrEqual(ref + 21 + 18);
+      expect(est).toBeLessThanOrEqual(ref + line + 18);
       n++;
     }
     expect(n).toBeGreaterThan(5);
@@ -2600,3 +2602,36 @@ test("names: yours over your message, the agent's over its reply, Agent when the
   await new Promise((r) => setTimeout(r, 20));
 });
 
+
+test("reading type: message and reply text at the Text size on 1.5 lines, a reading line wide at 960 px, labels unchanged", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const sizes = (c) => c.filter((x) => x[0] === "text_size").map((x) => x[1]);
+  v.forcedWidth = 960; v.width = 960;
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const c = calls(() => v.rowItem(theme, row, true));
+  // The message and the reply at 14 px on 21 px lines; the name, the date and the stats stay small.
+  expect(sizes(c)).toEqual(expect.arrayContaining([14, 11.5]));
+  expect(c.some((x) => x[0] === "h" && x[1] === 21)).toBe(true);
+  // The reply stops at the reading line, about 70 characters, not across the pane.
+  const prose = v.prose();
+  expect(prose).toBeLessThan(500);
+  expect(c.some((x) => x[0] === "max_w" && x[1] === prose)).toBe(true);
+  for (const l of row.shape.reply) expect(l.length).toBeLessThanOrEqual(75);
+  // An open reply's text: 14 px, 21 px lines, at most the reading line.
+  v.open = new Set([row.key]);
+  const md = v.rows().find((r) => r.kind === "md");
+  const m = calls(() => v.partContent(theme, md, false));
+  expect(m).toEqual(expect.arrayContaining([["max_w", prose], ["text_size", 14], ["line_height", "21px"]]));
+  // Text size: the stepper goes to 18 and no further, and Reset brings 14 back.
+  for (let i = 0; i < 6; i++) v.action("textSize:+", cx);
+  expect(v.prefs.textSize).toBe(18);
+  expect(v.action("textSize:+", cx)).toBe(false);
+  expect(v.rt().line).toBe(27);
+  expect(v.prose()).toBeGreaterThan(prose);
+  const big = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  expect(big.shape.height).toBeGreaterThan(row.shape.height);
+  v.action("resetSettings", cx);
+  expect(v.prefs.textSize).toBe(14);
+  await new Promise((r) => setTimeout(r, 20));
+});

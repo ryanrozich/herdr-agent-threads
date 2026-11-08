@@ -305,30 +305,59 @@ export function middle(text, max) {
 
 // Row geometry, shared by the drawing and the stated heights. A collapsed turn is drawn as
 // a chat exchange: 16 px in from each side (where an open turn's text starts), the meta line, the person's message in a bubble
-// on the right (an agent's on the left), the reply as plain text across the pane, then the
-// stats line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px
-// of padding each side and 6 px above and below.
+// on the right (an agent's on the left), the reply as plain text under it, then the stats
+// line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px of
+// padding each side and 6 px above and below. The *_CHAR widths are measured at 13 px;
+// readType scales them to the reading size.
 export const ROW = Object.freeze({
-  PROMPT_LINE: 18, REPLY_LINE: 18, META: 16, NAME: 18, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
+  META: 16, NAME: 18, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
   BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
 });
-// The widest a bubble can be, and the width of the text inside it.
-export function bubbleMax(width) { return Math.max(80, Math.floor((width - 2 * ROW.PAD_X) * (width < 320 ? 0.9 : 0.82))); }
-export function rowTextWidth(width, _agent = false) { return Math.max(60, bubbleMax(width) - 2 * ROW.BUBBLE_PX); }
-// The reply's text width: the pane less the exchange's padding.
+
+// ---- reading type ----
+// Message and reply text is set for reading, a step above the pane's 11.5 to 12.5 px labels
+// (names, dates, the stats line and Show more keep those): settings textSize, 14 px by
+// default, 12 to 18. Its lines are 1.5 times the size apart (WCAG 2.2 SC 1.4.8 asks for at
+// least 1.5), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
+// more than 80; Bringhurst: 45 to 75, 66 the ideal). PROSE_EM is an average character of
+// English prose in the system sans, in em, so MEASURE * PROSE_EM em is the line's width.
+export const TEXT_SIZE = 14;
+export const TEXT_RANGE = Object.freeze([12, 18]);
+export const MEASURE = 70;
+export const PROSE_EM = 0.47;
+export function readType(size = TEXT_SIZE) {
+  const px = Number.isFinite(size) ? Math.max(TEXT_RANGE[0], Math.min(TEXT_RANGE[1], size)) : TEXT_SIZE;
+  const k = px / 13;
+  return Object.freeze({
+    size: px, small: px - 0.5, line: Math.round(px * 1.5),
+    prompt: ROW.PROMPT_CHAR * k, agent: ROW.AGENT_CHAR * k, reply: ROW.REPLY_CHAR * k,
+    measure: Math.round(MEASURE * PROSE_EM * px),
+  });
+}
+
+// The widest a bubble can be (its text no wider than a reading line), and the width of the
+// text inside it.
+export function bubbleMax(width, size = TEXT_SIZE) {
+  const fit = Math.floor((width - 2 * ROW.PAD_X) * (width < 320 ? 0.9 : 0.82));
+  return Math.max(80, Math.min(fit, readType(size).measure + 2 * ROW.BUBBLE_PX));
+}
+export function rowTextWidth(width, _agent = false, size = TEXT_SIZE) { return Math.max(60, bubbleMax(width, size) - 2 * ROW.BUBBLE_PX); }
+// The pane's text width, less the exchange's padding (labels, code), and the reply's: that,
+// at most one reading line.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
+export function readWidth(width, size = TEXT_SIZE) { return Math.min(replyWidth(width), readType(size).measure); }
 
 // ---- pasted images over a message ----
 // Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
 // (56 to 120 px), and as wide as its image's shape allows between 0.75 and 1.5 times that.
 export const TILE_GAP = 6;
-export function thumbSize(width) { return Math.max(56, Math.min(120, Math.floor(bubbleMax(width) / 3) - 4)); }
+export function thumbSize(width, size = TEXT_SIZE) { return Math.max(56, Math.min(120, Math.floor(bubbleMax(width, size) / 3) - 4)); }
 // dims: per image { w, h } once decoded, else null. The tiles that fit in the widest bubble,
 // in order, with "+N" for the rest: { size, tiles: [{ i, w, x }], more, width }, x from the
 // strip's left edge. The "+N" chip takes a tile's place when some do not fit.
-export function tileRow(dims, width) {
-  const size = thumbSize(width);
-  const room = bubbleMax(width);
+export function tileRow(dims, width, text = TEXT_SIZE) {
+  const size = thumbSize(width, text);
+  const room = bubbleMax(width, text);
   const ws = dims.map((d) => (d && d.w > 0 && d.h > 0 ? Math.round(Math.max(size * 0.75, Math.min(size * 1.5, (size * d.w) / d.h))) : size));
   const chip = 44;
   const tiles = [];
@@ -344,23 +373,24 @@ export function tileRow(dims, width) {
   return { size, tiles, more, width: x - TILE_GAP + (more ? TILE_GAP + chip : 0) };
 }
 
-// Height of a collapsed exchange with p prompt lines and r reply lines, and `more` Show
-// more lines (one under a cut message, one under a cut reply). The reply has its agent's
-// name over it.
-export function rowHeight(p, r, more = 0) {
-  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + ROW.PROMPT_LINE * p + ROW.GAP + ROW.NAME + ROW.REPLY_LINE * r
+// Height of a collapsed exchange with p prompt lines and r reply lines of `line` px, and
+// `more` Show more lines (one under a cut message, one under a cut reply). The reply has its
+// agent's name over it.
+export function rowHeight(p, r, more = 0, line = readType().line) {
+  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + ROW.NAME + line * r
     + ROW.GAP + ROW.STATS + ROW.PAD_B + ROW.MORE * more;
 }
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
 // and the arguments wrap in the space to its right.
-export function commandLayout(name, args, width, limit, agent = false) {
-  const tw = rowTextWidth(width, agent);
+export function commandLayout(name, args, width, limit, agent = false, size = TEXT_SIZE) {
+  const rt = readType(size);
+  const tw = rowTextWidth(width, agent, size);
   const maxChip = Math.floor(tw * 0.45);
   const chipChars = Math.max(3, Math.floor((maxChip - 12) / ROW.CHIP_CHAR));
   const label = middle(name, chipChars);
   const chipW = Math.min(maxChip, Math.ceil([...label].length * ROW.CHIP_CHAR + 12));
-  const per = Math.floor((tw - chipW - 6) / ROW.PROMPT_CHAR);
+  const per = Math.floor((tw - chipW - 6) / rt.prompt);
   const a = args ? rowLines(args, limit, per) : { lines: [], cut: false };
   return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length) };
 }
@@ -369,34 +399,35 @@ export function commandLayout(name, args, width, limit, agent = false) {
 // the prompt quotes something, says how each prompt line is drawn: "q" a muted quote line
 // with a bar, "qonly" a quote that is the whole prompt (foreground, with the bar), "c" the
 // person's own words. q: the quote lines shown.
-export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, agent = false, replyLimit = null, quotes = true }) {
-  const tw = rowTextWidth(width, agent);
+export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, agent = false, replyLimit = null, quotes = true, size = TEXT_SIZE }) {
+  const rt = readType(size);
+  const tw = rowTextWidth(width, agent, size);
   let pr;
   let chip = null;
   if (cmd) {
-    chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent);
+    chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size);
     pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut };
   } else {
-    pr = quotes ? quoteRows(prompt, promptLines, tw, agent) : null;
+    pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {
       // A task notification that opens a session carries no text: the sender label names it.
-      const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR));
+      const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? rt.agent : rt.prompt));
       pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut };
     }
   }
-  const rl = rowLines(reply, replyLimit ?? replyLines, replyWidth(width) / ROW.REPLY_CHAR);
+  const rl = rowLines(reply, replyLimit ?? replyLines, readWidth(width, size) / rt.reply);
   const r = Math.max(1, rl.lines.length);
   const pMore = Boolean(pr.cut);
   const rMore = Boolean(rl.cut) && (replyLimit ?? replyLines) > 1;
   // The bubble is as wide as its widest line (a command's chip and arguments side by side),
   // and wide enough for "Show more".
-  const ch = agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR;
+  const ch = agent ? rt.agent : rt.prompt;
   const widest = chip ? chip.chipW + 6 + Math.max(0, ...pr.lines.map((l) => units(l))) * ch
     : Math.max(0, ...pr.lines.map((l, i) => units(l) * ch + (pr.kinds && pr.kinds[i] !== "c" ? QUOTE_INSET : 0)));
-  const bubbleW = Math.min(bubbleMax(width), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
+  const bubbleW = Math.min(bubbleMax(width, size), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
   return {
     p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
-    height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0)),
+    height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line),
   };
 }
 
@@ -456,15 +487,16 @@ export const QUOTE_INSET = 10;
 // usual; when the budget would hide every comment line, the comment takes the last line,
 // so with one line the row shows the comment only. A prompt that is only a quote is the
 // whole message: it wraps within the budget.
-export function quoteRows(prompt, budget, tw, agent = false) {
+export function quoteRows(prompt, budget, tw, agent = false, size = TEXT_SIZE) {
   if (!prompt || !/(^|\n) {0,3}>/.test(prompt)) return null;
   const parts = promptParts(prompt);
   if (!parts.some((r) => r.quote)) return null;
+  const rt = readType(size);
   const max = Math.max(1, Math.floor(budget));
-  const qper = (tw - QUOTE_INSET) / ROW.AGENT_CHAR;
-  const per = tw / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR);
+  const qper = (tw - QUOTE_INSET) / rt.agent;
+  const per = tw / (agent ? rt.agent : rt.prompt);
   if (!parts.some((r) => !r.quote)) {
-    const l = rowLines(parts.map((r) => r.lines.join("\n")).join("\n"), max, (tw - QUOTE_INSET) / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR));
+    const l = rowLines(parts.map((r) => r.lines.join("\n")).join("\n"), max, (tw - QUOTE_INSET) / (agent ? rt.agent : rt.prompt));
     return { lines: l.lines, rows: Math.max(1, l.lines.length), kinds: l.lines.map(() => "qonly"), q: l.lines.length, cut: l.cut };
   }
   const lines = [];

@@ -34,7 +34,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
+  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP,
@@ -95,7 +95,7 @@ const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
 const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply"]);
-const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose
+const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
@@ -1344,7 +1344,7 @@ export default class Threads extends View {
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
       [...this.open].join(","), [...this.full].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
-      `${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "",
     ].join("|");
@@ -1562,7 +1562,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const text = this.replyText(turn);
-    const key = `${Math.round(this.width)}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
+    const key = `${Math.round(this.width)}|${P.textSize}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
@@ -1583,14 +1583,14 @@ export default class Threads extends View {
       cmd: cmd && { name: cmd.name, args: src(cmd.args) },
       promptLines: P.promptLines, replyLines: tone === "reply" ? P.replyLines : 1,
       // While filtering, the row shows the text around the first match, as one run.
-      quotes: !q,
+      quotes: !q, size: P.textSize,
     });
+    // A running turn draws its live line (18 px, a label) where the name and reply go.
+    if (live) sh.height += 18 - ROW.NAME - sh.r * this.rt().line;
     sh.tone = tone;
     sh.cmd = cmd;
-    // Pasted images: a strip of thumbnails under the prompt from 300 px; narrower, the count
-    // in the meta line says they are there.
     // Pasted images: a row of tiles over the bubble.
-    if (turn.images?.length) { sh.thumbs = true; sh.height += thumbSize(this.width) + ROW.GAP; }
+    if (turn.images?.length) { sh.thumbs = true; sh.height += thumbSize(this.width, P.textSize) + ROW.GAP; }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     return sh;
@@ -1666,7 +1666,7 @@ export default class Threads extends View {
       // One block that gpui wraps at the card's width (C5); the estimate counts lines only
       // until the probe has measured it.
       const text = flattenMd(late.slice(0, 4000));
-      const l = rowLines(text, LATEST_LINES + 1, this.inner() / MD_CHAR);
+      const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
       push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
     }
@@ -1868,7 +1868,7 @@ export default class Threads extends View {
 
   // The tiles over a message (ui.js tileRow): the images that fit, then "+N". In an open
   // card a tile shows a ring while that image is open full size below.
-  tileLayout(turn) { return tileRow(turn.images.map((_, i) => this.imgFile(turn, i)), this.width); }
+  tileLayout(turn) { return tileRow(turn.images.map((_, i) => this.imgFile(turn, i)), this.width, this.prefs.textSize); }
   thumbStrip(t, turn, key, open = false) {
     this.wantImages(turn, key);
     const L = this.tileLayout(turn);
@@ -2450,7 +2450,7 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) this.filtering = false; return true;
-      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
       case "escape":
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
@@ -2487,8 +2487,8 @@ export default class Threads extends View {
       this.changePrefs({ [bc[1]]: v }, cx);
       return true;
     }
-    // "promptLines:+", "replyLines:-", "promptLines:4".
-    const m = name.match(/^(promptLines|replyLines):([+-]|\d+)$/);
+    // "promptLines:+", "replyLines:-", "promptLines:4", "textSize:15".
+    const m = name.match(/^(textSize|promptLines|replyLines):([+-]|\d+)$/);
     if (m) {
       const [lo, hi] = RANGES[m[1]];
       const cur = this.prefs[m[1]];
@@ -2811,6 +2811,7 @@ export default class Threads extends View {
       .child(stepper("promptLines", "Prompt lines"))
       .child(stepper("replyLines", "Reply lines"))
       .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
+      .child(stepper("textSize", "Text size"))
       .child(h_flex().gap(6).items_center()
         .child(label("Your name"))
         .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
@@ -3229,7 +3230,7 @@ export default class Threads extends View {
   }
 
   // A quote line's bar: 2 px, foreground at 28% (dim on agent rows).
-  quoteBar(t, agent, h = ROW.PROMPT_LINE - 4) {
+  quoteBar(t, agent, h = this.rt().line - 4) {
     return div().flex_none().w(2).h(h).rounded(1).bg(agent ? t.dim : alpha(t.foreground, 0.28));
   }
 
@@ -3253,16 +3254,28 @@ export default class Threads extends View {
   wrapped(text, width, charW) { return wrappedLines(text, Math.floor(width / charW)); }
   // An open turn's text width: 16 px in from each side, where a closed exchange's text is.
   inner() { return Math.max(120, replyWidth(this.width)); }
-  perLine() { return Math.max(8, Math.floor((this.inner() - 20) / YOU_CHAR)); }
+  // Reading text (ui.js readType): its size and line, an estimated character's width at that
+  // size, and the width of a reading line: the card's text width, at most about 70
+  // characters.
+  rt() { return readType(this.prefs.textSize); }
+  charW(at13) { return at13 * (this.rt().size / 13); }
+  prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize)); }
+  perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize) / this.charW(YOU_CHAR))); }
+  // A reading block: the reading size and line, at most a reading line wide.
+  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  // The space between paragraphs, for estimates: TextView's own, about 12 px at 13 px.
+  paraGap() { return Math.round((12 * this.rt().size) / 13); }
 
-  // First-frame estimate of Markdown at the card width: 21 px lines, 12 px between blocks,
-  // and one spare line so it does not run short. The probe's measure replaces it.
+  // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
+  // between blocks, and one spare line so it does not run short. The probe's measure
+  // replaces it.
   mdHeight(md) {
-    const w = this.inner();
+    const w = this.prose();
+    const { line } = this.rt();
     let h = 0;
     const blocks = md.split(/\n{2,}/);
-    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, MD_CHAR) * TV_LINE;
-    return h + (blocks.length - 1) * 12 + TV_LINE;
+    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, this.charW(MD_CHAR)) * line;
+    return h + (blocks.length - 1) * this.paraGap() + line;
   }
 
   chipRows(texts) {
@@ -3353,7 +3366,7 @@ export default class Threads extends View {
     // does not read on a coloured bubble. There the message is plain text in the bubble's
     // ink, quotes behind their bar, as for a filter match.
     const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
-    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
+    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
@@ -3363,13 +3376,14 @@ export default class Threads extends View {
       : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
-    const bmax = bubbleMax(this.width);
+    const bmax = bubbleMax(this.width, this.prefs.textSize);
+    const yc = this.charW(YOU_CHAR);
     const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
-    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, Math.ceil(widest * YOU_CHAR) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
-    const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / YOU_CHAR));
+    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, Math.ceil(widest * yc) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
+    const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / yc));
     const n = wrappedLines(c.text, per);
     // One spare line, so the first frame's estimate does not run short.
-    const raw = c.text ? (n + 1) * TV_LINE + extra : 0;
+    const raw = c.text ? (n + 1) * this.rt().line + extra : 0;
     // Taller than YOU_MAX: a box of that height that scrolls (Show all on a long paste).
     const capped = raw >= YOU_MAX;
     const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: Math.min(YOU_MAX, raw), capped };
@@ -3381,7 +3395,7 @@ export default class Threads extends View {
     const y = this.youMd(r);
     const clipped = !r.full && y.more > 0;
     const canLess = r.full && this.youClip(r.turn).more > 0;
-    const chip = r.turn.cmd ? ROW.PROMPT_LINE + 4 : 0;
+    const chip = r.turn.cmd ? this.rt().line + 4 : 0;
     const label = r.turn.agent ? 16 + 4 : 0;
     // 6 above, 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
     return 6 + 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
@@ -3425,7 +3439,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return r.h;
       case "turn": case "wrow": return r.shape.height;
-      case "imgs": return 8 + thumbSize(this.width);
+      case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
       case "day": return 46;
@@ -3434,7 +3448,7 @@ export default class Threads extends View {
       case "resume": return 30;
       case "working": {
         const g = this.workingGeom(r.turn);
-        return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + g.lines * TV_LINE + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
+        return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T + 18;
       case "you": return this.youHeight(r);
@@ -3476,7 +3490,7 @@ export default class Threads extends View {
   // signature of everything that changes its layout.
 
   partSig(r) {
-    const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${r.kind}`;
+    const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${this.prefs.textSize}|${r.kind}`;
     switch (r.kind) {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
@@ -3548,13 +3562,14 @@ export default class Threads extends View {
   // all appears when the text is taller than that (C5).
   latestBox(r) {
     const m = this.measured(r);
-    const full = m ?? Math.max(1, r.estLines ?? 1) * TV_LINE;
-    return Math.min(full, LATEST_LINES * TV_LINE);
+    const { line } = this.rt();
+    const full = m ?? Math.max(1, r.estLines ?? 1) * line;
+    return Math.min(full, LATEST_LINES * line);
   }
   latestCut(r) {
     if (r.md) return false;
     const m = this.measured(r);
-    return m != null ? m > LATEST_LINES * TV_LINE + 1 : (r.estLines ?? 0) > LATEST_LINES;
+    return m != null ? m > LATEST_LINES * this.rt().line + 1 : (r.estLines ?? 0) > LATEST_LINES;
   }
 
   // For the debug report: each open-card part's estimate, measure and list slot.
@@ -3760,26 +3775,28 @@ export default class Threads extends View {
   promptBlock(t, turn, sh, sel = false) {
     const agent = turn.agent;
     const color = agent ? t.muted : t.foreground;
-    const size = agent ? 12.5 : 13;
+    const rt = this.rt();
+    const size = agent ? rt.small : rt.size;
+    const lh = rt.line;
     if (sh.chip) {
       return h_flex().gap(6).items_start().min_w(0)
-        .child(div().flex_none().h(ROW.PROMPT_LINE).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
-        .when(sh.prompt.length > 0, (el) => el.child(this.lines(t, sh.prompt, color, size, ROW.PROMPT_LINE)));
+        .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
+        .when(sh.prompt.length > 0, (el) => el.child(this.lines(t, sh.prompt, color, size, lh)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
     // quote that is the whole prompt keeps the prompt's own colour and size.
     if (sh.kinds) {
       return v_flex().min_w(0).children(sh.prompt.map((l, i) => {
         const k = sh.kinds[i];
-        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, ROW.PROMPT_LINE));
-        return h_flex().h(ROW.PROMPT_LINE).min_w(0).gap(QUOTE_INSET - 2).items_center()
+        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh));
+        return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
-            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, ROW.PROMPT_LINE))
-            : this.lines(t, [l], t.muted, 12.5, ROW.PROMPT_LINE));
+            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh))
+            : this.lines(t, [l], t.muted, rt.small, lh));
       }));
     }
-    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, ROW.PROMPT_LINE));
+    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, lh));
   }
 
   // A collapsed exchange: the meta line, the message, the start of the reply, the stats.
@@ -3797,9 +3814,9 @@ export default class Threads extends View {
         this.promptBlock(bt, turn, sh, sel),
         ...(sh.pMore ? [this.moreLine(bt)] : []),
       ], sh.bubbleW),
-      v_flex().min_w(0)
+      v_flex().min_w(0).max_w(this.prose())
         .child(this.nameLine(t, turn))
-        .child(this.lines(t, sh.reply, color, 13, ROW.REPLY_LINE))
+        .child(this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.statsLine(t, this.statsText(turn)),
     ]);
@@ -3843,7 +3860,7 @@ export default class Threads extends View {
     return this.rowFrame(t, sel, focusedPanel, true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
       this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
-      h_flex().h(ROW.REPLY_LINE).gap(6).items_center().min_w(0)
+      h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
           .child([this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
@@ -3863,7 +3880,7 @@ export default class Threads extends View {
     const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
-      this.bubble(t, turn, [div().h(g.lines * TV_LINE).overflow_hidden().text_size(13).line_height(`${TV_LINE}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width)),
+      this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize)),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
@@ -3872,8 +3889,8 @@ export default class Threads extends View {
   }
   workingGeom(turn) {
     const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
-    const tw = bubbleMax(this.width) - 2 * ROW.BUBBLE_PX;
-    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, YOU_CHAR)));
+    const tw = bubbleMax(this.width, this.prefs.textSize) - 2 * ROW.BUBBLE_PX;
+    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
     const st = this.status();
     const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
       : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
@@ -3984,8 +4001,8 @@ export default class Threads extends View {
               .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
               .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(11.5).font_semibold()
                 .text_color(ac).child(this.youLabel(turn)))))
-            .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
-            .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(bt.foreground).child(text)))
+            .when(Boolean(cmd), (el) => el.child(h_flex().h(this.rt().line).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
+            .when(Boolean(c.text), (el) => el.child(box.text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(text)))
             .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child(`Show all · ${plural(c.more, "more line")}`).child(svg(ICON("chevron-down")).size(12))))
             .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
@@ -4007,11 +4024,11 @@ export default class Threads extends View {
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
       case "latest": {
         if (r.md) return v_flex().mt(6)
-          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
+          .child(this.readBlock(div()).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
           .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
-        const block = div().w_full().text_size(13).line_height("21px").text_color(t.foreground).child(r.text);
+        const block = this.readBlock(div()).text_color(t.foreground).child(r.text);
         if (probe) return block;
         return v_flex().mt(6)
           .child(div().h(this.latestBox(r)).overflow_hidden().child(block))
@@ -4027,7 +4044,7 @@ export default class Threads extends View {
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
-        return div().mt(r.gap ?? 6).text_size(13)
+        return this.readBlock(div().mt(r.gap ?? 6))
           .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
       case "seltext": {
         const st = this.selEditor?.st;

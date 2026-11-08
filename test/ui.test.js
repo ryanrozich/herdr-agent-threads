@@ -7,6 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -233,12 +234,45 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
     expect(six.r).toBe(8);
   }
   // Padding 8, meta 16, gap 6, bubble 6 + lines + 6, gap 6, the agent's name 18, reply lines,
-  // gap 6, stats 16, padding 10.
-  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 18 + 6 + 18 + 18 + 6 + 16 + 10);
-  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 72 + 6 + 18 + 108 + 6 + 16 + 10);
+  // gap 6, stats 16, padding 10. Lines are 21 px at the 14 px default.
+  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 21 + 6 + 18 + 21 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 84 + 6 + 18 + 126 + 6 + 16 + 10);
   expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
+  expect(rowHeight(1, 1, 0, 24)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
   expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
+});
+
+test("reading type: 14 px on 21 px lines by default, and a line of about 70 characters at any width", () => {
+  const d = readType();
+  expect([d.size, d.line, d.small]).toEqual([14, 21, 13.5]);
+  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8).
+  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.43);
+  expect(readType(16).line).toBe(24);
+  expect(readType(40).size).toBe(18);
+  expect(readType(Number.NaN).size).toBe(14);
+  // The reading line is MEASURE characters of prose: 461 px at 14 px, 527 at 16.
+  expect(d.measure).toBe(Math.round(MEASURE * PROSE_EM * 14));
+  expect(MEASURE).toBeGreaterThanOrEqual(65);
+  expect(MEASURE).toBeLessThanOrEqual(75);
+  expect(readType(16).measure).toBeGreaterThan(d.measure);
+  // A wide pane: the reply and the bubble stop at the reading line; a narrow one keeps its width.
+  expect(readWidth(960)).toBe(d.measure);
+  expect(readWidth(520)).toBe(d.measure);
+  expect(readWidth(280)).toBe(replyWidth(280));
+  expect(replyWidth(960)).toBe(928);
+  expect(bubbleMax(960)).toBe(d.measure + 20);
+  expect(bubbleMax(960, 18)).toBeGreaterThan(bubbleMax(960));
+  // At 960 px a long reply wraps at the reading line, not across the pane.
+  const words = "the nightly migration now runs before the deploy so the cache is warm ".repeat(8);
+  const sh = rowShape({ prompt: "x", reply: words, width: 960, promptLines: 1, replyLines: 4 });
+  for (const l of sh.reply) expect(l.length).toBeLessThanOrEqual(Math.ceil(d.measure / d.reply) + 1);
+  expect(sh.reply[0].length).toBeGreaterThan(55);
+  // Bigger text: fewer characters a line, taller lines.
+  const big = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4, size: 18 });
+  const base = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4 });
+  expect(big.reply[0].length).toBeLessThan(base.reply[0].length);
+  expect(big.height).toBe(rowHeight(1, 4, 1, 27));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {

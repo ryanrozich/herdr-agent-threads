@@ -64,7 +64,7 @@ test("rowShape keeps quotes within Prompt lines and always shows a comment line"
     }
   }
   // The quote line takes one truncated line, then the comment wraps.
-  const sh = rowShape({ prompt: CASES.quoteThenComment, reply: "Done.", width: 380, promptLines: 2, replyLines: 3 });
+  const sh = rowShape({ prompt: CASES.quoteThenComment, reply: "Done.", width: 380, promptLines: 2, replyLines: 3, size: 13 });
   expect(sh.kinds).toEqual(["q", "c"]);
   expect(sh.prompt[0].startsWith("The retry path")).toBe(true);
   expect(sh.prompt[1]).toBe("Cap the retries at five, and log once.");

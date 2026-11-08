@@ -147,6 +147,7 @@ Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the sessio
 
 | Key | Default | What it sets |
 |---|---|---|
+| `textSize` | 14 | The size of message and reply text in px (12 to 18). Lines are 1.5 times the size apart and hold about 70 characters, however wide the pane |
 | `promptLines` | 4 | Lines of your prompt a row shows (1 to 10) |
 | `replyLines` | 6 | Lines of the reply a row shows (1 to 12) |
 | `agentTurns` | false | Show agent messages |
