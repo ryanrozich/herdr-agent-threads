@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Threads chat look</title>
+<style>
+:root { --bg:#fff; --fg:#1b1b1e; --muted:#5f5f63; --dim:#85858a; --line:#00000018; --soft:#f4f4f2; --accent:#1f62d0; --ok:#1a7f37; --warn:#9a6700; --no:#c93c2c; color-scheme: light dark; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#17191d; --fg:#eeeeef; --muted:#a6a7a9; --dim:#7c7d80; --line:#ffffff1c; --soft:#212327; --accent:#96b2d7; --ok:#a6bd91; --warn:#e5c07b; --no:#f0705f; } }
+:root[data-theme="dark"] { --bg:#17191d; --fg:#eeeeef; --muted:#a6a7a9; --dim:#7c7d80; --line:#ffffff1c; --soft:#212327; --accent:#96b2d7; --ok:#a6bd91; --warn:#e5c07b; --no:#f0705f; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+main { max-width:1100px; margin:0 auto; padding:24px 16px 80px; }
+h1 { font-size:28px; line-height:1.2; margin:0 0 6px; }
+h2 { font-size:20px; margin:48px 0 8px; padding-top:8px; }
+h3 { font-size:15px; margin:20px 0 4px; }
+p, li { max-width:76ch; }
+p { margin:8px 0; }
+ul, ol { padding-left:20px; }
+.sub { color:var(--muted); }
+nav { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:8px 0; display:flex; gap:12px; flex-wrap:wrap; font-size:13px; z-index:5; }
+a { color:var(--accent); }
+nav a { text-decoration:none; }
+.box { background:var(--soft); border-radius:8px; padding:12px 16px; margin:12px 0; }
+.box p, .box li { max-width:none; }
+kbd { font:12px ui-monospace,Menlo,monospace; padding:1px 5px; border:1px solid var(--line); border-radius:4px; background:var(--bg); }
+.tw { overflow-x:auto; margin:12px 0; }
+table { border-collapse:collapse; width:100%; font-size:14px; }
+th,td { text-align:left; vertical-align:top; padding:8px 10px 8px 0; border-bottom:1px solid var(--line); }
+th { font-size:12px; color:var(--muted); font-weight:600; }
+td:first-child { min-width:120px; font-weight:500; }
+.dec { border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:12px 0; }
+.dec h3 { margin:0 0 4px; }
+.rec { color:var(--ok); font-weight:600; }
+figure { margin:0; }
+figcaption { font-size:12.5px; color:var(--muted); margin-top:4px; }
+.zoom { display:block; width:100%; height:auto; cursor:zoom-in; border-radius:6px; border:1px solid var(--line); background:var(--soft); }
+button.th { all:unset; display:block; cursor:zoom-in; width:100%; }
+button.th:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+.pair { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:10px 0 18px; align-items:start; }
+.pairn { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:10px 0 18px; align-items:start; max-width:640px; }
+.g5 { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin:12px 0; align-items:start; }
+.g4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:12px 0; align-items:start; }
+.g2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:12px 0; align-items:start; }
+.lab { font-size:12px; color:var(--muted); font-weight:600; margin:14px 0 0; }
+.tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.tabs button { font:inherit; font-size:13px; color:var(--fg); background:none; border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; }
+.tabs button[aria-selected="true"] { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+@media (max-width:720px) { .pair,.pairn,.g5,.g4 { grid-template-columns:repeat(2,minmax(0,1fr)); } .g2 { grid-template-columns:1fr; } }
+#lb { position:fixed; inset:0; background:#000000e6; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:20; padding:12px; }
+#lb.on { display:flex; }
+#lb img { max-width:100%; max-height:calc(100vh - 80px); object-fit:contain; }
+#lb .cap { color:#eee; font-size:13px; margin-top:8px; text-align:center; max-width:80ch; }
+#lb button { position:absolute; background:#ffffff22; color:#fff; border:0; border-radius:6px; width:44px; height:44px; font-size:20px; cursor:pointer; }
+#lb .x { top:12px; right:12px; } #lb .l { left:12px; top:50%; } #lb .r { right:12px; top:50%; }
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Threads, drawn as a chat</h1>
+<p class="sub">A design proposal for the owner's request: make the panel look and feel like the chat apps people already use, keep every piece of information, and collapse long prompts and replies. Pin access and quote tracking are folded in. Nothing here is built. All content is made up.</p>
+
+<nav><a href="#rec">Recommendation</a><a href="#decide">Your decisions</a><a href="#compare">Today and proposed</a><a href="#kept">What is kept</a><a href="#collapse">Collapse lengths</a><a href="#keys">Keys</a><a href="#pins">Reaching pins</a><a href="#quotes">Quote tracking</a><a href="#size">Build size and order</a><a href="#how">How this was made</a></nav>
+
+<h2 id="rec">Recommendation</h2>
+<div class="box">
+<ul>
+<li><b>Your messages become bubbles on the right, and replies become plain text across the pane.</b> These are the conventions chat apps share. There is no other app's branding, colour or layout, and Herdr's own colours, type and icons stay.</li>
+<li><b>Every turn shows your message and the start of its reply, without opening it.</b> Today a row shows one or the other until you open the card. Long text collapses with "Show more": your message at 4 lines and the reply at 6.</li>
+<li><b>The numbers stay.</b> Turn number and time sit above your message. Duration, tokens, model and tool calls sit under the reply, with the copy, quote and pin buttons.</li>
+<li><b>Pins move into a Pinned view.</b> It opens as a second pane beside Threads when there is room, and as an All and Pinned switch in the same pane when there is not. It replaces the tray.</li>
+<li><b>Quote tracking marks the parts of a reply you quoted later and links both ways.</b> It ships after the chat look, as its own change.</li>
+<li><b>Order:</b> pinning (PR 6) first as it is, then the chat look with the Pinned view, then quote tracking.</li>
+</ul>
+</div>
+
+<h2 id="decide">Your decisions</h2>
+<div class="dec"><h3>1. Is the chat look the direction?</h3><p>Bubbles for your messages, plain replies, numbers above and below. <span class="rec">Recommended: yes.</span> Every state is compared with today below.</p></div>
+<div class="dec"><h3>2. How long before text collapses?</h3><p>Your message at 4 lines and the reply at 6 (today they are 2 and 3). <span class="rec">Recommended: 4 and 6.</span> The settings panel keeps both adjustable. The reason is in <a href="#collapse">Collapse lengths</a>.</p></div>
+<div class="dec"><h3>3. How do you reach pins?</h3><p>A: an All and Pinned switch at the top of the pane. B: a Pinned pane beside Threads. C: keep the tray, improved. <span class="rec">Recommended: B, falling back to A when the window is too narrow.</span> They are one Pinned view drawn in two places, so this costs about the same as A alone.</p></div>
+<div class="dec"><h3>4. Quote tracking: now or after?</h3><p><span class="rec">Recommended: after the chat look, as its own pull request.</span> It is drawn on the chat look's reply text, so building it on the current cards would mean drawing it twice.</p></div>
+
+<h2 id="compare">Today and proposed</h2>
+<p>The same made-up session, eleven turns of a storefront project, in each state. Today's screenshots are the real panel in an isolated Herdr 0.1.13 window. The proposals come from the Pen file. In each pair the left image is today and the right is the proposal. Click any image for full size. Arrow keys step through, and Esc closes.</p>
+<div class="tabs" id="tabs" role="tablist"></div>
+<p id="note"></p>
+<div id="matrix"></div>
+
+<h2 id="kept">What is kept, and where it goes</h2>
+<div class="tw"><table>
+<tr><th>Information or action</th><th>Today</th><th>Proposed</th></tr>
+<tr><td>Turn number and time</td><td>Left of a row's top line</td><td>Small, above your message ("#7 · Sat 8:43 AM")</td></tr>
+<tr><td>Duration, tokens, model, tool calls</td><td>Right of a row, chips in an open card</td><td>One line under the reply. The narrow pane drops "tokens" and the model to fit</td></tr>
+<tr><td>Cache detail, tool names</td><td>Open card, and <kbd>i</kbd></td><td>Under the stats line when the reply is open, and <kbd>i</kbd></td></tr>
+<tr><td>Copy, quote, pin, select, terminal</td><td>Buttons in an open card</td><td>Icons on the stats line of the selected turn. Select and terminal move into the "…" menu, and their keys stay</td></tr>
+<tr><td>Links (ACME-123, #42)</td><td>Linked in reply text</td><td>Same</td></tr>
+<tr><td>Agent messages</td><td>Inset rows with a rail, hidden by default</td><td>A left-aligned outlined bubble that names its sender. Still hidden by default, still <kbd>a</kbd>, with the hidden count on the header button</td></tr>
+<tr><td>Images</td><td>Thumbnails in the row</td><td>Thumbnails inside your bubble</td></tr>
+<tr><td>Answered in #N</td><td>A note on a row that was cut off</td><td>The same note under the reply, in the same style as the quote links</td></tr>
+<tr><td>Day bands</td><td>Shaded band</td><td>A centred date between hairlines</td></tr>
+<tr><td>Running turn</td><td>Spinner row</td><td>Spinner, time and tool count under your message, in the working colour</td></tr>
+<tr><td>Search</td><td>Matches highlighted, other turns folded</td><td>Same, with the fold as a small pill</td></tr>
+<tr><td>Pins</td><td>Tray above the footer</td><td>The Pinned view (decision 3)</td></tr>
+<tr><td>Selection</td><td>Highlighted row</td><td>Accent bar on the left and a light fill across the whole exchange</td></tr>
+</table></div>
+
+<h2 id="collapse">Collapse lengths</h2>
+<p>I counted lines in the owner's own sessions from the last 10 days (60 files, about 4,700 typed messages and 4,800 final replies), from line lengths only, at the default pane width of 520 px:</p>
+<div class="tw"><table>
+<tr><th>Shown whole when collapsed at</th><th>2 lines</th><th>3</th><th>4</th><th>6</th><th>8</th><th>12</th></tr>
+<tr><td>Your messages</td><td>19%</td><td>27%</td><td>31%</td><td>40%</td><td></td><td></td></tr>
+<tr><td>Replies</td><td></td><td>36%</td><td>46%</td><td>53%</td><td>58%</td><td>66%</td></tr>
+</table></div>
+<p>Six reply lines show about half of replies whole. Eight add only 5 points but cost two lines on every turn, so fewer turns fit on screen. Four lines of your message keep the bubble short and show the first lines of a longer request, which is usually the ask. At 280 px both figures drop (21% of messages at 4 lines, 41% of replies at 6), so the narrow pane collapses more often, and "Show more" stays one click or <kbd>Enter</kbd> away. A collapsed reply keeps its formatting (headings, bullets, code), cut at a line, never mid-word.</p>
+
+<h2 id="keys">Keys</h2>
+<p>Every key that works today keeps working. Two letters are added, both unused today.</p>
+<div class="tw"><table>
+<tr><th>Key</th><th>What it does</th></tr>
+<tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>j</kbd> <kbd>k</kbd></td><td>Move between turns, as today. In the Pinned view they move between pins.</td></tr>
+<tr><td><kbd>Enter</kbd> <kbd>Space</kbd> <kbd>o</kbd></td><td>Show more or Show less on the selected turn (today: open or close the card)</td></tr>
+<tr><td><kbd>c</kbd> <kbd>q</kbd> <kbd>p</kbd> <kbd>u</kbd> <kbd>1</kbd>–<kbd>5</kbd> <kbd>s</kbd> <kbd>t</kbd> <kbd>i</kbd> <kbd>a</kbd> <kbd>/</kbd> <kbd>g</kbd> <kbd>[</kbd> <kbd>]</kbd> <kbd>,</kbd> <kbd>End</kbd> <kbd>Esc</kbd></td><td>Unchanged</td></tr>
+<tr><td><kbd>v</kbd> (new)</td><td>Switch between All and Pinned. With option B it opens or focuses the Pinned pane.</td></tr>
+<tr><td><kbd>l</kbd> (new)</td><td>Follow a quote link: from a quoted part to the prompt that quoted it, and back. Pressed again, it goes on to the next link.</td></tr>
+</table></div>
+
+<h2 id="pins">Reaching pins</h2>
+<p>The owner's words: "I can pin but not sure how to open the pin back up? clicking on it doesn't seem to open it.... oh maybe it does but it also stays pinned at the bottom.. I wonder about this interface." Each option below runs the same story: three pins (#8 left at its last heading, #7 not read yet, #11 still working); open #8, go on to #7, pin #10 from the feed, unpin #11, and a narrow pane.</p>
+<p>In every option, opening a pin lands on the place you left it, with one line above saying the turn's top is further up, and the pin you are in says <b>Reading</b>. Pins keep "New reply", the working spinner and the place they keep today, and a pinned reply says how much of it you have quoted (see <a href="#quotes">Quote tracking</a>).</p>
+
+<h3>A. An All and Pinned switch</h3>
+<p>The pane shows one list at a time. <kbd>v</kbd> or a click switches. In Pinned, an opened pin unfolds in place under its card. The switch shows the pin count, with a dot when a pinned turn has a new reply. Simple, and it works at any width, but you cannot watch the feed while working through pins.</p>
+<div class="g5" id="optA"></div>
+
+<h3>B. A Pinned pane beside Threads (recommended)</h3>
+<p>The Threads pane stays as it is. <kbd>v</kbd> or the header button opens a second pane of the same mod to its right, listing the pins. You work through pins on the right and still see new turns arrive on the left. Pinning from the feed adds the pin on the right straight away, and both panes share one <code>pins.json</code>, which PR 6 already supports.</p>
+<div class="box"><p><b>Can a mod do this?</b> Yes, with a command it already uses. Threads opens itself with <code>pane.split</code> (direction right, its own mod, its own props) when you press Cmd-Shift-T, and the same command can split the Threads pane with a <code>view: "pinned"</code> prop. <code>layout.resize</code> sets the widths. Two Threads panes on one session already share pins through <code>pins.json</code>. What has not been tried is calling <code>pane.split</code> from a key press inside the pane rather than from the open command. A short spike proves that before the build.</p>
+<p><b>A narrow window.</b> When the Threads pane is under about 600 px, splitting would leave both panes under 300 px. So Pinned opens as the switch from option A in the same pane, and a toast says why. Closing the Pinned pane is closing any pane, and nothing is lost.</p></div>
+<div class="g2" id="optB"></div>
+<div class="g5" id="optB2"></div>
+
+<h3>C. The tray, improved</h3>
+<p>Today's tray stays above the footer. The pin you opened says <b>Reading</b> and has an accent bar, the turn in the list carries a pin, and the toast says where you landed. It is the smallest change, but the tray still takes rows from the list, and with five pins it folds to chips in a short pane.</p>
+<div class="g5" id="optC"></div>
+
+<h2 id="quotes">Quote tracking</h2>
+<p>The owner's words: "I also wonder whether it's possible to indicate that a portion of a reply was quoted and link to the quoted message fragment we used later.. to also help us keep track of what parts of which replies we have already replied to as we work through various messages and updates".</p>
+<div class="g4" id="quoteG"></div>
+<div class="g4" id="quoteG2"></div>
+<h3>How it looks</h3>
+<ul>
+<li>In the reply, a quoted part gets a tinted background, an accent bar and a link under it: "You replied in #9" (narrow: "#9"). The reply's note line reads "Quoted in #9 and #10 · 2 of 3 paragraphs answered". It is the same line and style as today's "Answered in #N", so both read as one idea: where this turn was picked up.</li>
+<li>In the later message, the quote shows as today, with a bar, and its first line is a link: "From #8".</li>
+<li>Following a link (click, or <kbd>l</kbd>) scrolls to the other end and flashes it briefly. <kbd>Esc</kbd> goes back.</li>
+</ul>
+<h3>How a quote is found</h3>
+<p>By matching, not by recording <kbd>q</kbd>. When the panel reads a session, each prompt's <code>&gt;</code> lines are compared with the earlier replies. Recording <kbd>q</kbd> would miss quotes typed by hand, pasted from elsewhere, or made before the feature existed, and would need a file. Matching works the same for all five agents (Claude Code, Codex, OpenCode, Pi and Cursor), because it reads only the prompt text each transcript already holds.</p>
+<ul>
+<li><b>Edited quotes.</b> Text is compared after folding case, spaces and Markdown marks, sentence by sentence. A quote you trimmed or changed still marks the sentences that match. A quote with no sentence in common marks nothing.</li>
+<li><b>The same text twice.</b> The nearest earlier reply wins, and within it the first match not already claimed by another quote.</li>
+<li><b>Pasted wrappers.</b> Tags an agent writes around pasted text in its transcript are stripped before comparing.</li>
+<li><b>On disk.</b> Nothing is stored. The marks come from the transcript each time, like "Answered in #N".</li>
+<li><b>With pins.</b> A pinned reply says "2 of 3 paragraphs answered, in #9 and #10", or "Not quoted yet". That is how you see what is left in a pinned reply.</li>
+</ul>
+
+<h2 id="size">Build size and order</h2>
+<div class="tw"><table>
+<tr><th>Change</th><th>Rough size</th><th>What it touches</th></tr>
+<tr><td>Chat look</td><td>About 700 to 1,000 changed lines in <code>main.js</code>, 250 to 300 lines of tests, then new README screenshots and docs. Two to three working sessions.</td><td>How a turn is drawn and measured (the bubble, the collapsed reply with its formatting, the stats line, notes), day bands, the header buttons and the footer hints. Parsing, search, links, quotes, pins and settings stay as they are.</td></tr>
+<tr><td>Pinned view (B with A as the narrow fallback)</td><td>About 400 lines and 150 lines of tests, part of the chat-look change. It replaces the tray, which is about 50 lines of drawing.</td><td>A <code>view: "pinned"</code> prop, the pin list, <kbd>v</kbd>, opening at the place. Pins, places and <code>pins.json</code> are reused from PR 6 unchanged.</td></tr>
+<tr><td>Quote tracking</td><td>About 450 lines and 250 lines of tests. One working session, as its own PR.</td><td>A matcher beside the parser, the marks and links in the reply and the prompt, <kbd>l</kbd>, and the coverage line on pins.</td></tr>
+</table></div>
+<p><b>Order:</b> merge pinning (PR 6) first, since it works for the owner and the chat look reuses its pins, places and file. Then the chat look with the Pinned view, which retires the tray. Then quote tracking.</p>
+
+<h2 id="how">How this was made</h2>
+<ul>
+<li><code>agent-threads-chat-look.pen</code> is the design source, 63 frames. <code>gen-pen.mjs</code> writes it (<code>bun designs/chat-look/gen-pen.mjs</code>), with the running panel's own colours in dark and light.</li>
+<li><code>make-session.mjs</code> writes the made-up session. Today's screenshots are that session in the real panel, on Herdr 0.1.13 in an isolated home, at 520 and 280 px.</li>
+<li>Widths: wide is the default 520 px, narrow is 280 px. A frame is a pane, not the whole window, except option B, which shows both panes.</li>
+</ul>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Image viewer">
+<button class="x" aria-label="Close">×</button><button class="l" aria-label="Previous">‹</button><button class="r" aria-label="Next">›</button>
+<img alt=""><div class="cap"></div>
+</div>
+
+<script>
+const fig = (src, cap) => `<figure><button class="th" data-src="${src}" data-cap="${cap}"><img class="zoom" loading="lazy" src="${src}" alt="${cap}"></button><figcaption>${cap}</figcaption></figure>`;
+const C = (n) => `shots/current/${n}.png`, P = (n) => `shots/proposal/${n}.png`;
+const STATES = [
+  ["01-short", "Short exchanges", "Your messages on the right, replies under them, the stats under each reply. The selected turn has the accent bar and its buttons."],
+  ["02-long-collapsed", "Long, collapsed", "#8's message stops at 4 lines and its reply at 6, with Show more on each. The reply keeps its heading and bullets."],
+  ["03-long-expanded", "Long, expanded", "Both open. The reply draws in full: headings, bullets, the code block. The second proposal shows its end, with Show less, the stats, the cache line and the buttons.", "03b-long-expanded-end"],
+  ["04-tools", "Many tool calls", "#10 made 14 tool calls. The count is on the stats line, and the open reply lists them by name."],
+  ["05-running", "Running turn", "#11 is still working: spinner, time and tool calls so far, in the working colour."],
+  ["06-agent", "Agent message", "#4 came from another agent. It is a left-aligned outlined bubble that names its sender. Shown here with a; hidden by default as today."],
+  ["07-image", "Image", "#2 has a pasted image. Its thumbnail sits in the bubble."],
+  ["08-search", "Search", "Searching \"refund\": matches highlighted in the message and the reply, other turns folded into a pill."],
+  ["09-pins", "Pins", "Today: the tray above the footer. Proposed: the Pinned view, here as the switch in one pane (option A). See Reaching pins for B and C."],
+];
+const VARS = [["dark", "wide"], ["dark", "narrow"], ["light", "wide"], ["light", "narrow"]];
+const M = document.getElementById("matrix"), N = document.getElementById("note"), T = document.getElementById("tabs");
+function show(i) {
+  const [id, name, note, extra] = STATES[i];
+  [...T.children].forEach((b, j) => b.setAttribute("aria-selected", String(i === j)));
+  N.textContent = note;
+  M.innerHTML = [false, true].map((nar) => {
+    const vs = VARS.filter(([, w]) => (w === "narrow") === nar);
+    const cells = vs.flatMap(([m, w]) => [fig(C(`${m}-${w}-${id}`), `${name}, ${w}, ${m}: today`), fig(P(`${m}-${w}-${id}`), `${name}, ${w}, ${m}: proposed`)]);
+    const more = extra ? vs.map(([m, w]) => fig(P(`${m}-${w}-${extra}`), `${name}, ${w}, ${m}: proposed, the end of the reply`)) : [];
+    return `<p class="lab">${nar ? "Narrow, 280 px" : "Wide, 520 px"}: today, proposed, then the same in light${extra ? ", then the end of the open reply" : ""}</p><div class="${nar ? "pairn" : "pair"}">${cells.join("")}${more.join("")}</div>`;
+  }).join("");
+}
+T.innerHTML = STATES.map((s, i) => `<button role="tab" data-i="${i}">${s[1]}</button>`).join("");
+T.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) show(+b.dataset.i); });
+show(1);
+const STEPS = ["Open #8: it lands at its last heading", "Next pin: #7, from the top", "Pin #10 from the feed", "Unpin #11", "Narrow pane"];
+document.getElementById("optA").innerHTML = ["a1-open-pin", "a2-next-pin", "a3-pin-from-feed", "a4-unpin", "a5-narrow"].map((n, i) => fig(P(n), `A. ${STEPS[i]}`)).join("");
+document.getElementById("optB").innerHTML = ["b1-open-pin", "b2-next-pin", "b3-pin-from-feed", "b4-unpin"].map((n, i) => fig(P(n), `B. ${STEPS[i]}`)).join("");
+document.getElementById("optB2").innerHTML = fig(P("b5-narrow-falls-back"), "B. Narrow window: no room beside, so Pinned shows as the switch in the same pane");
+document.getElementById("optC").innerHTML = ["c1-open-pin", "c2-next-pin", "c3-pin-from-feed", "c4-unpin", "c5-narrow"].map((n, i) => fig(P(n), `C. ${STEPS[i]}`)).join("");
+document.getElementById("quoteG").innerHTML = [
+  ["q1-reply-marked", "#8's reply: two parts quoted (in #9 and #10), one not"],
+  ["q2-prompt-backlink", "#9 and #10: each quote links back to #8"],
+  ["q3-follow-to-prompt", "Following the first link: #9 flashes"],
+  ["q4-follow-to-reply", "Following From #8 in #10: the quoted part flashes"],
+].map(([n, c]) => fig(P(n), c)).join("");
+document.getElementById("quoteG2").innerHTML = [
+  ["q5-pinned-coverage", "A pinned reply says how much is answered"],
+  ["q6-narrow-reply", "Narrow: the reply's marks"],
+  ["q7-narrow-prompt", "Narrow: the back-links"],
+  ["q8-light-reply", "Light"],
+].map(([n, c]) => fig(P(n), c)).join("");
+
+const LB = document.getElementById("lb"), LI = LB.querySelector("img"), LC = LB.querySelector(".cap");
+let cur = -1, last = null;
+const items = () => [...document.querySelectorAll("button.th")];
+function open(i) { const a = items(); cur = (i + a.length) % a.length; LI.src = a[cur].dataset.src; LI.alt = a[cur].dataset.cap; LC.textContent = a[cur].dataset.cap; LB.classList.add("on"); }
+function close() { LB.classList.remove("on"); cur = -1; if (last) last.focus(); }
+document.addEventListener("click", (e) => { const b = e.target.closest("button.th"); if (b) { last = b; open(items().indexOf(b)); } });
+LB.querySelector(".x").onclick = close; LB.querySelector(".l").onclick = () => open(cur - 1); LB.querySelector(".r").onclick = () => open(cur + 1);
+LB.addEventListener("click", (e) => { if (e.target === LB) close(); });
+document.addEventListener("keydown", (e) => { if (!LB.classList.contains("on")) return; if (e.key === "Escape") close(); if (e.key === "ArrowLeft") open(cur - 1); if (e.key === "ArrowRight") open(cur + 1); });
+</script>
+</body>
+</html>
