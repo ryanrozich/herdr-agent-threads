@@ -69,7 +69,7 @@ mock.module("gpui-base", () => ({
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
-    lastList = { sizes: [...sizes], keys: [] };
+    lastList = { sizes: [...sizes], keys: [], draw };
     for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
     draw({ start: 0, end: n });
     return el;
@@ -2254,4 +2254,38 @@ test("adding a pin to the tray does not change how a reply is split", async () =
   v.action("pin", cx);
   v.listH = 366; // the tray took room from the list
   expect(items()).toBe(before);
+});
+
+test("a part that fails to draw shows as an error row, not a blank list", async () => {
+  const { v, cx } = await pinPane();
+  const key = v.turnKeys(v.rows())[1];
+  v.toggle(key, cx);
+  const item = v.item.bind(v);
+  // Before the guard, one throw here blanked every row on screen until a scroll or resize.
+  v.item = (t, r, ...rest) => { if (r.kind === "you") throw new Error("test failure in you"); return item(t, r, ...rest); };
+  expect(() => draw(v, cx)).not.toThrow();
+  const drawn = lastList.draw({ start: 0, end: lastList.keys.length });
+  expect(drawn.length).toBe(lastList.keys.length);
+  expect(v.drawError).toMatchObject({ msg: "test failure in you", kind: "you", key: `you:${key}` });
+  draw(v, cx);
+  expect(state.shared["threads.drawError"]).toMatchObject({ msg: "test failure in you", kind: "you" });
+  expect(toastText(v)).toBe("Part of a turn could not be drawn. The details are saved for the owner.");
+  v.item = item;
+});
+
+test("the list measuring its first item does not move a pin's place", async () => {
+  const { v, cx } = await pinPane();
+  const key = v.turnKeys(v.rows())[2];
+  v.toggle(key, cx);
+  v.togglePin(key, cx);
+  v.placeHold = null; v.placeBase = null;
+  draw(v, cx);
+  const rows = v.rows();
+  const at = rows.findIndex((r) => r.key === `you:${key}`);
+  expect(at).toBeGreaterThan(0);
+  lastList.draw({ start: at, end: Math.min(rows.length, at + 3) });
+  // gpui asks for item 0 alone to measure the list's width; the top is still the YOU part.
+  lastList.draw({ start: 0, end: 1 });
+  expect(v.topKey).toBe(`you:${key}`);
+  expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });

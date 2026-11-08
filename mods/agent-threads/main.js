@@ -2394,6 +2394,7 @@ export default class Threads extends View {
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
+    this.publishDrawError(cx);
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering;
     if (this.debug) this.measure();
@@ -2836,15 +2837,8 @@ export default class Threads extends View {
         this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
-      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i].key,
-        (range) => {
-          this.topKey = rows[range.start]?.key ?? null;
-          this.trackPlace();
-          return rows.slice(range.start, range.end).map((x, j) =>
-            v_flex().w_full().h(slots[range.start + j]).overflow_hidden()
-              .when(dim && !CARD.has(x.kind), (el) => el.opacity(0.55))
-              .child(this.item(t, x, focusedPanel, slots[range.start + j])));
-        })
+      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+        (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
         .track_scroll(this.scroll)
         .on_item_click((key, cx) => this.click(key, cx))
         .size_full())
@@ -3360,6 +3354,54 @@ export default class Threads extends View {
     if (turn.answeredIn) return `Answered in #${turn.answeredIn}. This turn itself ended with: ${turn.errors.at(-1)}`;
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
       : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
+  }
+
+  // The list's items for the range on screen. An error thrown here blanks the whole list
+  // until it scrolls or resizes, and Herdr reports nothing, so each item is drawn on its own:
+  // one that fails shows as a short error row, and the error is kept for the owner.
+  listItems(t, rows, slots, range, focusedPanel, dim) {
+    // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
+    // the pane, and taking it as the top would move a pin's place to the first row.
+    if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
+      this.topKey = rows[range.start]?.key ?? null;
+      try { this.trackPlace(); } catch (e) { this.drawFailed(e, null); }
+    }
+    const out = [];
+    for (let i = range.start; i < range.end; i++) {
+      const x = rows[i];
+      const h = slots[i] > 0 ? slots[i] : 1;
+      let body;
+      try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+      out.push(v_flex().w_full().h(h).overflow_hidden()
+        .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
+        .child(body));
+    }
+    return out;
+  }
+
+  // Kept for render(), which publishes it: the drawing pass may not notify or write state.
+  // The kind and the key say which part failed; no text from the session is kept.
+  drawFailed(e, r) {
+    const msg = String(e?.message ?? e).slice(0, 300);
+    this.drawErrors = (this.drawErrors ?? 0) + 1;
+    if (this.drawError?.msg === msg && this.drawError?.key === (r?.key ?? null)) return;
+    this.drawError = { msg, kind: r?.kind ?? null, key: r?.key ?? null, stack: String(e?.stack ?? "").split("\n").slice(0, 6).join("\n"), at: new Date().toISOString(), sent: false };
+  }
+
+  drawErrorRow(t, e) {
+    return h_flex().px(12).h_full().gap(6).items_center().text_size(12).text_color(t.blocked)
+      .child(svg(ICON("circle-x")).size(12).flex_none())
+      .child(div().min_w(0).truncate().child(`Could not draw this part: ${String(e?.message ?? e).slice(0, 120)}`));
+  }
+
+  // A row that failed to draw: saved to shared("threads.drawError"), which an agent on the
+  // owner's machine can read, and said once in a toast.
+  publishDrawError(cx) {
+    const d = this.drawError;
+    if (!d || d.sent) return;
+    d.sent = true;
+    try { setShared("threads.drawError", { ...d, count: this.drawErrors, terminal: this.terminal ?? null }); } catch { /* the toast still says it */ }
+    this.say("Part of a turn could not be drawn. The details are saved for the owner.", "circle-x", cx, 5000);
   }
 
   item(t, r, focusedPanel, size) {
