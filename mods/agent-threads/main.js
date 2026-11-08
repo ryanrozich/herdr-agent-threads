@@ -26,7 +26,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, firstLine, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -35,9 +35,10 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, QUOTE_INSET, cardLabelColor, bandFill, over,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
-import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, pinWhen, trayFolds } from "./pins.js";
+import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -70,6 +71,9 @@ const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
 const REPLY_BUDGET = 1600; // characters of prose shown before "Show full reply"
+// px above a paragraph drawn as its own list item, and above a heading, as inside one block
+// (measured against the same text drawn whole: 748 px and 748 px).
+const visitNote = (search) => (search ? "Pinned, not in this search" : "Pinned, hidden agent message");
 const CODE_LINES = 12;
 const LINE = 18; // one line of 13 px text in a box of that height (rows, code)
 // gpui's default line height is about 1.618 times the text size: 21 px for 13 px TextView
@@ -90,7 +94,7 @@ const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext"]);
+const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -447,9 +451,23 @@ export default class Threads extends View {
     this.prefsNotes = []; // notes on quoteKey and link rules
     this.lastQuote = null; // the last quote press, for the debug report (never its text)
     this.remote = { key: null, repo: null, owner: null, why: "not looked up" }; // F3.3
+    this.pinStore = parsePins(null).store; // pins.json, read below and watched
+    this.pinRaw = null; // the file's text as last read or written
+    this.pinsError = null;
+    this.pinVer = 0;
+    this.pinDirty = new Map(); // session key -> edit number, until a save holds that edit
+    this.pinEdits = 0;
+    this.pinDueAt = null; // when a changed reading place is saved
+    this.pinUndo = []; // unpinned this pane's life, newest last
+    this.pinVisit = null; // a pinned turn shown although the search or a setting hides it
+    this.pinResume = null; // { key, part }: the "starts above" line a return put over a place
+    this.pinAgain = null; // the turn a return just showed from its head, for a second press
+    this.topKey = null; // the list item at the top of the pane
+    this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
     this.commands(cx);
     this.loadPrefs(cx);
+    this.readPins(cx);
     this.resolve(cx);
     // While the agent works, re-read every few seconds in case a folder event is missed.
     // While a session id has no transcript yet, look for it. Idle panes do nothing here.
@@ -457,13 +475,14 @@ export default class Threads extends View {
       if (this.status() === "working") { this.read(cx); cx.notify(); }
       if (this.res.kind === "pending" || this.res.pendingId) this.resolve(cx);
       // No folder watch for the settings (the folder could not be watched): read it here.
-      if (this.prefsPoll) this.readPrefs(cx);
+      if (this.prefsPoll) { this.readPrefs(cx); this.readPins(cx); }
     });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
       this.watchRead(cx);
       this.poll(cx);
       this.flushCode(cx);
+      if (this.pinDueAt != null && Date.now() >= this.pinDueAt) this.savePins(cx);
       if (this.liveShown && ["working", "blocked"].includes(this.status())) cx.notify();
       if (this.debug) this.report();
     });
@@ -476,6 +495,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, fold: this.trayFold ?? null, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       header: this.headerText(),
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -592,6 +612,7 @@ export default class Threads extends View {
         try { await watchFolder(dir); } catch { this.prefsPoll = true; return; }
         if (this.prefsGen !== gen) return;
         this.readPrefs(cx);
+        this.readPins(cx);
       }
     });
   }
@@ -680,6 +701,267 @@ export default class Threads extends View {
     if (Boolean(this.prefs.agentTurns) === on) return;
     this.changePrefs({ agentTurns: on }, cx);
     this.say(on ? "Agent messages shown" : "Agent messages hidden", "bot", cx);
+  }
+
+  // ---- pins (pins.js has the file's format) ----
+
+  readPins(cx) {
+    cx.spawn(async (cx) => {
+      const text = await readTextFile(pinsPath(appHome())).catch(() => null);
+      if (this.pinSaving || text === this.pinRaw) return;
+      this.pinRaw = text;
+      const { store, error } = parsePins(text);
+      this.pinsError = error;
+      // A file that does not parse (a hand edit in progress): keep the pins already here.
+      if (!error) { this.pinStore = mergeDirty(store, this.pinStore, this.pinDirty.keys()); this.pinVer++; }
+      cx.notify();
+    });
+  }
+
+  // Saves the sessions this pane changed over what the file holds now, so two panes keep
+  // each other's pins. A rejected write means another pane just wrote: read and try again.
+  savePins(cx) {
+    this.pinDueAt = null;
+    const edits = new Map(this.pinDirty);
+    if (!edits.size) return;
+    const chain = (this.pinChain ?? Promise.resolve()).then(async () => {
+      for (let tries = 0; tries < 3; tries++) {
+        const before = await readTextFile(pinsPath(appHome())).catch(() => null);
+        const { store, error } = parsePins(before);
+        if (error) { this.pinsError = error; this.pinRaw = before; return; }
+        const merged = mergeDirty(store, this.pinStore, edits.keys());
+        const text = pinsText(merged);
+        try {
+          await savePinsText(appHome(), text, before);
+          this.pinRaw = text;
+          this.pinsError = null;
+          this.pinStore = mergeDirty(merged, this.pinStore, this.pinDirty.keys());
+          for (const [k, n] of edits) if (this.pinDirty.get(k) === n) this.pinDirty.delete(k);
+          this.pinVer++;
+          return;
+        } catch (e) { this.pinsError = `Could not save pins.json: ${clean(String(e?.message ?? e))}`; }
+      }
+    });
+    this.pinChain = chain;
+    this.pinSaving = (this.pinSaving ?? 0) + 1;
+    cx.spawn(async (cx) => {
+      await chain;
+      this.pinSaving--;
+      if (this.pinsError) this.say(`${this.pinsError}, so pins last until this pane closes`, "circle-x", cx, 5000);
+      if (!this.pinSaving) this.readPins(cx);
+      cx.notify();
+    });
+  }
+
+  pinChanged(k, cx) {
+    this.pinDirty.set(k, ++this.pinEdits);
+    this.pinVer++;
+    this.savePins(cx);
+  }
+
+  // A smaller change, saved on the next tick after a pause.
+  pinChangedLater(k) {
+    this.pinDirty.set(k, ++this.pinEdits);
+    this.pinDueAt ??= Date.now() + 1500;
+  }
+
+  sessionKey(s) { return `${harnessOfFile(s.file)}:${s.id}`; }
+
+  // The pins of every session in the pane, in order: { pin, s, turn, key, state }.
+  pinnedAll() {
+    const memoKey = `${this.pinVer}|${this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",")}|${this.status()}|${this.sel}|${this.sel && this.open.has(this.sel) ? 1 : 0}`;
+    if (this.pinMemoKey === memoKey) return this.pinMemo;
+    const out = [];
+    this.sessions.forEach((s, si) => {
+      const pins = this.pinStore.sessions[this.sessionKey(s)]?.pins ?? [];
+      if (!pins.length) return;
+      const ids = turnIds(s.turns);
+      for (const pin of pins) {
+        const turn = ids.get(pin.id) ?? null;
+        const key = turn ? `${si}:${turn.n}` : null;
+        if (turn) pin.n = turn.n;
+        const live = turn ? this.isLive(s, si, turn.n - 1, this.status()) : false;
+        // An open, selected turn is being read, so nothing in it is new.
+        if (turn && !live && key === this.sel && this.open.has(key)) {
+          const seen = seenOf(turn);
+          if (seen.len !== pin.seen?.len || seen.fu !== pin.seen?.fu) { pin.seen = seen; this.pinChangedLater(this.sessionKey(s)); }
+        }
+        out.push({ pin, s, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen }) });
+      }
+    });
+    this.pinMemoKey = memoKey;
+    this.pinMemo = out;
+    this.pinKeys = new Set(out.map((p) => p.key).filter(Boolean));
+    this.pinTurns = new Set(out.map((p) => p.turn).filter(Boolean));
+    return out;
+  }
+  // What the tray and the digits show: a pane with two sessions can hold more than the limit.
+  pinnedList() { return this.pinnedAll().slice(0, PIN_LIMIT); }
+  isPinned(key) { this.pinnedAll(); return this.pinKeys.has(key); }
+  isPinnedTurn(turn) { this.pinnedAll(); return this.pinTurns.has(turn); }
+
+  togglePin(key, cx) {
+    const turn = key && this.findTurn(key);
+    if (!turn) return false;
+    const s = this.sessions[Number(key.split(":")[0])];
+    const found = this.pinnedAll().find((p) => p.key === key);
+    if (found) return this.unpin(found, cx);
+    if (this.pinnedAll().length >= PIN_LIMIT) { this.say(`Pins are full (${PIN_LIMIT}). Unpin one first.`, "circle-x", cx, 4000); return true; }
+    const k = this.sessionKey(s);
+    const rec = (this.pinStore.sessions[k] ??= { at: 0, pins: [] });
+    rec.at = Date.now();
+    const pin = newPin(s.turns, turn);
+    this.notePlace(pin, key);
+    rec.pins.push(pin);
+    this.pinChanged(k, cx);
+    const i = this.pinnedList().findIndex((p) => p.pin === pin);
+    this.say(`Pinned #${turn.n} · press ${i + 1} to come back`, "pin", cx, 3000);
+    return true;
+  }
+
+  unpin(p, cx) {
+    const k = this.sessionKey(p.s);
+    const rec = this.pinStore.sessions[k];
+    // By id: a save or another pane's change can have replaced the object since the tray drew.
+    const at = rec?.pins.findIndex((x) => x.id === p.pin.id) ?? -1;
+    if (at < 0) return false;
+    const [pin] = rec.pins.splice(at, 1);
+    rec.at = Date.now();
+    this.pinUndo.push({ k, at, pin });
+    this.pinChanged(k, cx);
+    this.say(`Unpinned #${p.pin.n} · u to undo`, "pin", cx, 5000);
+    return true;
+  }
+
+  undoUnpin(cx) {
+    const u = this.pinUndo[this.pinUndo.length - 1];
+    if (!u) return false;
+    if (this.pinnedAll().length >= PIN_LIMIT) { this.say(`Pins are full (${PIN_LIMIT}). Unpin one first.`, "circle-x", cx, 4000); return true; }
+    this.pinUndo.pop();
+    const rec = (this.pinStore.sessions[u.k] ??= { at: 0, pins: [] });
+    rec.pins.splice(Math.min(u.at, rec.pins.length), 0, u.pin);
+    rec.at = Date.now();
+    this.pinChanged(u.k, cx);
+    this.say(`Pinned #${u.pin.n} again`, "pin", cx, 2000);
+    return true;
+  }
+
+  // Keeps the pin's reading place when the top of the pane is in its turn.
+  notePlace(pin, key) {
+    const a = this.topKey && partOf(this.topKey, key);
+    if (!a || NOT_A_PLACE.has(a[0])) return false;
+    const whole = this.full.has(`r:${key}`);
+    if (pin.anchor?.[0] === a[0] && pin.anchor?.[1] === a[1] && Boolean(pin.whole) === whole) return false;
+    pin.anchor = a;
+    pin.whole = whole;
+    return true;
+  }
+
+  // While the selected pinned turn stays open, its place follows the reading. A landing does
+  // not count: near the end of the list the list cannot scroll far enough, and the item left
+  // at the top would move the place up on every return. So the place holds until the top of
+  // the pane moves after the landing.
+  trackPlace() {
+    if (!this.sel || !this.open.has(this.sel)) return;
+    if (this.placeHold != null) {
+      if (Date.now() < this.placeHold) return;
+      this.placeHold = null;
+      this.placeBase = this.topKey;
+    }
+    if (this.placeBase != null) {
+      if (this.topKey === this.placeBase) return;
+      this.placeBase = null;
+    }
+    const p = this.pinnedAll().find((x) => x.key === this.sel);
+    if (p && this.notePlace(p.pin, p.key)) this.pinChangedLater(this.sessionKey(p.s));
+  }
+
+  // Returns to pin i: the turn opens at the place the person stopped. The search stays; a
+  // turn it hides shows on its own, for as long as it stays selected.
+  goPin(i, cx) {
+    const p = this.pinnedList()[i];
+    if (!p) return false;
+    if (!p.turn) {
+      this.say(p.state === "gone" ? `#${p.pin.n} is no longer in this session. Unpin to clear it.` : "Still reading this session", "pin", cx, 4000);
+      return true;
+    }
+    const { key, turn, pin, s } = p;
+    const wasSel = this.sel;
+    if (pin.whole) this.full.add(`r:${key}`);
+    if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
+    this.sel = key;
+    this.follow = false;
+    this.toBottom = false; // a jump to the newest turn still waiting would take this frame
+    const q = this.filterText();
+    const hidden = (q && !threadMatches(s.turns, turn, q)) || !isShown(turn, { agentTurns: this.prefs.agentTurns, live: p.state === "live" });
+    this.pinVisit = hidden ? key : null;
+    // The note above the turn can be out of view when the place is further down.
+    if (hidden) this.say(visitNote(Boolean(q && !threadMatches(s.turns, turn, q))), "pin", cx, 3000);
+    // A return puts the turn's head at the top of the pane, so the message under it matches
+    // the pin's line. A second press of the same number, before the view moves, goes on to
+    // the place the person left, under a line that says the turn starts above.
+    const [first, ...rest] = placeAtTop(pin.anchor) ? [] : partKeys(placeItem(pin.anchor), key);
+    const again = first && this.pinAgain === key && wasSel === key && (this.placeHold != null || this.placeBase != null);
+    const until = Date.now() + 400;
+    this.pinResume = null;
+    this.pinAgain = first && !again ? key : null;
+    this.scrollTo = again ? { key: first, how: "land", or: rest, head: key, until, resume: true } : { key, how: "head", until };
+    if (first && !again && !hidden) this.say(`Press ${i + 1} again for where you left off`, "pin", cx, 3000);
+    this.placeHold = until + 300;
+    this.placeBase = null;
+    pin.seen = seenOf(turn);
+    this.pinChanged(this.sessionKey(s), cx);
+    return true;
+  }
+
+  // The keyboard back to the list, with any search kept.
+  toList() {
+    this.filtering = false;
+    this.h.focus();
+    this.editorFocused = false;
+  }
+
+  // The tray: outside the list, so it stays on screen while the list scrolls and a tray row
+  // can have its own click handlers; below the list, so adding a pin does not move the text.
+  pinTray(t) {
+    const L = this.pinnedList();
+    this.trayFold = L.length ? trayFolds(L.length, this.rootH) : null;
+    if (!L.length) return null;
+    const narrow = this.narrow();
+    const go = (i) => (_e, cx) => { cx.stop_propagation(); this.toList(); this.goPin(i, cx); cx.notify(); };
+    const wrap = v_flex().id("th-pins").flex_none().bg(this.bandFill(t)).border_t(1).border_color(t.border);
+    const dot = () => div().flex_none().size(6).rounded(3).bg(t.accent);
+    if (this.trayFold) {
+      return wrap.child(h_flex().h(32).px(10).gap(6).items_center().overflow_hidden()
+        .child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent))
+        .children(L.map((p, i) => h_flex().id(`th-pin-${i}`).flex_none().h(22).px(6).gap(4).items_center().rounded(5).border_1().border_color(t.border).cursor_pointer()
+          .when(this.sel === p.key, (el) => el.bg(t.selected))
+          .hover((x) => x.bg(t.hover))
+          .tooltip(firstLine(p.turn?.prompt ?? p.pin.text))
+          .on_click(go(i))
+          .child(div().text_size(11).text_color(p.state === "gone" ? t.dim : t.foreground).child(`${i + 1}`))
+          .when(!narrow, (el) => el.child(div().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(p.turn ? `#${p.turn.n}` : "gone")))
+          .when(p.state === "new", (el) => el.child(dot()))
+          .when(p.state === "live", (el) => el.child(this.liveIcon(this.liveState(t), 10))))));
+    }
+    return wrap.py(4).children(L.map((p, i) => {
+      const gone = p.state === "gone";
+      const live = p.state === "live" ? this.liveState(t) : null;
+      const label = live ? live.label : p.state === "new" ? "New reply" : gone ? "Gone" : p.state === "loading" ? "Reading…" : pinWhen(p.turn?.ts);
+      const color = live ? live.color : p.state === "new" ? t.accent : t.dim;
+      return h_flex().id(`th-pin-${i}`).h(26).pl(10).pr(8).gap(6).items_center().cursor_pointer()
+        .when(this.sel === p.key, (el) => el.bg(t.selected))
+        .hover((x) => x.bg(t.hover))
+        .on_click(go(i))
+        .child(this.kbd(t, String(i + 1)))
+        .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(`#${p.pin.n}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(gone ? t.dim : t.foreground).child(firstLine(p.turn?.prompt ?? p.pin.text) || "No text"))
+        .when(p.state === "new", (el) => el.child(dot()))
+        .when(Boolean(live), (el) => el.child(this.liveIcon(live, 11)))
+        // A narrow pane keeps the signs above and the one word that has no sign.
+        .when(Boolean(label) && (!narrow || gone), (el) => el.child(div().flex_none().text_size(11.5).text_color(color).child(label)))
+        .child(this.iconButton(t, `th-unpin-${i}`, "pin-off", `Unpin #${p.pin.n}`, (_e, cx) => { this.unpin(p, cx); cx.notify(); }));
+    }));
   }
 
   // ---- data ----
@@ -1054,7 +1336,7 @@ export default class Threads extends View {
       [...this.open].join(","), [...this.full].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0,
+      this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
@@ -1127,9 +1409,13 @@ export default class Threads extends View {
       s.turns.forEach((turn, ti) => {
         const key = `${si}:${turn.n}`;
         // Agent turns while they are hidden: skipped, and counted in the header instead.
-        if (!shown(turn, ti)) return;
-        if (q && !threadMatches(s.turns, turn, q)) { unmatched++; return; }
+        const visit = key === this.pinVisit;
+        const off = !shown(turn, ti);
+        const miss = q && !threadMatches(s.turns, turn, q);
+        if (off && !visit) return;
+        if (miss && !visit) { unmatched++; return; }
         flush();
+        if (visit && (off || miss)) out.push({ kind: "note", key: `visit:${key}`, text: visitNote(miss) });
         const d = turn.day;
         if (days.size > 1 && !q && d && d !== day) {
           day = d;
@@ -1232,8 +1518,13 @@ export default class Threads extends View {
 
   // One expanded turn becomes several list items, so each clickable part has its own key
   // (a virtual list allows one click handler, on the list, reporting the item key).
+  // The item a return put the "starts above" line over, while that turn stays selected.
+  resumeAt() { return this.pinResume && this.sel === this.pinResume.key ? this.pinResume.part : null; }
+
   expanded(item, out) {
     const { key, turn } = item;
+    const resume = this.resumeAt();
+    const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
     (turn.images ?? []).forEach((_, i) => out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: this.full.has(`i:${key}:${i}`) }));
@@ -1271,11 +1562,13 @@ export default class Threads extends View {
         }
         used += md.length;
         // Link rules (settings.json links) on the text shown; heights use the text as written.
+        // A block is one list item however tall, so a drag can select across its paragraphs
+        // (it cannot cross list items). A return to a pin lands at the start of the block.
         const lk = linked?.[i] && md === seg.text ? linked[i] : this.linkOne(md);
-        out.push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
+        push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
       } else {
         used += Math.min(seg.text.length, 400);
-        out.push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
+        push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
         out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...this.codeShape(seg.text) });
       }
     });
@@ -1290,7 +1583,7 @@ export default class Threads extends View {
       // until the probe has measured it.
       const text = flattenMd(late.slice(0, 4000));
       const l = rowLines(text, LATEST_LINES + 1, this.inner() / MD_CHAR);
-      out.push({ ...item, kind: "lhead", key: `lh:${key}` });
+      push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
     }
     out.push({ ...item, kind: "stats", key: `st:${key}` });
@@ -1860,15 +2153,25 @@ export default class Threads extends View {
     }
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    if (kind === "resume") {
+      this.toList();
+      this.sel = id;
+      this.pinResume = null;
+      this.scrollTo = { key: id, how: "head" };
+      return cx.notify();
+    }
     if (kind === "cp") this.clipAtPress = this.clipBefore;
     if (kind === "cp" && this.selecting === id) {
       const hit = this.barHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width, this.findTurn(id));
       if (hit === "quote") { this.pressX = null; this.lastBarHit = { hit }; this.quote(cx, "button", id); return cx.notify(); }
     }
-    this.h.focus();
-    // The panel has the keyboard again, even if an editor's blur event was missed.
-    this.editorFocused = false;
-    if (/^\d+$/.test(kind)) return this.toggle(key, cx);
+    // The panel has the keyboard again, even if an editor's blur event was missed. A search
+    // stays, and its field gives up the keys.
+    this.toList();
+    if (/^\d+$/.test(kind)) {
+      if (this.open.has(key) && headPinHit(this.pressX, this.bodyW)) { this.pressX = null; this.togglePin(key, cx); return cx.notify(); }
+      return this.toggle(key, cx);
+    }
     // A click on an image in an open card shows it at the card's full width, or back.
     if (kind === "img") {
       const k = `i:${id}`;
@@ -1949,9 +2252,12 @@ export default class Threads extends View {
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
     const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
-    // own (moving the turn selection would leave the text being selected). Esc, s and the
-    // quote key still act.
-    if (this.editorFocused && name && !["escape", "select", "quote"].includes(name)) return;
+    // own (moving the turn selection would leave the text being selected).
+    // Esc, s and the quote key still act, and pin keys, which those read-only editors have
+    // no use for: the moment to pin can be right after clicking into a code block.
+    const pinKey = name === "pin" || name === "undoUnpin" || name?.startsWith("go:");
+    if (this.editorFocused && name && !pinKey && !["escape", "select", "quote"].includes(name)) return;
+    if (pinKey && e.is_held) { cx.stop_propagation(); return; }
     // The quote key is handled here and never through action(), so no mod command (and so
     // no script with herdr-app do) can fire the one write into a terminal.
     if (name === "quote") {
@@ -1985,6 +2291,8 @@ export default class Threads extends View {
       case "open":
         // Enter in a "#12" jump: keep the turn selected and leave the field.
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
+        // A search: Enter also hands the keys to the list, so p and the digits work on a result.
+        if (this.filtering && this.query) this.toList();
         if (this.sel && keys.includes(this.sel)) this.toggle(this.sel, cx);
         return true;
       case "jump": this.filtering = true; this.input.set_value("#"); this.query = "#"; this.input.focus(); return true;
@@ -1996,6 +2304,8 @@ export default class Threads extends View {
         this.scrollTo = { key: k, how: "top" };
         return true;
       }
+      case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
+      case "undoUnpin": return this.undoUnpin(cx);
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -2021,6 +2331,7 @@ export default class Threads extends View {
         if (this.sel && this.open.has(this.sel)) { this.toggle(this.sel, cx); return true; }
         return false;
     }
+    if (name.startsWith("go:")) { this.editorFocused = false; this.h.focus(); return this.goPin(Number(name.slice(3)) - 1, cx); }
     if (name === "choose") {
       const list = this.res.choices ?? [];
       if (list.length < 2) return false;
@@ -2046,6 +2357,10 @@ export default class Threads extends View {
     }
     // Tests only: "debugWidth:240" lays the pane out for that width.
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
+    // Tests only: the selected turn's whole reply, as "Show full reply" would.
+    if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
+    // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
+    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land" }; return true; }
     // Tests only (props.debug, which the launcher never sets): a quote press on the selected
     // turn, since keys cannot reach a window that does not draw.
     if (this.debug && name === "debugQuote") return this.quote(cx, "debug") !== false;
@@ -2097,6 +2412,11 @@ export default class Threads extends View {
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
     this.react(cx);
+    // Here and not in rows(): the timing report changes the selection for a moment.
+    if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
+    if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
+    if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
+    this.publishDrawError(cx);
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering;
     if (this.debug) this.measure();
@@ -2107,6 +2427,8 @@ export default class Threads extends View {
       .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
       .on_size_change((size, cx) => {
+        const h = size.height / this.zoom();
+        if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
         if (!this.forcedWidth && Math.abs(w - this.width) > 1) { this.width = w; cx.notify(); }
@@ -2116,6 +2438,7 @@ export default class Threads extends View {
       .child(this.header(t))
       .children(this.banners(t))
       .child(this.body(t, focusedPanel, cx))
+      .children([this.pinTray(t)].filter(Boolean))
       .child(this.footer(t))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -2177,6 +2500,9 @@ export default class Threads extends View {
       out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
         countLabel(on ? c.agentAll : c.hiddenAll)]);
     }
+    const pinned = Boolean(this.sel && this.isPinned(this.sel));
+    const n = this.sel ? this.findTurn(this.sel)?.n : null;
+    out.push(["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null]);
     out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null]);
     return out;
@@ -2268,6 +2594,8 @@ export default class Threads extends View {
       .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(h_flex().mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
         .border_1().border_color(this.filtering ? t.accent : t.border).bg(t.chrome)
+        // A click back into a kept search: the typing is the field's again.
+        .on_mouse_down("left", (_e, cx) => { this.filtering = true; cx.notify(); })
         .child(svg(ICON("search")).size(13).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))
         .when(!q, (el) => el.child(this.kbd(t, "/")))
@@ -2486,15 +2814,47 @@ export default class Threads extends View {
       this.toBottom = false;
       this.scrollTo = null;
       cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
+    } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
+      // A return waits for the card's parts to be measured: estimates can be off by 100 px,
+      // and the list keeps its offset in px, so it would land away from the place.
+      cx.timer.after(60, (cx) => cx.notify());
     } else if (this.scrollTo) {
-      const i = rows.findIndex((x) => x.key === this.scrollTo.key);
-      const how = this.scrollTo.how;
+      // A pin's place can be gone (the reply changed): the next best item, then the card.
+      const st = this.scrollTo;
+      let how = st.how;
+      let i = -1;
+      for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
+      if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
       this.scrollTo = null;
+      // A second press goes on to the place further down the turn, under a line that says the
+      // turn starts above, which the next frame's rows carry.
+      if (i >= 0 && how === "land" && st.resume) {
+        this.pinResume = { key: st.head, part: rows[i].key };
+        this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400 };
+        i = -1;
+        cx.timer.after(0, (cx) => cx.notify());
+      }
+      // A turn's head at the top of the pane, with the note above it when the search hides
+      // the turn. It lands like a place, so a head already on screen still goes to the top.
+      if (i >= 0 && how === "head") {
+        if (rows[i - 1]?.key === `visit:${rows[i].key}`) i -= 1;
+        how = "land";
+      }
       if (i >= 0 && how === "card") {
         // The card's last part to the near edge, then its head: a card that fits ends up
         // wholly on screen, and a taller one shows from its head down.
         let j = i;
         while (j + 1 < rows.length && CARD.has(rows[j + 1].kind) && rows[j + 1].kind !== "head") j++;
+        // A return to a turn the search hides: its note shows above its head.
+        const top = rows[i - 1]?.key === `visit:${rows[i].key}` ? i - 1 : i;
+        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, "top"); cx.notify(); });
+      } else if (i >= 0 && how === "land") {
+        // scroll_to_item only brings an item to the nearest edge, so a place below the view
+        // would land at the bottom. An item a pane further down first, then the place, which
+        // is then above the view and lands at the top.
+        let j = i;
+        for (let below = 0; j + 1 < rows.length && below < this.listH; j++) below += slots[j];
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(i, "top"); cx.notify(); });
       } else if (i >= 0) cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
@@ -2513,11 +2873,8 @@ export default class Threads extends View {
         this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
-      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i].key,
-        (range) => rows.slice(range.start, range.end).map((x, j) =>
-          v_flex().w_full().h(slots[range.start + j]).overflow_hidden()
-            .when(dim && !CARD.has(x.kind), (el) => el.opacity(0.55))
-            .child(this.item(t, x, focusedPanel, slots[range.start + j]))))
+      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+        (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
         .track_scroll(this.scroll)
         .on_item_click((key, cx) => this.click(key, cx))
         .size_full())
@@ -2877,6 +3234,7 @@ export default class Threads extends View {
       case "day": return 46;
       case "hidden": return 28;
       case "note": return 34;
+      case "resume": return 30;
       case "working": {
         const prompt = clipPrompt(r.turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
         // The working card's text is 2 px narrower than other card text (its 10 px padding),
@@ -2893,7 +3251,7 @@ export default class Threads extends View {
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
-      case "md": return 6 + this.mdHeight(r.src ?? r.md);
+      case "md": return (r.gap ?? 6) + this.mdHeight(r.src ?? r.md);
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r) + (r.caption ? 24 : 0);
@@ -2931,7 +3289,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
-      case "md": return `${head}|${r.md.length}|${this.linksVer}|${this.remote.repo ?? ""}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
       case "stats": return `${head}|${this.statTexts(r.turn).join("|")}|${this.countsLine(r.turn) ?? ""}|${this.legendOn ? 1 : 0}`;
@@ -3026,6 +3384,54 @@ export default class Threads extends View {
       : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
   }
 
+  // The list's items for the range on screen. An error thrown here blanks the whole list
+  // until it scrolls or resizes, and Herdr reports nothing, so each item is drawn on its own:
+  // one that fails shows as a short error row, and the error is kept for the owner.
+  listItems(t, rows, slots, range, focusedPanel, dim) {
+    // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
+    // the pane, and taking it as the top would move a pin's place to the first row.
+    if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
+      this.topKey = rows[range.start]?.key ?? null;
+      try { this.trackPlace(); } catch (e) { this.drawFailed(e, null); }
+    }
+    const out = [];
+    for (let i = range.start; i < range.end; i++) {
+      const x = rows[i];
+      const h = slots[i] > 0 ? slots[i] : 1;
+      let body;
+      try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+      out.push(v_flex().w_full().h(h).overflow_hidden()
+        .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
+        .child(body));
+    }
+    return out;
+  }
+
+  // Kept for render(), which publishes it: the drawing pass may not notify or write state.
+  // The kind and the key say which part failed; no text from the session is kept.
+  drawFailed(e, r) {
+    const msg = String(e?.message ?? e).slice(0, 300);
+    this.drawErrors = (this.drawErrors ?? 0) + 1;
+    if (this.drawError?.msg === msg && this.drawError?.key === (r?.key ?? null)) return;
+    this.drawError = { msg, kind: r?.kind ?? null, key: r?.key ?? null, stack: String(e?.stack ?? "").split("\n").slice(0, 6).join("\n"), at: new Date().toISOString(), sent: false };
+  }
+
+  drawErrorRow(t, e) {
+    return h_flex().px(12).h_full().gap(6).items_center().text_size(12).text_color(t.blocked)
+      .child(svg(ICON("circle-x")).size(12).flex_none())
+      .child(div().min_w(0).truncate().child(`Could not draw this part: ${String(e?.message ?? e).slice(0, 120)}`));
+  }
+
+  // A row that failed to draw: saved to shared("threads.drawError"), which an agent on the
+  // owner's machine can read, and said once in a toast.
+  publishDrawError(cx) {
+    const d = this.drawError;
+    if (!d || d.sent) return;
+    d.sent = true;
+    try { setShared("threads.drawError", { ...d, count: this.drawErrors, terminal: this.terminal ?? null }); } catch { /* the toast still says it */ }
+    this.say("Part of a turn could not be drawn. The details are saved for the owner.", "circle-x", cx, 5000);
+  }
+
   item(t, r, focusedPanel, size) {
     switch (r.kind) {
       case "spacer": return div();
@@ -3037,6 +3443,7 @@ export default class Threads extends View {
       case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
       case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
+      case "resume": return this.resumeItem(t, r, size);
       default: return this.cardPart(t, r, size);
     }
   }
@@ -3067,7 +3474,8 @@ export default class Threads extends View {
     const tools = turn.tools > 0 && !this.narrow() ? 13 + String(turn.tools).length * ch : 0;
     // Gaps: icon, label, time, #n, the bell and tool counts, tokens (which truncate first).
     const gaps = 4 + (bell ? 1 : 0) + (tools ? 1 : 0);
-    const fixed = 12 + time + n + bell + tools + 6 * gaps + 8;
+    const pin = this.isPinnedTurn(turn) ? 12 + 6 : 0;
+    const fixed = 12 + time + n + bell + tools + pin + 6 * gaps + 8;
     return Math.max(36, Math.floor(Math.min(tw * 0.6, tw - fixed)));
   }
 
@@ -3079,15 +3487,19 @@ export default class Threads extends View {
     const agent = turn.agent;
     const ac = this.agentColor(t);
     const tw = rowTextWidth(this.width, agent);
+    const pin = () => svg(ICON("pin")).size(12).flex_none().text_color(t.accent);
+    const pinned = this.isPinnedTurn(turn);
     return h_flex().h(ROW.META).gap(6).items_center().text_size(11.5).text_color(dim).min_w(0)
       .when(agent, (el) => el
         .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
         .child(div().flex_none().max_w(this.labelRoom(turn, tw)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
           .text_size(11.5).font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width))))
       .when(!agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
+      .when(!agent && pinned, (el) => el.child(pin()))
       .when(Boolean(lead), (el) => el.child(lead))
       .child(div().flex_none().child(time))
       .when(agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
+      .when(agent && pinned, (el) => el.child(pin()))
       .when(turn.followups > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center()
         .child(svg(ICON("bell")).size(10)).child(countLabel(turn.followups))))
       .when(Boolean(turn.images?.length), (el) => el.child(h_flex().flex_none().gap(3).items_center()
@@ -3169,6 +3581,7 @@ export default class Threads extends View {
           .child(div().flex_none().max_w(Math.floor(rowTextWidth(this.width, true) * 0.6)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
             .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
         .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
+        .when(this.isPinned(key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
         .child(this.liveIcon(st, 12))
         .child(div().flex_none().child(st.spin ? "now" : fmtTime(turn.ts)))
         .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono())
@@ -3191,6 +3604,7 @@ export default class Threads extends View {
     return div().px(6).py(4).child(v_flex().p(10).gap(8).rounded(9).bg(alpha(st.color, 0.08)).border_1().border_color(alpha(st.color, 0.55))
       .child(h_flex().h(18).gap(6).items_center().text_size(11.5)
         .child(div().text_color(t.dim).font_family(this.mono()).child(`#${turn.n}`))
+        .when(this.isPinned(r.key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
         .child(this.liveIcon(st, 12))
         .child(div().text_color(st.color).font_medium().child(`${st.label}${clock ? ` · ${clock}` : ""}`)))
       .child(div().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text))
@@ -3230,6 +3644,15 @@ export default class Threads extends View {
       .child(div().flex_1().h(1).bg(t.border));
   }
 
+  // The line a return to a pin puts over a place further down the turn: the prompt and the
+  // start of the reply are above it. A click shows the turn from its head.
+  resumeItem(t, r, size) {
+    return v_flex().h(size).px(6).child(v_flex().h(size).flex_none().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).justify_center()
+      .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
+        .child(svg(ICON("chevron-up")).size(12).flex_none())
+        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`))));
+  }
+
   // One slice of an expanded turn's card: exactly its slot's height, with the card's
   // raised fill and side borders, so slices stack into one card with no seam. Only the
   // first part has the top edge and the last the bottom edge. The card keeps the border
@@ -3263,6 +3686,8 @@ export default class Threads extends View {
           .child(this.statusIcon(t, turn))
           .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))))
           .child(div().flex_1().min_w(0).truncate().child([when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
+          // A list item takes one click handler, so click() tells the pin by position (headPinHit).
+          .child(svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim))
           .child(svg(ICON("chevron-up")).size(14).flex_none());
       case "you": {
         const y = this.youMd(r);
@@ -3330,7 +3755,7 @@ export default class Threads extends View {
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
-        return div().mt(6).text_size(13)
+        return div().mt(r.gap ?? 6).text_size(13)
           .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
       case "seltext": {
         const st = this.selEditor?.st;
@@ -3460,6 +3885,7 @@ export default class Threads extends View {
     const out = [["↑↓", "move"], ["↵", "open"], ["c", narrow ? "copy" : "copy reply"]];
     if (!narrow && this.quotable()) out.push([this.quoteKey, "quote"]);
     out.push(["/", "filter"]);
+    if (this.quoteKey !== "p") out.push(["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]);
     if (narrow) return out;
     if (this.sel && this.open.has(this.sel)) out.push(["s", "select"], ["i", "explain"]);
     out.push(["g", "jump"], ["End", "latest"]);
@@ -3471,7 +3897,12 @@ export default class Threads extends View {
 
   footer(t) {
     const hint = (k, label) => h_flex().gap(4).items_center().child(this.kbd(t, k)).child(div().text_size(11.5).text_color(t.dim).child(label));
-    return h_flex().flex_none().pl(10).pr(16).py(7).gap(10).flex_wrap().items_center().border_t(1).border_color(t.border)
+    return h_flex().id("th-footer").flex_none().pl(10).pr(16).py(7).gap(10).flex_wrap().items_center().border_t(1).border_color(t.border)
+      // The hints wrap to two lines or more, and a toast has to clear them when there is a tray.
+      .on_size_change((size, cx) => {
+        const h = size.height / this.zoom();
+        if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }
+      })
       .children(this.footerHints().map(([k, label]) => hint(k, label)));
   }
 
@@ -3483,10 +3914,13 @@ export default class Threads extends View {
   }
 
   toastView(t) {
-    return h_flex().absolute().bottom(44).left(0).right(0).justify_center()
-      .child(h_flex().h(32).max_w(Math.max(120, this.width - 24)).px(12).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
+    // Above the tray when there is one, so it never covers a pin. With no tray it keeps its old
+    // place over the footer.
+    const tray = !this.pinnedList().length ? 0 : this.trayFold ? 33 : this.pinnedList().length * 26 + 9;
+    return h_flex().absolute().bottom(tray ? (this.footerH ?? 61) + tray + 6 : 44).left(0).right(0).justify_center()
+      .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
-        .child(div().min_w(0).truncate().child(this.toast.text)));
+        .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
   }
 }

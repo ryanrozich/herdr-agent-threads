@@ -86,9 +86,9 @@ function violations(modDir, installSh, recipe = join(root, "RECIPE.md")) {
       }
       if (/\bhc\s+(send|type|run|kill|label|write|paste|keys)\b/.test(line)) out.push(`${at} hc write verb in a shell`);
       if (/\b(writeFile|appendFile|mkdir|rmSync|unlink|fs\/promises)\b/.test(line) && !name.endsWith(".sh")) out.push(`${at} file write`);
-      // writeTextFile only in settings.js, and only to the settings file.
+      // writeTextFile only in settings.js, and only to the settings file and pins.json.
       if (/\bwriteTextFile\b/.test(line) && !name.endsWith(".sh")) {
-        const allowed = name === "settings.js" && (/^import \{ writeTextFile \} from "herdr";$/.test(line.trim()) || /^return writeTextFile\(settingsPath\(appHome\), /.test(line.trim()));
+        const allowed = name === "settings.js" && (/^import \{ writeTextFile \} from "herdr";$/.test(line.trim()) || /^return writeTextFile\((settingsPath|pinsPath)\(appHome\), /.test(line.trim()));
 
         if (!allowed) out.push(`${at} file write`);
       }
