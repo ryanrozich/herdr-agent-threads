@@ -1,0 +1,51 @@
+{
+  "result": "pass",
+  "where": "Cloudflare Browser Run, recorded session",
+  "steps": [
+    {
+      "name": "Review page loads",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Compare tab: Search",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Image opens full size in the lightbox",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Right arrow steps to the next image",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Esc closes the lightbox",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Pin options B",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Quote tracking",
+      "result": "pass",
+      "layoutWidth": 1280
+    },
+    {
+      "name": "Phone width: no sideways scroll",
+      "result": "pass",
+      "layoutWidth": 390
+    },
+    {
+      "name": "Phone width: comparison grid",
+      "result": "pass",
+      "layoutWidth": 390
+    }
+  ]
+}
