@@ -52,7 +52,8 @@ section { display: flex; flex-direction: column; gap: 14px; }
 @media (prefers-reduced-motion: no-preference) { .shot img { transition: transform .15s ease; } .shot:hover img { transform: translateY(-2px); } }
 .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
-.hero img { height: auto; max-height: none; object-fit: contain; }
+.grid .hero { grid-column: 1 / -1; }
+.hero img { height: auto; max-height: none; object-fit: contain; max-width: 980px; }
 table { border-collapse: collapse; font-size: 14px; width: 100%; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 13px; }
