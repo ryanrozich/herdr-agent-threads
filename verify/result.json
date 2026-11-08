@@ -1,41 +1,87 @@
 {
   "result": "pass",
+  "replay": "https://staging.catalystcloud.dev/verify/vr-20261108-079a5e20b558f74b",
   "steps": [
     {
+      "n": 1,
       "name": "Review page loads with all 15 screenshots",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 2,
       "name": "Try steps",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 3,
       "name": "Bubble colours: agent purple and the settings swatches",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 4,
       "name": "A screenshot opens full size in the lightbox",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 5,
       "name": "Right arrow steps to the next screenshot",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 6,
       "name": "Esc closes the lightbox",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 7,
       "name": "Pinned view",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      }
     },
     {
+      "n": 8,
       "name": "Phone width: no sideways scroll",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
     },
     {
+      "n": 9,
       "name": "Phone width: the list shots",
-      "status": null
+      "result": "pass",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
     }
   ]
 }
