@@ -33,7 +33,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
+  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
 } from "./ui.js";
@@ -1510,7 +1510,7 @@ export default class Threads extends View {
     sh.cmd = cmd;
     // Pasted images: a strip of thumbnails under the prompt from 300 px; narrower, the count
     // in the meta line says they are there.
-    if (turn.images?.length && !this.narrow()) { sh.thumbs = true; sh.height += THUMB_H + 3; }
+    if (turn.images?.length && !this.narrow()) { sh.thumbs = true; sh.height += THUMB_H + 6; sh.bubbleW = Math.max(sh.bubbleW, Math.min(bubbleMax(this.width), Math.min(turn.images.length, 3) * (THUMB_W + 4) + 2 * ROW.BUBBLE_PX)); }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     return sh;
@@ -3448,65 +3448,87 @@ export default class Threads extends View {
     }
   }
 
-  // The frame of a collapsed row. The 2 px accent ring marks the selected row while the
-  // pane has the keyboard; open cards never take it.
-  // Agent rows are inset 8 px, with a 2 px ansi5 rail and a faint ansi5 fill.
+  // The frame of a collapsed exchange: 12 px in from each side, the meta line, the message,
+  // the reply and the stats line 6 px apart (ui.js rowHeight). The selected exchange has a
+  // light fill across the pane and a 2 px bar on its left edge, in the accent colour while
+  // the pane has the keyboard.
   rowFrame(t, r, sel, focusedPanel, live, kids) {
-    const agent = r.turn.agent;
-    const box = v_flex().flex_1().min_w(0).px(10).py(7).gap(3)
-      .when(agent, (el) => el.rounded_r(8).bg(alpha(t.ansi5, 0.06)).border_l(2).border_color(alpha(t.ansi5, 0.7)).pl(8))
-      .when(!agent, (el) => el.rounded(8))
+    return v_flex().w_full().relative().px(ROW.PAD_X).pt(ROW.PAD_T).pb(ROW.PAD_B).gap(ROW.GAP).min_w(0)
       .when(sel && !live, (el) => el.bg(t.selected))
-      .when(sel && focusedPanel, (el) => el.border_2().border_color(t.accent).px(8).py(5))
-      .hover((s) => s.bg(sel && !live ? t.selected : t.hover))
+      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .children(kids);
-    return h_flex().px(6).py(1).child(div().when(agent, (el) => el.w(8)).flex_none()).child(box);
   }
 
-  // Width left for an agent row's sender label: the text width less the icon, time, #n,
-  // bell and tool counts beside it and their gaps (at most 60%), so a long name shortens
-  // in the middle instead of pushing the time or #n past the gutter.
+  // Width left for an agent's sender label on the meta line: the pane less the icon, #n,
+  // time, bell and pin beside it (at most 60%), so a long name shortens in the middle.
   labelRoom(turn, tw) {
     const ch = 6.6;
-    const time = fmtTime(turn.ts).length * ch;
+    const time = Math.max(8, fmtTime(turn.ts).length) * ch;
     const n = (`#${turn.n}`.length) * 7.2;
     const bell = turn.followups > 0 ? 13 + countLabel(turn.followups).length * ch : 0;
-    const tools = turn.tools > 0 && !this.narrow() ? 13 + String(turn.tools).length * ch : 0;
-    // Gaps: icon, label, time, #n, the bell and tool counts, tokens (which truncate first).
-    const gaps = 4 + (bell ? 1 : 0) + (tools ? 1 : 0);
-    const pin = this.isPinnedTurn(turn) ? 12 + 6 : 0;
-    const fixed = 12 + time + n + bell + tools + pin + 6 * gaps + 8;
+    const pin = this.isPinnedTurn(turn) ? 12 + 5 : 0;
+    // Six 5 px gaps: icon, label, "·", #n, "·", time, and the bell or pin between.
+    const fixed = 12 + n + 3 * ch + time + bell + pin + 6 * 5 + 8;
     return Math.max(36, Math.floor(Math.min(tw * 0.6, tw - fixed)));
   }
 
-  // The meta line: own rows "#n ✓ 9:05 AM 🔔 12 🔧 4 … tokens · duration"; agent rows
-  // "<icon> t7 review · hc report  9:05 AM  #n … tokens". Tokens and duration truncate first.
-  metaLine(t, turn, lead, time) {
-    const narrow = this.narrow();
-    const dim = t.dim;
+  // The line over the message: "📌 🔔 3 🖼 1 #7 · 8:43 AM" on the right for the person's
+  // own messages; "<icon> t7 review · #7 · 8:43 AM" on the left for an agent's. A stopped
+  // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
+  metaLine(t, turn, lead = null, time = fmtTime(turn.ts)) {
     const agent = turn.agent;
     const ac = this.agentColor(t);
-    const tw = rowTextWidth(this.width, agent);
-    const pin = () => svg(ICON("pin")).size(12).flex_none().text_color(t.accent);
-    const pinned = this.isPinnedTurn(turn);
-    return h_flex().h(ROW.META).gap(6).items_center().text_size(11.5).text_color(dim).min_w(0)
+    const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
+    const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
+    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .when(!agent, (el) => el.justify_end())
       .when(agent, (el) => el
         .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
-        .child(div().flex_none().max_w(this.labelRoom(turn, tw)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-          .text_size(11.5).font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width))))
-      .when(!agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
-      .when(!agent && pinned, (el) => el.child(pin()))
-      .when(Boolean(lead), (el) => el.child(lead))
-      .child(div().flex_none().child(time))
-      .when(agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
-      .when(agent && pinned, (el) => el.child(pin()))
-      .when(turn.followups > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("bell")).size(10)).child(countLabel(turn.followups))))
-      .when(Boolean(turn.images?.length), (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("image")).size(10)).child(String(turn.images.length))))
-      .when(turn.tools > 0 && !narrow, (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("wrench")).size(10)).child(String(turn.tools))))
-      .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono()).child(this.meta(turn)));
+        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+          .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)))
+        .child(div().flex_none().child("·")))
+      .when(Boolean(icon), (el) => el.child(icon))
+      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
+      .when(Boolean(turn.images?.length) && this.narrow(), (el) => el.child(count("image", String(turn.images.length))))
+      .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
+      .child(div().flex_none().child("·"))
+      .child(div().flex_none().truncate().child(time));
+  }
+
+  // The person's message in a bubble on the right (an agent's: an outlined bubble on the
+  // left), as wide as its widest line (ui.js rowShape bubbleW).
+  bubble(t, turn, kids, w) {
+    const agent = turn.agent;
+    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)
+      .when(!agent, (el) => el.bg(t.bubble ?? t.raised).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+      .when(agent, (el) => el.bg(t.background).border_1().border_color(t.border).rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+      .children(kids);
+    return h_flex().w_full().min_w(0).when(!agent, (el) => el.justify_end()).child(box);
+  }
+
+  // "Show more" under a message or reply that was cut: Enter or a click opens the turn.
+  moreLine(t) {
+    return h_flex().h(ROW.MORE).gap(4).items_center().text_size(12).text_color(t.accent)
+      .child("Show more").child(svg(ICON("chevron-down")).size(12));
+  }
+
+  // The stats under a reply, one line: "52s · 7.7k tokens · opus 5.5 · 3 tool calls". Under
+  // 300 px the words go: "52s · 7.7k · 3 tools".
+  statsText(turn) {
+    const st = stats(turn);
+    const narrow = this.narrow();
+    const parts = [];
+    if (turn.durationMs) parts.push(fmtDuration(turn.durationMs));
+    if (this.showTokens(st) && st.tokens > 0) parts.push(narrow ? fmtTokens(st.tokens) : `${fmtTokens(st.tokens)} tokens`);
+    if (!narrow && turn.model) parts.push(shortModel(turn.model));
+    if (turn.tools > 0) parts.push(narrow ? plural(turn.tools, "tool") : plural(turn.tools, "tool call"));
+    return parts.join(" · ");
+  }
+  statsLine(t, text, color = t.dim) {
+    return h_flex().h(ROW.STATS).min_w(0).items_center().text_size(11.5).font_family(this.mono()).text_color(color)
+      .child(div().flex_1().min_w(0).truncate().child(text || " "));
   }
 
   // A command's chip, then its arguments wrapping to its right.
@@ -3535,22 +3557,24 @@ export default class Threads extends View {
     return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, ROW.PROMPT_LINE));
   }
 
+  // A collapsed exchange: the meta line, the message, the start of the reply, the stats.
   rowItem(t, r, focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const sh = r.shape;
     const tone = sh.tone;
-    const icon = tone === "why" ? "ban" : tone === "error" ? "alert" : "reply";
-    const color = tone === "why" ? t.blocked : t.dim;
-    // Agent rows leave out the done check; interrupted and error icons still show.
-    const status = turn.agent && !turn.interrupted && !this.failed(turn) ? null : this.statusIcon(t, turn);
+    const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     return this.rowFrame(t, r, sel, focusedPanel, false, [
-      this.metaLine(t, turn, status, fmtTime(turn.ts)),
-      this.promptBlock(t, turn, sh, sel),
-      ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
-      h_flex().gap(5).items_start().min_w(0)
-        .child(div().flex_none().h(ROW.REPLY_LINE).flex().items_center().child(svg(ICON(icon)).size(12).text_color(color)))
-        .child(this.lines(t, sh.reply, tone === "reply" ? t.muted : t.dim, 12.5, ROW.REPLY_LINE)),
+      this.metaLine(t, turn),
+      this.bubble(t, turn, [
+        this.promptBlock(t, turn, sh, sel),
+        ...(sh.thumbs ? [div().mt(6).child(this.thumbStrip(t, turn, key))] : []),
+        ...(sh.pMore ? [this.moreLine(t)] : []),
+      ], sh.bubbleW),
+      v_flex().min_w(0)
+        .child(this.lines(t, sh.reply, color, 13, ROW.REPLY_LINE))
+        .when(sh.rMore, (el) => el.child(this.moreLine(t))),
+      this.statsLine(t, this.statsText(turn)),
     ]);
   }
 
@@ -3566,30 +3590,23 @@ export default class Threads extends View {
     return st.spin ? icon.spin(900) : icon;
   }
 
-  // The running turn when it is not selected: a row like the others, with the live state
-  // on the reply line.
+  // The running turn when it is not selected: the message, then where the reply will be,
+  // the live state, its clock and tool calls so far, in the live colour.
   workingRow(t, r, focusedPanel) {
     const { turn, key } = r;
     const st = this.liveState(t);
     const sel = this.sel === key;
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
-    const tools = `${plural(turn.tools, "tool call")} so far, no reply yet`;
     const sh = r.shape;
+    const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
     return this.rowFrame(t, r, sel, focusedPanel, true, [
-      h_flex().h(ROW.META).gap(6).items_center().text_size(11.5).text_color(t.dim)
-        .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
-          .child(div().flex_none().max_w(Math.floor(rowTextWidth(this.width, true) * 0.6)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-            .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
-        .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
-        .when(this.isPinned(key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-        .child(this.liveIcon(st, 12))
-        .child(div().flex_none().child(st.spin ? "now" : fmtTime(turn.ts)))
-        .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono())
-          .child([this.showTokens(stats(turn)) ? fmtTokens(stats(turn).tokens) : null, clock].filter(Boolean).join(" · "))),
-      this.promptBlock(t, turn, sh),
-      h_flex().h(ROW.REPLY_LINE).gap(5).items_center().min_w(0)
-        .child(this.liveIcon(st, 12))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(`${st.label} · ${tools}`)),
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
+      this.bubble(t, turn, [this.promptBlock(t, turn, sh), ...(sh.pMore ? [this.moreLine(t)] : [])], sh.bubbleW),
+      h_flex().h(ROW.REPLY_LINE).gap(6).items_center().min_w(0)
+        .child(this.liveIcon(st, 13))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
+          .child([st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
+      this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ]);
   }
 

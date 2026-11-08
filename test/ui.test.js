@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
-  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, commandLayout, ROW, senderLabel, senderIcon, kindWords,
+  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
 } from "../mods/agent-threads/ui.js";
 
@@ -166,7 +166,8 @@ test("keys: a agents, t terminal, comma settings; none while filtering", () => {
 });
 
 // Characters per line in a collapsed row's prompt at a pane width (same formula as main.js).
-const per = (w) => rowTextWidth(w) / ROW.PROMPT_CHAR;
+// rowLines on its own, at a fixed text width per pane width (the wrapping, not the layout).
+const per = (w) => (w - 32) / ROW.PROMPT_CHAR;
 
 test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () => {
   for (const w of [240, 380]) {
@@ -219,16 +220,24 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
     const b = rowShape({ prompt: long, reply, width: w, promptLines: 2, replyLines: 3 });
     expect(b.p).toBe(2);
     expect(b.r).toBe(w === 240 ? 3 : b.r);
-    expect(b.height).toBe(rowHeight(b.p, b.r));
+    expect(b.height).toBe(rowHeight(b.p, b.r, (b.pMore ? 1 : 0) + (b.rMore ? 1 : 0)));
+    expect(b.pMore).toBe(true);
+    expect(a.pMore || a.rMore).toBe(false);
+    // The bubble fits its widest line, up to 82% of the text width (90% under 320 px).
+    expect(a.bubbleW).toBeLessThan(b.bubbleW);
+    expect(b.bubbleW).toBeLessThanOrEqual(bubbleMax(w));
     const one = rowShape({ prompt: long, reply, width: w, promptLines: 1, replyLines: 1 });
     expect([one.p, one.r]).toEqual([1, 1]);
     const six = rowShape({ prompt: long.repeat(4), reply: reply.repeat(4), width: w, promptLines: 6, replyLines: 8 });
     expect(six.p).toBe(6);
     expect(six.r).toBe(8);
   }
-  expect(rowHeight(1, 1)).toBe(2 + 14 + 16 + 3 + 18 + 3 + 17);
-  expect(rowHeight(2, 3)).toBe(2 + 14 + 16 + 3 + 36 + 3 + 51);
-  expect(rowHeight(1, 1, true)).toBe(rowHeight(1, 1) + 16);
+  // Padding 8, meta 16, gap 6, bubble 6 + lines + 6, gap 6, reply lines, gap 6, stats 16, padding 10.
+  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 18 + 6 + 18 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 72 + 6 + 108 + 6 + 16 + 10);
+  expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
+  expect(bubbleMax(380)).toBe(Math.floor(356 * 0.82));
+  expect(bubbleMax(280)).toBe(Math.floor(256 * 0.9));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {
@@ -236,7 +245,7 @@ test("command rows: the chip takes width from the first line and long names cut 
   expect(c).toMatchObject({ label: "/review-pr", lines: ["12"], rows: 1 });
   const long = commandLayout("/plugin-marketplace:review-pull-request", "12 --deep check the retry path and the backoff", 240, 2);
   expect(long.label).toContain("…");
-  expect(long.label.startsWith("/plug")).toBe(true);
+  expect(long.label.startsWith("/pl")).toBe(true);
   expect(long.chipW).toBeLessThanOrEqual(Math.floor(rowTextWidth(240) * 0.45));
   // the args wrap in the space right of the chip, so they need more lines than the full width
   const plain = rowLines("12 --deep check the retry path and the backoff", 2, rowTextWidth(240) / ROW.PROMPT_CHAR);

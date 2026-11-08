@@ -7,16 +7,16 @@ mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { w
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 
 test("defaults when there is no file, or it is empty", () => {
-  expect(DEFAULTS).toEqual({ promptLines: 2, replyLines: 3, agentTurns: false });
+  expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false });
   expect(parseSettings(null)).toEqual({ values: DEFAULTS, error: null });
   expect(parseSettings("  ")).toEqual({ values: DEFAULTS, error: null });
   expect(parseSettings("{}")).toEqual({ values: DEFAULTS, error: null });
 });
 
 test("values clamp to their ranges and wrong types take the default", () => {
-  expect(RANGES).toEqual({ promptLines: [1, 6], replyLines: [1, 8] });
-  expect(parseSettings('{"promptLines": 0, "replyLines": 99, "agentTurns": true}').values).toEqual({ promptLines: 1, replyLines: 8, agentTurns: true });
-  expect(parseSettings('{"promptLines": 7, "replyLines": -3}').values).toMatchObject({ promptLines: 6, replyLines: 1 });
+  expect(RANGES).toEqual({ promptLines: [1, 10], replyLines: [1, 12] });
+  expect(parseSettings('{"promptLines": 0, "replyLines": 99, "agentTurns": true}').values).toEqual({ promptLines: 1, replyLines: 12, agentTurns: true });
+  expect(parseSettings('{"promptLines": 11, "replyLines": -3}').values).toMatchObject({ promptLines: 10, replyLines: 1 });
   expect(parseSettings('{"promptLines": 2.6, "replyLines": "4"}').values).toMatchObject({ promptLines: 3, replyLines: 4 });
   expect(parseSettings('{"promptLines": "two", "replyLines": null, "agentTurns": "yes"}').values).toEqual(DEFAULTS);
 });
@@ -29,10 +29,10 @@ test("invalid JSON keeps the defaults with a one-line note", () => {
 });
 
 test("the file text keeps unknown keys and clamps what it writes", () => {
-  const t = settingsText({ promptLines: 9 }, '{"replyLines": 5, "future": "x"}');
-  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 6, agentTurns: false });
+  const t = settingsText({ promptLines: 14 }, '{"replyLines": 5, "future": "x"}');
+  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, look: 2 });
   expect(t.endsWith("\n")).toBe(true);
-  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 2, replyLines: 3, agentTurns: true });
+  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, look: 2 });
 });
 
 test("the only write goes to data/agent-threads/settings.json with the expected snapshot", async () => {
@@ -43,7 +43,7 @@ test("the only write goes to data/agent-threads/settings.json with the expected 
     ["/apphome/data/agent-threads/settings.json", null],
     ["/apphome/data/agent-threads/settings.json", '{"promptLines":4}'],
   ]);
-  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false });
+  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, look: 2 });
 });
 
 test("a save never replaces a file that does not parse (F5)", async () => {
@@ -78,4 +78,17 @@ test("a settings file saved under an earlier name is adopted once, the old file 
   expect(await adoptPrevious("/h", async () => { throw new Error("missing"); })).toBe(null);
   expect(await adoptPrevious("/h", async () => "  \n")).toBe(null);
   expect(writes).toEqual([]);
+});
+
+test("a file from before the chat look holding the old defaults reads as the new ones, once", () => {
+  // Written by an earlier build, which saved every value on any change.
+  expect(parseSettings('{"promptLines": 2, "replyLines": 3, "agentTurns": true}').values).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true });
+  // Any other pair was chosen, and stays.
+  expect(parseSettings('{"promptLines": 2, "replyLines": 5}').values).toMatchObject({ promptLines: 2, replyLines: 5 });
+  // Once the file carries the mark, 2 and 3 are the person's choice.
+  expect(parseSettings('{"promptLines": 2, "replyLines": 3, "look": 2}').values).toMatchObject({ promptLines: 2, replyLines: 3 });
+  // Choosing 2 and 3 from the panel writes the mark with them, so they hold.
+  const t = settingsText({ promptLines: 2, replyLines: 3 }, '{"promptLines": 4, "replyLines": 3}');
+  expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 2 });
+  expect(parseSettings(t).values).toMatchObject({ promptLines: 2, replyLines: 3 });
 });

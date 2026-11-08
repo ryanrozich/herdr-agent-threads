@@ -455,10 +455,10 @@ test("an agent row's sender label leaves room for the time and #n at 240 px (R6)
   t1.followups = 12; t1.n = 128;
   for (const w of [240, 380]) {
     v.width = w;
-    const tw = (await import("../mods/agent-threads/ui.js")).rowTextWidth(w, true);
+    const tw = (await import("../mods/agent-threads/ui.js")).replyWidth(w);
     const room = v.labelRoom(t1, tw);
-    // icon 12 + label + time + #n + bell + gaps fit inside the text width
-    const used = 12 + room + 8 * 6.6 + 4 * 7.2 + (13 + 2 * 6.6) + 6 * 5;
+    // icon 12 + label + " · " + #n + " · " + time + bell + gaps fit inside the meta line
+    const used = 12 + room + 3 * 6.6 + 8 * 6.6 + 4 * 7.2 + (13 + 2 * 6.6) + 6 * 5;
     expect(used).toBeLessThanOrEqual(tw);
     draw(v, cx);
   }
@@ -1641,12 +1641,12 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   expect(turns[2].prompt).toBe("[Image #4]");
   const two = turns[1];
   const key = `0:${two.n}`;
-  // 380 px: a strip of thumbnails adds a 40 px line to the row; 240 px: none, the meta
-  // line counts them.
+  // 380 px: a strip of thumbnails adds a 40 px line and a 6 px gap to the message bubble;
+  // 240 px: none, the meta line counts them.
   v.width = 380;
   const at380 = v.shape(two).height;
   expect(v.shape(two).thumbs).toBe(true);
-  expect(at380 - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(43);
+  expect(at380 - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(46);
   v.width = 240;
   expect(v.shape(two).thumbs).toBeUndefined();
   v.width = 380;

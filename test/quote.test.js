@@ -52,7 +52,7 @@ test("rowShape keeps quotes within Prompt lines and always shows a comment line"
         const where = `${name} at ${width} px, ${promptLines} lines`;
         expect(sh.prompt.length, where).toBeLessThanOrEqual(promptLines);
         expect(sh.p, where).toBe(Math.max(1, sh.prompt.length));
-        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r));
+        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0)));
         const hasComment = promptParts(prompt).some((r) => !r.quote);
         const hasQuote = promptParts(prompt).some((r) => r.quote);
         if (!hasQuote) { expect(sh.kinds, where).toBe(null); continue; }
