@@ -1,0 +1,41 @@
+{
+  "result": "pass",
+  "steps": [
+    {
+      "name": "Review page loads with all 15 screenshots",
+      "status": null
+    },
+    {
+      "name": "Try steps",
+      "status": null
+    },
+    {
+      "name": "Bubble colours: agent purple and the settings swatches",
+      "status": null
+    },
+    {
+      "name": "A screenshot opens full size in the lightbox",
+      "status": null
+    },
+    {
+      "name": "Right arrow steps to the next screenshot",
+      "status": null
+    },
+    {
+      "name": "Esc closes the lightbox",
+      "status": null
+    },
+    {
+      "name": "Pinned view",
+      "status": null
+    },
+    {
+      "name": "Phone width: no sideways scroll",
+      "status": null
+    },
+    {
+      "name": "Phone width: the list shots",
+      "status": null
+    }
+  ]
+}
