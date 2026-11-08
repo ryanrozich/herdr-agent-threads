@@ -461,6 +461,7 @@ export default class Threads extends View {
     this.pinUndo = []; // unpinned this pane's life, newest last
     this.pinVisit = null; // a pinned turn shown although the search or a setting hides it
     this.pinResume = null; // { key, part }: the "starts above" line a return put over a place
+    this.pinAgain = null; // the turn a return just showed from its head, for a second press
     this.topKey = null; // the list item at the top of the pane
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
@@ -885,6 +886,7 @@ export default class Threads extends View {
       return true;
     }
     const { key, turn, pin, s } = p;
+    const wasSel = this.sel;
     if (pin.whole) this.full.add(`r:${key}`);
     if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
@@ -895,12 +897,16 @@ export default class Threads extends View {
     this.pinVisit = hidden ? key : null;
     // The note above the turn can be out of view when the place is further down.
     if (hidden) this.say(visitNote(Boolean(q && !threadMatches(s.turns, turn, q))), "pin", cx, 3000);
-    // A place near the top of the turn returns to its head: the prompt and the start of the
-    // reply. A place further down returns there, under a line that says the turn starts above.
+    // A return puts the turn's head at the top of the pane, so the message under it matches
+    // the pin's line. A second press of the same number, before the view moves, goes on to
+    // the place the person left, under a line that says the turn starts above.
     const [first, ...rest] = placeAtTop(pin.anchor) ? [] : partKeys(placeItem(pin.anchor), key);
+    const again = first && this.pinAgain === key && wasSel === key && (this.placeHold != null || this.placeBase != null);
     const until = Date.now() + 400;
     this.pinResume = null;
-    this.scrollTo = first ? { key: first, how: "land", or: rest, head: key, until, resume: true } : { key, how: "card", until };
+    this.pinAgain = first && !again ? key : null;
+    this.scrollTo = again ? { key: first, how: "land", or: rest, head: key, until, resume: true } : { key, how: "head", until };
+    if (first && !again && !hidden) this.say(`Press ${i + 1} again for where you left off`, "pin", cx, 3000);
     this.placeHold = until + 300;
     this.placeBase = null;
     pin.seen = seenOf(turn);
@@ -2151,7 +2157,7 @@ export default class Threads extends View {
       this.toList();
       this.sel = id;
       this.pinResume = null;
-      this.scrollTo = { key: id, how: "card" };
+      this.scrollTo = { key: id, how: "head" };
       return cx.notify();
     }
     if (kind === "cp") this.clipAtPress = this.clipBefore;
@@ -2409,6 +2415,7 @@ export default class Threads extends View {
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
+    if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering;
@@ -2819,20 +2826,19 @@ export default class Threads extends View {
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
       if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
       this.scrollTo = null;
-      // A return to a place further down the turn: when the place shows with the head at the
-      // top of the pane, the head; otherwise the place, under a line that says the turn
-      // starts above, which the next frame's rows carry.
+      // A second press goes on to the place further down the turn, under a line that says the
+      // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
-        const h = rows.findIndex((x) => x.key === st.head);
-        let above = 0;
-        for (let k = h; h >= 0 && k < i; k++) above += slots[k];
-        if (h >= 0 && above <= this.listH * 0.6) { i = h; how = "card"; }
-        else {
-          this.pinResume = { key: st.head, part: rows[i].key };
-          this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400 };
-          i = -1;
-          cx.timer.after(0, (cx) => cx.notify());
-        }
+        this.pinResume = { key: st.head, part: rows[i].key };
+        this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400 };
+        i = -1;
+        cx.timer.after(0, (cx) => cx.notify());
+      }
+      // A turn's head at the top of the pane, with the note above it when the search hides
+      // the turn. It lands like a place, so a head already on screen still goes to the top.
+      if (i >= 0 && how === "head") {
+        if (rows[i - 1]?.key === `visit:${rows[i].key}`) i -= 1;
+        how = "land";
       }
       if (i >= 0 && how === "card") {
         // The card's last part to the near edge, then its head: a card that fits ends up

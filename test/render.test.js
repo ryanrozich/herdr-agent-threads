@@ -1901,7 +1901,7 @@ test("a sixth pin is refused in the design's words, and undo cannot pass the lim
   draw(v, cx);
 });
 
-test("a digit returns: the turn opens, stays selected, and shows from its head when the place is near its top", async () => {
+test("a digit returns: the turn opens, stays selected, and shows from its head", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = keys()[0];
   v.toggle(a, cx);
@@ -1915,7 +1915,8 @@ test("a digit returns: the turn opens, stays selected, and shows from its head w
   expect(v.sel).toBe(a);
   expect(v.open.has(a)).toBe(true);
   expect(v.follow).toBe(false);
-  expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
+  expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
+  expect(v.pinAgain).toBe(null); // a place at the top of the turn: no second press
   v.scrollTo.until = 0; // no wait for measures here
   draw(v, cx);
   expect(v.scrollTo).toBe(null);
@@ -1952,13 +1953,15 @@ test("the place follows reading the selected turn, not a landing and not another
   expect(pin().anchor).toEqual(["head"]);
 });
 
-test("a place that no longer exists falls back to the block, then the card", async () => {
+test("a place that no longer exists falls back to the block, then the head", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = keys()[0];
   v.toggle(a, cx);
   v.action("pin", cx);
   v.pinnedList()[0].pin.anchor = ["md", "99.3"];
   v.goPin(0, cx);
+  v.goPin(0, cx); // the second press, for the place
+  expect(v.scrollTo).toMatchObject({ key: `md:${a}:99.3`, or: [`md:${a}:99`], how: "land" });
   v.scrollTo.until = 0;
   const scrolled = [];
   v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
@@ -1968,13 +1971,14 @@ test("a place that no longer exists falls back to the block, then the card", asy
   cx.flush();
   // The card: its last part, then its head.
   const head = v.rows().findIndex((r) => r.key === a);
+  expect(head).toBeGreaterThanOrEqual(0);
   expect(scrolled.at(-1)).toEqual([head, "top"]);
 });
 
 // Turn 8 of the --long fixture has a reply in two blocks around a code block: md 0, cc 1, md 2.
 const twoBlocks = (keys) => keys().find((k) => k.endsWith(":8"));
 
-test("a return to a place far down the turn lands from below under a line that says the turn starts above, after the measures", async () => {
+test("a second press goes on to a place far down the turn, under a line that says the turn starts above, after the measures", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = twoBlocks(keys);
   v.sel = a;
@@ -1983,6 +1987,11 @@ test("a return to a place far down the turn lands from below under a line that s
   v.action("pin", cx);
   expect(v.pinnedList()[0].pin.anchor).toEqual(["md", "2"]);
   v.listH = 60;
+  v.sel = keys()[0];
+  v.goPin(0, cx);
+  // The first press: the head, and a note that a second press goes on.
+  expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
+  expect(v.toast?.text).toBe("Press 1 again for where you left off");
   v.goPin(0, cx);
   expect(v.scrollTo).toMatchObject({ key: `md:${a}:2`, how: "land", head: a, resume: true });
   const scrolled = [];
@@ -1994,7 +2003,7 @@ test("a return to a place far down the turn lands from below under a line that s
   v.probeDue = () => [];
   cx.timers = [];
   v.render(cx);
-  // The head would push the place out of view: the place, under the line, next frame.
+  // The place, under the line, next frame.
   expect(v.scrollTo).toMatchObject({ key: `resume:${a}`, how: "land", or: [`md:${a}:2`] });
   expect(scrolled.length).toBe(0);
   const rows = v.rows();
@@ -2010,7 +2019,7 @@ test("a return to a place far down the turn lands from below under a line that s
   draw(v, cx);
 });
 
-test("a place far down that shows under the head returns to the head; the starts-above line shows the head", async () => {
+test("the first press shows the head even when the place would show under it; a moved view or another turn forgets the second press", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = twoBlocks(keys);
   v.sel = a;
@@ -2018,26 +2027,38 @@ test("a place far down that shows under the head returns to the head; the starts
   v.topKey = `md:${a}:2`;
   v.action("pin", cx);
   v.listH = 5000;
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
   v.goPin(0, cx);
   v.scrollTo.until = 0;
+  cx.timers = [];
   draw(v, cx);
-  expect(v.scrollTo).toBe(null);
+  cx.flush();
+  // The head lands like a place: an item further down first, then the head at the top.
+  const head = v.rows().findIndex((r) => r.key === a);
+  expect(scrolled.at(-1)).toEqual([head, "top"]);
+  expect(scrolled[0][0]).toBeGreaterThan(head);
   expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
-  // A short pane: the line, and a click on it goes to the head.
-  v.listH = 60;
+  // The view moves before the second press: the press shows the head again.
+  v.placeHold = null;
+  v.placeBase = null;
+  v.goPin(0, cx);
+  expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
+  // A second press with the view still: the place, under the line; a click on it goes to the head.
   v.goPin(0, cx);
   v.scrollTo.until = 0;
   draw(v, cx);
   expect(v.rows().some((r) => r.key === `resume:${a}`)).toBe(true);
   v.click(`resume:${a}`, cx);
-  expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
+  expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
   expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
-  // Selecting another turn drops the line too.
+  // Selecting another turn drops the line and the second press.
   v.goPin(0, cx);
-  v.scrollTo.until = 0;
-  draw(v, cx);
+  expect(v.pinAgain).toBe(a);
   v.sel = keys()[0];
   v.action("next", cx);
+  draw(v, cx);
+  expect(v.pinAgain).toBe(null);
   expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
 });
 
@@ -2066,7 +2087,8 @@ test("a place an earlier build saved on a turn's stats or action bar returns to 
   for (const anchor of [["st", null], ["cp", null], ["lg", null], ["more", null]]) {
     v.pinnedList()[0].pin.anchor = anchor;
     v.goPin(0, cx);
-    expect(v.scrollTo).toMatchObject({ key: a, how: "card" });
+    expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
+    expect(v.pinAgain).toBe(null);
   }
 });
 
@@ -2312,7 +2334,7 @@ test("a reply block is one list item however tall, so a drag can cross its parag
   draw(v, cx);
 });
 
-test("a pin left on a paragraph by the earlier build returns to the start of its block", async () => {
+test("a pin left on a paragraph by the earlier build: a second press returns to the start of its block", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = twoBlocks(keys);
   v.toggle(a, cx);
@@ -2324,6 +2346,7 @@ test("a pin left on a paragraph by the earlier build returns to the start of its
   v.toggle(a, cx);
   v.sel = keys().at(-1);
   v.listH = 60;
+  v.key(keyEv("1"), cx);
   v.key(keyEv("1"), cx);
   v.scrollTo.until = 0;
   const rows = v.rows();

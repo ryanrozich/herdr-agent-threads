@@ -125,7 +125,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 
 ## Pins
 
-Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the turn. It opens with your prompt and the start of the reply at the top of the pane. If you were reading further down than that, it opens at the start of that block of text, under a line that says the turn starts above. Click the line to see the prompt.
+Partway through a long reply and a newer one needs you? Press `p`. The turn joins a tray above the footer, and the text you are reading does not move. Press `1` to come back to the turn. It opens with the turn's number and your prompt at the top of the pane, the same first line as its row in the tray. If you were reading further down, press `1` again: the turn opens at the start of that block of text, under a line that says the turn starts above. Click the line to see the prompt.
 
 - Up to five pins. A sixth is refused: unpin one first.
 - A pinned turn stays in its place in the list, with a pin icon. The tray shows "New reply" until you read it, and "Working" while it runs.
