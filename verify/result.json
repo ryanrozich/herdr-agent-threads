@@ -1,87 +1,181 @@
 {
+  "schema": "browser-verify/v1",
+  "ticket": null,
+  "commit": "a9386c095793315ff044e8b2fbda138c75338c86",
+  "environmentUrl": "https://htmlpreview.github.io",
+  "host": "Ryans-MBP-2.rozich",
+  "startedAt": "2026-11-08T21:19:50.649Z",
+  "finishedAt": "2026-11-08T21:20:46.489Z",
   "result": "pass",
-  "replay": "https://staging.catalystcloud.dev/verify/vr-20261108-079a5e20b558f74b",
   "steps": [
     {
       "n": 1,
-      "name": "Review page loads with all 15 screenshots",
+      "name": "Review page loads with all 29 screenshots",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 9087,
+      "screenshot": "steps/01.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 2,
-      "name": "Try steps",
+      "name": "Reading type: today against the new type at 960 px",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3829,
+      "screenshot": "steps/02.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 3,
-      "name": "Bubble colours: agent purple and the settings swatches",
+      "name": "The comparison opens full size in the lightbox",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3520,
+      "screenshot": "steps/03.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 4,
-      "name": "A screenshot opens full size in the lightbox",
+      "name": "Right arrow steps to the next screenshot",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 4140,
+      "screenshot": "steps/04.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 5,
-      "name": "Right arrow steps to the next screenshot",
+      "name": "Esc closes the lightbox",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3224,
+      "screenshot": "steps/05.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 6,
-      "name": "Esc closes the lightbox",
+      "name": "The values and their sources",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3161,
+      "screenshot": "steps/06.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 7,
-      "name": "Pinned view",
+      "name": "Softer bubble colours, dark and light",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3134,
+      "screenshot": "steps/07.png",
       "viewport": {
         "width": 1280,
         "height": 800
-      }
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 8,
-      "name": "Phone width: no sideways scroll",
+      "name": "Bigger images",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 3098,
+      "screenshot": "steps/08.png",
       "viewport": {
-        "width": 390,
-        "height": 844
-      }
+        "width": 1280,
+        "height": 800
+      },
+      "layoutWidth": 1280
     },
     {
       "n": 9,
-      "name": "Phone width: the list shots",
+      "name": "Names, with the per-agent table",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
       "result": "pass",
+      "ms": 2954,
+      "screenshot": "steps/09.png",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "layoutWidth": 1280
+    },
+    {
+      "n": 10,
+      "name": "Try steps",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
+      "result": "pass",
+      "ms": 3184,
+      "screenshot": "steps/10.png",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "layoutWidth": 1280
+    },
+    {
+      "n": 11,
+      "name": "Phone width: no sideways scroll",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
+      "result": "pass",
+      "ms": 2688,
+      "screenshot": "steps/11.png",
       "viewport": {
         "width": 390,
         "height": 844
-      }
+      },
+      "layoutWidth": 390
+    },
+    {
+      "n": 12,
+      "name": "Phone width: the reading type section",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/e1b4b373683b018d6355e8c5d654f5aae8c0034f/index.html",
+      "result": "pass",
+      "ms": 3031,
+      "screenshot": "steps/12.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "layoutWidth": 390
     }
-  ]
+  ],
+  "replay": {
+    "status": "present",
+    "sessionId": "87c7232d-a266-479e-a254-6714d2f1c53f",
+    "file": "replay.json",
+    "waitedSec": 4
+  },
+  "preview": "preview.gif",
+  "video": null,
+  "network": [
+    "network/tab-1.har"
+  ],
+  "signIn": "none",
+  "sessionClosed": true
 }
