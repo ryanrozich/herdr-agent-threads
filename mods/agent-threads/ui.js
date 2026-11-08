@@ -1149,3 +1149,45 @@ export function youHeight(text, innerW, { link = false, max = 420, line = 18, ch
   const body = Math.min(max, (n + (n > 1 || (text ?? "").length > per * 0.8 ? 1 : 0)) * line);
   return 8 + 10 + 16 + 4 + body + 10 + (link ? 22 : 0) + 10;
 }
+
+// ---- bubble colours (settings.json bubbleColor and agentBubbleColor) ----
+// A preset name or "#rrggbb". Every preset reads at 4.5:1 or more with white text. "plain"
+// is the theme's own look: the person's bubble is the text colour at 8% over the pane, an
+// agent's bubble is outlined on the pane.
+export const BUBBLES = Object.freeze({
+  blue: "#2563EB", purple: "#7C3AED", teal: "#0F766E", green: "#15803D",
+  orange: "#C2410C", pink: "#BE185D", gray: "#4B5563", plain: null,
+});
+
+const BUBBLE_NAMES = new Set(Object.keys(BUBBLES));
+
+// A setting's value as stored: a preset's name or "#RRGGBB", or null when it is neither.
+export function bubbleValue(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (BUBBLE_NAMES.has(s)) return s;
+  if (/^#[0-9a-f]{6}$/.test(s)) return s.toUpperCase();
+  if (/^#[0-9a-f]{3}$/.test(s)) return `#${[...s.slice(1)].map((x) => x + x).join("")}`.toUpperCase();
+  return null;
+}
+
+// The text colour on a fill: white or near-black, whichever reads better.
+export function bubbleInk(fill) {
+  return (contrast("#FFFFFF", fill) ?? 0) >= (contrast("#111111", fill) ?? 0) ? "#FFFFFF" : "#111111";
+}
+
+// How a bubble is drawn for a setting's value: { fill, ink, sub, bar, outline }. ink is the
+// message's text colour, sub a quote's, bar a quote's bar. Plain (or a value that does not
+// parse) takes the theme's colours: the person's bubble the text colour at 8%, an agent's
+// bubble outlined, with the agent's prompt muted.
+export function bubbleStyle(value, t, agent) {
+  const v = bubbleValue(value);
+  const hex = v == null ? null : v.startsWith("#") ? v : BUBBLES[v];
+  if (!hex) {
+    return agent
+      ? { fill: t.background, ink: t.muted, sub: t.muted, bar: t.dim, outline: true }
+      : { fill: alpha(t.foreground, 0.08), ink: t.foreground, sub: t.muted, bar: alpha(t.foreground, 0.28), outline: false };
+  }
+  const ink = bubbleInk(hex);
+  return { fill: hex, ink, sub: alpha(ink, 0.78), bar: alpha(ink, 0.5), outline: false };
+}

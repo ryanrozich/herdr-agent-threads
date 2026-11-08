@@ -36,7 +36,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -2392,7 +2392,7 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) this.filtering = false; return true;
-      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines }, cx); return true;
+      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor }, cx); return true;
       case "escape":
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
@@ -2414,6 +2414,14 @@ export default class Threads extends View {
       const c = (this.choosing ? this.choices : null)?.[Number(name.slice(5)) - 1];
       if (!c) return false;
       this.pick(c, cx);
+      return true;
+    }
+    // "bubbleColor:teal", "agentBubbleColor:#7C3AED": a preset name or #rrggbb.
+    const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
+    if (bc) {
+      const v = bubbleValue(bc[2]);
+      if (v == null) return false;
+      this.changePrefs({ [bc[1]]: v }, cx);
       return true;
     }
     // "promptLines:+", "replyLines:-", "promptLines:4".
@@ -2732,6 +2740,8 @@ export default class Threads extends View {
       .child(stepper("promptLines", "Prompt lines"))
       .child(stepper("replyLines", "Reply lines"))
       .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
+      .child(this.swatches(t, "bubbleColor", "Your messages"))
+      .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
       // quoteKey and links are edited in the file; the panel says what it read.
       .child(div().text_size(11.5).text_color(t.muted).child(this.settingsLine()))
@@ -2741,7 +2751,30 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(mono).text_color(t.dim).child(path))
         .child(this.button(t, "th-set-copy", this.narrow() ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", "Settings path copied", cx); }, "copy")))
       .child(h_flex().gap(6)
-        .child(this.button(t, "th-set-reset", `Reset to ${DEFAULTS.promptLines} / ${DEFAULTS.replyLines}`, (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")));
+        .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")));
+  }
+
+  // A bubble colour setting: its name and the colour's name, then a swatch for each preset
+  // (ui.js BUBBLES) and, when the file holds one, its own #rrggbb. The chosen one has a ring.
+  swatches(t, key, name) {
+    const cur = this.prefs[key];
+    const agent = key === "agentBubbleColor";
+    const names = Object.keys(BUBBLES);
+    const list = cur.startsWith("#") ? [...names, cur] : names;
+    const dflt = DEFAULTS[key];
+    const shown = cur.startsWith("#") ? cur : `${cur[0].toUpperCase()}${cur.slice(1)}`;
+    return v_flex().gap(6)
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(name))
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(cur === dflt ? `${shown} · default` : shown)))
+      .child(h_flex().gap(6).flex_wrap().children(list.map((v) => {
+        const st = bubbleStyle(v, t, agent);
+        const on = v === cur;
+        return div().id(`th-${key}-${v}`).flex_none().size(22).rounded(11).p(2).cursor_pointer()
+          .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
+          .child(div().size_full().rounded(9).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.border : st.fill));
+      })));
   }
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
@@ -3240,13 +3273,17 @@ export default class Threads extends View {
     const src = this.youSource(r.turn);
     const q = this.filterText();
     const hl = Boolean(q) && src.toLowerCase().includes(q.toLowerCase());
-    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}`;
+    // TextView draws Markdown in the theme's text colour, whatever its parent sets, which
+    // does not read on a coloured bubble. There the message is plain text in the bubble's
+    // ink, quotes behind their bar, as for a filter match.
+    const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
+    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
     const max = r.full ? FULL_PROMPT_CHARS / 8 : 4000;
-    const parts = hl ? promptParts(c.text, max) : null;
-    const m = hl ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
+    const parts = plain ? promptParts(c.text, max) : null;
+    const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
       : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
@@ -3259,7 +3296,7 @@ export default class Threads extends View {
     const raw = c.text ? (n + 1) * TV_LINE + extra : 0;
     // Taller than YOU_MAX: a box of that height that scrolls (Show all on a long paste).
     const capped = raw >= YOU_MAX;
-    const v = { ...m, text: c.text, more: c.more, hl, parts, extra, bw, bodyH: Math.min(YOU_MAX, raw), capped };
+    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: Math.min(YOU_MAX, raw), capped };
     r.turn.youMemo = { sig, v };
     return v;
   }
@@ -3364,7 +3401,7 @@ export default class Threads extends View {
   partSig(r) {
     const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}`;
       case "lhead": return `${head}|${r.turn.followups}`;
@@ -3579,16 +3616,35 @@ export default class Threads extends View {
   // left), as wide as its widest line (ui.js rowShape bubbleW).
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)
-      .when(!agent, (el) => el.bg(this.bubbleFill(t)).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
-      .when(agent, (el) => el.bg(t.background).border_1().border_color(t.border).rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+    const { style } = this.bubbleLook(t, agent);
+    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill)
+      .when(style.outline, (el) => el.border_1().border_color(t.border))
+      .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+      .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
       .children(kids);
     return h_flex().w_full().min_w(0).when(!agent, (el) => el.justify_end()).child(box);
   }
 
-  // The bubble's fill: the text colour at 8% over whatever is under it, so it shows on the
-  // pane and on a selected exchange's fill, in dark and light themes.
-  bubbleFill(t) { return alpha(t.foreground, 0.08); }
+  // How a bubble is drawn (settings bubbleColor and agentBubbleColor, ui.js bubbleStyle),
+  // and the theme its text is drawn with. On a coloured fill the bubble's ink stands in for
+  // the text, muted and accent colours, so a quote, a command's name and Show more read on
+  // it. Plain keeps the pane's theme: the person's bubble is the text colour at 8% over
+  // whatever is under it, so it shows on a selected exchange's fill too.
+  bubbleLook(t, agent) {
+    const v = agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor;
+    const k = `${agent ? 1 : 0}|${v}|${t.foreground}|${t.background}|${t.muted}|${t.dim}|${t.border}`;
+    this.bubbleMemo ??= new Map();
+    let look = this.bubbleMemo.get(k);
+    if (!look) {
+      const style = bubbleStyle(v, t, agent);
+      const plain = style.outline || style.ink === t.foreground;
+      const theme = plain ? t : { ...t, foreground: style.ink, muted: style.sub, dim: style.sub, accent: style.ink, background: style.fill, selected: style.fill, border: style.bar };
+      look = { style, theme };
+      if (this.bubbleMemo.size > 8) this.bubbleMemo.clear();
+      this.bubbleMemo.set(k, look);
+    }
+    return look;
+  }
 
   // "Show more" under a message or reply that was cut: Enter or a click opens the turn.
   moreLine(t) {
@@ -3654,12 +3710,13 @@ export default class Threads extends View {
     const sh = r.shape;
     const tone = sh.tone;
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
+    const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, false, [
       this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null),
       this.bubble(t, turn, [
-        this.promptBlock(t, turn, sh, sel),
+        this.promptBlock(bt, turn, sh, sel),
         ...(sh.thumbs ? [div().mt(6).child(this.thumbStrip(t, turn, key))] : []),
-        ...(sh.pMore ? [this.moreLine(t)] : []),
+        ...(sh.pMore ? [this.moreLine(bt)] : []),
       ], sh.bubbleW),
       v_flex().min_w(0)
         .child(this.lines(t, sh.reply, color, 13, ROW.REPLY_LINE))
@@ -3691,7 +3748,7 @@ export default class Threads extends View {
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
     return this.rowFrame(t, sel, focusedPanel, true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
-      this.bubble(t, turn, [this.promptBlock(t, turn, sh), ...(sh.pMore ? [this.moreLine(t)] : [])], sh.bubbleW),
+      this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
       h_flex().h(ROW.REPLY_LINE).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
@@ -3712,7 +3769,7 @@ export default class Threads extends View {
     const live = [st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
       this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
-      this.bubble(t, turn, [div().h(g.lines * TV_LINE).overflow_hidden().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(g.prompt)], bubbleMax(this.width)),
+      this.bubble(t, turn, [div().h(g.lines * TV_LINE).overflow_hidden().text_size(13).line_height(`${TV_LINE}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width)),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
@@ -3800,6 +3857,7 @@ export default class Threads extends View {
           .child(svg(ICON("chevron-up")).size(14).flex_none());
       case "you": {
         const y = this.youMd(r);
+        const { style, theme: bt } = this.bubbleLook(t, turn.agent);
         const c = { text: y.text, more: y.more };
         const canLess = r.full && this.youClip(turn).more > 0;
         // A prompt taller than YOU_MAX scrolls inside a box of that height; any other is
@@ -3808,34 +3866,35 @@ export default class Threads extends View {
         // Markdown through TextView (quotes, code and link rules drawn the way the reply is),
         // or with a filter that matches the prompt, the matches marked and each quote run
         // behind the same bar.
-        const text = y.hl
+        const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
-            ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? t.dim : alpha(t.foreground, 0.28)))
-              .child(this.hlBlock(t, p.lines.join("\n"), t.muted))
-            : this.hlBlock(t, p.lines.join("\n"), t.foreground)).concat(y.cut
-            ? [div().text_size(11.5).italic().text_color(t.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
+            ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
+              .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
+            : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
+            ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
           : y.capped
             ? TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).when(scroll, (el) => el.scrollable(true).size_full()).when(!scroll, (el) => el.w_full())
             : TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).w_full();
         const cmd = commandParts(turn);
-        const ac = this.agentColor(t);
-        const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.hl ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
+        const ac = style.outline ? this.agentColor(t) : bt.foreground;
+        const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.plain ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
         // The message in its bubble, on the right (an agent's outlined, on the left, under its
         // sender), as wide as its widest line.
         const agent = turn.agent;
         return h_flex().w_full().mt(6).when(!agent, (el) => el.justify_end())
           .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
-            .when(!agent, (el) => el.bg(this.bubbleFill(t)).rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
-            .when(agent, (el) => el.bg(t.background).border_1().border_color(t.border).rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+            .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
+            .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+            .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
             .when(agent, (el) => el.child(h_flex().gap(5).items_center()
               .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
               .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(11.5).font_semibold()
                 .text_color(ac).child(this.youLabel(turn)))))
-            .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(t, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
-            .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(t.foreground).child(text)))
-            .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(t.accent)
+            .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
+            .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(bt.foreground).child(text)))
+            .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child(`Show all · ${plural(c.more, "more line")}`).child(svg(ICON("chevron-down")).size(12))))
-            .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(t.accent)
+            .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
       case "rhead":

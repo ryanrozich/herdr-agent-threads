@@ -5,9 +5,10 @@ import { test, expect, mock } from "bun:test";
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
+const COLORS = { bubbleColor: "blue", agentBubbleColor: "purple" };
 
 test("defaults when there is no file, or it is empty", () => {
-  expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false });
+  expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...COLORS });
   expect(parseSettings(null)).toEqual({ values: DEFAULTS, error: null });
   expect(parseSettings("  ")).toEqual({ values: DEFAULTS, error: null });
   expect(parseSettings("{}")).toEqual({ values: DEFAULTS, error: null });
@@ -15,7 +16,7 @@ test("defaults when there is no file, or it is empty", () => {
 
 test("values clamp to their ranges and wrong types take the default", () => {
   expect(RANGES).toEqual({ promptLines: [1, 10], replyLines: [1, 12] });
-  expect(parseSettings('{"promptLines": 0, "replyLines": 99, "agentTurns": true}').values).toEqual({ promptLines: 1, replyLines: 12, agentTurns: true });
+  expect(parseSettings('{"promptLines": 0, "replyLines": 99, "agentTurns": true}').values).toEqual({ promptLines: 1, replyLines: 12, agentTurns: true, ...COLORS });
   expect(parseSettings('{"promptLines": 11, "replyLines": -3}').values).toMatchObject({ promptLines: 10, replyLines: 1 });
   expect(parseSettings('{"promptLines": 2.6, "replyLines": "4"}').values).toMatchObject({ promptLines: 3, replyLines: 4 });
   expect(parseSettings('{"promptLines": "two", "replyLines": null, "agentTurns": "yes"}').values).toEqual(DEFAULTS);
@@ -30,9 +31,9 @@ test("invalid JSON keeps the defaults with a one-line note", () => {
 
 test("the file text keeps unknown keys and clamps what it writes", () => {
   const t = settingsText({ promptLines: 14 }, '{"replyLines": 5, "future": "x"}');
-  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, look: 2 });
+  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...COLORS, look: 2 });
   expect(t.endsWith("\n")).toBe(true);
-  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, look: 2 });
+  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...COLORS, look: 2 });
 });
 
 test("the only write goes to data/agent-threads/settings.json with the expected snapshot", async () => {
@@ -43,7 +44,7 @@ test("the only write goes to data/agent-threads/settings.json with the expected 
     ["/apphome/data/agent-threads/settings.json", null],
     ["/apphome/data/agent-threads/settings.json", '{"promptLines":4}'],
   ]);
-  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, look: 2 });
+  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, ...COLORS, look: 2 });
 });
 
 test("a save never replaces a file that does not parse (F5)", async () => {
@@ -82,7 +83,7 @@ test("a settings file saved under an earlier name is adopted once, the old file 
 
 test("a file from before the chat look holding the old defaults reads as the new ones, once", () => {
   // Written by an earlier build, which saved every value on any change.
-  expect(parseSettings('{"promptLines": 2, "replyLines": 3, "agentTurns": true}').values).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true });
+  expect(parseSettings('{"promptLines": 2, "replyLines": 3, "agentTurns": true}').values).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...COLORS });
   // Any other pair was chosen, and stays.
   expect(parseSettings('{"promptLines": 2, "replyLines": 5}').values).toMatchObject({ promptLines: 2, replyLines: 5 });
   // Once the file carries the mark, 2 and 3 are the person's choice.
@@ -91,4 +92,12 @@ test("a file from before the chat look holding the old defaults reads as the new
   const t = settingsText({ promptLines: 2, replyLines: 3 }, '{"promptLines": 4, "replyLines": 3}');
   expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 2 });
   expect(parseSettings(t).values).toMatchObject({ promptLines: 2, replyLines: 3 });
+});
+
+test("bubble colours take a preset name or #rrggbb, and anything else the default", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values;
+  expect(v({ bubbleColor: "Teal", agentBubbleColor: "plain" })).toMatchObject({ bubbleColor: "teal", agentBubbleColor: "plain" });
+  expect(v({ bubbleColor: "#1a2b3c", agentBubbleColor: "#abc" })).toMatchObject({ bubbleColor: "#1A2B3C", agentBubbleColor: "#AABBCC" });
+  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("blue");
+  expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "purple" });
 });

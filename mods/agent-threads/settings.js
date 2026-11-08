@@ -3,11 +3,14 @@
 // reinstall, which replaces mods/agent-threads/, leaves it alone). A person can edit it by
 // hand; the pane watches it and applies a change at once.
 //
-//   { "promptLines": 4, "replyLines": 6, "agentTurns": false, "quoteKey": "q",
+//   { "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "blue",
+//     "agentBubbleColor": "purple", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
 // promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
+// bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
+// bubbles, a preset name (ui.js BUBBLES; "plain" is the theme's own look) or "#rrggbb".
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
@@ -15,10 +18,10 @@
 // beside it (pins.js has the format).
 
 import { writeTextFile } from "herdr";
-import { TAKEN_LETTERS } from "./ui.js";
+import { TAKEN_LETTERS, bubbleValue } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ promptLines: 4, replyLines: 6, agentTurns: false });
+export const DEFAULTS = Object.freeze({ promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "blue", agentBubbleColor: "purple" });
 export const RANGES = Object.freeze({ promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -48,6 +51,8 @@ export function parseSettings(text) {
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
+      bubbleColor: bubbleValue(raw.bubbleColor) ?? DEFAULTS.bubbleColor,
+      agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
     },
     error: null,
   };

@@ -6,7 +6,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## What you can do
 
-- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a bubble on the right, the start of the reply sits under it, the turn's number and time are above, and its tokens, time and model are below.
+- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a blue bubble on the right, the start of the reply sits under it, the turn's number and time are above, and its tokens, time and model are below.
 - **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
@@ -150,6 +150,8 @@ Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the sessio
 | `promptLines` | 4 | Lines of your prompt a row shows (1 to 10) |
 | `replyLines` | 6 | Lines of the reply a row shows (1 to 12) |
 | `agentTurns` | false | Show agent messages |
+| `bubbleColor` | `"blue"` | Your message bubbles: `blue`, `purple`, `teal`, `green`, `orange`, `pink`, `gray`, `plain` (the theme's own grey) or `"#rrggbb"` |
+| `agentBubbleColor` | `"purple"` | Agent message bubbles, from the same choices |
 | `quoteKey` | `"q"` | The quote key: one lowercase letter the pane does not already use |
 | `links` | none | Link rules, below |
 

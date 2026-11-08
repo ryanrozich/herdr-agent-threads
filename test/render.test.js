@@ -795,6 +795,7 @@ test("the command name is quiet: no fill, muted, foreground when bare, tinted on
 
 test("prompt quotes: rows draw a bar line within the budget, the card draws Markdown", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.width = 380;
   draw(v, cx);
   const snap = () => state.shared["threads.debug"].t4;
@@ -865,7 +866,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--links"));
   v.width = 380;
-  v.applyPrefs(JSON.stringify({ links: [
+  v.applyPrefs(JSON.stringify({ bubbleColor: "plain", agentBubbleColor: "plain", links: [
     { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" },
     { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
     { pattern: "(a+)+", url: "https://x.example/$1" },
@@ -1337,6 +1338,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
 
 test("V3b: reply and latest TextViews never scroll, and only the YOU box over 420 px does", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--langs", "--long", "--blocks"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   v.full = new Set(v.current().turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
   views.length = 0;
@@ -2494,4 +2496,49 @@ test("the list measuring its first item does not move a pin's place", async () =
   lastList.draw({ start: 0, end: 1 });
   expect(v.topKey).toBe(`you:${key}`);
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
+});
+
+test("bubbles are blue for the person and purple for agents by default, white text on both, and the panel's swatches change them", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  const you = () => v.bubbleLook(theme, false);
+  const agent = () => v.bubbleLook(theme, true);
+  expect(you().style).toMatchObject({ fill: "#2563EB", ink: "#FFFFFF", outline: false });
+  expect(agent().style).toMatchObject({ fill: "#7C3AED", ink: "#FFFFFF", outline: false });
+  // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
+  // a command and Show more read on it.
+  expect(you().theme).toMatchObject({ foreground: "#FFFFFF", accent: "#FFFFFF", background: "#2563EB" });
+  v.settingsOpen = true;
+  draw(v, cx);
+  expect(v.action("bubbleColor:teal", cx)).toBe(true);
+  expect(v.prefs.bubbleColor).toBe("teal");
+  expect(you().style.fill).toBe("#0F766E");
+  expect(v.action("agentBubbleColor:#abc", cx)).toBe(true);
+  expect(agent().style.fill).toBe("#AABBCC");
+  expect(agent().style.ink).toBe("#111111"); // light fill: dark text
+  draw(v, cx);
+  expect(v.action("bubbleColor:navy", cx)).toBe(false);
+  // Plain: the theme's own look, as before the colours.
+  v.action("bubbleColor:plain", cx);
+  v.action("agentBubbleColor:plain", cx);
+  expect(you().theme).toBe(theme);
+  expect(you().style.fill).toBe("#e6e6e614");
+  expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
+  draw(v, cx);
+  v.action("resetSettings", cx);
+  expect(v.prefs).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "purple" });
+  await new Promise((r) => setTimeout(r, 20));
+  draw(v, cx);
+});
+
+test("a coloured bubble draws the open message as plain text in its ink, quotes behind their bar; plain draws Markdown", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
+  v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
+  const you = () => v.rows().filter((r) => r.kind === "you").map((r) => v.youMd(r));
+  expect(you().length).toBeGreaterThan(0);
+  expect(you().every((y) => y.plain && y.parts)).toBe(true);
+  expect(you().some((y) => y.parts.some((p) => p.quote))).toBe(true);
+  draw(v, cx);
+  v.action("bubbleColor:plain", cx);
+  expect(you().every((y) => !y.plain && y.md != null)).toBe(true);
+  draw(v, cx);
 });
