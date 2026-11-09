@@ -63,9 +63,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 <main>
   <header class="prose">
     <h1>Agent Threads chat look</h1>
-    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, and reading type for messages and replies. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
+    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, and the Pinned column as the way to your pins. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
     <div class="status">
-      <span class="pill"><b>309</b> tests pass</span>
+      <span class="pill"><b>313</b> tests pass</span>
       <span class="pill">Biome, shellcheck, private scan, gitleaks clean</span>
       <span class="pill"><span class="dot" style="background:var(--you)"></span>Your messages: slate</span>
       <span class="pill"><span class="dot" style="background:var(--agent)"></span>Agent messages: plum</span>
@@ -73,6 +73,29 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
     </div>
     <p class="small">Every screenshot is from an isolated Herdr window on the mini, with a made-up session. Click any image to open it full size. Arrow keys step through, Esc closes.</p>
   </header>
+
+  <section>
+    <div class="prose">
+      <h2>The Pinned column</h2>
+      <p>You met the in-pane switch, not the column: the column needed Threads 600 px wide, and the header's list icon did not say what it did. Now the column is the way in.</p>
+      <ul>
+        <li><b>It opens by itself.</b> Your first pin opens the Pinned column beside Threads, and so does opening Threads on a session that already has pins. The keyboard stays in Threads. If you close the column it stays closed until you press <kbd>v</kbd> or click <b>Pinned</b>. Closing Threads closes the column too, and opening Threads again brings both back.</li>
+        <li><b>It fits your widths.</b> The column lists pins, so it is narrow: about a third of the Threads width, 240 to 320 px. It opens whenever Threads is at least 480 px wide, so a 500 px pane counts. Herdr takes the column's room from the terminal side, so Threads keeps its width (the shots at 500, 700 and 960 px below).</li>
+        <li><b>A labelled button.</b> The list icon is now a button that reads <b>Pinned 2</b>, with your pin count. It opens the column, or goes to it when it is open, and has an accent border while the column is open. In the column the button reads <b>All turns</b> and goes back. <kbd>v</kbd> does the same as the button.</li>
+        <li><b>Under 480 px</b> there is no room, so the pins show in the same pane and a note says "Pinned shows here: the Pinned column needs Threads 480 px wide".</li>
+      </ul>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide hero"><img src="shots/p01-column-960.jpg" alt="Threads at 960 px with the Pinned column beside it"><span>Threads at 960 px, the Pinned column at 320 px</span></button>
+      <button class="shot wide"><img src="shots/p07-header-960.jpg" alt="The header: the Pinned 2 button, and All turns in the column"><span>The header: <b>Pinned 2</b>, and <b>All turns</b> in the column</span></button>
+      <button class="shot"><img src="shots/p02-column-700.jpg" alt="Threads at 700 px with the Pinned column"><span>Threads at 700 px, column 252 px</span></button>
+      <button class="shot"><img src="shots/p03-column-500.jpg" alt="Threads at 500 px with the Pinned column"><span>Threads at 500 px, column 240 px</span></button>
+      <button class="shot"><img src="shots/p04-column-700-light.jpg" alt="Threads at 700 px with the Pinned column, light"><span>700 px, light</span></button>
+      <button class="shot"><img src="shots/p05-column-focused.jpg" alt="The Pinned column with the keyboard after v"><span>After <kbd>v</kbd>: the keyboard in the column</span></button>
+      <button class="shot"><img src="shots/p08-reopened.jpg" alt="Threads opened again on a session with pins, the column back beside it"><span>Threads closed and opened again: the column comes back</span></button>
+      <button class="shot"><img src="shots/p06-under-480.jpg" alt="Threads at 440 px showing the pins in the same pane, with the note"><span>440 px: no room, so the pins show in the same pane</span></button>
+    </div>
+  </section>
 
   <section>
     <div class="prose">
@@ -172,7 +195,6 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
     <div class="grid" data-g>
       <button class="shot wide"><img src="shots/l02-wide-900.jpg" alt="The list at 900 px"><span>900 px: bubbles and replies stop at a reading line</span></button>
       <button class="shot"><img src="shots/l03-running.jpg" alt="A turn still running"><span>A turn with no reply yet</span></button>
-      <button class="shot wide"><img src="shots/l04-pinned.jpg" alt="The Pinned pane beside Threads"><span>v: the Pinned pane beside Threads</span></button>
     </div>
   </section>
 
@@ -184,7 +206,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Widen the pane. Replies and bubbles stop at about 70 characters a line.</li>
       <li>Press <kbd>Enter</kbd> on a long turn to open it. Click an image tile to see it full size.</li>
       <li>Press <kbd>,</kbd> for settings. Try Text size, the colours and Your name. <b>Reset to defaults</b> puts back 14 px, slate, plum and You.</li>
-      <li>Press <kbd>v</kbd> for the Pinned view, and <kbd>v</kbd> again to go back.</li>
+      <li>Make Threads at least 480 px wide, select a turn and press <kbd>p</kbd>. The Pinned column opens beside Threads, and the keyboard stays in Threads. Pin a second turn: it shows in the column, and the header button reads <b>Pinned 2</b>.</li>
+      <li>Click <b>Pinned 2</b> or press <kbd>v</kbd> to go to the column. There <kbd>↑</kbd> <kbd>↓</kbd> move between pins, <kbd>Enter</kbd> opens one, and <b>All turns</b> or <kbd>v</kbd> goes back.</li>
+      <li>Close Threads and open it again with <kbd>Cmd-Shift-T</kbd>: the column comes back with it, because the session has pins.</li>
     </ol>
     <p class="small">A settings file saved by an earlier build of this branch holds that build's colours (blue and purple), because a save writes every value. Reset to defaults switches to slate and plum.</p>
   </div>
@@ -197,6 +221,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>An open turn on a coloured bubble shows your message as plain text. Herdr draws Markdown in the theme's text colour whatever the bubble says. Link rules and code spans in your message show only with <code>plain</code>.</li>
       <li>Two departures from the design: the action bar stays as buttons, and the side padding is 16 px rather than 12, to line up with the rest of the pane.</li>
       <li>The README screenshots still show the old look. New images in the repo need your approval first, so they wait until you approve this look.</li>
+      <li>The column opening by itself is the pick for "make the column the main way in". If you would rather it waited for <kbd>v</kbd>, that is a small change, or a setting.</li>
       <li>Quote tracking comes next, as its own PR.</li>
     </ul>
   </section>
