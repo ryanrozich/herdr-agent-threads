@@ -11,7 +11,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi, Cursor and Antigravity have none, see [Which agents it reads](#which-agents-it-reads).
-- **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image larger, under the tiles.
+- **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image larger, under the tiles, and a click on the larger image opens all the message's images in a viewer that fills the Herdr window.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Keep a few turns at hand.** `p` pins a turn, and your pins show in a Pinned column beside the list. See [Pins](#pins).
 - **See background work after a turn.** When a background task wakes the agent after a turn has ended, the turn keeps its reply, and a line under it reads "Updating" with its clock, tool calls and what the agent said last.
@@ -19,7 +19,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## How it works
 
-Press `Cmd-Shift-T` in a Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity terminal. Agent Threads opens to its right, at the width of a reading line (545 px at the default text size), and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
+Press `Cmd-Shift-T` in a Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity terminal. Agent Threads opens to its right, at the width of a reading line (545 px at the default text size), keeps to that width, and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
 
 Agent Threads reads the agent's session on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
 
@@ -133,6 +133,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `v` | Open or go to the Pinned column beside the list, or show the pins in the same pane when it is under 480 px wide |
 | `1` to `5` | Return to that pin |
 | `u` | Undo the last unpin |
+| `w` | Fit Threads to the reading width (and the Pinned column to its width) |
 | `,` | Settings |
 | `Esc` | Back out: search, Select view, settings, the open turn |
 
@@ -163,6 +164,7 @@ Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the sessio
 | `promptLines` | 4 | Lines of your prompt a row shows (1 to 10) |
 | `replyLines` | 6 | Lines of the reply a row shows (1 to 12) |
 | `agentTurns` | false | Show agent messages |
+| `readingWidth` | true | Keep Threads at the reading width: a wider pane is brought back to it |
 | `bubbleColor` | `"slate"` | Your message bubbles: `slate`, `plum`, `blue`, `purple`, `teal`, `green`, `amber`, `rose`, `gray`, `plain` (the theme's own grey) or `"#rrggbb"` |
 | `agentBubbleColor` | `"plum"` | Agent message bubbles, from the same choices |
 | `youName` | `"You"` | The name over your messages, up to 40 characters. The settings panel has a field for it |

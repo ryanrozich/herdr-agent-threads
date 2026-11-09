@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 // The chat look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" };
+const CHAT = { textSize: 14, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You", readingWidth: true };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });

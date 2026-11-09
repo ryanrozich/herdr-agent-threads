@@ -13,6 +13,8 @@
 // bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "plain" is the theme's own look) or "#rrggbb".
 // youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
+// readingWidth: keep the Threads pane at the reading width (true, the default): a pane that
+// opens or is dragged wider is resized back, and the terminal gets the room.
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
@@ -23,7 +25,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You", readingWidth: true });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -65,6 +67,7 @@ export function parseSettings(text) {
       bubbleColor: bubbleValue(raw.bubbleColor) ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       youName: nameValue(raw.youName) ?? DEFAULTS.youName,
+      readingWidth: typeof raw.readingWidth === "boolean" ? raw.readingWidth : DEFAULTS.readingWidth,
     },
     error: null,
   };

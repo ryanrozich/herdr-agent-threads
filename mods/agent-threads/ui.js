@@ -8,7 +8,7 @@ const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
-  "-": "narrower", "=": "wider",
+  "-": "narrower", "=": "wider", w: "fit",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
 // chose it still has the header's pin button.
@@ -173,6 +173,18 @@ export function cutMd(md, n) {
   lines[lines.length - 1] = last;
   const body = lines.join("\n").trimEnd();
   return /^\s*\|/.test(last) ? `${body}\n\n…` : `${body} …`;
+}
+
+// The full-window gallery: an image's box inside the room it has, its shape kept, never
+// larger than its own pixels (a small image stays sharp). Unknown dimensions take the room.
+export function galleryBox(img, roomW, roomH) {
+  const W = Math.max(40, Math.floor(roomW));
+  const H = Math.max(40, Math.floor(roomH));
+  const w = Number(img?.w);
+  const h = Number(img?.h);
+  if (!(w > 0 && h > 0)) return { w: W, h: H };
+  const k = Math.min(1, W / w, H / h);
+  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
 }
 
 export function codeRows(text, per) {
