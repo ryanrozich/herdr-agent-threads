@@ -157,3 +157,14 @@ test("other agents' model names stay as they are", () => {
   expect(shortModel("gpt-5.5-codex")).toBe("gpt-5.5-codex");
   expect(shortModel("glm-5.3-flash-free")).toBe("glm-5.3-flash-free");
 });
+
+test("Amp is known and not read: harnessOf passes it by, unreadOf names it", async () => {
+  const { unreadOf, UNREAD, HARNESS } = await import("../mods/agent-threads/harness.js");
+  expect(harnessOf({ argv: ["/home/dev/.amp/bin/amp"], name: "amp" })).toBe(null);
+  expect(unreadOf({ argv: ["/home/dev/.amp/bin/amp"], name: "amp" })).toBe("amp");
+  expect(unreadOf({ name: "node", argv: ["node", "/x/amp.js"] })).toBe("amp");
+  expect(unreadOf({ name: "zsh" }, { program: { key: "amp" } })).toBe("amp");
+  expect(unreadOf({ argv: ["claude"], name: "claude" })).toBe(null);
+  expect(HARNESS.amp).toBeUndefined();
+  expect(UNREAD.amp.name).toBe("Amp");
+});

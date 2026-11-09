@@ -1,5 +1,6 @@
 #!/bin/sh
-# agent-threads: read-only lookups for finding a terminal's Claude Code, Codex, Pi or Cursor transcript.
+# agent-threads: read-only lookups for finding a terminal's Claude Code, Codex, Pi, Cursor or
+# Antigravity transcript.
 #   locate.sh find <claude-home> <id>                the transcript for a session id (real path)
 #   locate.sh folder <projects> <slug> [cwd-json]    the project folder for a working directory
 #                                                    (with cwd-json, also scans for a folder
@@ -19,6 +20,8 @@
 #   locate.sh cursor-list <folder>                   a project's transcripts, as list prints them
 #   locate.sh cursor-peers <pid> <folder>            how many other Cursor processes run there
 #   locate.sh cursor-label <file>                    a Cursor chat's first prompt
+#   locate.sh agy-dir                                the folder Antigravity's CLI keeps its data in
+#   locate.sh agy-open <pid>                         the conversation folder an agy process has open
 #   locate.sh etime <pid>                            how long a process has run (ps -o etime)
 # Exits 1 when nothing is found. Reads only; writes nothing.
 set -u
@@ -145,9 +148,25 @@ cursor-label)
   LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
     | jq -Rc -f "$(dirname "$0")/extract-cursor.jq" 2>/dev/null \
     | jq -r 'select(.k == "p") | .t | gsub("\\s+"; " ") | .[0:100]' 2>/dev/null ;;
+agy-dir)
+  printf '%s\n' "${AGY_DATA_DIR:-$HOME/.gemini/antigravity-cli}" ;;
+agy-open)
+  # agy keeps its conversation's folder open (<data>/brain/<id>), so the path names the
+  # conversation. After a new conversation the folder with the newest transcript wins. MCP
+  # servers it starts run as children.
+  pids="$1 $(pgrep -P "$1" 2>/dev/null | tr '\n' ' ')"
+  # shellcheck disable=SC2086 # the pids are meant to split
+  dirs=$(for p in $pids; do lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n -E 's#^(.*/brain/[0-9A-Za-z_-]{8,})(/.*)?$#\1#p' || true; done | sort -u)
+  [ -n "$dirs" ] || exit 1
+  printf '%s\n' "$dirs" | while IFS= read -r d; do
+    [ -d "$d" ] || continue
+    f="$d/.system_generated/logs/transcript_full.jsonl"
+    if [ -f "$f" ]; then t=$(date -r "$f" +%s); else t=$(date -r "$d" +%s); fi
+    printf '%s %s\n' "$t" "$d"
+  done | sort -rn | head -n 1 | cut -d ' ' -f 2- ;;
 etime)
   ps -o etime= -p "$1" 2>/dev/null ;;
 *)
-  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|pi-dir|pi-peers|pi-label|cursor-dir|cursor-open|cursor-find|cursor-list|cursor-peers|cursor-label|etime ..." >&2
+  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|pi-dir|pi-peers|pi-label|cursor-dir|cursor-open|cursor-find|cursor-list|cursor-peers|cursor-label|agy-dir|agy-open|etime ..." >&2
   exit 2 ;;
 esac

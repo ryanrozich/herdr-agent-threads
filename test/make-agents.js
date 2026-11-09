@@ -1,10 +1,11 @@
-// Writes the synthetic Codex, OpenCode, Pi and Cursor sessions staged for the README's "beside
-// each agent" screenshot: the made-up acme-web project of make-hero.js, a few turns each, in the
-// line shapes the tests use. Nothing here comes from a real session.
+// Writes the synthetic Codex, OpenCode, Pi, Cursor and Antigravity sessions staged for the
+// README's "beside each agent" screenshot: the made-up acme-web project of make-hero.js, a few
+// turns each, in the line shapes the tests use. Nothing here comes from a real session.
 // Usage: bun test/make-agents.js <out folder> <cwd> <startISO>
 // Writes <out>/rollout-<time>-<id>.jsonl (Codex), <out>/opencode.db (OpenCode 2.x; the pane reads
-// "<out>/opencode.db#ses_0003acme"), <out>/<time>_<id>.jsonl (Pi) and
-// <out>/agent-transcripts/<id>/<id>.jsonl (Cursor), and prints the four paths.
+// "<out>/opencode.db#ses_0003acme"), <out>/<time>_<id>.jsonl (Pi),
+// <out>/agent-transcripts/<id>/<id>.jsonl (Cursor), <out>/brain/<id>/.system_generated/logs/
+// transcript_full.jsonl (Antigravity). Prints the five paths the pane's transcript takes.
 import { Database } from "bun:sqlite";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -130,4 +131,31 @@ writeFileSync(cursorFile, [
   cline2({ type: "turn_ended", status: "success" }),
 ].join(""));
 
-console.log([codexFile, `${ocPath}#${SID}`, piFile, cursorFile].join("\n"));
+// ---- Antigravity: a conversation's transcript ----
+const agyId = "00000000-0000-4000-8000-0000000000a9";
+const agyDir = join(out, "brain", agyId, ".system_generated", "logs");
+mkdirSync(agyDir, { recursive: true });
+const A0 = T0 + 2400000;
+let step = 0;
+const astep = (o, ms) => `${JSON.stringify({ step_index: step++, created_at: iso(A0 + ms).replace(/\.\d+Z$/, "Z"), status: "DONE", ...o })}\n`;
+const auser = (text, ms, model) => astep({ source: "USER_EXPLICIT", type: "USER_INPUT",
+  content: `<USER_REQUEST>\n${text}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: ${iso(A0 + ms)}.\n</ADDITIONAL_METADATA>${model
+    ? `\n<USER_SETTINGS_CHANGE>\nThe user changed setting \`Model Selection\` from None to ${model}. No need to comment on this change if the user doesn't ask about it.\n</USER_SETTINGS_CHANGE>` : ""}` }, ms);
+const aplan = (ms, content, calls, [i, o, cr]) => astep({ source: "MODEL", type: "PLANNER_RESPONSE", ...(content ? { content } : {}),
+  input_tokens: i, output_tokens: o, cache_read_tokens: cr, ...(calls ? { tool_calls: calls.map((name) => ({ name, args: {} })) } : {}) }, ms);
+const aout = (ms) => astep({ source: "MODEL", type: "GENERIC", content: "(tool output)" }, ms);
+const agyFile = join(agyDir, "transcript_full.jsonl");
+writeFileSync(agyFile, [
+  auser("Why does the search box lose its text when I go back?", 0, "Gemini 3.5 Flash (Medium)"),
+  aplan(2000, null, ["grep_search"], [11400, 70, 0]),
+  aout(4000),
+  aplan(6000, null, ["view_file"], [2300, 90, 9300]),
+  aout(7000),
+  aplan(12000, "The search page keeps its text in component state, which resets when the page mounts again on back.\n\nKeeping it in the URL (`?q=`) fixes both back and reload:\n\n- `SearchBox` reads `q` from the URL on mount\n- typing updates `q` with `replace`, so it adds no history entry\n\nShall I make the change?", null, [2400, 160, 9600]),
+  auser("Yes, do it", 60000),
+  aplan(63000, null, ["replace_file_content"], [2600, 210, 10100]),
+  aout(64000),
+  aplan(68000, "Done. `SearchBox` now keeps the query in `?q=`, and going back restores it.", null, [2800, 40, 10600]),
+].join(""));
+
+console.log([codexFile, `${ocPath}#${SID}`, piFile, cursorFile, agyFile].join("\n"));

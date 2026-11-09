@@ -6,7 +6,8 @@
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
 // layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
 // between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
-// it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
+// it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
+// Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
 //
@@ -31,7 +32,7 @@ import {
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -45,6 +46,15 @@ import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
+// An agent's mark on its tile (MARKS in harness.js), size px square, or null for an agent
+// with none. A one-colour mark is drawn white; a full-colour one as it is.
+function mark(key, size) {
+  const m = MARKS[key];
+  if (!m) return null;
+  const glyph = Math.round(size * (key === "claude" ? 0.7 : 0.75));
+  return div().flex_none().size(size).rounded(Math.max(3, Math.round(size / 4))).bg(m.tile).flex().items_center().justify_center()
+    .child(m.tint ? svg(ICON(m.icon)).size(glyph).text_color("#ffffff") : image(ICON(m.icon)).size(glyph));
+}
 // Pasted images, decoded by image.sh into the mod's data folder (kept across installs, never
 // in the repo, trimmed to 200 MB). image() takes paths from the app home.
 const IMG_DIR = `data/${MOD}/images`;
@@ -107,7 +117,6 @@ const MONO_EM = 0.6; // width of a mono character, in em
 const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
-const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
@@ -220,6 +229,9 @@ async function resolve(address, claudeHome, current = null) {
   const shell = SHELLS.has(cmd) || SHELLS.has(base(fg.name));
   const app = pane?.app === "claude-code";
   const program = pane?.program;
+  // Amp: the pane knows it and does not read it (UNREAD says why).
+  const unread = !claude && !app && !harnessOf(fg, pane) ? unreadOf(fg, pane) : null;
+  if (unread) return { kind: "unsupported", name: UNREAD[unread].name, key: unread };
   if (!claude && !app && !harnessOf(fg, pane) && program?.agent && program.key !== "claude" && !shell)
     return { kind: "unsupported", name: program.name ?? cmd };
   const pid = fg.pid ?? null;
@@ -234,6 +246,7 @@ async function resolve(address, claudeHome, current = null) {
   if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "cursor") return resolveCursor({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
+  if (harness === "antigravity") return resolveAntigravity({ argv, pid, cwd, cmd });
   const who = { claude, live, pid, cwd };
   tried.program = { what: "Program in pane", detail: `${claude ? `claude${version ? ` ${version}` : ""}` : cmd || "?"}${pid ? ` · pid ${pid}` : ""}`, ok: claude };
   const fromArgv = argvSession(argv);
@@ -408,11 +421,28 @@ async function resolveCursor({ argv, pid, cwd, cwds, cmd }, current) {
   return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, openStep, step] };
 }
 
+// An agy process keeps its conversation's folder open (<data>/brain/<id>), which names it
+// exactly; its transcript is written with the first prompt. Else --conversation <id>.
+async function resolveAntigravity({ argv, pid, cwd, cmd }) {
+  const who = { harness: "antigravity", claude: false, live: true, pid, cwd };
+  const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
+  const brain = pid ? agyBrain(await locate("agy-open", String(pid))) : null;
+  const openStep = { what: "Conversation the process has open", detail: brain ? brain.id.slice(0, 8) : "none yet", ok: Boolean(brain) };
+  const data = brain?.data ?? (await locate("agy-dir")) ?? `${home()}/.gemini/antigravity-cli`;
+  const id = brain?.id ?? agyArgv(argv).id;
+  if (!id) return { kind: "pending", id: null, via: null, ...who, tried: [program, openStep], watch: `${data}/brain` };
+  const file = agyFile(data, id);
+  const via = brain ? "open file" : "argv";
+  const written = (await listFolder(dirname(file))).some((f) => f.path.endsWith("/transcript_full.jsonl"));
+  if (!written) return { kind: "pending", id, via, ...who, tried: [program, openStep], watch: `${data}/brain` };
+  return { kind: "found", id, file, via, ...who, guess: false, tried: [program, openStep] };
+}
+
 // What a session's file takes to read one chunk.
 function readArgs(file, offset, chunk) {
   const h = harnessOfFile(file);
   if (h === "opencode") return [SCRIPT("opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
-  if (h === "codex" || h === "pi" || h === "cursor") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), h];
+  if (h === "codex" || h === "pi" || h === "cursor" || h === "antigravity") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), h];
   return [SCRIPT("extract.sh"), file, String(offset), String(chunk)];
 }
 
@@ -1054,7 +1084,7 @@ export default class Threads extends View {
       // The record names a session whose transcript is not written yet: keep what is shown
       // and watch for that file.
       this.watchFor = r.id;
-      // A Codex, OpenCode, Pi or Cursor process that has written nothing yet says so only by not having
+      // A Codex, OpenCode, Pi, Cursor or Antigravity process that has written nothing yet says so only by not having
       // a session: the 1 s timer looks again (poll).
       if (!cur) {
         this.res = r;
@@ -1340,10 +1370,11 @@ export default class Threads extends View {
     else if (this.lookPolled()) this.resolve(cx);
   }
 
-  // Codex, OpenCode, Pi and Cursor report no status here and name a new session (/new) nowhere the pane is
-  // told about, so a pane on one of them looks again every few seconds while it runs.
+  // Codex, OpenCode, Pi, Cursor and Antigravity report no status here and name a new session
+  // (/new) nowhere the pane is told about, so a pane on one of them looks again every few seconds
+  // while it runs.
   lookPolled() {
-    if (this.pinned || !this.res?.live || !["codex", "opencode", "pi", "cursor"].includes(this.res.harness)) return false;
+    if (this.pinned || !this.res?.live || !["codex", "opencode", "pi", "cursor", "antigravity"].includes(this.res.harness)) return false;
     const at = Date.now();
     if (at - (this.lastPoll ?? 0) < POLL_MS) return false;
     this.lastPoll = at;
@@ -2852,13 +2883,12 @@ export default class Threads extends View {
         : agent.key !== "claude" ? agent.name : null;
     if (other) return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
       .when(this.res.kind !== "unsupported" && this.res.kind !== "remote", (el) => el.tooltip(this.badgeTip())
-        .child(svg(ICON("square-terminal")).size(13).text_color(t.muted)))
+        .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted)))
       .when(this.res.kind === "remote", (el) => el.child(svg(ICON("cpu")).size(12).text_color(t.muted)))
       .child(div().max_w(120).truncate().text_size(12).text_color(t.foreground).child(other));
     return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
       .tooltip(this.badgeTip())
-      .child(div().flex_none().size(14).rounded(3).bg(CLAUDE).flex().items_center().justify_center()
-        .child(svg(ICON("claude-mark")).size(10).text_color("#ffffff")))
+      .child(mark("claude", 14))
       .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
   }
 
@@ -3156,17 +3186,20 @@ export default class Threads extends View {
     if (this.choosing) return this.chooser(t);
     if (r.kind === "resolving" && !s) return this.loading(t, "Finding the session…", null);
     if (r.kind === "remote") return this.empty(t, "messages", "Remote sessions aren't read yet", `${this.terminal} runs on another machine. This version reads sessions on this computer only.`);
-    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex, OpenCode, Pi and Cursor sessions. Other terminal panes are left alone.", null,
-      [h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
-        .child(div().flex_none().size(12).rounded(3).bg(CLAUDE).flex().items_center().justify_center().child(svg(ICON("claude-mark")).size(8).text_color("#ffffff")))
-        .child("Claude Code"),
-      ...[HARNESS.codex, HARNESS.opencode, HARNESS.pi, HARNESS.cursor].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
-        .child(svg(ICON("square-terminal")).size(12).flex_none())
-        .child(h.name))]);
+    // Amp: why it is not read, in one line, and the README section that says more.
+    if (r.kind === "unsupported" && UNREAD[r.key]) {
+      const u = UNREAD[r.key];
+      return this.empty(t, mark(u.key, 36) ?? "messages", `${u.name} isn't supported`, u.why, "Threads reads only the sessions agents keep on this computer.",
+        [this.button(t, "th-why-unread", `Why ${u.name} isn't supported`, () => { exec("open", [u.url]).catch(() => null); }, "info")]);
+    }
+    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity sessions. Other terminal panes are left alone.", null,
+      [HARNESS.claude, HARNESS.codex, HARNESS.opencode, HARNESS.pi, HARNESS.cursor, HARNESS.antigravity].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
+        .child(mark(h.key, 12))
+        .child(h.key === "claude" ? "Claude Code" : h.name)), true);
     if (r.kind === "gone" && !s) return this.empty(t, "circle-x", "Terminal closed", `${this.terminal} is gone, and nothing was read from it.`, null, this.closeButtons(t));
     if (r.kind === "error" && !s) return this.empty(t, "alert", "Something went wrong", r.error);
     if (r.kind === "none" && !s) return this.notFound(t, r);
-    const noTurns = () => this.empty(t, "messages", "No turns yet", `Send a prompt to ${this.agent().cmd} in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
+    const noTurns = () => this.empty(t, mark(this.agent().key, 36) ?? "messages", "No turns yet", `Send a prompt to ${this.agent().cmd} in ${this.terminal}. Each prompt and its final reply will show up here.`, "Threads only reads the session. It never types into the terminal.");
     if (r.kind === "pending" && !s) return noTurns();
     if (s && !s.loaded && s.error && s.turns.length === 0)
       return this.empty(t, "alert", "Couldn't read this session", s.error, null, [this.retryButton(t), ...this.closeButtons(t)]);
@@ -3289,13 +3322,17 @@ export default class Threads extends View {
     return me ? [this.button(t, "th-close-empty", label, () => run("pane.close", { pane: me.pane }), "x")] : [];
   }
 
-  empty(t, icon, title, body, foot, buttons = []) {
+  // icon: a Lucide icon's name, or an element (an agent's mark). wrap: the buttons wrap onto
+  // more lines.
+  empty(t, icon, title, body, foot, buttons = [], wrap = false) {
     return v_flex().flex_1().min_h(0).p(20).gap(10).items_center().justify_center()
-      .child(div().size(36).rounded(9).bg(t.raised).flex().items_center().justify_center().child(svg(ICON(icon)).size(18).text_color(t.muted)))
+      .child(typeof icon === "string"
+        ? div().size(36).rounded(9).bg(t.raised).flex().items_center().justify_center().child(svg(ICON(icon)).size(18).text_color(t.muted))
+        : icon)
       .child(div().text_size(14).font_semibold().text_color(t.foreground).child(title))
       .child(div().max_w(300).text_size(12.5).text_color(t.muted).text_center().child(body))
       .when(Boolean(foot), (el) => el.child(div().max_w(300).text_size(11.5).text_color(t.dim).text_center().child(foot)))
-      .when(buttons.length > 0, (el) => el.child(h_flex().mt(4).gap(6).children(buttons)));
+      .when(buttons.length > 0, (el) => el.child(h_flex().mt(4).gap(6).when(wrap, (row) => row.max_w(340).flex_wrap().justify_center()).children(buttons)));
   }
 
   notFound(t, r) {
@@ -3307,7 +3344,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).text_size(14).font_semibold().child(`No session found for ${this.terminal}`)))
       .child(div().text_size(12).text_color(t.muted).child(r.claude
         ? "Claude runs in this pane, but no transcript could be matched."
-        : `No Claude Code, Codex, OpenCode, Pi or Cursor process runs in ${this.terminal}, and no transcript was matched for its folder.`))
+        : `No Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity process runs in ${this.terminal}, and no transcript was matched for its folder.`))
       .child(v_flex().rounded(8).bg(t.chrome).border_1().border_color(t.border).overflow_hidden()
         .child(div().px(10).pt(9).pb(7).text_size(10.5).font_semibold().text_color(t.dim).child("WHAT WE TRIED"))
         .children(steps.map((x) => h_flex().px(10).py(8).gap(8).items_start().border_t(1).border_color(t.border)
