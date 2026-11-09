@@ -2439,6 +2439,12 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
   w.key(keyEv("escape"), cx2);
   expect(w.view).toBe("pinned");
+  // Threads closes: the column closes too, once.
+  log = [];
+  state.panes = state.panes.filter((p) => p.pane !== "p2");
+  w.poll(cx2);
+  w.poll(cx2);
+  expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
   state.props = props;
 });
 

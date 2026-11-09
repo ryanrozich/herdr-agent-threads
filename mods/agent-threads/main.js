@@ -5,7 +5,7 @@
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
 // layout.resize (to give that column its width), pane.focus (the Terminal button, v
-// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane). The only programs
+// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
 // it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
@@ -1525,8 +1525,19 @@ export default class Threads extends View {
 
   // The Pinned column is the way in: Threads opening with pins opens it once, when there is
   // room. Closing the column keeps it closed for this pane's life, until v opens it again.
+  // In the column: it closes when its Threads pane closes.
   autoPinned(cx) {
-    if (this.pinnedPane) return;
+    if (this.pinnedPane) {
+      // The column goes with its Threads pane: once the main pane has been seen, its closing
+      // closes the column, so opening Threads again brings both back together.
+      const main = this.mainPane();
+      if (main) this.mainSeen = true;
+      else if (this.mainSeen && !this.closing) {
+        const me = this.me();
+        if (me) { this.closing = true; run("pane.close", { pane: me.pane }); }
+      }
+      return;
+    }
     const open = Boolean(this.pinnedPaneOpen());
     if (this.pinColOpen && !open && !this.splitAsk) this.pinColClosed = true;
     this.pinColOpen = open;
