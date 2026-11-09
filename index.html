@@ -77,6 +77,8 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
   <section>
     <div class="prose">
       <h2>The Pinned column</h2>
+      <p><b>New today: the column is called out.</b> Both panes carried the same "agent-threads" title, and the column's header said "Pinned · 1 of 5" in small grey text, so the two looked alike. Now the column's header leads with a pin and <b>Pinned</b> as a heading, then the count, "2 of 5". The header has an accent bar along its top and a light accent tint, so the column reads as a different view from the list. The same heading shows when the pins take over the Threads pane under 480 px, before the agent badge.</p>
+      <p>The pane titles cannot change. Herdr titles every mod pane with the mod's name, and gives a mod no command to rename its pane, so both still read "agent-threads". The heading inside the pane carries the name instead. Renaming the mod itself to "Threads" would change it for everyone and break existing installs and commands, so I left it.</p>
       <p>You met the in-pane switch, not the column: the column needed Threads 600 px wide, and the header's list icon did not say what it did. Now the column is the way in.</p>
       <ul>
         <li><b>It opens by itself.</b> Your first pin opens the Pinned column beside Threads, and so does opening Threads on a session that already has pins. The keyboard stays in Threads. If you close the column it stays closed until you press <kbd>v</kbd> or click <b>Pinned</b>. Closing Threads closes the column too, and opening Threads again brings both back.</li>
@@ -86,7 +88,12 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       </ul>
     </div>
     <div class="grid" data-g>
-      <button class="shot wide hero"><img src="shots/p01-column-960.jpg" alt="Threads at 960 px with the Pinned column beside it"><span>Threads at 960 px, the Pinned column at 320 px</span></button>
+      <button class="shot wide"><img src="shots/q00-header-today-vs-new.jpg" alt="The column header before (top) and called out (bottom)"><span>The column header: before (top), and with the pin, heading and accent (bottom)</span></button>
+      <button class="shot wide hero"><img src="shots/q01-column-960.jpg" alt="Threads at 960 px with the called-out Pinned column"><span>960 px: the column with its heading and accent</span></button>
+      <button class="shot"><img src="shots/q03-column-500.jpg" alt="Threads at 500 px with the called-out Pinned column"><span>500 px, column 240 px: the heading and "2 of 5" fit</span></button>
+      <button class="shot"><img src="shots/q04-column-700-light.jpg" alt="The called-out Pinned column at 700 px, light"><span>700 px, light</span></button>
+      <button class="shot"><img src="shots/q05-under-480.jpg" alt="Under 480 px the pins in the same pane, with the Pinned heading before the badge"><span>440 px: the same heading, before the badge</span></button>
+      <button class="shot wide"><img src="shots/p01-column-960.jpg" alt="Threads at 960 px with the Pinned column beside it"><span>Before: Threads at 960 px, the Pinned column at 320 px</span></button>
       <button class="shot wide"><img src="shots/p07-header-960.jpg" alt="The header: the Pinned 2 button, and All turns in the column"><span>The header: <b>Pinned 2</b>, and <b>All turns</b> in the column</span></button>
       <button class="shot"><img src="shots/p02-column-700.jpg" alt="Threads at 700 px with the Pinned column"><span>Threads at 700 px, column 252 px</span></button>
       <button class="shot"><img src="shots/p03-column-500.jpg" alt="Threads at 500 px with the Pinned column"><span>Threads at 500 px, column 240 px</span></button>
@@ -270,6 +277,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Press <kbd>Enter</kbd> on a long turn to open it. Click an image tile to see it full size.</li>
       <li>Press <kbd>,</kbd> for settings. Try Text size, the colours and Your name. <b>Reset to defaults</b> puts back 14 px, slate, plum and You.</li>
       <li>Make Threads at least 480 px wide, select a turn and press <kbd>p</kbd>. The Pinned column opens beside Threads, and the keyboard stays in Threads. Pin a second turn: it shows in the column, and the header button reads <b>Pinned 2</b>.</li>
+      <li>The column's header starts with a pin and <b>Pinned</b>, then "2 of 5", with an accent bar on top, unlike the Threads header beside it.</li>
       <li>Click <b>Pinned 2</b> or press <kbd>v</kbd> to go to the column. There <kbd>↑</kbd> <kbd>↓</kbd> move between pins, <kbd>Enter</kbd> opens one, and <b>All turns</b> or <kbd>v</kbd> goes back.</li>
       <li>Close Threads and open it again with <kbd>Cmd-Shift-T</kbd>: the column comes back with it, because the session has pins.</li>
       <li>Close Threads and the column. Open Threads with <kbd>Cmd-Shift-T</kbd>: it opens about 545 px wide. Drag it wider: the turns stay at the reading width, centred.</li>
