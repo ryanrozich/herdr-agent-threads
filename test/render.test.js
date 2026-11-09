@@ -2328,7 +2328,7 @@ test("the pins show in the Pinned view at every width; the header and footer say
   expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
   const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
-  expect(pinned().slice(1, 6)).toEqual(["list", "Pinned · 5 (v)", "pinned", false, "5"]);
+  expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
   expect(v.footerHints().map((x) => x[1])).toContain("pin");
   expect(v.footerHints().map((x) => x.join(" "))).toContain("v pinned");
   v.sel = k[0];
@@ -2341,7 +2341,7 @@ test("the pins show in the Pinned view at every width; the header and footer say
   expect(r).toBeUndefined();
 });
 
-test("v in a pane under 600 px shows Pinned in the same pane: pins in pin order, Enter opens one at its place, Esc goes back", async () => {
+test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order, Enter opens one at its place, Esc goes back", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const k = keys();
   for (const i of [3, 0, 5]) { v.sel = k[i]; v.action("pin", cx); }
@@ -2350,8 +2350,9 @@ test("v in a pane under 600 px shows Pinned in the same pane: pins in pin order,
   v.key(keyEv("v"), cx);
   expect(v.view).toBe("pinned");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
-  expect(toastText(v)).toBe("Pinned shows here: the pane is too narrow to split");
+  expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
   expect(v.headerText()).toBe("Pinned · 3 of 5");
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Back to all turns (v)", "pinned", true, null, "All turns"]);
   const rows = v.rows();
   expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
   expect(v.footerHints().map((x) => x.join(" "))).toEqual(expect.arrayContaining(["↑↓ next pin", "p unpin", "1-5 go to pin", "v all turns"]));
@@ -2380,30 +2381,34 @@ test("v in a pane under 600 px shows Pinned in the same pane: pins in pin order,
   draw(v, cx);
 });
 
-test("v in a pane from 600 px splits a Pinned pane beside it, kept apart from the main pane; v moves between them", async () => {
-  const { v, cx, keys } = await pinPane("--extra", "6");
-  v.sel = keys()[1];
-  v.action("pin", cx);
+test("v in a pane from 480 px splits the Pinned column beside it, about a third wide, kept apart from the main pane; v moves between them", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
-  draw(v, cx);
+  draw(v, cx); // no pins yet, so the column does not open by itself
   expect(v.me().pane).toBe("p2");
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   log = [];
   v.key(keyEv("v"), cx);
   expect(v.view).toBe("all");
   const split = log.find(([, n]) => n === "pane.split");
   expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "pinned" } });
-  // The split applies: the new pane goes in its own map and gets half the width.
+  // The split applies: the new pane goes in its own map and gets the column's width. v
+  // asked for it, so the keyboard stays in the column.
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   v.settleSplit();
   expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
-  expect(log.find(([, n]) => n === "layout.resize")[2]).toEqual({ id: "p3", px: 350 });
-  // v again, with the Pinned pane open, focuses it instead of splitting a second one.
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 252 }]]);
+  // The header's Pinned button says the column is open, and v or a click focuses it.
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
   log = [];
   v.key(keyEv("v"), cx);
   expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
   // The Pinned pane: a second panel with view "pinned", which finds its own pane and shows the pins.
+  v.sel = v.turnKeys(v.rows())[1];
+  v.action("pin", cx);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]); // the column is open already
   await saved(); // the main pane's pins.json, which the Pinned pane reads
   const props = state.props;
   state.props = { ...props, view: "pinned" };
@@ -2416,7 +2421,16 @@ test("v in a pane from 600 px splits a Pinned pane beside it, kept apart from th
   expect(w.view).toBe("pinned");
   expect(w.me().pane).toBe("p3");
   expect(w.rows().filter((r) => r.kind === "turn").length).toBe(1);
-  expect(w.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Back to all turns (v)");
+  // The pins read from the top, pin 1 first, with no spacer to push them to the bottom.
+  w.listH = 900;
+  w.rowsKey = null;
+  expect(w.rows()[0].kind).not.toBe("spacer");
+  // Its header: no badge, the pin button and "All turns", with room for "Pinned · 1 of 5" at 240 px.
+  w.width = 240;
+  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pin", null], ["th-pinned", "All turns"]]);
+  expect(w.headerButtons()[1][2]).toBe("Back to Threads, all turns (v)");
+  expect(w.headerLayout().badge).toBe(0);
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("Pinned · 1 of 5".length * 6.6));
   draw(w, cx2);
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
   // v in the Pinned pane goes back to the main pane; Esc does not leave the Pinned view there.
@@ -2426,6 +2440,84 @@ test("v in a pane from 600 px splits a Pinned pane beside it, kept apart from th
   w.key(keyEv("escape"), cx2);
   expect(w.view).toBe("pinned");
   state.props = props;
+});
+
+test("the first pin opens the Pinned column when there is room and keeps the keyboard in Threads; a closed column stays closed", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  v.width = 960;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  log = [];
+  v.sel = k[2];
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Pinned #\d+ · in the Pinned column · press 1 to come back$/);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+  // A second pin while the split is on its way asks for no second column.
+  v.sel = k[3];
+  v.key(keyEv("p"), cx);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  log = [];
+  v.settleSplit();
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 320 }], ["pane.focus", { pane: "p2" }]]);
+  draw(v, cx);
+  // The owner closes the column: the next pin does not open it again, and v still does.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  draw(v, cx);
+  log = [];
+  v.sel = k[4];
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Pinned #\d+ · press 3 to come back$/);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  v.key(keyEv("v"), cx);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+});
+
+test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
+  const first = await pinPane("--extra", "6");
+  log = [];
+  first.v.sel = first.keys()[1];
+  first.v.action("pin", first.cx); // at 380 px: no column
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  const file = await saved();
+  for (const [width, px] of [[479, null], [498, 240]]) {
+    log = [];
+    recordFiles[PINS] = JSON.stringify(file);
+    const w = new Threads();
+    const cx2 = makeCx();
+    state.shared = { "threads.byTerminal": { t4: { pane: "p2" } } };
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    w.init(state.props, cx2);
+    w.width = width;
+    await settle(w);
+    await new Promise((r) => setTimeout(r, 20));
+    draw(w, cx2);
+    draw(w, cx2);
+    expect(w.pinnedList().length).toBe(1);
+    expect(log.filter(([, n]) => n === "pane.split").length).toBe(px ? 1 : 0);
+    if (!px) { expect(w.view).toBe("all"); continue; }
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    w.settleSplit();
+    expect(log.filter(([, n]) => n === "layout.resize")[0][2]).toEqual({ id: "p3", px });
+    expect(log.at(-1)).toEqual(["run", "pane.focus", { pane: "p2" }]);
+  }
+});
+
+test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, under 440 px latest gives way, and under 300 px agents and pin too", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  for (const [width, text] of [[260, 60], [380, 110], [500, 160], [640, 300]]) {
+    v.width = width;
+    const ids = v.headerButtons().map((b) => b[0]);
+    expect(ids.includes("th-agents")).toBe(width >= 300);
+    expect(ids.includes("th-pin")).toBe(width >= 300);
+    expect(ids.includes("th-latest")).toBe(width >= 440);
+    expect(v.headerButtons().find((b) => b[0] === "th-pinned")[6]).toBe("Pinned 1");
+    expect(v.headerLayout().text).toBeGreaterThanOrEqual(text);
+    draw(v, cx);
+  }
 });
 
 test("a reply block is one list item however tall, so a drag can cross its paragraphs", async () => {

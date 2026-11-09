@@ -3,9 +3,9 @@
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
-// other commands it runs are pane.split (to open itself, and v's Pinned pane beside it),
-// layout.resize (to give that pane half the width), pane.focus (the Terminal button, v
-// between the two panes, and before the quote's paste) and pane.close (its own pane). The only programs
+// other commands it runs are pane.split (to open itself, and the Pinned column beside it),
+// layout.resize (to give that column its width), pane.focus (the Terminal button, v
+// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane). The only programs
 // it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
@@ -37,7 +37,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP,
+  thumbSize, tileRow, TILE_GAP, pinColumn, PIN_SPLIT_MIN, headerButtonWidth,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -67,8 +67,6 @@ const MAP_KEY = "threads.byTerminal";
 // shared("threads.pinnedByTerminal"): terminal -> its Pinned pane (v), kept apart from the
 // map above so Cmd-Shift-T still finds the main Threads pane.
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
-// Under this width v shows Pinned in the same pane: two panes would each be under 300 px.
-const SPLIT_MIN = 600;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
@@ -536,7 +534,7 @@ export default class Threads extends View {
       // v1 feedback: what each row and card part shows, as text.
       detail: rows.map((r) => this.rowDetail(r)).filter(Boolean),
       counts: this.sessions.length ? this.counts() : null,
-      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}|${b[2]}`),
+      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
@@ -741,6 +739,7 @@ export default class Threads extends View {
   readPins(cx) {
     cx.spawn(async (cx) => {
       const text = await readTextFile(pinsPath(appHome())).catch(() => null);
+      this.pinsRead = true;
       if (this.pinSaving || text === this.pinRaw) return;
       this.pinRaw = text;
       const { store, error } = parsePins(text);
@@ -848,7 +847,9 @@ export default class Threads extends View {
     rec.pins.push(pin);
     this.pinChanged(k, cx);
     const i = this.pinnedList().findIndex((p) => p.pin === pin);
-    this.say(`Pinned #${turn.n} · press ${i + 1} to come back`, "pin", cx, 3000);
+    // A pin opens the Pinned column when there is room and it was not closed this pane's life.
+    const col = !this.pinnedPane && !this.pinnedPaneOpen() && !this.pinColClosed && this.view === "all" && this.openPinned(cx, true);
+    this.say(`Pinned #${turn.n} · ${col ? "in the Pinned column · " : ""}press ${i + 1} to come back`, "pin", cx, 3000);
     return true;
   }
 
@@ -1304,6 +1305,7 @@ export default class Threads extends View {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
     this.settleSplit();
+    this.autoPinned(cx);
     this.lookRepo(cx);
     const t = this.term();
     const now = { turn: t?.turn ?? null, status: t?.status ?? null, there: Boolean(t), fg: this.pane()?.program?.key ?? null };
@@ -1372,9 +1374,10 @@ export default class Threads extends View {
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
-      // A short list sits at the bottom, by the newest turn, like the chat.
+      // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
+      // reads from the top: pin 1 first.
       const total = sizes.reduce((x, y) => x + y, 0);
-      if (this.listH > 0 && rows.length && total < this.listH - 1) {
+      if (this.view !== "pinned" && this.listH > 0 && rows.length && total < this.listH - 1) {
         rows = [{ kind: "spacer", key: "spacer", h: this.listH - total }, ...rows];
         sizes = [this.listH - total, ...sizes];
       }
@@ -1479,29 +1482,35 @@ export default class Threads extends View {
     if (this.sel) this.scrollTo = { key: this.sel, how: "center" };
   }
 
-  // v: the Pinned pane beside this one, from SPLIT_MIN wide; narrower, the switch in this
-  // pane. In the Pinned pane, v goes back to the main pane.
-  openPinned(cx) {
+  // v: the Pinned column beside this pane, from PIN_SPLIT_MIN (480 px) wide; narrower, the
+  // switch in this pane, with a toast that says why. In the Pinned pane, v goes back to the
+  // main pane. auto: opened by a pin or by Threads opening with pins, so no switch when there
+  // is no room, and the keyboard stays in this pane.
+  openPinned(cx, auto = false) {
     if (this.pinnedPane) {
       const main = this.mainPane();
       if (main) run("pane.focus", { pane: main.pane });
       return true;
     }
     const open = this.pinnedPaneOpen();
-    if (open) { run("pane.focus", { pane: open.pane }); return true; }
-    if (this.view === "pinned") { this.setView("all"); return true; }
+    if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
+    if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    if (!me || this.width < SPLIT_MIN) {
+    const px = pinColumn(this.width);
+    if (!me || !px) {
+      if (auto) return false;
       this.setView("pinned");
-      if (me) this.say("Pinned shows here: the pane is too narrow to split", "pin", cx, 3000);
+      if (me) this.say(`Pinned shows here: the Pinned column needs Threads ${PIN_SPLIT_MIN} px wide`, "pin", cx, 3500);
       return true;
     }
-    this.splitAsk = { before: panes().map((p) => p.pane), half: Math.floor(this.width / 2), until: Date.now() + 4000 };
+    if (this.splitAsk) return true;
+    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
     run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
   }
 
-  // Once the split has applied: the new pane goes in the Pinned map and gets half the width.
+  // Once the split has applied: the new pane goes in the Pinned map and gets the column's
+  // width. Opened by a pin or by Threads opening, the keyboard goes back to Threads.
   settleSplit() {
     const a = this.splitAsk;
     if (!a) return;
@@ -1509,8 +1518,21 @@ export default class Threads extends View {
     if (made) {
       this.splitAsk = null;
       remember(this.terminal, made.pane, PIN_MAP_KEY);
-      run("layout.resize", { id: made.pane, px: a.half });
+      run("layout.resize", { id: made.pane, px: a.px });
+      if (a.back) run("pane.focus", { pane: a.back });
     } else if (Date.now() > a.until) this.splitAsk = null;
+  }
+
+  // The Pinned column is the way in: Threads opening with pins opens it once, when there is
+  // room. Closing the column keeps it closed for this pane's life, until v opens it again.
+  autoPinned(cx) {
+    if (this.pinnedPane) return;
+    const open = Boolean(this.pinnedPaneOpen());
+    if (this.pinColOpen && !open && !this.splitAsk) this.pinColClosed = true;
+    this.pinColOpen = open;
+    if (this.pinAutoDone || !this.width || !this.current()?.loaded || !this.pinsRead) return;
+    this.pinAutoDone = true;
+    if (!open && !this.pinColClosed && this.pinnedList().length) this.openPinned(cx, true);
   }
 
   // Counts for the header, the Agents button and the empty state, kept until the turns,
@@ -2618,6 +2640,9 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
+  // Under 440 px the header's badge drops its word and the latest button gives way (End still
+  // acts), so the text keeps room beside the labelled Pinned button.
+  compact() { return this.width < 440; }
   // Herdr's zoom (settings.json, 0.5 to 3). It scales every length the panel draws, the item
   // sizes given to v_virtual_list included, while on_size_change and mouse positions come in
   // zoomed px. So the panel works in design px (as AGENTS.md says to write sizes), divides
@@ -2641,34 +2666,55 @@ export default class Threads extends View {
         .text_size(9).font_semibold().text_color(on ? t.background : t.muted).child(count)));
   }
 
-  // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on, count].
+  // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on,
+  // count, label]. A labelled button shows its label instead of an icon. Under 440 px the
+  // latest button gives way, and under 300 px the agents and pin buttons too (End, a and p
+  // still act), so the turn count keeps its room beside "Pinned 2". The Pinned pane keeps
+  // only its own two.
   headerButtons() {
     const c = this.counts();
-    const showAgents = c.agentAll > 0 || this.prefs.agentTurns;
-    const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null]];
+    const pins = this.pinnedList().length;
+    const pinned = Boolean(this.sel && this.isPinned(this.sel));
+    const n = this.sel ? this.findTurn(this.sel)?.n : null;
+    const pinBtn = ["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null, null];
+    if (this.pinnedPane) return [pinBtn, ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
+    const narrow = this.narrow();
+    const showAgents = (c.agentAll > 0 || this.prefs.agentTurns) && !narrow;
+    const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null]];
     if (showAgents) {
       const on = Boolean(this.prefs.agentTurns);
       out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
-        countLabel(on ? c.agentAll : c.hiddenAll)]);
+        countLabel(on ? c.agentAll : c.hiddenAll), null]);
     }
-    const pinned = Boolean(this.sel && this.isPinned(this.sel));
-    const n = this.sel ? this.findTurn(this.sel)?.n : null;
-    out.push(["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null]);
-    const pins = this.pinnedList().length;
-    out.push(["th-pinned", "list", this.pinnedPane ? "Back to all turns (v)" : this.view === "pinned" ? "All turns (v)" : `Pinned${pins ? ` · ${pins}` : ""} (v)`,
-      "pinned", this.view === "pinned" || Boolean(this.pinnedPaneOpen()), pins && !this.pinnedPane ? String(pins) : null]);
-    out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null]);
-    out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null]);
+    if (!narrow) out.push(pinBtn);
+    const label = `Pinned${pins ? ` ${pins}` : ""}`;
+    const col = this.pinnedPaneOpen();
+    out.push(this.view === "pinned" ? ["th-pinned", null, "Back to all turns (v)", "pinned", true, null, "All turns"]
+      : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.width) ? "Open the Pinned column beside Threads (v)"
+        : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
+    if (!this.compact()) out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null, null]);
+    out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
+  }
+
+  // A labelled header button: the Pinned control reads "Pinned 2", not an icon to guess at.
+  labelButton(t, id, label, tip, onClick, on = false) {
+    return div().id(id).flex_none().h(24).px(7).flex().items_center().rounded(5).cursor_pointer().border_1()
+      .border_color(on ? t.accent : t.border).text_size(12).text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.raised))
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(tip)
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(label);
   }
 
   // Estimated header layout at the pane width (no window has to draw to read it): the
   // badge, the room left for the text, and the buttons, inside 10 px padding and 8 px gaps.
   headerLayout() {
-    const buttons = this.headerButtons().length;
-    const badge = this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.narrow() ? 28 : 28 + 5 + 38;
-    const text = Math.round(this.width - 20 - badge - 8 - buttons * (24 + 8));
-    return { width: Math.round(this.width), badge, text, buttons, rightGutter: 10 };
+    const list = this.headerButtons();
+    const badge = this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38;
+    const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
+    const text = Math.round(this.width - 20 - (badge ? badge + 8 : 0) - room);
+    return { width: Math.round(this.width), badge, text, buttons: list.length, rightGutter: 10 };
   }
 
   badge(t) {
@@ -2687,7 +2733,7 @@ export default class Threads extends View {
       .tooltip(this.badgeTip())
       .child(div().flex_none().size(14).rounded(3).bg(CLAUDE).flex().items_center().justify_center()
         .child(svg(ICON("claude-mark")).size(10).text_color("#ffffff")))
-      .when(!this.narrow(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
+      .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
   }
 
   // "Reading t4 · session 7f3a1b2c · 1.2M tokens · cache 97.1%": which terminal and
@@ -2735,18 +2781,21 @@ export default class Threads extends View {
     const q = this.query.trim();
     return v_flex().flex_none().border_b(1).border_color(t.border)
       .child(h_flex().h(40).px(10).gap(8).items_center()
-        .child(this.badge(t))
+        .when(!this.pinnedPane, (el) => el.child(this.badge(t)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(this.headerText()))
         .when(this.debug && Boolean(this.timing) && !this.narrow(), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)))
-        .children(this.headerButtons().map(([id, icon, tip, act, on, count]) => this.iconButton(t, id, icon, tip, (_e, cx) => {
-          if (act === "filterToggle") {
-            this.filtering = !this.filtering;
-            this.settingsOpen = false;
-            if (this.filtering) this.input.focus();
-            else { this.input.set_value(""); this.query = ""; this.h.focus(); }
-          } else this.action(act, cx);
-          cx.notify();
-        }, on, count))))
+        .children(this.headerButtons().map(([id, icon, tip, act, on, count, label]) => {
+          const click = (_e, cx) => {
+            if (act === "filterToggle") {
+              this.filtering = !this.filtering;
+              this.settingsOpen = false;
+              if (this.filtering) this.input.focus();
+              else { this.input.set_value(""); this.query = ""; this.h.focus(); }
+            } else this.action(act, cx);
+            cx.notify();
+          };
+          return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count);
+        })))
       .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(h_flex().mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
         .border_1().border_color(this.filtering ? t.accent : t.border).bg(t.chrome)

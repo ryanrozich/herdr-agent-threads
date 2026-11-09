@@ -13,7 +13,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi and Cursor have none, see [Which agents it reads](#which-agents-it-reads).
 - **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image full size.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
-- **Keep a few turns at hand.** `p` pins a turn and `v` shows your pins in a Pinned pane beside the list. See [Pins](#pins).
+- **Keep a few turns at hand.** `p` pins a turn, and your pins show in a Pinned column beside the list. See [Pins](#pins).
 - **Choose how much each row shows.** A row shows 4 lines of your prompt and 6 of the reply before "Show more". Settings change both.
 
 ## How it works
@@ -119,7 +119,7 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `a` | Show or hide agent messages |
 | `i` | Explain the stats on an open turn |
 | `p` | Pin or unpin the selected turn |
-| `v` | Show the pins: a Pinned pane beside the list, or the same pane when it is under 600 px wide |
+| `v` | Open or go to the Pinned column beside the list, or show the pins in the same pane when it is under 480 px wide |
 | `1` to `5` | Return to that pin |
 | `u` | Undo the last unpin |
 | `,` | Settings |
@@ -131,9 +131,10 @@ Partway through a long reply and a newer one needs you? Press `p`. The turn gets
 
 - Up to five pins. A sixth is refused: unpin one first.
 - A pinned turn stays in its place in the list, with a pin icon and its number above the bubble.
-- `v` opens a Pinned pane to the right of the list with only the pinned turns, in pin order. In the Pinned pane `v` goes back to the list, `↑` `↓` move between pins, and `p` unpins. Under 600 px there is no room to split, so the list itself shows the pins until you press `v` again.
+- The Pinned column opens to the right of the list with only the pinned turns, in pin order. It opens by itself with your first pin, and when Threads opens on a session that has pins, as long as Threads is at least 480 px wide. It takes about a third of the Threads width, 240 to 320 px, and Herdr takes that room from the panes beside it, the terminal included. The keyboard stays in the list. If you close the column it stays closed until you press `v` or click **Pinned** again.
+- In the column, `v` or **All turns** goes back to the list, `↑` `↓` move between pins, and `p` unpins. Under 480 px there is no room for the column, so the list itself shows the pins until you press `v` again, and a note says so.
 - `p` again unpins. `u` undoes it, in the same place and with your reading place.
-- The header's pin button and the pin on a turn's top line do the same with the mouse. The header's list button opens the Pinned view.
+- The header's pin button and the pin on a turn's top line do the same with the mouse. The header's **Pinned 2** button (the count is your pins) opens or goes to the Pinned column.
 - Search leaves the pins alone. Press `Enter` or click a result to give the keys back to the list, so `p` and the digits work with the search kept. Returning to a turn the search hides shows that one turn.
 - Pins belong to one session and survive closing the pane, restarting Herdr and resuming. A forked session starts with none. A pinned turn that no longer exists shows in the Pinned view as "no longer in this session", and a click unpins it.
 

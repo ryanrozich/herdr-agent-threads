@@ -8,6 +8,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -432,4 +433,15 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
     const ink = cardLabelColor(c);
     expect(ink === c.foreground || contrast(ink, c.raised) >= 4.5).toBe(true);
   }
+});
+
+test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, leaving Threads at least 240", () => {
+  expect(PIN_SPLIT_MIN).toBe(480);
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 240], [600, 240], [700, 252], [800, 288], [960, 320], [1600, 320]]) {
+    expect(pinColumn(w)).toBe(px);
+    if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+  }
+  expect(pinColumn(Number.NaN)).toBe(null);
+  expect(headerButtonWidth(null)).toBe(24);
+  expect(headerButtonWidth("Pinned 2")).toBe(69);
 });

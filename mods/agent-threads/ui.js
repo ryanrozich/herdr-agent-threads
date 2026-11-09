@@ -1105,6 +1105,24 @@ export function headPinHit(x, w) {
   return x != null && w != null && x >= w - 54 && x <= w - 33;
 }
 
+// The Pinned column that v (or the first pin) splits off a Threads pane. It lists pins, so
+// it can be narrow: about a third of the pane, 240 to 320 px. A pane from PIN_SPLIT_MIN
+// (480 px, so a pane set to 500 that measures a pixel or two less still counts) gets the
+// column; narrower, Pinned shows in the same pane. Herdr takes the column's room from the
+// pane's neighbours as well as from Threads. Returns the column's width, or null.
+export const PIN_COL = Object.freeze([240, 320]);
+export const PIN_MAIN_MIN = 240;
+export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
+export function pinColumn(width) {
+  if (!(width >= PIN_SPLIT_MIN)) return null;
+  return Math.max(PIN_COL[0], Math.min(PIN_COL[1], Math.round(width * 0.36)));
+}
+
+// A header button's width: a 24 px icon, or a labelled one (7 px padding a side, 12 px text).
+export function headerButtonWidth(label) {
+  return label ? 14 + Math.ceil(String(label).length * 6.6) + 2 : 24;
+}
+
 // ---- colour -----------------------------------------------------------------------------
 
 function rgb(color) {
