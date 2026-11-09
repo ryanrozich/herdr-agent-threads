@@ -1,0 +1,160 @@
+<title>PR 11 shots review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for the words, wide galleries of tall pane shots under each heading. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1e24; --muted: #5a6170; --line: #dde1e8;
+  --you: #47648F; --agent: #715C91; --link: #2f5fb8; --chip: #eef1f6;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #47648F; --agent: #715C91; --link: #7ea6f2; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #47648F; --agent: #715C91; --link: #7ea6f2; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; }
+main { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.prose { max-width: 68ch; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+a { color: var(--link); }
+code, kbd { font-family: var(--mono); font-size: 0.88em; background: var(--chip); border-radius: 4px; padding: 1px 5px; }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font-size: 13px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--panel); }
+.pill b { font-weight: 600; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+.steps { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.steps pre { margin: 6px 0 0; font-family: var(--mono); font-size: 13px; overflow-x: auto; background: var(--chip); border-radius: 6px; padding: 8px 10px; }
+section { display: flex; flex-direction: column; gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-items: start; }
+.grid .wide { grid-column: span 2; }
+@media (max-width: 440px) { .grid { grid-template-columns: 1fr 1fr; } .grid .wide { grid-column: span 2; } }
+.shot { all: unset; cursor: zoom-in; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shot img { width: 100%; height: 380px; object-fit: cover; object-position: top; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); display: block; }
+.shot span { font-size: 13px; color: var(--muted); line-height: 1.4; }
+.shot:focus-visible img { outline: 3px solid var(--link); outline-offset: 2px; }
+.notes li { color: var(--fg); }
+.small { font-size: 13px; color: var(--muted); }
+#lb { position: fixed; inset: 0; z-index: 50; background: rgba(8,10,14,0.92); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+#lb.on { display: flex; }
+#lb .frame { flex: 1; min-height: 0; width: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+#lb img { max-width: 100%; height: auto; border-radius: 6px; }
+#lb .bar { display: flex; gap: 10px; align-items: center; color: #e6e8ec; font-size: 14px; flex-wrap: wrap; justify-content: center; }
+#lb button { font: inherit; color: #e6e8ec; background: #2a2f38; border: 1px solid #3a404b; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+#lb button:focus-visible { outline: 2px solid #4f86f0; }
+@media (prefers-reduced-motion: no-preference) { .shot img { transition: transform .15s ease; } .shot:hover img { transform: translateY(-2px); } }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+.grid .hero { grid-column: 1 / -1; }
+.hero img { height: auto; max-height: none; object-fit: contain; max-width: 980px; }
+table { border-collapse: collapse; font-size: 14px; width: 100%; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.prose h3 { font-size: 17px; margin: 28px 0 8px; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+</style>
+
+<main>
+  <header class="prose">
+    <h1>PR 11 shots</h1>
+    <p>The README screenshots that show what PR 11 added: the day strip, the image viewer and the reading width. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/13">PR 13</a>. Nothing merges until you say so.</p>
+    <div class="status">
+      <span class="pill"><b>4</b> images: 2 replaced, 2 new</span>
+      <span class="pill">Listing image unchanged</span>
+      <span class="pill">Privacy scan, with OCR on every changed image: clean</span>
+    </div>
+    <p class="small">Every shot is from an isolated Herdr window on the mini with main's mod and the made-up acme-web session, nothing retouched. Click any image to open it full size. Arrow keys step through, Esc closes.</p>
+  </header>
+
+  <section>
+    <div class="prose"><h2>The day strip</h2>
+      <p><code>days.png</code> used to open at the top, where the strip is empty. The new one opens turn 3, so the list scrolls into the first day and Saturday's pill sits in its own strip above the list, with Yesterday's band further down.</p>
+      <p class="small">New caption: "A session that runs over several days gets a band for each day, with its turn count. While you scroll through a day, its pill stays in a strip of its own above the list."</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/t-days.jpg" alt="Today&#x27;s days shot"><span>Today: the top of the list</span></button>
+      <button class="shot"><img src="shots/n-days.jpg" alt="The new days shot with the pill in its strip"><span>New: Saturday&#x27;s pill in its strip, turn 3 open</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose"><h2>The image viewer</h2>
+      <p><code>images.png</code> is the same scene as before. The line under the larger image now reads "click for full window". <code>viewer.png</code> is new: the viewer over the whole window, on a turn with two images. The second shot below is the same viewer after Right, for this page only.</p>
+      <p class="small">New captions: "A pasted image is a tile over your message. In an open turn a click on the tile shows it larger, and a click on that opens the viewer." and "The image viewer fills the Herdr window. Left and Right step through the message's images, and Esc closes it."</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/t-images.jpg" alt="Today&#x27;s images shot"><span>Today: click to shrink</span></button>
+      <button class="shot"><img src="shots/n-images.jpg" alt="The new images shot"><span>New: click for full window</span></button>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/n-viewer.jpg" alt="The image viewer on image 1 of 2"><span>New viewer.png: Image 1 of 2</span></button>
+      <button class="shot"><img src="shots/n-viewer2.jpg" alt="The image viewer on image 2 of 2"><span>Not in the README: after Right, Image 2 of 2</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose"><h2>The reading width</h2>
+      <p>Every other shot was retaken with Threads opened at 960 px and left to come back to 545 px by itself. The listing image, panel, open turn, light, search, agent messages and quote match today's images pixel for pixel, so they stay, and herdr.dev keeps its image. <code>width.png</code> is new: with Keep to reading width off, a 960 px pane keeps its turns in a centred column and shows the Fit button in the header. The second shot, after Fit, is for this page only.</p>
+      <p class="small">New caption: "With Keep to reading width off, a wider pane keeps its turns in a centred column, and the Fit button (or w) brings it back to 545 px."</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/n-width.jpg" alt="A 960 px Threads pane with the Fit button"><span>New width.png: 960 px, setting off, Fit button by Pinned</span></button>
+      <button class="shot"><img src="shots/n-fit.jpg" alt="The same pane after Fit, at 545 px"><span>Not in the README: after Fit, 545 px</span></button>
+    </div>
+    <div class="grid" data-g style="grid-template-columns:1fr">
+      <button class="shot"><img src="shots/n-preview.jpg" alt="The listing image, unchanged"><span>Unchanged: the listing image, as retaken from 960 px</span></button>
+    </div>
+  </section>
+
+  <section class="prose notes">
+    <h2>Notes for review</h2>
+    <ul>
+      <li>Pinned and Updating also came out a few pixels different (antialiasing, and the Updating clock), with nothing you could see, so they stay.</li>
+      <li><code>test/make-hero.js</code> gains a <code>pair</code> flag that gives turn 5 two images. Without it the transcript is unchanged.</li>
+      <li>The four changed images stay unpinned in <code>test/scan-approved.txt</code> until you approve them, so the privacy scan reads them with OCR. It passes.</li>
+      <li>If width.png is more than the README needs, I can drop it and keep the other three.</li>
+    </ul>
+  </section>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="frame"><img alt=""></div>
+  <div class="bar"><button id="lb-prev" aria-label="Previous">←</button><span class="cap"></span><button id="lb-next" aria-label="Next">→</button><button id="lb-close">Close (Esc)</button></div>
+</div>
+
+<script>
+(() => {
+  const shots = [...document.querySelectorAll(".shot")];
+  const lb = document.getElementById("lb");
+  const img = lb.querySelector("img");
+  const cap = lb.querySelector(".cap");
+  let i = 0, opener = null;
+  const show = (n) => {
+    i = (n + shots.length) % shots.length;
+    const s = shots[i].querySelector("img");
+    img.src = s.src; img.alt = s.alt;
+    cap.textContent = `${i + 1} of ${shots.length} · ${shots[i].querySelector("span").textContent}`;
+    lb.querySelector(".frame").scrollTop = 0;
+  };
+  const open = (n) => { opener = document.activeElement; show(n); lb.classList.add("on"); document.getElementById("lb-close").focus(); };
+  const close = () => { lb.classList.remove("on"); opener?.focus?.(); };
+  shots.forEach((b, n) => b.addEventListener("click", () => open(n)));
+  document.getElementById("lb-prev").addEventListener("click", () => show(i - 1));
+  document.getElementById("lb-next").addEventListener("click", () => show(i + 1));
+  document.getElementById("lb-close").addEventListener("click", close);
+  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.classList.contains("frame")) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (!lb.classList.contains("on")) return;
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowRight") show(i + 1);
+    else if (e.key === "ArrowLeft") show(i - 1);
+  });
+})();
+</script>
