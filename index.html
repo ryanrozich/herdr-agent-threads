@@ -64,9 +64,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 <main>
   <header class="prose">
     <h1>Agent Threads chat look</h1>
-    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, the Pinned column as the way to your pins, the opening width, collapsed replies as Markdown, stronger day bands with the day shown while you scroll, and the turn header. The first section has what changed in this update: the header over your bubble, keys to resize the Pinned column, wrapped code blocks, and a fix for finished turns that showed as Working. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
+    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, the Pinned column as the way to your pins, the opening width, collapsed replies as Markdown, stronger day bands with the day shown while you scroll, and the turn header. The first section has what changed in this update: the header over your bubble, keys to resize the Pinned column, wrapped code blocks, a fix for finished turns that showed as Working, and a fix for long replies that vanished on Show full reply. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
     <div class="status">
-      <span class="pill"><b>326</b> tests pass</span>
+      <span class="pill"><b>329</b> tests pass</span>
       <span class="pill">Biome, shellcheck, private scan, gitleaks clean</span>
       <span class="pill"><span class="dot" style="background:var(--you)"></span>Your messages: slate</span>
       <span class="pill"><span class="dot" style="background:var(--agent)"></span>Agent messages: plum</span>
@@ -78,7 +78,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
   <section>
     <div class="prose">
       <h2>New in this update</h2>
-      <p>Four changes since the Pinned callout, all on PR 8.</p>
+      <p>Five changes since the Pinned callout, all on PR 8.</p>
       <h3>The header sits over your bubble</h3>
       <p>On your turns, "#146 · You" now starts at your bubble's left edge, and the time ends at its right edge, so the header is exactly as wide as the bubble. A short bubble that is too narrow for the number, the name and the time drops the name first, then keeps the number and the time. An agent's turns keep the header at the reply's left edge. This holds open and closed, and in the Pinned column.</p>
     </div>
@@ -117,6 +117,20 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
     <div class="compare" data-g>
       <button class="shot"><img src="shots/u01-wake-before.jpg" alt="Before: a finished turn showing Working and no reply"><span>Before: Working, the reply hidden, a 28-hour clock</span></button>
       <button class="shot"><img src="shots/u02-wake-new.jpg" alt="New: the reply kept with an Updating line"><span>New: the reply kept, and the Updating line</span></button>
+    </div>
+    <div class="prose">
+      <h3>Long replies draw in full, and prices no longer break bold</h3>
+      <p>Show full reply emptied your Codex reply because Herdr's Markdown view draws nothing for a block longer than 4,096 characters. I measured it on 0.1.14: a block of 4,090 characters draws, and one of 4,099 is 0 px tall. Your reply is 4,804 characters, and Threads drew it whole as one block, so it vanished. The preview was shorter, so it drew. Threads now draws long Markdown as several blocks, split at paragraphs and never inside a code block. This covers replies, your own long messages, background updates and collapsed rows. If a reply block still comes back with no height, it shows as plain text with a note saying so, instead of vanishing.</p>
+      <p>The asterisks came from the dollar signs. Herdr reads text between two dollar signs as maths and shows it as written, so "**4,180 map look-ups at $0.009 each**" kept its asterisks when another price came earlier in the paragraph. Dollar signs outside code are now escaped, and they still show as "$".</p>
+      <p>The preview now stops at the end of a paragraph when one ends near the cut, so it never ends on an empty list item. A cut inside a bold span closes the bold.</p>
+      <p>One thing a mod cannot change: Herdr 0.1.14 draws bold text at the same weight as the rest, in the test window at least. The asterisks are gone, but "Total" in bold looks like the other rows.</p>
+      <p>The shots use a made-up reply with the same shape as yours: over 4,096 characters, a table of prices, bold spans between prices, and a numbered list. I also checked a copy of your reply's layout with every letter replaced, on the mini only: it vanished before the fix and draws in full after.</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/e02-long-before-whole.jpg" alt="Before: after Show full reply the reply is gone"><span>Before: Show full reply, and the reply is gone</span></button>
+      <button class="shot"><img src="shots/e04-long-new-whole.jpg" alt="New: the whole reply drawn"><span>New: the whole reply, asterisks gone</span></button>
+      <button class="shot"><img src="shots/e01-long-before-open.jpg" alt="Before: the preview with asterisks"><span>Before: the preview, with literal asterisks</span></button>
+      <button class="shot"><img src="shots/e03-long-new-open.jpg" alt="New: the preview ends after a whole list item"><span>New: the preview ends after a whole item</span></button>
     </div>
   </section>
 
@@ -333,6 +347,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Look at one of your turns: "#7 · You" starts at your bubble's left edge and the time ends at its right edge. Narrow the pane to about 280 px: a short bubble's header drops "You" before the time.</li>
       <li>With the Pinned column open, press <kbd>=</kbd> twice, then <kbd>-</kbd> twice, in either pane. The column widens and narrows, Threads gives and takes the same room, and the terminal stays the same width.</li>
       <li>Open a reply with a long shell command in a code block. It wraps and starts at the left, with no slide, and its label is the language or nothing.</li>
+      <li>Open a long reply (yours from the Codex session will do) and click Show full reply. The whole reply shows, and bold spans between prices have no asterisks.</li>
       <li>Next time a background task wakes an agent after its turn has ended, the turn keeps its reply and shows an "Updating" line under it with its own clock and tool count.</li>
     </ol>
     <p class="small">A settings file saved by an earlier build of this branch holds that build's colours (blue and purple), because a save writes every value. Reset to defaults switches to slate and plum.</p>
