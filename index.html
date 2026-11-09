@@ -63,9 +63,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 <main>
   <header class="prose">
     <h1>Agent Threads chat look</h1>
-    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, and the Pinned column as the way to your pins. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
+    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, the Pinned column as the way to your pins, the opening width, collapsed replies as Markdown, stronger day bands with the day shown while you scroll, and the turn header. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
     <div class="status">
-      <span class="pill"><b>313</b> tests pass</span>
+      <span class="pill"><b>321</b> tests pass</span>
       <span class="pill">Biome, shellcheck, private scan, gitleaks clean</span>
       <span class="pill"><span class="dot" style="background:var(--you)"></span>Your messages: slate</span>
       <span class="pill"><span class="dot" style="background:var(--agent)"></span>Agent messages: plum</span>
@@ -94,6 +94,69 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <button class="shot"><img src="shots/p05-column-focused.jpg" alt="The Pinned column with the keyboard after v"><span>After <kbd>v</kbd>: the keyboard in the column</span></button>
       <button class="shot"><img src="shots/p08-reopened.jpg" alt="Threads opened again on a session with pins, the column back beside it"><span>Threads closed and opened again: the column comes back</span></button>
       <button class="shot"><img src="shots/p06-under-480.jpg" alt="Threads at 440 px showing the pins in the same pane, with the note"><span>440 px: no room, so the pins show in the same pane</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Opening width, and a wider pane</h2>
+      <p><kbd>Cmd-Shift-T</kbd> now opens Threads at the reading width: about 545 px at 14 px text (479 at 12, 676 at 18), so the pane is as wide as a line of text and no wider. If the window has less room, Threads takes what there is. This happens once when the pane opens. After that the width is yours.</p>
+      <p>If you widen it, the text stays capped at the reading line. I tried the turns at the left of the pane and centred, and picked <b>centred</b>. At the left, your bubbles sit at the far right of a 960 px pane, 400 px from the replies they belong to. Centred, each message stays next to its reply, and the empty room is split evenly. The header and keys bar still span the pane.</p>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/w01-opened-545.jpg" alt="Threads opened with Cmd-Shift-T at 545 px"><span>Opened with <kbd>Cmd-Shift-T</kbd>: 545 px</span></button>
+      <button class="shot wide"><img src="shots/w07-left-vs-centre.jpg" alt="At 960 px: turns at the left against turns centred"><span>960 px: at the left (left) against centred (right)</span></button>
+      <button class="shot"><img src="shots/w02-left-960.jpg" alt="960 px with the turns at the left"><span>960 px, at the left</span></button>
+      <button class="shot"><img src="shots/w03-centre-960.jpg" alt="960 px with the turns centred"><span>960 px, centred (the pick)</span></button>
+      <button class="shot wide"><img src="shots/w06-centre-with-column.jpg" alt="Centred turns with the Pinned column beside"><span>Centred, with the Pinned column at its own narrow width</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Collapsed replies as Markdown</h2>
+      <p>A collapsed reply used to be flattened to one run of text, so lists, headings and code ran together ("Tax is rounded once · Six new cases in totals.test.ts [code]"). It now draws as Markdown, the same way an open reply does, and stops at a whole line instead of mid-word. A list keeps its bullets, a heading stays a heading, and a code span stays code. If a paragraph alone is longer than the preview, it stops at a word with "…". Show more opens the rest.</p>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide"><img src="shots/r03-today-vs-new.jpg" alt="Collapsed replies: today against Markdown"><span>Today (left) against Markdown (right), 545 px</span></button>
+      <button class="shot"><img src="shots/r01-collapsed-today.jpg" alt="Collapsed replies today, flattened"><span>Today: flattened</span></button>
+      <button class="shot"><img src="shots/r02-collapsed-markdown.jpg" alt="Collapsed replies as Markdown"><span>New: Markdown, cut at a whole line</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Day bands, and the day while you scroll</h2>
+      <p>The day divider was a grey word on a hairline. It is now a filled pill, "<b>Yesterday</b> · Sat 7 Nov · 2 turns", with the day in the text colour, so a change of day shows when you scroll past it.</p>
+      <p>While you scroll, the day of the top turn shows in the same pill at the top of the list. It hides when a day band is at the top, or right under it, so two pills never stack.</p>
+      <p>Herdr limits how close this gets to a true sticky header. A mod is not told the scroll position, only which turn is drawn first. So the pill changes when the top turn changes, up to about a tenth of a second after the scroll, and it does not slide as the next band pushes it up. It covers the top line of text under it, as any pinned header does.</p>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide"><img src="shots/d05-today-vs-new.jpg" alt="Day bands: today against the filled pill"><span>Today (left) against the new band (right)</span></button>
+      <button class="shot"><img src="shots/d04-sticky-day.jpg" alt="The day pill at the top while scrolled into Friday"><span>Scrolled into Friday: the day pill at the top</span></button>
+      <button class="shot"><img src="shots/d03-days-light.jpg" alt="Day bands in the light theme"><span>Light theme</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Turn header</h2>
+      <p>Your idea: name and turn number at the left, time at the right. A separate design pass compared it with today's header in both bubble directions at 280, 545 and 960 px, and recommended your layout with one change: the number goes first. The header now reads "<b>#7</b> · You" at the left and "7:33 AM" at the right, for your turns and an agent's, open or closed. The number is one step brighter than the name.</p>
+      <ul>
+        <li><b>Scanning.</b> The numbers make one column down the left edge and the times one down the right. Today the number moves with the length of the time, and jumps to the other side on a turn an agent sent.</li>
+        <li><b>One shape.</b> Today an open turn drops the name, and a turn an agent sent puts everything on the left. Now every header has the same layout.</li>
+        <li><b>Widths.</b> At 280 px the bubbles nearly fill the row, so both layouts look alike. At 960 px the turns sit in the centred reading column, so the header looks the same as at 545.</li>
+        <li><b>Against it.</b> On a short message of yours, "You" sits at the left, far from your bubble at the right. Putting the number first makes it read as a turn header rather than a name tag. If it still reads wrong, the next step is to drop "You" on your turns and name only other agents.</li>
+      </ul>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide"><img src="shots/h00-today-vs-new-545.jpg" alt="Turn header at 545 px: today against the new one"><span>545 px: today (left) against new (right)</span></button>
+      <button class="shot"><img src="shots/h01-today-280.jpg" alt="Header today at 280 px"><span>280 px, today</span></button>
+      <button class="shot"><img src="shots/h02-new-280.jpg" alt="New header at 280 px"><span>280 px, new</span></button>
+      <button class="shot"><img src="shots/h05-today-960.jpg" alt="Header today at 960 px"><span>960 px, today</span></button>
+      <button class="shot"><img src="shots/h06-new-960.jpg" alt="New header at 960 px"><span>960 px, new</span></button>
+      <button class="shot"><img src="shots/h07-today-agent.jpg" alt="A turn an agent sent, header today"><span>A turn an agent sent, today</span></button>
+      <button class="shot"><img src="shots/h08-new-agent.jpg" alt="A turn an agent sent, new header"><span>A turn an agent sent, new</span></button>
     </div>
   </section>
 
@@ -209,6 +272,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Make Threads at least 480 px wide, select a turn and press <kbd>p</kbd>. The Pinned column opens beside Threads, and the keyboard stays in Threads. Pin a second turn: it shows in the column, and the header button reads <b>Pinned 2</b>.</li>
       <li>Click <b>Pinned 2</b> or press <kbd>v</kbd> to go to the column. There <kbd>↑</kbd> <kbd>↓</kbd> move between pins, <kbd>Enter</kbd> opens one, and <b>All turns</b> or <kbd>v</kbd> goes back.</li>
       <li>Close Threads and open it again with <kbd>Cmd-Shift-T</kbd>: the column comes back with it, because the session has pins.</li>
+      <li>Close Threads and the column. Open Threads with <kbd>Cmd-Shift-T</kbd>: it opens about 545 px wide. Drag it wider: the turns stay at the reading width, centred.</li>
+      <li>Look at a collapsed reply with a list or a heading: it shows as Markdown and stops at a whole line. Each header reads "#7 · You" at the left and the time at the right.</li>
+      <li>Scroll up past a day band, such as Yesterday. The band is a filled pill, and the day you are in shows at the top of the list while you scroll.</li>
     </ol>
     <p class="small">A settings file saved by an earlier build of this branch holds that build's colours (blue and purple), because a save writes every value. Reset to defaults switches to slate and plum.</p>
   </div>
@@ -222,6 +288,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Two departures from the design: the action bar stays as buttons, and the side padding is 16 px rather than 12, to line up with the rest of the pane.</li>
       <li>The README screenshots still show the old look. New images in the repo need your approval first, so they wait until you approve this look.</li>
       <li>The column opening by itself is the pick for "make the column the main way in". If you would rather it waited for <kbd>v</kbd>, that is a small change, or a setting.</li>
+      <li>Your messages read "Ryan Rozich" in one screenshot, not "You". Nothing in the mod reads your name: the default is "You", so that label came from a saved Your name in settings. <b>Reset to defaults</b>, or clearing the field, gives "You" back.</li>
+      <li>The open turn's header used to differ from a closed one's: it dropped the name and put the number with the time. The new header is the same open or closed.</li>
+      <li>The shots of today's header come from a review-only action, <code>debugHeader:right</code>, that draws the old header on the new build. It can go before merge.</li>
       <li>Quote tracking comes next, as its own PR.</li>
     </ul>
   </section>
