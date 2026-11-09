@@ -96,6 +96,8 @@ const COUNTS_LINE = 16; // the counts line's explicit line height (11 px mono)
 // the editor to inherit; an editor that keeps its own shorter line leaves a few px of the
 // box's own background below the code, never a cut line (R3-2).
 const CODE_LINE = 20;
+// The Updating line under a done turn while a background task has woken the agent.
+const WAKE_H = 24;
 // The code box's borders and the editor's own padding inside it, left and right.
 const CODE_PAD = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
@@ -1407,15 +1409,19 @@ export default class Threads extends View {
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
       this.fitKey = fit;
-      this.liveShown = Boolean(lr?.live);
+      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake");
     }
     return this.rowsMemo;
   }
 
-  // Whether turn ti of session si is the live newest turn (Working or Needs you).
-  isLive(s, si, ti, status) {
-    const turn = s.turns[ti];
-    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && (!turn.done || (s.followActive && status === "working"));
+  // Whether turn ti of session si is the live newest turn (Working or Needs you): only one
+  // still owed its reply. A done turn the agent woke up for again (a background task's
+  // notification) keeps its reply, with an Updating line under it (waking).
+  isLive(s, si, ti, _status) {
+    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && !s.turns[ti].done;
+  }
+  waking(s, si, ti, status) {
+    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && s.turns[ti].done && s.followActive && status === "working";
   }
 
   buildRows(status) {
@@ -1461,6 +1467,7 @@ export default class Threads extends View {
         if (live) out.push({ ...item, kind: "wrow", shape: this.shape(turn, true) });
         else if (this.open.has(key)) this.expanded(item, out);
         else out.push({ ...item, shape: this.shape(turn) });
+        if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
       });
       flush();
     });
@@ -1484,6 +1491,7 @@ export default class Threads extends View {
       if (live) out.push({ ...item, kind: "wrow", shape: this.shape(p.turn, true) });
       else if (this.open.has(p.key)) this.expanded(item, out);
       else out.push({ ...item, shape: this.shape(p.turn) });
+      if (this.waking(p.s, si, p.turn.n - 1, status)) out.push({ kind: "wake", key: `wk:${p.key}`, turn: p.turn, s: p.s });
     });
     return out;
   }
@@ -3632,6 +3640,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return r.h;
       case "turn": case "wrow": return r.shape.height;
+      case "wake": return WAKE_H;
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
@@ -3839,6 +3848,7 @@ export default class Threads extends View {
       case "spacer": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);
+      case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
       case "day": return this.dayItem(t, r);
@@ -4090,6 +4100,19 @@ export default class Threads extends View {
   liveIcon(st, size) {
     const icon = svg(ICON(st.icon)).size(size).flex_none().text_color(st.color);
     return st.spin ? icon.spin(900) : icon;
+  }
+
+  // Under a done turn while a background task has woken the agent: a quiet line with this
+  // wake-up's own clock (from its notification), its tool calls and what it said last. The
+  // reply above stays as it was.
+  wakeRow(t, r) {
+    const { turn, s } = r;
+    const clock = s.followSince ? fmtClock(Date.now() - s.followSince) : null;
+    const said = (turn.latest ?? "").replace(/\s+/g, " ").trim();
+    return h_flex().h(WAKE_H).px(ROW.PAD_X).gap(6).items_center().min_w(0).text_size(12).text_color(t.dim)
+      .child(svg(ICON("spinner")).size(12).flex_none().text_color(t.muted).spin(900))
+      .child(div().flex_1().min_w(0).truncate()
+        .child(["Updating", clock, turn.wakeTools ? plural(turn.wakeTools, "tool call") : null, said || null].filter(Boolean).join(" · ")));
   }
 
   // The running turn when it is not selected: the message, then where the reply will be,

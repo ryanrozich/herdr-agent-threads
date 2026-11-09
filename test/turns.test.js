@@ -448,7 +448,8 @@ test("--agents, --commands, --latest and --skill fixtures round trip with sender
   const exp = s.turns[14];
   expect(reply(exp)).toBe("Started the export; I will report when it finishes.");
   expect(exp.latest).toBe("The export finished: 1,204 rows, no errors. The file is out/export.csv.");
-  expect(exp.tools).toBe(2);
+  expect(exp.tools).toBe(1);
+  expect(exp.followTools).toBe(1);
   // the filter matches a sender name
   expect(matches(s.turns[2], "t7 rev")).toBe(true);
 });

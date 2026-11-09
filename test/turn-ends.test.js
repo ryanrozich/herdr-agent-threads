@@ -179,7 +179,9 @@ test("with no turn_duration a finished reply closes the row, and later updates d
   expect(reply(row)).toBe("The reply.");
   expect(row.latest).toBe("Update 39.");
   expect(row.followups).toBe(40);
-  expect(row.tools).toBe(41);
+  // The prompt's own tool call, and the 40 the wake-ups made, counted apart.
+  expect(row.tools).toBe(1);
+  expect(row.followTools).toBe(40);
   // The work, not the 40 hours on the wall: each update took 5 s.
   expect(row.durationMs).toBe((started + 40 * 5) * 1000);
 });
@@ -436,4 +438,31 @@ test("a row and its answer find each other in a search, and nothing else does", 
   expect(found("carry on")).toEqual([2]);
   expect(found("Another")).toEqual([3]);
   expect(found("")).toEqual([1, 2, 3]);
+});
+
+test("a skill's turn that ended, then a background wake-up still running: done, its reply kept, counts apart", () => {
+  const t = transcript();
+  t.skill("bro");
+  t.tool("a1", "Read", 3);
+  t.tool("a2", "Bash", 3);
+  t.say("r1", "Here is the plan in three steps.", 4);
+  t.hooks();
+  t.duration(15000);
+  // A background task finishes: the agent wakes, runs two tools and has not ended yet.
+  t.notify(600);
+  t.message("w0", [{ type: "text", text: "Checking the job's output." }], "tool_use", 2);
+  t.tool("w1", "Bash", 5);
+  t.tool("w2", "Bash", 5);
+  const s = read(t.file());
+  expect(s.turns.length).toBe(1);
+  const [row] = s.turns;
+  expect(row.done).toBe(true);
+  expect(reply(row)).toBe("Here is the plan in three steps.");
+  expect(row.latest ?? "").not.toContain("plan");
+  expect(s.followActive).toBe(true);
+  expect(row.tools).toBe(2);
+  expect(row.followTools).toBe(2);
+  expect(row.wakeTools).toBe(2);
+  // The wake-up's clock starts at its notification, not at the prompt.
+  expect(s.followSince).toBeGreaterThan(row.ts + 600 * 1000);
 });

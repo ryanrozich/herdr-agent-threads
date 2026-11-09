@@ -2915,3 +2915,37 @@ test("the sticky day: the day of the item at the top of the pane, not while a ba
   rec = null;
   expect(ids).toContain("th-sticky-day");
 });
+
+test("a done turn during a background wake-up keeps its reply, with an Updating line under it, never 'no reply yet'", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const s = v.sessions.at(-1);
+  const turn = s.turns.at(-1);
+  expect(turn.done).toBe(true);
+  // A task notification woke the agent: Herdr says working, the turn is still done.
+  state.terminals[0].status = "working";
+  s.followActive = true;
+  s.followSince = Date.now() - 90 * 1000;
+  turn.wakeTools = 3;
+  turn.latest = "Checking the job's output.";
+  s.version++;
+  v.rowsKey = null;
+  const rows = v.rows();
+  expect(rows.some((r) => r.kind === "wrow" || r.kind === "working")).toBe(false);
+  const last = rows.findIndex((r) => r.key === `${v.sessions.length - 1}:${turn.n}`);
+  expect(rows[last].kind).toBe("turn");
+  expect(rows[last + 1].kind).toBe("wake");
+  expect(v.height(rows[last + 1])).toBe(24);
+  rec = []; v.item(theme, rows[last + 1], false, 13); const wake = rec; rec = null;
+  const text = wake.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  expect(text).toMatch(/^Updating · 1:3\d · 3 tool calls · Checking the job's output\.$/);
+  // The turn's own row still has its reply, and nothing on screen says "no reply yet".
+  rec = []; v.rowItem(theme, rows[last], false); const row = rec; rec = null;
+  expect(JSON.stringify(row)).not.toContain("no reply yet");
+  expect(v.liveShown).toBe(true);
+  draw(v, cx);
+  // The wake-up ends: the line goes.
+  s.followActive = false;
+  s.version++;
+  v.rowsKey = null;
+  expect(v.rows().some((r) => r.kind === "wake")).toBe(false);
+});
