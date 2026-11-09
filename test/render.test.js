@@ -117,7 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, alpha: alphaForTest } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, MD_MAX, alpha: alphaForTest } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -852,13 +852,17 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full = new Set(["0:3"]);
   mdSources.length = 0;
   draw(v, cx);
-  let src = mdSources.find(([id]) => id === "th-you-you:0:3")[1];
+  // Longer than Herdr draws in one Markdown view: stacked blocks, each within MD_MAX.
+  const youParts = () => mdSources.filter(([id]) => id === "th-you-you:0:3" || id.startsWith("th-you-you:0:3-")).map(([, m]) => m);
+  expect(youParts().length).toBeGreaterThan(1);
+  expect(youParts().every((m) => Buffer.byteLength(m) <= MD_MAX)).toBe(true);
+  let src = youParts().join("\n\n");
   expect(src).toContain("TAIL\\-END");
   expect(src).not.toContain("more characters not shown");
   t3b.prompt = `${"word ".repeat(50000)}end`;
   mdSources.length = 0;
   draw(v, cx);
-  src = mdSources.find(([id]) => id === "th-you-you:0:3")[1];
+  src = youParts().join("\n\n");
   expect(src).toMatch(/\*… 50,003 more characters not shown\*$/);
   t3b.prompt = keep;
   v.full.clear();
@@ -2948,4 +2952,50 @@ test("a done turn during a background wake-up keeps its reply, with an Updating 
   s.version++;
   v.rowsKey = null;
   expect(v.rows().some((r) => r.kind === "wake")).toBe(false);
+});
+
+test("a reply longer than Herdr draws in one Markdown view: stacked blocks, escaped prices, a clean preview cut, and plain text if a block draws nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const turn = v.sessions.at(-1).turns.at(-1);
+  // A made-up reply with the shape of the one that vanished: over 4,096 characters, a table of
+  // prices, bold spans between two prices, and a numbered list after "These are the open choices:".
+  turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.shapeKey = null;
+  const key = `${v.sessions.length - 1}:${turn.n}`;
+  v.open = new Set([key]);
+  v.sel = key;
+  v.rowsKey = null;
+  // The preview stops at a paragraph, never on an empty list item.
+  let md = v.rows().filter((r) => r.kind === "md");
+  expect(md.length).toBe(1);
+  expect(md[0].md).toMatch(/without it the 210 waiting orders stay unrouted\. …$/);
+  expect(md[0].md).not.toMatch(/\n\s*(?:\d+[.)]|[-*+])\s*(?:\*\*)?\s*…$/);
+  expect(v.rows().some((r) => r.kind === "more" && !r.less)).toBe(true);
+  // Show full reply: one list item, drawn as several Markdown views, each within the limit.
+  v.full.add(`r:${key}`);
+  v.rowsKey = null;
+  md = v.rows().filter((r) => r.kind === "md");
+  expect(md.length).toBe(1);
+  expect(Buffer.byteLength(md[0].src)).toBeGreaterThan(4096);
+  mdSources.length = 0;
+  v.partContent(theme, md[0], false);
+  const parts = mdSources.filter(([id]) => id.startsWith(`th-md-${md[0].key}-`)).map(([, m]) => m);
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts.every((m) => Buffer.byteLength(m) <= MD_MAX)).toBe(true);
+  // Dollar signs are escaped, so the bold between two prices is bold, not math.
+  const all = parts.join("\n\n");
+  expect(all).toContain("**4,180 map look-ups at \\$0.009 each**");
+  expect(all.replace(/\\\$/g, "$")).toBe(md[0].src);
+  // Herdr drew a block at no height: it shows as plain text with a note instead of vanishing.
+  const sig = v.partSig(md[0]);
+  v.probed(md[0].key, sig, { height: 6 * v.zoom() }, cx);
+  expect(v.mdBroken.has(md[0].key)).toBe(true);
+  expect(v.rowDetail(md[0])).toMatch(/ plain /);
+  mdSources.length = 0;
+  rec = []; v.partContent(theme, md[0], false); const plain = rec; rec = null;
+  expect(mdSources.some(([id]) => id.startsWith(`th-md-${md[0].key}`))).toBe(false);
+  const text = plain.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  expect(text).toContain("Herdr could not draw this part as Markdown, so it shows as plain text.");
+  expect(text).toContain("the morning van.");
+  draw(v, cx);
 });

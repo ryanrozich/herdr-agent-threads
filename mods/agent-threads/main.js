@@ -37,7 +37,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
+  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -591,7 +591,7 @@ export default class Threads extends View {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
-      case "md": return `md${n} links ${r.links ?? 0} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
+      case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
       case "rhead": return `rhead${n}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
@@ -1752,7 +1752,7 @@ export default class Threads extends View {
         if (used + md.length > REPLY_BUDGET * 1.4) {
           long = true;
           if (!whole) {
-            md = `${md.slice(0, Math.max(200, REPLY_BUDGET - used)).replace(/\s+\S*$/, "")} …`;
+            md = cutMd(md, Math.max(200, REPLY_BUDGET - used));
             cut = true;
           }
         }
@@ -3456,6 +3456,24 @@ export default class Threads extends View {
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
   readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
+  // enough for Herdr to draw (mdChunks). Kept for the text last asked for, as it is redrawn often.
+  mdParts(md) {
+    const memo = (this.mdMemo ??= new Map());
+    let parts = memo.get(md);
+    if (!parts) {
+      parts = mdChunks(escapeDollars(md));
+      if (memo.size > 300) memo.clear();
+      memo.set(md, parts);
+    }
+    return parts;
+  }
+  // One TextView, or several stacked a paragraph apart when the Markdown is too long for one.
+  mdView(id, md, selectable) {
+    const parts = this.mdParts(md);
+    if (parts.length === 1) return TextView.markdown(id, parts[0]).selectable(selectable).w_full();
+    return v_flex().w_full().gap(this.paraGap()).children(parts.map((p, i) => TextView.markdown(`${id}-${i}`, p).selectable(selectable).w_full()));
+  }
   // The space between paragraphs, for estimates: TextView's own, about 12 px at 13 px.
   paraGap() { return Math.round((12 * this.rt().size) / 13); }
 
@@ -3697,7 +3715,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
@@ -3719,6 +3737,15 @@ export default class Threads extends View {
     const h = Math.ceil(size.height / this.zoom() - 1e-6);
     if (!(h > 0)) return;
     this.meas ??= new Map();
+    // A reply block with text that measured no taller than its gap: Herdr drew nothing, so it
+    // is drawn again as plain text (partContent), and measured again.
+    const part = key.startsWith("md:") ? this.baseRows?.[this.baseIndex?.get(key)] : null;
+    if (part?.kind === "md" && part.key === key && !this.mdBroken?.has(key) && h <= (part.gap ?? 6) + 2 && (part.src ?? part.md ?? "").trim()) {
+      (this.mdBroken ??= new Set()).add(key);
+      this.meas.delete(key);
+      cx.notify();
+      return;
+    }
     const was = this.meas.get(key);
     if (was?.sig === sig && was.h === h) return;
     if (this.meas.size > 2000) this.meas.clear();
@@ -4073,7 +4100,7 @@ export default class Threads extends View {
   // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
   // a click on the row opens the turn.
   cmdBlock(md, id) {
-    return this.readBlock(div()).child(TextView.markdown(id, md).selectable(false).w_full());
+    return this.readBlock(div()).child(this.mdView(id, md, false));
   }
 
   // The agent's name over its reply (ROW.NAME high).
@@ -4294,9 +4321,11 @@ export default class Threads extends View {
               .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
             : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
-          : y.capped
-            ? TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).when(scroll, (el) => el.scrollable(true).size_full()).when(!scroll, (el) => el.w_full())
-            : TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).w_full();
+          : y.capped && scroll && this.mdParts(y.md).length === 1
+            ? TextView.markdown(tv(`th-you-${r.key}`), this.mdParts(y.md)[0]).selectable(false).scrollable(true).size_full()
+            : y.capped && scroll
+              ? v_flex().id(tv(`th-you-scroll-${r.key}`)).size_full().overflow_y_scrollbar().child(this.mdView(tv(`th-you-${r.key}`), y.md, false))
+              : this.mdView(tv(`th-you-${r.key}`), y.md, false);
         const cmd = commandParts(turn);
         const ac = style.outline ? this.agentColor(t) : bt.foreground;
         const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.plain ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
@@ -4335,7 +4364,7 @@ export default class Threads extends View {
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
       case "latest": {
         if (r.md) return v_flex().mt(6)
-          .child(this.readBlock(div()).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
+          .child(this.readBlock(div()).child(this.mdView(tv(`th-lmd-${r.key}`), r.md, this.replySelectable())))
           .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
@@ -4357,8 +4386,15 @@ export default class Threads extends View {
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
+        // A block Herdr drew at no height (mdBroken) shows as plain text with a note, so a
+        // reply never vanishes.
+        if (this.mdBroken?.has(r.key)) return v_flex().mt(r.gap ?? 6).gap(4)
+          .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
+            .child(svg(ICON("alert")).size(12).flex_none())
+            .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
+          .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
         return this.readBlock(div().mt(r.gap ?? 6))
-          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
+          .child(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()));
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)

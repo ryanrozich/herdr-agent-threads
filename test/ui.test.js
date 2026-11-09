@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
-  mdPreview, fitWidth,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -494,4 +494,38 @@ test("the reading width Threads opens at: 545 px at 14 px, scaled with Text size
   expect(fitWidth()).toBe(545);
   expect(fitWidth(12)).toBe(479);
   expect(fitWidth(18)).toBe(676);
+});
+
+test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside fenced code", () => {
+  expect(mdChunks("short")).toEqual(["short"]);
+  const para = (i) => `Paragraph ${i}: ${"words in a sentence ".repeat(12).trim()}.`;
+  const fence = `\`\`\`sh\n${"echo one\n\necho two\n".repeat(3)}\`\`\``;
+  const md = [...Array.from({ length: 30 }, (_, i) => para(i)), fence, para(30)].join("\n\n");
+  const parts = mdChunks(md, 1000);
+  expect(parts.length).toBeGreaterThan(3);
+  expect(parts.every((p) => Buffer.byteLength(p) <= 1000)).toBe(true);
+  expect(parts.join("\n\n")).toBe(md);
+  expect(parts.some((p) => p.includes(fence))).toBe(true);
+  // One paragraph longer than the limit splits at words; multibyte text counts in bytes.
+  const long = "naïve café — ".repeat(200).trim();
+  const lp = mdChunks(long, 500);
+  expect(lp.every((p) => Buffer.byteLength(p) <= 500)).toBe(true);
+  expect(lp.join("")).toBe(long);
+});
+
+test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
+  expect(escapeDollars("The $41.250 total includes **4,180 look-ups at $0.009 each**."))
+    .toBe("The \\$41.250 total includes **4,180 look-ups at \\$0.009 each**.");
+  expect(escapeDollars("Run `echo $HOME` and pay \\$5")).toBe("Run `echo $HOME` and pay \\$5");
+  expect(escapeDollars("```sh\nexport A=$B\n```\n$1")).toBe("```sh\nexport A=$B\n```\n\\$1");
+  expect(escapeDollars("no prices")).toBe("no prices");
+});
+
+test("cutMd: a paragraph end when one is near, no empty list item, a bold closed, a table row whole", () => {
+  const md = `${"Intro words here. ".repeat(60)}\n\nThese are the open choices:\n\n1. **Delivery credit:** add $25 to the route account before Friday.\n\n2. **Bulbs:** a dozen are listed twice.`;
+  expect(cutMd(md, md.indexOf("1. **Delivery") + 6)).toMatch(/These are the open choices: …$/);
+  expect(cutMd("Choices:\n\n- one\n- ", 40)).toBe("Choices:\n\n- one …");
+  expect(cutMd("Recommendation: **$25 credit to finish the delivery routes, then cache", 60))
+    .toBe("Recommendation: **$25 credit to finish the delivery routes,** …");
+  expect(cutMd("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\nafter", 40)).toBe("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n…");
 });

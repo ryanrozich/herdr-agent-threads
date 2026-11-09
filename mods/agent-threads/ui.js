@@ -104,6 +104,77 @@ export function wrappedLines(text, per) {
 
 // Rows a code block takes when the editor wraps it at `per` characters: each line filled
 // word by word (a break after a space), a word longer than a row split across rows.
+// Herdr's Markdown view draws nothing for a block over 4,096 characters (on 0.1.14 a block
+// of 4,090 draws and one of 4,099 measures 0 px tall). Longer Markdown is drawn as several
+// blocks of at most MD_MAX bytes, split at blank lines outside fenced code, else at lines,
+// else at words.
+export const MD_MAX = 3500;
+function utf8Len(s) {
+  let n = 0;
+  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; }
+  return n;
+}
+const FENCE = /^\s*(`{3,}|~{3,})/;
+function packed(pieces, sep, max) {
+  const out = [];
+  let acc = "";
+  for (const p of pieces) {
+    const next = acc ? `${acc}${sep}${p}` : p;
+    if (acc && utf8Len(next) > max) { out.push(acc); acc = p; } else acc = next;
+  }
+  if (acc) out.push(acc);
+  return out;
+}
+export function mdChunks(md, max = MD_MAX) {
+  const text = String(md ?? "");
+  if (utf8Len(text) <= max) return [text];
+  const blocks = [];
+  let cur = [];
+  let fence = null;
+  for (const line of text.split("\n")) {
+    const f = line.match(FENCE);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    else if (!fence && !line.trim()) { if (cur.length) blocks.push(cur.join("\n")); cur = []; continue; }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join("\n"));
+  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b]
+    : packed(b.split("\n").flatMap((l) => (utf8Len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", max))), "\n", max)));
+  return packed(pieces, "\n\n", max);
+}
+
+// Herdr's Markdown reads $…$ as inline math and shows the text between as written, so a
+// **bold** span between two prices keeps its asterisks. Dollar signs outside code are
+// escaped; one already escaped stays as it is.
+export function escapeDollars(md) {
+  let fence = null;
+  return String(md ?? "").split("\n").map((line) => {
+    const f = line.match(FENCE);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; return line; }
+    if (fence || !line.includes("$")) return line;
+    return line.split(/(`+[^`]*`+)/).map((part, i) => (i % 2 ? part : part.replace(/\\?\$/g, (m) => (m === "$" ? "\\$" : m)))).join("");
+  }).join("\n");
+}
+
+// The start of a long Markdown block, for an open turn before "Show full reply": it ends at
+// a paragraph when one ends in the last third, else at a word. It never ends on a bare list
+// marker or a table row cut short, closes a bold left open, then adds "…".
+export function cutMd(md, n) {
+  let s = String(md ?? "").slice(0, n);
+  const para = s.lastIndexOf("\n\n");
+  s = para > n * 0.66 ? s.slice(0, para) : s.replace(/\s+\S*$/, "");
+  const lines = s.trimEnd().split("\n");
+  const whole = String(md ?? "").split("\n");
+  const bare = /^\s*(?:[-*+]|\d+[.)])?\s*(?:\*\*|__|\*|_)?\s*$/;
+  const shortRow = (i) => /^\s*\|/.test(lines[i]) && lines[i].trimEnd() !== (whole[i] ?? "").trimEnd();
+  while (lines.length > 1 && (bare.test(lines.at(-1)) || shortRow(lines.length - 1))) lines.pop();
+  let last = lines.at(-1) ?? "";
+  if ((last.match(/\*\*/g) ?? []).length % 2) last = `${last.trimEnd()}**`;
+  lines[lines.length - 1] = last;
+  const body = lines.join("\n").trimEnd();
+  return /^\s*\|/.test(last) ? `${body}\n\n…` : `${body} …`;
+}
+
 export function codeRows(text, per) {
   const p = Math.max(8, Math.floor(per));
   let rows = 0;
