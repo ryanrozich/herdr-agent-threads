@@ -25,7 +25,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
-  focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
+  focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
@@ -38,7 +38,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
+  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -81,6 +81,7 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
+const DAY_STRIP = 32; // the strip above the list that shows the day while scrolling
 // What Herdr's layout px size adds to the width a pane measures (its frame).
 const PANE_FRAME = 2;
 // The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
@@ -451,6 +452,8 @@ function readArgs(file, offset, chunk) {
 export default class Threads extends View {
   init(_p, cx) {
     const p = props() ?? _p ?? {};
+    // A copy opened as the full-window image gallery (openGallery): it draws only that.
+    if (p.gallery) { this.initGallery(p, cx); return; }
     if (p.overlay) {
       this.launcher = true;
       cx.timer.after(0, (cx) => {
@@ -657,8 +660,8 @@ export default class Threads extends View {
   }
 
   close() {
-    // The launcher (an overlay) returns from init() before any of this exists.
-    if (this.launcher) return;
+    // The launcher and the gallery (overlays) return from init() before any of this exists.
+    if (this.launcher || this.gal) return;
     this.watchGen = (this.watchGen ?? 0) + 1;
     this.lookGen = (this.lookGen ?? 0) + 1;
     this.prefsGen = (this.prefsGen ?? 0) + 1;
@@ -1354,6 +1357,7 @@ export default class Threads extends View {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
     this.fitOnOpen();
+    this.keepWidth();
     this.settleSplit();
     this.autoPinned(cx);
     this.lookRepo(cx);
@@ -1600,6 +1604,8 @@ export default class Threads extends View {
     // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
     const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d);
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
+    // With readingWidth on, Threads stops at the reading width and the terminal takes the rest.
+    if (this.prefs.readingWidth) next.main = Math.min(next.main, this.readingPx());
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
@@ -2433,9 +2439,14 @@ export default class Threads extends View {
       return cx.notify();
     }
     if (kind === "img") {
+      // An image shown large: a click opens every image in the message full window. Its
+      // tile over the message shrinks it again.
       const k = `i:${id}`;
+      const tk = rest.slice(0, 2).join(":");
+      const turn = this.findTurn(tk);
+      this.sel = tk;
+      if (turn && this.openGallery(turn, Number(rest[2]))) return cx.notify();
       this.full.has(k) ? this.full.delete(k) : this.full.add(k);
-      this.sel = rest.slice(0, 2).join(":");
       return cx.notify();
     }
     if (kind === "you") { this.full.has(id) ? this.full.delete(id) : this.full.add(id); this.sel = id; return cx.notify(); }
@@ -2581,6 +2592,8 @@ export default class Threads extends View {
       case "pinned": return this.openPinned(cx);
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
       case "wider": return this.resizeColumn(PIN_STEP, cx);
+      case "fit": return this.fitToReading(cx);
+      case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -2708,9 +2721,99 @@ export default class Threads extends View {
     cx.notify();
   }
 
+  // ---- the image gallery ----
+
+  // A message's images, full window: this mod again, as a dialog over the whole window, with
+  // the decoded files and the one to start at. Only images that have a file go in.
+  openGallery(turn, i) {
+    const list = (turn.images ?? []).map((im, j) => {
+      const f = this.imgFile(turn, j);
+      return f ? { path: f.path, w: f.w ?? 0, h: f.h ?? 0, n: im?.n ?? j + 1, j } : null;
+    }).filter(Boolean);
+    if (!list.length) return false;
+    const at = Math.max(0, list.findIndex((x) => x.j === i));
+    this.galleryOpened = { turn: turn.n, at, count: list.length };
+    openOverlay({ mod: MOD, kind: "dialog", frame: "none", width: 1, height: 1,
+      props: { gallery: { images: list.map(({ j: _j, ...x }) => x), at, title: `#${turn.n}` } } });
+    return true;
+  }
+  initGallery(p, cx) {
+    const g = p.gallery ?? {};
+    const images = Array.isArray(g.images) ? g.images.filter((x) => x && typeof x.path === "string") : [];
+    this.gal = { overlay: p.overlay ?? null, images, i: Math.max(0, Math.min(images.length - 1, Math.round(Number(g.at) || 0))), title: String(g.title ?? "") };
+    this.galSize = null;
+    this.h = cx.focus_handle();
+    cx.timer.after(0, () => this.h.focus());
+    // "agent-threads.galleryNext", galleryPrev and galleryClose (for key bindings, and for a
+    // window no keys reach). Other commands are the panes'.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "galleryNext") this.galleryStep(1, cx);
+        else if (c === "galleryPrev") this.galleryStep(-1, cx);
+        else if (c === "galleryClose") this.galleryClose();
+      }
+    });
+  }
+  galleryStep(d, cx) {
+    const n = this.gal.images.length;
+    if (n < 2) return;
+    this.gal.i = (this.gal.i + d + n) % n;
+    cx.notify();
+  }
+  galleryClose() { if (this.gal.overlay) closeOverlay(this.gal.overlay); }
+  galleryKey(e, cx) {
+    const m = e?.modifiers ?? {};
+    if (m.platform || m.control || m.alt) return;
+    const k = e?.key ?? "";
+    if (["left", "up", "k", "h", "pageup"].includes(k)) this.galleryStep(-1, cx);
+    else if (["right", "down", "j", "l", "space", "pagedown"].includes(k)) this.galleryStep(1, cx);
+    else if (k === "home") { this.gal.i = 0; cx.notify(); }
+    else if (k === "end") { this.gal.i = this.gal.images.length - 1; cx.notify(); }
+    else if (k === "escape" || k === "q" || k === "enter") this.galleryClose();
+  }
+  galleryView() {
+    const t = theme();
+    const g = this.gal;
+    const n = g.images.length;
+    const f = g.images[g.i];
+    const z = this.zoom();
+    const W = (this.galSize?.width ?? 1200) / z;
+    const H = (this.galSize?.height ?? 800) / z;
+    const box = galleryBox(f, W - 2 * 64, H - 52 - 40);
+    const btn = (id, icon, tip, on, act) => div().id(id).flex_none().size(40).rounded(20).flex().items_center().justify_center()
+      .bg(alpha(t.foreground, 0.08)).text_color(on ? t.foreground : t.dim).when(!on, (el) => el.opacity(0.35))
+      .when(on, (el) => el.cursor_pointer().hover((s) => s.bg(alpha(t.foreground, 0.16))))
+      .tooltip(tip)
+      .on_click((_e, cx) => { cx.stop_propagation(); if (on) act(cx); })
+      .child(svg(ICON(icon)).size(20));
+    const label = f ? [`${g.title} · Image ${g.i + 1} of ${n}`, `[Image #${f.n}]`, f.w > 0 ? `${f.w}×${f.h}` : null].filter(Boolean).join(" · ") : "No image";
+    return v_flex().id("th-gallery").size_full().bg(t.background)
+      .track_focus(this.h)
+      .on_key_down((e, cx) => this.galleryKey(e, cx))
+      .on_size_change((size, cx) => {
+        if (Math.abs((this.galSize?.width ?? 0) - size.width) > 1 || Math.abs((this.galSize?.height ?? 0) - size.height) > 1) { this.galSize = size; cx.notify(); }
+      })
+      .child(h_flex().h(52).flex_none().px(16).gap(10).items_center()
+        .child(svg(ICON("image")).size(15).flex_none().text_color(t.muted))
+        .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(t.foreground).child(label))
+        .child(div().id("th-gallery-close").flex_none().h(28).px(10).rounded(6).flex().items_center().gap(6).cursor_pointer()
+          .border_1().border_color(t.border).text_size(12.5).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.galleryClose(); })
+          .child(svg(ICON("x")).size(13)).child("Close (Esc)")))
+      .child(h_flex().flex_1().min_h(0).items_center().justify_between().px(12)
+        .child(btn("th-gallery-prev", "chevron-left", "Previous image (Left)", n > 1, (cx) => this.galleryStep(-1, cx)))
+        .child(h_flex().flex_1().min_w(0).h_full().items_center().justify_center()
+          .child(f ? div().w(box.w).h(box.h).flex_none().rounded(6).overflow_hidden().child(image(f.path).size_full()) : div()))
+        .child(btn("th-gallery-next", "chevron-right", "Next image (Right)", n > 1, (cx) => this.galleryStep(1, cx))))
+      .child(h_flex().h(40).flex_none().justify_center().items_center().text_size(12).text_color(t.dim)
+        .child(n > 1 ? "Left and Right step through the message's images · Esc closes" : "Esc closes"));
+  }
+
   // ---- drawing ----
 
   render(cx) {
+    if (this.gal) return this.galleryView();
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
     this.fitColumn();
@@ -2791,8 +2894,41 @@ export default class Threads extends View {
     const { [me.pane]: _, ...rest } = map;
     setShared(FIT_KEY, rest);
     const px = fitWidth(this.prefs.textSize);
-    if (this.paneW > px + 2) run("layout.resize", { id: me.pane, px });
+    if (this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
   }
+  // Herdr has no maximum width for a pane a split made (a layout file's min/max applies to its
+  // own nodes only), so with readingWidth on (the default) the pane keeps itself there: wider
+  // than the reading width, from a drag, a restart or an older layout, it asks Herdr once to
+  // resize it, and the terminal gets the room. One ask per width, so a pane Herdr cannot
+  // resize (alone in its tab, or zoomed) is not asked again and again.
+  readingPx() { return fitWidth(this.prefs.textSize); }
+  keepWidth() {
+    if (this.pinnedPane || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded) return;
+    const me = this.me();
+    if (!me || me.zoomed) return;
+    const px = this.readingPx();
+    if (this.paneW <= px + 2) { this.capAsked = null; return; }
+    const w = Math.round(this.paneW);
+    if (this.capAsked === w) return;
+    this.capAsked = w;
+    run("layout.resize", { id: me.pane, px });
+  }
+  // w, or the header's fit button: Threads to the reading width, and an open Pinned column to
+  // its own width for that, wider or narrower than they are now.
+  fitToReading(cx) {
+    const main = this.pinnedPane ? this.mainPane() : this.me();
+    if (!main) return false;
+    const px = this.readingPx();
+    run("layout.resize", { id: main.pane, px });
+    const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
+    if (col) run("layout.resize", { id: col.pane, px: pinColumn(px) ?? PIN_COL[0] });
+    this.capAsked = null;
+    this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
+    return true;
+  }
+  // Wider than the reading width by more than a little: the header offers the fit button.
+  tooWide() { return !this.pinnedPane && this.paneW != null && this.paneW > this.readingPx() + 8; }
+
   // Under 440 px the header's badge drops its word and the latest button gives way (End still
   // acts), so the text keeps room beside the labelled Pinned button.
   compact() { return this.width < 440; }
@@ -2847,6 +2983,7 @@ export default class Threads extends View {
     out.push(this.view === "pinned" ? ["th-pinned", null, "Back to all turns (v)", "pinned", true, null, "All turns"]
       : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
         : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
+    if (this.tooWide()) out.push(["th-fit", "fold-horizontal", `Fit to the reading width, ${this.readingPx()} px (w)`, "fit", false, null, null]);
     if (!this.compact()) out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null, null]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
@@ -3015,10 +3152,10 @@ export default class Threads extends View {
         .child(div().flex_none().w(18).text_center().text_size(12.5).font_family(mono).text_color(t.foreground).child(String(P[key])))
         .child(step(`th-${key}-plus`, "plus", `${key}:+`, P[key] < hi));
     };
-    const on = Boolean(P.agentTurns);
-    const sw = div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center()
+    const toggle = (on) => div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center()
       .when(on, (el) => el.justify_end()).bg(on ? t.ansi5 : t.border)
       .child(div().size(12).rounded(6).bg(on ? t.background : t.muted));
+    const sw = toggle(Boolean(P.agentTurns));
     const path = tilde(this.prefsPath());
     return v_flex().mx(10).mb(8).p(10).gap(8).rounded(7).border_1().border_color(t.border).bg(t.chrome)
       .child(h_flex().id("th-set-agents").gap(6).items_center().cursor_pointer()
@@ -3026,6 +3163,11 @@ export default class Threads extends View {
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
         .child(label("Agent messages"))
         .child(sw))
+      .child(h_flex().id("th-set-width").gap(6).items_center().cursor_pointer()
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action("keepWidth", cx); cx.notify(); })
+        .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
+        .child(label("Keep to reading width"))
+        .child(toggle(P.readingWidth !== false)))
       .child(stepper("promptLines", "Prompt lines"))
       .child(stepper("replyLines", "Reply lines"))
       .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
@@ -3270,8 +3412,11 @@ export default class Threads extends View {
     const dim = Boolean(this.res.ended);
     const sticky = this.stickyDay();
     this.stickyShown = sticky?.key ?? null;
-    return div().id("threads-body").flex_1().min_h(0).relative()
-      .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
+    // The day while scrolling has a strip of its own above the list, so it never covers a
+    // message or a control. The strip stays while the list has day bands (it shows nothing
+    // while a band is at the top), so the list does not move when the day appears.
+    const strip = this.hasDayStrip(rows);
+    return v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom() - this.colLeft(); })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
@@ -3283,15 +3428,19 @@ export default class Threads extends View {
         this.bodyW = w == null ? null : Math.min(w / this.zoom(), this.width);
         this.notePress(cx);
       })
+      .when(strip, (el) => el.child(h_flex().id("th-day-strip").h(DAY_STRIP).flex_none().w_full().justify_center().items_center().bg(t.background)
+        .border_b_1().border_color(sticky ? t.border : t.background)
+        .when(Boolean(sticky), (el) => el.child(div().id("th-sticky-day").child(this.dayPill(t, sticky))))))
+      .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
+        .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
+        .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
+          .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+            (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
+            .track_scroll(this.scroll)
+            .on_item_click((key, cx) => this.click(key, cx))
+            .size_full())))
+        .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0()))
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
-      .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
-        .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
-          (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
-          .track_scroll(this.scroll)
-          .on_item_click((key, cx) => this.click(key, cx))
-          .size_full())))
-      .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0())
-      .when(Boolean(sticky), (el) => el.child(h_flex().id("th-sticky-day").absolute().top(6).left(0).right(0).justify_center().child(this.dayPill(t, sticky))))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
   }
 
@@ -4262,19 +4411,18 @@ export default class Threads extends View {
     if (this.dayOfRows !== rows) {
       this.dayOfRows = rows;
       this.dayOf = new Map();
-      this.beforeDay = new Set();
       let day = null;
-      rows.forEach((r, i) => {
+      for (const r of rows) {
         if (r.kind === "day") day = r;
         this.dayOf.set(r.key, day);
-        if (rows[i + 1]?.kind === "day") this.beforeDay.add(r.key);
-      });
+      }
     }
     const top = this.topKey;
     const day = top ? this.dayOf.get(top) : null;
-    // Not while the band itself, or the next day's band, is at the top: two pills would stack.
-    return day && day.key !== top && !this.beforeDay.has(top) ? day : null;
+    // Not while the band itself is at the top of the list, right under the strip.
+    return day && day.key !== top ? day : null;
   }
+  hasDayStrip(rows) { return rows.some((r) => r.kind === "day"); }
   noteTopDay() {
     const k = this.stickyDay()?.key ?? null;
     if (k !== this.stickyShown) this.stickyDue = true;
@@ -4485,7 +4633,7 @@ export default class Threads extends View {
         const st = this.imgState(turn);
         const gone = !f && this.imgGone(turn, r.i);
         const label = [`[Image #${n ?? r.i + 1}]`, gone ? turn.images[r.i]?.src : null, f?.w ? `${f.w}×${f.h}` : null,
-          f ? (r.full ? "click to shrink" : "click to enlarge") : null].filter(Boolean).join(" · ");
+          f ? (turn.images.length > 1 ? `click for all ${turn.images.length} full window` : "click for full window") : null].filter(Boolean).join(" · ");
         return v_flex().pt(8).gap(4)
           .child(f
             ? div().w(box.w).h(box.h).rounded(6).overflow_hidden().border_1().border_color(t.border).bg(t.background).child(image(f.path).size_full())

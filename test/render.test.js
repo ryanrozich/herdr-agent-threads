@@ -41,6 +41,9 @@ let recordFiles = {};
 let focusNow = null;
 let afterFocus = (args) => { focusNow = { terminal: state.panes.find((p) => p.pane === args?.pane)?.terminal ?? null }; };
 const mdSources = [];
+// Overlays the mod opened (the image gallery).
+const overlays = [];
+const closed = [];
 // Every TextView made, with the calls on it (scrollable, size_full, …).
 const views = [];
 function viewEl(calls) {
@@ -112,7 +115,7 @@ function herdrRest() { return {
   focused: () => focusNow, props: () => state.props,
   run: (name, args) => { log.push(["run", name, args ?? null]); if (name === "pane.focus") afterFocus(args); return null; },
   shared: (k) => state.shared[k], setShared: (k, v) => { state.shared[k] = v; },
-  closeOverlay: () => null, notify: () => null, nextCommand: never,
+  closeOverlay: (id) => { closed.push(id); return null; }, openOverlay: (spec) => { overlays.push(spec); return `ov${overlays.length}`; }, notify: () => null, nextCommand: never,
 }; }
 
 // main.js finds its scripts under appHome()/mods/agent-threads.
@@ -1237,7 +1240,7 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     const calls = rec;
     rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: reported, height: 800 * zoom }, cx);
-    handlerAfterId(calls, "threads-body", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
+    handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
     rec = [];
     v.render(cx);
     const drawn = rec;
@@ -1720,7 +1723,16 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   expect(big).toMatchObject({ kind: "img", key: `img:${key}:1`, full: true });
   const side = Math.min(400, v.inner()); // at the card's width, never enlarged
   expect(v.imgBox(big)).toEqual({ w: side, h: side });
+  // A press on the large image opens the message's images full window (the gallery), at
+  // that image; the press on its tile shrinks it again.
+  overlays.length = 0;
   v.click(big.key, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", width: 1, height: 1, props: { gallery: { at: 1, title: `#${two.n}` } } });
+  expect(overlays[0].props.gallery.images.map((x) => [x.path, x.w, x.h])).toEqual([[f.path, 300, 600], [v.imgFile(two, 1).path, 400, 400]]);
+  expect(v.rows().some((r) => r.kind === "img")).toBe(true);
+  v.pressX = 380 - ROW.PAD_X - 10;
+  v.click(`imgs:${key}`, cx);
   expect(v.rows().some((r) => r.kind === "img")).toBe(false);
   // Drawn rows and cards hold image elements with the cached paths.
   rec = [];
@@ -2492,6 +2504,9 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   expect(w.view).toBe("pinned");
   // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
   // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
+  // (Keep to reading width off here, so Threads may be wider than the reading width.)
+  v.prefs = { ...v.prefs, readingWidth: false };
+  w.prefs = { ...w.prefs, readingWidth: false };
   state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
   log = [];
   w.key(keyEv("="), cx2);
@@ -2499,6 +2514,13 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
+  // With it on (the default), - narrows the column but Threads stops at the reading width:
+  // the terminal takes the rest.
+  v.prefs = { ...v.prefs, readingWidth: true };
+  state.shared["threads.width"] = { p2: 543, p3: 290 };
+  log = [];
+  v.key(keyEv("-"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 545 }]);
   expect(w.footerHints().map((x) => x.join(" "))).toContain("- = width");
   // Threads closes: the column closes too, once.
   log = [];
@@ -2847,9 +2869,32 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
     // Once only: the flag is gone, and another pane's flag stays.
     expect(state.shared["threads.fit"]).toEqual({ p9: true });
   }
-  // A pane the launcher did not just open is left alone.
+  // A pane the launcher did not just open (a restart, an existing layout, a drag): with Keep
+  // to reading width on, it is asked back once per width; off, it is left alone.
   const { v, cx } = await pane(fixture("--extra", "2"));
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.paneW = 900;
+  log = [];
+  v.poll(cx);
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  // Herdr left it wide (a pane alone in its tab): no second ask at the same width; a new
+  // width (a drag) asks again.
+  log = [];
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  v.paneW = 960;
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  // The header offers the fit button while it is wider; w fits Threads and an open column.
+  expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
+  log = [];
+  v.key(keyEv("w"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  v.paneW = 543;
+  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
+  // Off: a wide pane stays as it is.
+  v.prefs = { ...v.prefs, readingWidth: false };
   v.paneW = 900;
   log = [];
   v.poll(cx);
@@ -2891,7 +2936,7 @@ test("a collapsed reply draws as Markdown: its block is measured, and the row is
   expect(typeof before).toBe("number");
 });
 
-test("the sticky day: the day of the item at the top of the pane, not while a band is at the top", async () => {
+test("the sticky day: the day of the item at the top of the pane, in its own strip, not while a band is at the top", async () => {
   const { v, cx } = await pane(fixture("--extra", "6", "--gap", "43200"));
   v.width = 545;
   draw(v, cx);
@@ -2903,16 +2948,17 @@ test("the sticky day: the day of the item at the top of the pane, not while a ba
   v.topKey = d1.key;
   expect(v.stickyDay()).toBe(null);
   // An item in that day further down: its band shows at the top, and a redraw is asked for.
-  const inside = rows.slice(i1 + 1).find((r) => r.kind !== "day" && !v.beforeDay?.has(r.key));
+  const inside = rows.slice(i1 + 1).find((r) => r.kind !== "day");
   v.stickyShown = null;
   v.stickyDue = false;
   v.topKey = inside.key;
   v.noteTopDay();
   expect(v.stickyDay()?.key).toBe(d1.key);
   expect(v.stickyDue).toBe(true);
-  // The item just before the next band: no sticky, so two pills never stack.
+  // The item just before the next band keeps its own day: the pill sits in the strip above the
+  // list, so it never covers the band under it.
   const before = rows[days[2] ? days[2][1] - 1 : -1];
-  if (before) { v.topKey = before.key; expect(v.stickyDay()).toBe(null); }
+  if (before) { v.topKey = before.key; expect(v.stickyDay()?.key).toBe(d1.key); }
   // The drawn body carries it.
   v.topKey = inside.key;
   rec = [];
@@ -3030,4 +3076,55 @@ test("an Amp terminal: Amp isn't supported, why in one line, and a button to the
   await new Promise((r) => setTimeout(r, 10));
   expect(log).toEqual([["open", "https://github.com/ryanrozich/herdr-agent-threads#why-amp-isnt-supported"]]);
   expect(UNREAD.amp.url).toMatch(/#why-amp-isnt-supported$/);
+});
+
+test("the image gallery: every image of the message full window, Left and Right step and wrap, Esc closes", async () => {
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", gallery: { title: "#4", at: 1, images: [
+    { path: "data/agent-threads/images/f/a-0.png", w: 2000, h: 1247, n: 41 },
+    { path: "data/agent-threads/images/f/a-1.png", w: 300, h: 600, n: 42 },
+    { path: "data/agent-threads/images/f/a-2.png", w: 0, h: 0, n: 43 },
+  ] } } };
+  const g = new Threads();
+  const cx = makeCx();
+  g.init(state.props, cx);
+  // Not the launcher, and nothing of the pane starts (no reads, no commands).
+  expect(g.launcher).toBeFalsy();
+  expect(g.gal.i).toBe(1);
+  const text = () => { rec = []; g.render(cx); const r = rec; rec = null; return r.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" | "); };
+  handlerAfterId((() => { rec = []; g.render(cx); const r = rec; rec = null; return r; })(), "th-gallery", "on_size_change")({ width: 1600, height: 1000 }, cx);
+  expect(text()).toContain("#4 · Image 2 of 3 · [Image #42] · 300×600");
+  g.galleryKey(keyEv("right"), cx);
+  expect(text()).toContain("Image 3 of 3 · [Image #43]");
+  g.galleryKey(keyEv("right"), cx);
+  expect(g.gal.i).toBe(0);
+  g.galleryKey(keyEv("left"), cx);
+  expect(g.gal.i).toBe(2);
+  g.galleryKey(keyEv("escape"), cx);
+  expect(closed).toContain("ov7");
+  expect(() => g.close()).not.toThrow();
+});
+
+test("the day while scrolling has a strip of its own above the list, never over a row", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6", "--gap", "43200"));
+  v.width = 545;
+  draw(v, cx);
+  const rows = v.rows();
+  expect(rows.some((r) => r.kind === "day")).toBe(true);
+  rec = []; draw(v, cx); let calls = rec; rec = null;
+  const ids = calls.filter((e) => e[0] === "id").map((e) => e[1]);
+  // The strip comes before the list's box, so the list starts under it.
+  expect(ids.indexOf("th-day-strip")).toBeGreaterThan(-1);
+  expect(ids.indexOf("th-day-strip")).toBeLessThan(ids.indexOf("threads-listbox"));
+  // Scrolled into a day: the pill is in the strip, and the strip is not drawn over the list.
+  const inDay = rows.find((r, i) => i > 0 && rows[i - 1].kind !== "day" && r.kind !== "day" && rows[i + 1]?.kind !== "day" && rows.slice(0, i).some((x) => x.kind === "day"));
+  v.topKey = inDay.key;
+  expect(v.stickyDay()).not.toBe(null);
+  rec = []; draw(v, cx); calls = rec; rec = null;
+  const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-day-strip");
+  const pill = calls.findIndex((e) => e[0] === "id" && e[1] === "th-sticky-day");
+  expect(pill).toBeGreaterThan(at);
+  expect(calls.slice(at - 12, at).some((e) => e[0] === "absolute")).toBe(false);
+  // The list's height is measured from its own box, under the strip.
+  handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: 380, height: 500 }, cx);
+  expect(v.listH).toBe(500);
 });

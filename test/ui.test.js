@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -528,4 +528,12 @@ test("cutMd: a paragraph end when one is near, no empty list item, a bold closed
   expect(cutMd("Recommendation: **$25 credit to finish the delivery routes, then cache", 60))
     .toBe("Recommendation: **$25 credit to finish the delivery routes,** …");
   expect(cutMd("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\nafter", 40)).toBe("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n…");
+});
+
+test("galleryBox: an image fits the room with its shape, never past its own pixels", () => {
+  expect(galleryBox({ w: 2000, h: 1247 }, 1400, 900)).toEqual({ w: 1400, h: 873 });
+  expect(galleryBox({ w: 1200, h: 2400 }, 1400, 900)).toEqual({ w: 450, h: 900 });
+  expect(galleryBox({ w: 300, h: 200 }, 1400, 900)).toEqual({ w: 300, h: 200 });
+  expect(galleryBox({ w: 0, h: 0 }, 1400, 900)).toEqual({ w: 1400, h: 900 });
+  expect(galleryBox(null, 10, 10)).toEqual({ w: 40, h: 40 });
 });

@@ -268,7 +268,7 @@ test("the quote key: q by default, configurable, never a key already taken", () 
   expect(keyAction(k("q", { platform: true }))).toBe(null);
   expect(keyAction(k("q", { shift: true }))).toBe(null);
   expect(keyAction(k("j"), false, "j")).toBe("next"); // a taken key keeps its action
-  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "g", "i", "j", "k", "o", "s", "t", "v"]);
+  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "g", "i", "j", "k", "o", "s", "t", "v", "w"]);
   // Round 3 (C2): i explains the stat chips, so it cannot be the quote key.
   expect(keyAction(k("i"))).toBe("legend");
   expect(keyAction(k("i"), false, "i")).toBe("legend");
