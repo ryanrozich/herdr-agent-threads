@@ -4,7 +4,7 @@
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
-// layout.resize (to give that column its width), pane.focus (the Terminal button, v
+// layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
 // between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
 // it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
@@ -37,7 +37,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, pinColumn, PIN_SPLIT_MIN, headerButtonWidth,
+  thumbSize, tileRow, TILE_GAP, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -67,6 +67,8 @@ const MAP_KEY = "threads.byTerminal";
 // shared("threads.pinnedByTerminal"): terminal -> its Pinned pane (v), kept apart from the
 // map above so Cmd-Shift-T still finds the main Threads pane.
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
+// shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
+const FIT_KEY = "threads.fit";
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
@@ -146,6 +148,8 @@ function launch() {
     const made = panes().find((p) => p.mod === MOD && !before.has(p.pane));
     if (!made) return false;
     remember(pane.terminal, made.pane);
+    // The new pane sizes itself to the reading width once it knows its width (fitOnOpen).
+    setShared(FIT_KEY, { ...(shared(FIT_KEY) ?? {}), [made.pane]: true });
     return true;
   };
 }
@@ -1304,6 +1308,7 @@ export default class Threads extends View {
   poll(cx) {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
+    this.fitOnOpen();
     this.settleSplit();
     this.autoPinned(cx);
     this.lookRepo(cx);
@@ -1496,7 +1501,7 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    const px = pinColumn(this.width);
+    const px = pinColumn(this.pw());
     if (!me || !px) {
       if (auto) return false;
       this.setView("pinned");
@@ -2596,6 +2601,7 @@ export default class Threads extends View {
   render(cx) {
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
+    this.fitColumn();
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
@@ -2616,7 +2622,7 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(w - this.width) > 1) { this.width = w; cx.notify(); }
+        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
@@ -2651,6 +2657,30 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
+  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
+  // wider than fitWidth a centred column that wide, so a reply's reading line and the
+  // bubbles stay together instead of leaving a gutter between them. Before the pane has
+  // measured itself (and in tests that set width) both are this.width.
+  pw() { return this.paneW ?? this.width; }
+  fitColumn() {
+    if (this.forcedWidth || this.paneW == null) return;
+    const w = Math.min(this.paneW, fitWidth(this.prefs.textSize));
+    if (Math.abs(w - this.width) > 0.5) this.width = w;
+  }
+  // How far the column sits in from the pane's left edge.
+  colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
+  // reading width shrinks to it. A narrower one keeps what it was given.
+  fitOnOpen() {
+    if (this.paneW == null || !this.prefsLoaded) return;
+    const me = this.me();
+    const map = shared(FIT_KEY);
+    if (!me || !map?.[me.pane]) return;
+    const { [me.pane]: _, ...rest } = map;
+    setShared(FIT_KEY, rest);
+    const px = fitWidth(this.prefs.textSize);
+    if (this.paneW > px + 2) run("layout.resize", { id: me.pane, px });
+  }
   // Under 440 px the header's badge drops its word and the latest button gives way (End still
   // acts), so the text keeps room beside the labelled Pinned button.
   compact() { return this.width < 440; }
@@ -2701,7 +2731,7 @@ export default class Threads extends View {
     const label = `Pinned${pins ? ` ${pins}` : ""}`;
     const col = this.pinnedPaneOpen();
     out.push(this.view === "pinned" ? ["th-pinned", null, "Back to all turns (v)", "pinned", true, null, "All turns"]
-      : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.width) ? "Open the Pinned column beside Threads (v)"
+      : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
         : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
     if (!this.compact()) out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null, null]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
@@ -2724,8 +2754,8 @@ export default class Threads extends View {
     const list = this.headerButtons();
     const badge = this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38;
     const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
-    const text = Math.round(this.width - 20 - (badge ? badge + 8 : 0) - room);
-    return { width: Math.round(this.width), badge, text, buttons: list.length, rightGutter: 10 };
+    const text = Math.round(this.pw() - 20 - (badge ? badge + 8 : 0) - room);
+    return { width: Math.round(this.pw()), badge, text, buttons: list.length, rightGutter: 10 };
   }
 
   badge(t) {
@@ -3109,22 +3139,24 @@ export default class Threads extends View {
     const dim = Boolean(this.res.ended);
     return div().id("threads-body").flex_1().min_h(0).relative()
       .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
-      .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom(); })
+      .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom() - this.colLeft(); })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
       .on_mouse_down("left", (e, cx) => {
         const x = e.local_position?.x;
         const w = e.bounds?.width;
-        this.pressX = x == null ? null : x / this.zoom();
-        this.bodyW = w == null ? null : w / this.zoom();
+        // In the column's own px: a centred column starts colLeft() in.
+        this.pressX = x == null ? null : x / this.zoom() - this.colLeft();
+        this.bodyW = w == null ? null : Math.min(w / this.zoom(), this.width);
         this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
-      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
-        (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
-        .track_scroll(this.scroll)
-        .on_item_click((key, cx) => this.click(key, cx))
-        .size_full())
+      .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
+        .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+          (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
+          .track_scroll(this.scroll)
+          .on_item_click((key, cx) => this.click(key, cx))
+          .size_full())))
       .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0())
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
   }

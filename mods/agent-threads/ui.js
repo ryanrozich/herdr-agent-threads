@@ -346,6 +346,12 @@ export function rowTextWidth(width, _agent = false, size = TEXT_SIZE) { return M
 // at most one reading line.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
 export function readWidth(width, size = TEXT_SIZE) { return Math.min(replyWidth(width), readType(size).measure); }
+// The width that fits a reading line: the line, 16 px each side, and 52 px more for the
+// bubbles' left gap and the header's buttons. 545 px at 14 px, the width the owner found
+// right; it scales with Text size (479 at 12, 676 at 18). Cmd-Shift-T opens Threads at
+// this width, and a wider pane centres a column this wide.
+export const FIT_EXTRA = 52;
+export function fitWidth(size = TEXT_SIZE) { return readType(size).measure + 2 * ROW.PAD_X + FIT_EXTRA; }
 
 // ---- pasted images over a message ----
 // Tiles over the message, on the right: each THUMB high, about a third of the widest bubble

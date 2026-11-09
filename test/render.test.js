@@ -117,7 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -1216,13 +1216,15 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     v.render(cx);
     const drawn = rec;
     rec = null;
-    return { width: v.width, listH: v.listH, rows: v.rows().map((r) => r.key), est: [...v.sizesMemo], list: lastList, drawn };
+    return { width: v.width, pane: v.pw(), listH: v.listH, rows: v.rows().map((r) => r.key), est: [...v.sizesMemo], list: lastList, drawn };
   };
   try {
     for (const w of [240, 380, 640]) {
       const one = run(1, w);
       const z = run(0.9, w * 0.9);
-      expect(z.width).toBeCloseTo(w, 6);
+      // The pane's width in design px, and the column the turns use: at most fitWidth.
+      expect(z.pane).toBeCloseTo(w, 6);
+      expect(z.width).toBeCloseTo(Math.min(w, fitWidth()), 6);
       expect(z.listH).toBeCloseTo(700, 6);
       expect(z.rows).toEqual(one.rows);
       expect(z.est).toEqual(one.est);
@@ -1254,16 +1256,19 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       v.render(cx);
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
       rec = null;
-      expect(v.width).toBeCloseTo(w, 6);
-      const g = v.barGeom(w, v.findTurn(key));
+      // A pane wider than fitWidth centres a column that wide; a press is read in its px.
+      const c = Math.min(w, fitWidth());
+      expect(v.width).toBeCloseTo(c, 6);
+      const left = (w - c) / 2;
+      const g = v.barGeom(c, v.findTurn(key));
       for (const [name, b] of Object.entries(g)) {
         if (!b) continue;
-        down({ local_position: { x: ((b[0] + b[1]) / 2) * 0.9, y: 10 }, bounds: { width: w * 0.9 } });
+        down({ local_position: { x: (left + (b[0] + b[1]) / 2) * 0.9, y: 10 }, bounds: { width: w * 0.9 } });
         v.sel = key;
         // Only the hit is checked: the handlers themselves are covered elsewhere.
         const hit = v.barHit(v.pressX, v.bodyW, v.findTurn(key));
         expect(hit).toBe(name);
-        expect(v.bodyW).toBeCloseTo(w, 6);
+        expect(v.bodyW).toBeCloseTo(c, 6);
       }
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
@@ -2732,4 +2737,46 @@ test("reading type: message and reply text at the Text size on 1.5 lines, a read
   v.action("resetSettings", cx);
   expect(v.prefs.textSize).toBe(14);
   await new Promise((r) => setTimeout(r, 20));
+});
+
+test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fitWidth once, a narrower one keeps its width", async () => {
+  for (const [measured, size, want] of [[900, 14, 545], [900, 18, 676], [480, 14, null]]) {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.prefs = { ...v.prefs, textSize: size };
+    state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+    state.shared["threads.fit"] = { p2: true, p9: true };
+    v.paneW = measured;
+    log = [];
+    v.poll(cx);
+    v.poll(cx);
+    const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+    expect(resized).toEqual(want ? [{ id: "p2", px: want }] : []);
+    // Once only: the flag is gone, and another pane's flag stays.
+    expect(state.shared["threads.fit"]).toEqual({ p9: true });
+  }
+  // A pane the launcher did not just open is left alone.
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.paneW = 900;
+  log = [];
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+});
+
+test("a pane wider than the reading width lays the turns out in a centred column that wide, scaled with Text size", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  for (const [paneW, size, col] of [[960, 14, 545], [960, 18, 676], [500, 14, 500], [300, 14, 300]]) {
+    v.prefs = { ...v.prefs, textSize: size };
+    v.paneW = paneW;
+    draw(v, cx);
+    expect(v.width).toBe(col);
+    expect(v.pw()).toBe(paneW);
+    expect(v.colLeft()).toBe((paneW - col) / 2);
+  }
+  // The header and the Pinned column go by the pane, not the column.
+  v.prefs = { ...v.prefs, textSize: 14 };
+  v.paneW = 960;
+  draw(v, cx);
+  expect(v.headerLayout().width).toBe(960);
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
 });

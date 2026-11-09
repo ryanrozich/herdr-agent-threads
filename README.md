@@ -18,7 +18,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## How it works
 
-Press `Cmd-Shift-T` in a Claude Code, Codex, OpenCode, Pi or Cursor terminal. Agent Threads opens to its right and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
+Press `Cmd-Shift-T` in a Claude Code, Codex, OpenCode, Pi or Cursor terminal. Agent Threads opens to its right, at the width of a reading line (545 px at the default text size), and keeps up with that session as it runs. Press it again to move between the pane and the terminal. Every terminal can have its own Agent Threads pane, and each pane follows only its own session.
 
 Agent Threads reads the agent's session on your computer. It sends nothing over the network, and it never types into your terminal except when you press `q` to quote.
 
