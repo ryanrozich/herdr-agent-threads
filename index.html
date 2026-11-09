@@ -1,0 +1,168 @@
+<title>Antigravity and Amp in Threads</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for the words, a gallery of tall pane shots under each heading. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1e24; --muted: #5a6170; --line: #dde1e8; --link: #2f5fb8; --chip: #eef1f6;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e; --link: #7ea6f2; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e; --link: #7ea6f2; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; }
+main { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.prose { max-width: 68ch; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+a { color: var(--link); }
+code, kbd { font-family: var(--mono); font-size: 0.88em; background: var(--chip); border-radius: 4px; padding: 1px 5px; overflow-wrap: anywhere; }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font-size: 13px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--panel); }
+section { display: flex; flex-direction: column; gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; align-items: start; }
+.grid .wide { grid-column: span 2; }
+@media (max-width: 460px) { .grid { grid-template-columns: 1fr 1fr; } }
+.shot { all: unset; cursor: zoom-in; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shot img { width: 100%; height: 420px; object-fit: cover; object-position: bottom; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); display: block; }
+.shot.fit img { height: auto; object-fit: contain; }
+.shot span { font-size: 13px; color: var(--muted); line-height: 1.4; }
+.shot:focus-visible img { outline: 3px solid var(--link); outline-offset: 2px; }
+.small { font-size: 13px; color: var(--muted); }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; font-size: 14px; width: 100%; min-width: 560px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.steps { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+#lb { position: fixed; inset: 0; z-index: 50; background: rgba(8,10,14,0.92); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+#lb.on { display: flex; }
+#lb .frame { flex: 1; min-height: 0; width: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+#lb img { max-width: 100%; height: auto; border-radius: 6px; }
+#lb .bar { display: flex; gap: 10px; align-items: center; color: #e6e8ec; font-size: 14px; flex-wrap: wrap; justify-content: center; }
+#lb button { font: inherit; color: #e6e8ec; background: #2a2f38; border: 1px solid #3a404b; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+#lb button:focus-visible { outline: 2px solid #4f86f0; }
+</style>
+
+<main>
+  <header class="prose">
+    <h1>Antigravity and Amp in Threads</h1>
+    <p>Threads now reads Antigravity's CLI (<code>agy</code>) and Amp, and every agent shows its own mark. This is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/10">PR 10</a> on main, separate from the chat look in PR 8. Nothing merges until you say so.</p>
+    <div class="status">
+      <span class="pill">310 tests pass</span>
+      <span class="pill">CI green: Biome, shellcheck, jq, private scan, gitleaks</span>
+      <span class="pill">agy 1.5.3 and Amp 0.0.1794 tried live</span>
+    </div>
+    <p class="small">The screenshots come from an isolated Herdr window on the mini, using made-up sessions. The live tests on your laptop used throwaway sessions in a scratch folder. Click any image to open it full size. Arrow keys step through the images, and Esc closes.</p>
+  </header>
+
+  <section>
+    <div class="prose">
+      <h2>Antigravity</h2>
+      <ul>
+        <li>agy writes each conversation to <code>~/.gemini/antigravity-cli/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</code>. The <code>~/.gemini/antigravity</code> folder belongs to the older IDE.</li>
+        <li>Each step records a time to the second, input, cached and output tokens, and the tools it called. The prompt step records the model you picked and its level, such as "Gemini 3.5 Flash · Medium".</li>
+        <li>agy keeps the conversation's folder open, so Threads finds the exact conversation for each terminal.</li>
+      </ul>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/agy.jpg" alt="Threads beside a made-up Antigravity session, the first turn open"><span>Antigravity: tokens, time, model and level, tool count</span></button>
+      <button class="shot"><img src="shots/agy-light.jpg" alt="The same Antigravity session in light"><span>Light</span></button>
+      <button class="shot"><img src="shots/agy-empty.jpg" alt="No turns yet, with the Antigravity mark"><span>Before the first prompt: the mark in "No turns yet"</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Amp</h2>
+      <ul>
+        <li>Amp keeps its threads on its own server. On disk it writes only a debug log for each thread and a note of the last thread it ran in each folder.</li>
+        <li>Threads watches that log. When the log grows, Threads reads the thread with Amp's own <code>amp threads export</code>, using the login Amp already has. The export changes nothing and takes about 1.5 s. This makes Amp the one agent Threads reads over the network, and the README now says so.</li>
+        <li>The export holds prompts, replies, tool names, the model, input, output and cache tokens, times to the millisecond, and the thread's title.</li>
+        <li>Threads takes <code>amp threads continue &lt;id&gt;</code> from the command line when it is there. Otherwise it takes the thread Amp last ran in the terminal's folder after that Amp started. When two Amp terminals share a folder, Threads guesses and offers Choose.</li>
+      </ul>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/amp.jpg" alt="Threads beside a made-up Amp thread, the first turn open"><span>Amp: title, tokens, time, model, cache</span></button>
+      <button class="shot"><img src="shots/amp-light.jpg" alt="The same Amp thread in light"><span>Light</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Every agent's mark</h2>
+      <p>The marks are the icons Herdr itself ships for these agents: LobeHub icons (MIT) and Pi's own mark. The drawings are unchanged, and <code>ICONS.md</code> records each one's source and license. One-colour marks are drawn white and full-colour marks as they come, both on Herdr's dark tile, which matches Herdr's own settings. Claude keeps its orange tile.</p>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide fit"><img src="shots/badges.jpg" alt="The Threads header badge for Codex, OpenCode, Pi, Cursor, Antigravity and Amp"><span>The header badge for each agent, in the app</span></button>
+      <button class="shot wide fit"><img src="shots/marks.png" alt="All seven marks on their tiles, large"><span>All seven marks on their tiles, drawn large from the same files</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>What I could not read</h2>
+      <ul>
+        <li><b>Amp, two terminals in one folder:</b> Amp records one last thread per folder, plus a second hash I could not decode, so Threads guesses.</li>
+        <li><b>Amp offline or logged out:</b> the read fails and says so.</li>
+        <li><b>Pasted images:</b> neither agent stores one in a form Threads can read.</li>
+        <li><b>Antigravity's <code>conversation_summaries.db</code></b> would not open read-only. Threads does not need it.</li>
+        <li><b>The "isn't supported yet" list:</b> it now shows all seven marks (the large sheet above shows the same files). I could not get the mini's Herdr to treat a stand-in program as an unsupported agent, so there is no screenshot of that state.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Try it</h2>
+      <div class="steps">
+        <ol>
+          <li>Check out the branch and install: <code>git checkout agents-agy-amp &amp;&amp; ./install.sh</code> in your herdr-agent-threads clone.</li>
+          <li>Run <code>agy</code> in a Herdr terminal, send one prompt, and press <kbd>Cmd-Shift-T</kbd>. The badge shows the Antigravity mark, and the turn shows its tokens and model.</li>
+          <li>Do the same with <code>amp</code>. The first read takes about a second and a half.</li>
+          <li>Open Threads beside Codex, OpenCode, Pi or Cursor to see their marks in the badge.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="frame"><img alt=""></div>
+  <div class="bar"><button id="lb-prev" aria-label="Previous">←</button><span class="cap"></span><button id="lb-next" aria-label="Next">→</button><button id="lb-close">Close (Esc)</button></div>
+</div>
+
+<script>
+(() => {
+  const shots = [...document.querySelectorAll(".shot")];
+  const lb = document.getElementById("lb");
+  const img = lb.querySelector("img");
+  const cap = lb.querySelector(".cap");
+  let i = 0, opener = null;
+  const show = (n) => {
+    i = (n + shots.length) % shots.length;
+    const s = shots[i].querySelector("img");
+    img.src = s.src; img.alt = s.alt;
+    cap.textContent = `${i + 1} of ${shots.length} · ${shots[i].querySelector("span").textContent}`;
+    lb.querySelector(".frame").scrollTop = 0;
+  };
+  const open = (n) => { opener = document.activeElement; show(n); lb.classList.add("on"); document.getElementById("lb-close").focus(); };
+  const close = () => { lb.classList.remove("on"); opener?.focus?.(); };
+  shots.forEach((b, n) => b.addEventListener("click", () => open(n)));
+  document.getElementById("lb-prev").addEventListener("click", () => show(i - 1));
+  document.getElementById("lb-next").addEventListener("click", () => show(i + 1));
+  document.getElementById("lb-close").addEventListener("click", close);
+  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.classList.contains("frame")) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (!lb.classList.contains("on")) return;
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowRight") show(i + 1);
+    else if (e.key === "ArrowLeft") show(i - 1);
+  });
+})();
+</script>
