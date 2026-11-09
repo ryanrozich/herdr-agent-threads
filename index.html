@@ -52,11 +52,11 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 <main>
   <header class="prose">
     <h1>Antigravity and Amp in Threads</h1>
-    <p>Threads now reads Antigravity's CLI (<code>agy</code>) and Amp, and every agent shows its own mark. This is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/10">PR 10</a> on main, separate from the chat look in PR 8. Nothing merges until you say so.</p>
+    <p>Threads now reads Antigravity's CLI (<code>agy</code>), and every agent shows its own mark. <b>Amp is no longer supported</b>, as you asked: an Amp terminal gets a page that says why and links to the README. This is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/10">PR 10</a> on main, separate from the chat look in PR 8. Nothing merges until you say so.</p>
     <div class="status">
-      <span class="pill">310 tests pass</span>
+      <span class="pill">307 tests pass</span>
       <span class="pill">CI green: Biome, shellcheck, jq, private scan, gitleaks</span>
-      <span class="pill">agy 1.5.3 and Amp 0.0.1794 tried live</span>
+      <span class="pill">agy 1.5.3 tried live</span>
     </div>
     <p class="small">The screenshots come from an isolated Herdr window on the mini, using made-up sessions. The live tests on your laptop used throwaway sessions in a scratch folder. Click any image to open it full size. Arrow keys step through the images, and Esc closes.</p>
   </header>
@@ -79,17 +79,17 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 
   <section>
     <div class="prose">
-      <h2>Amp</h2>
+      <h2>Amp: not supported, and why</h2>
+      <p>Amp reading is gone: its reader, the <code>amp threads export</code> call, its tests and the text that listed it. Amp keeps its conversations on its own servers, not on disk, so reading them meant calling Amp over the network on every refresh, and Threads reads only local files.</p>
       <ul>
-        <li>Amp keeps its threads on its own server. On disk it writes only a debug log for each thread and a note of the last thread it ran in each folder.</li>
-        <li>Threads watches that log. When the log grows, Threads reads the thread with Amp's own <code>amp threads export</code>, using the login Amp already has. The export changes nothing and takes about 1.5 s. This makes Amp the one agent Threads reads over the network, and the README now says so.</li>
-        <li>The export holds prompts, replies, tool names, the model, input, output and cache tokens, times to the millisecond, and the thread's title.</li>
-        <li>Threads takes <code>amp threads continue &lt;id&gt;</code> from the command line when it is there. Otherwise it takes the thread Amp last ran in the terminal's folder after that Amp started. When two Amp terminals share a folder, Threads guesses and offers Choose.</li>
+        <li>In an Amp terminal, Threads shows Amp's mark, "Amp isn't supported", one line of why ("Amp keeps its chats online, on Amp's servers, so Threads cannot read them."), and a <b>Why Amp isn't supported</b> button.</li>
+        <li>The button opens the README's new section, <a href="https://github.com/ryanrozich/herdr-agent-threads/blob/agents-agy-amp/README.md#why-amp-isnt-supported">Why Amp isn't supported</a>, which says the same in three plain sentences.</li>
+        <li>Amp is out of the supported list everywhere: the README table, the "isn't supported yet" list for other agents, and the docs.</li>
       </ul>
     </div>
     <div class="grid" data-g>
-      <button class="shot"><img src="shots/amp.jpg" alt="Threads beside a made-up Amp thread, the first turn open"><span>Amp: title, tokens, time, model, cache</span></button>
-      <button class="shot"><img src="shots/amp-light.jpg" alt="The same Amp thread in light"><span>Light</span></button>
+      <button class="shot"><img src="shots/amp-unsupported.jpg" alt="Threads beside an Amp terminal: Amp isn't supported, why, and the button to the README"><span>Beside Amp: the reason in one line, and the README button</span></button>
+      <button class="shot"><img src="shots/amp-unsupported-light.jpg" alt="The same page in light"><span>Light</span></button>
     </div>
   </section>
 
@@ -99,7 +99,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <p>The marks are the icons Herdr itself ships for these agents: LobeHub icons (MIT) and Pi's own mark. The drawings are unchanged, and <code>ICONS.md</code> records each one's source and license. One-colour marks are drawn white and full-colour marks as they come, both on Herdr's dark tile, which matches Herdr's own settings. Claude keeps its orange tile.</p>
     </div>
     <div class="grid" data-g>
-      <button class="shot wide fit"><img src="shots/badges.jpg" alt="The Threads header badge for Codex, OpenCode, Pi, Cursor, Antigravity and Amp"><span>The header badge for each agent, in the app</span></button>
+      <button class="shot wide fit"><img src="shots/badges.jpg" alt="The Threads header badge for Codex, OpenCode, Pi, Cursor, Antigravity and Amp"><span>The header badge for each agent, in the app (taken before Amp was dropped; Amp now gets the page above)</span></button>
       <button class="shot wide fit"><img src="shots/marks.png" alt="All seven marks on their tiles, large"><span>All seven marks on their tiles, drawn large from the same files</span></button>
     </div>
   </section>
@@ -108,11 +108,9 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
     <div class="prose">
       <h2>What I could not read</h2>
       <ul>
-        <li><b>Amp, two terminals in one folder:</b> Amp records one last thread per folder, plus a second hash I could not decode, so Threads guesses.</li>
-        <li><b>Amp offline or logged out:</b> the read fails and says so.</li>
-        <li><b>Pasted images:</b> neither agent stores one in a form Threads can read.</li>
+        <li><b>Pasted images:</b> Antigravity stores none in a form Threads can read.</li>
         <li><b>Antigravity's <code>conversation_summaries.db</code></b> would not open read-only. Threads does not need it.</li>
-        <li><b>The "isn't supported yet" list:</b> it now shows all seven marks (the large sheet above shows the same files). I could not get the mini's Herdr to treat a stand-in program as an unsupported agent, so there is no screenshot of that state.</li>
+        <li><b>The "isn't supported yet" list</b> for other agents Herdr knows shows the six supported marks. I could not get the mini's Herdr to treat a stand-in program as an unknown agent, so there is no screenshot of that list. The Amp page above is found by the program's name, so it has one.</li>
       </ul>
     </div>
   </section>
@@ -122,10 +120,12 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <h2>Try it</h2>
       <div class="steps">
         <ol>
-          <li>Check out the branch and install: <code>git checkout agents-agy-amp &amp;&amp; ./install.sh</code> in your herdr-agent-threads clone.</li>
-          <li>Run <code>agy</code> in a Herdr terminal, send one prompt, and press <kbd>Cmd-Shift-T</kbd>. The badge shows the Antigravity mark, and the turn shows its tokens and model.</li>
-          <li>Do the same with <code>amp</code>. The first read takes about a second and a half.</li>
+          <li>Install the branch: <code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout agents-agy-amp &amp;&amp; git pull &amp;&amp; ./install.sh</code></li>
+          <li>Run <code>agy</code> in a Herdr terminal, send one prompt, and press <kbd>Cmd-Shift-T</kbd>. The badge shows the Antigravity mark, and the turn shows its tokens, time, model and level, and tool count.</li>
+          <li>Send a second prompt in agy. It shows up in Threads within a few seconds.</li>
+          <li>Run <code>amp</code> in another terminal and press <kbd>Cmd-Shift-T</kbd>. Threads says "Amp isn't supported" with the reason, and <b>Why Amp isn't supported</b> opens the README section.</li>
           <li>Open Threads beside Codex, OpenCode, Pi or Cursor to see their marks in the badge.</li>
+          <li>To go back to the chat look afterwards: <code>git checkout chat-look &amp;&amp; git pull &amp;&amp; ./install.sh</code></li>
         </ol>
       </div>
     </div>
