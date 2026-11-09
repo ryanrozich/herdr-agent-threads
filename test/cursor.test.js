@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync, real
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, reply, stats, replaced } from "../mods/agent-threads/turns.js";
-import { harnessOf, harnessOfFile, idOfFile, cursorFolder, cursorStore, cursorArgv, HARNESS } from "../mods/agent-threads/harness.js";
+import { harnessOf, harnessOfFile, idOfFile, cursorFolder, cursorStore, cursorArgv, cursorRoots, HARNESS } from "../mods/agent-threads/harness.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/extract.sh");
@@ -189,6 +189,24 @@ test("a Cursor terminal and its files are told apart from the other agents'", ()
   expect(cursorFolder("/h/.cursor", "/Users/dev/my shop/")).toBe("/h/.cursor/projects/Users-dev-my-shop/agent-transcripts");
   expect(cursorStore(`/h/.cursor/chats/0123abcd/${ID}/store.db`)).toEqual({ data: "/h/.cursor", id: ID });
   expect(cursorStore(`/h/.cursor/chats/0123abcd/${ID}/store.db-wal`)).toBe(null);
+});
+
+test("a newer Cursor keeps its chat store in ~/.config/cursor and its transcripts in ~/.cursor: both are searched, transcripts first", () => {
+  const data = realpathSync(mkdtempSync(join(tmpdir(), "threads-cursor-home-")));
+  const store = cursorStore(`${data}/.config/cursor/chats/0123abcd/${ID}/store.db`);
+  expect(store).toEqual({ data: `${data}/.config/cursor`, id: ID });
+  const roots = cursorRoots(`${data}/.cursor`, store);
+  expect(roots).toEqual([`${data}/.cursor`, `${data}/.config/cursor`]);
+  // An older build: the store sits in the data folder, which is searched once.
+  expect(cursorRoots("/h/.cursor", cursorStore(`/h/.cursor/chats/0123abcd/${ID}/store.db`))).toEqual(["/h/.cursor"]);
+  expect(cursorRoots("/h/.cursor", null)).toEqual(["/h/.cursor"]);
+  // The chat's transcript is found under the first root and not the store's.
+  const dir = cursorFolder(`${data}/.cursor`, "/home/dev/shop");
+  mkdirSync(join(dir, ID), { recursive: true });
+  writeFileSync(join(dir, ID, `${ID}.jsonl`), user("Made-up prompt") + said(text("ok")) + ended());
+  const run = (...a) => { try { return execFileSync("sh", [locator, ...a], { encoding: "utf8" }).trim(); } catch { return null; } };
+  expect(run("cursor-find", store.data, ID)).toBe(null);
+  expect(roots.map((r) => run("cursor-find", r, ID)).find(Boolean)).toBe(join(dir, ID, `${ID}.jsonl`));
 });
 
 test("a Cursor command line names a chat only with --resume <id>", () => {

@@ -30,7 +30,7 @@ import {
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -343,19 +343,22 @@ async function resolvePi({ argv, pid, cwd, cwds, cmd }, current) {
   return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
 }
 
-// A Cursor process keeps its chat's store open, and the store's path names the chat id and the
-// data folder; its transcript is written with the first reply. Without that, --resume <id>,
+// A Cursor process keeps its chat's store open, and the store's path names the chat id; its
+// transcript is written with the first reply, under Cursor's data folder (cursorRoots). Without that, --resume <id>,
 // else the folder's newest transcript since the process started, as for Pi.
 async function resolveCursor({ argv, pid, cwd, cwds, cmd }, current) {
   const who = { harness: "cursor", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const store = pid ? cursorStore(await locate("cursor-open", String(pid))) : null;
   const openStep = { what: "Chat the process has open", detail: store ? store.id.slice(0, 8) : "none", ok: Boolean(store) };
-  const data = store?.data ?? (await locate("cursor-dir")) ?? `${home()}/.cursor`;
+  // The transcripts' folder first: a newer Cursor keeps the store elsewhere (cursorRoots).
+  const roots = cursorRoots((await locate("cursor-dir")) ?? `${home()}/.cursor`, store);
+  const data = roots[0];
   const named = cursorArgv(argv);
   const id = store?.id ?? named.id;
   if (id) {
-    const file = await locate("cursor-find", data, id);
+    let file = null;
+    for (const r of roots) if (!file) file = await locate("cursor-find", r, id);
     const via = store ? "open file" : "argv";
     if (file) return { kind: "found", id, file, via, ...who, guess: false, tried: [program, openStep] };
     if (store) return { kind: "pending", id, via, ...who, tried: [program, openStep], watch: `${data}/projects` };
