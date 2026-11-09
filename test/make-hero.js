@@ -2,11 +2,12 @@
 // storefront project, acme-web. Same line shapes as test/make-fixture.js. Nothing here
 // comes from a real session, and both pasted images are drawn below, with no text in them.
 // docs/develop.md has the steps that turn this into the screenshots.
-// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake]
+// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair]
 // With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
 // With "wake", a background update follows the last turn: a task notification woke the agent
 // 95 s before the script ran and it is still working, so with the terminal reporting working the
 // last turn shows its "Updating" line. Its times are relative to now, so write it just before the shot.
+// With "pair", turn 5 has two pasted images, so the image viewer has one to step to.
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
@@ -189,8 +190,12 @@ assistant([{ type: "text", text: "Added alt text to all three: the product name 
 end(33000);
 
 // Turn 5: a pasted image of a tablet page
-p = prompt([{ type: "text", text: "[Image #2] The filter chips wrap under the search box on tablet. Can you fix it?" },
-  { type: "image", source: { type: "base64", media_type: "image/png", data: mock.toString("base64") } }], 300, { imagePasteIds: [2] });
+p = flags.includes("pair")
+  ? prompt([{ type: "text", text: "[Image #2] [Image #3] The filter chips wrap under the search box on tablet, in both orientations. Can you fix it?" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: mock.toString("base64") } },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: phone.toString("base64") } }], 300, { imagePasteIds: [2, 3] })
+  : prompt([{ type: "text", text: "[Image #2] The filter chips wrap under the search box on tablet. Can you fix it?" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: mock.toString("base64") } }], 300, { imagePasteIds: [2] });
 tool("Read", { file_path: `${cwd}/src/components/FilterBar.tsx` }, "…", p);
 tool("Edit", { file_path: `${cwd}/src/components/FilterBar.tsx` }, "…", p);
 tool("Edit", { file_path: `${cwd}/src/styles/filters.css` }, "…", p);
