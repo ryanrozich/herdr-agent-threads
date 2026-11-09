@@ -23,6 +23,8 @@
 #                                       every turn, so "s" is what closes a row
 #   c  compaction                       {ts}
 #   title  /rename title                {t}
+#   an     the agent's name             {t}: an agent-name line, which Claude Code writes
+#                                       again through the session
 # Thinking blocks, tool inputs, tool results and bookkeeping lines are dropped. Texts are
 # capped at 200 KB so one chunk's output stays well under exec's 8 MiB limit.
 
@@ -136,6 +138,7 @@ def event:
   elif .type == "attachment" then (if .attachment.type? == "queued_command" then queued_event else empty end)
   elif .type == "system" and .subtype == "compact_boundary" then {k: "c", ts: .timestamp}
   elif .type == "custom-title" then {k: "title", t: .customTitle}
+  elif .type == "agent-name" and (.agentName | type) == "string" and (.agentName | length) > 0 then {k: "an", t: (.agentName | .[0:80])}
   else empty end;
 
 (fromjson? // empty) | select(type == "object") | event

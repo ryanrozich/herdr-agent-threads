@@ -37,8 +37,8 @@ const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk"]);
 
 export function newSession(id, file) {
   return {
-    id, file, offset: 0, size: null, head: null, title: null, turns: [], seg: null, startedAt: null,
-    open: [], pendingCmd: null, clearAt: null, followActive: false, version: 0,
+    id, file, offset: 0, size: null, head: null, title: null, agentName: null, turns: [], seg: null, startedAt: null,
+    open: [], pendingCmd: null, clearAt: null, followActive: false, followSince: null, version: 0,
     ctx: null, settled: 0, anchor: null, clock: null, since: null, guess: null,
   };
 }
@@ -160,6 +160,9 @@ function newTurn(s, e) {
     cmd: Boolean(e.cmd),
     after: [],
     tools: 0,
+    // Tool calls in background wake-ups after the reply (not in tools), and in the latest one.
+    followTools: 0,
+    wakeTools: 0,
     toolNames: {},
     usage: {},
     // Codex names the model before the prompt it applies to (a "ctx" event).
@@ -255,7 +258,7 @@ export function apply(s, e) {
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
-  if (s.pendingCmd && e.k !== "c" && e.k !== "title") s.pendingCmd = null;
+  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
     case "p": {
@@ -279,6 +282,9 @@ export function apply(s, e) {
         cur.latestParts = [];
         s.seg = "follow";
         s.followActive = true;
+        // This wake-up's own clock and tool count, apart from the prompt's.
+        s.followSince = e.ts ? Date.parse(e.ts) : null;
+        cur.wakeTools = 0;
         startModelTurn(s, e);
       }
       return;
@@ -294,7 +300,8 @@ export function apply(s, e) {
       return;
     case "u":
       if (!cur) return;
-      cur.tools++;
+      // A background wake-up's tool calls are counted apart from the prompt's own.
+      if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else cur.tools++;
       cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1;
       if (s.seg === "own") cur.after = [];
       else cur.latestParts = [];
@@ -304,6 +311,7 @@ export function apply(s, e) {
       cur.usage[e.id] = e.u;
       if (e.m) cur.model = e.m;
       if (e.e) cur.effort = e.e;
+      if (typeof e.a === "string" && e.a) cur.by = e.a;
       if (e.ts) cur.endTs = Date.parse(e.ts);
       return;
     case "e":
@@ -350,6 +358,11 @@ export function apply(s, e) {
       return;
     case "title":
       if (e.t) s.title = e.t;
+      return;
+    // The agent's name, where the harness records one: Claude Code's agent-name line, a
+    // Codex subagent's nickname. OpenCode names the agent on each reply ("m" a).
+    case "an":
+      if (e.t) s.agentName = e.t;
       return;
     case "ctx":
       s.ctx = { m: e.m ?? null, e: e.e ?? null };

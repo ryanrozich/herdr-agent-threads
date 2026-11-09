@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
-  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, commandLayout, ROW, senderLabel, senderIcon, kindWords,
+  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -166,7 +169,8 @@ test("keys: a agents, t terminal, comma settings; none while filtering", () => {
 });
 
 // Characters per line in a collapsed row's prompt at a pane width (same formula as main.js).
-const per = (w) => rowTextWidth(w) / ROW.PROMPT_CHAR;
+// rowLines on its own, at a fixed text width per pane width (the wrapping, not the layout).
+const per = (w) => (w - 32) / ROW.PROMPT_CHAR;
 
 test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () => {
   for (const w of [240, 380]) {
@@ -219,16 +223,58 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
     const b = rowShape({ prompt: long, reply, width: w, promptLines: 2, replyLines: 3 });
     expect(b.p).toBe(2);
     expect(b.r).toBe(w === 240 ? 3 : b.r);
-    expect(b.height).toBe(rowHeight(b.p, b.r));
+    expect(b.height).toBe(rowHeight(b.p, b.r, (b.pMore ? 1 : 0) + (b.rMore ? 1 : 0)));
+    expect(b.pMore).toBe(true);
+    expect(a.pMore || a.rMore).toBe(false);
+    // The bubble fits its widest line, up to 82% of the text width (90% under 320 px).
+    expect(a.bubbleW).toBeLessThan(b.bubbleW);
+    expect(b.bubbleW).toBeLessThanOrEqual(bubbleMax(w));
     const one = rowShape({ prompt: long, reply, width: w, promptLines: 1, replyLines: 1 });
     expect([one.p, one.r]).toEqual([1, 1]);
     const six = rowShape({ prompt: long.repeat(4), reply: reply.repeat(4), width: w, promptLines: 6, replyLines: 8 });
     expect(six.p).toBe(6);
     expect(six.r).toBe(8);
   }
-  expect(rowHeight(1, 1)).toBe(2 + 14 + 16 + 3 + 18 + 3 + 17);
-  expect(rowHeight(2, 3)).toBe(2 + 14 + 16 + 3 + 36 + 3 + 51);
-  expect(rowHeight(1, 1, true)).toBe(rowHeight(1, 1) + 16);
+  // Padding 8, meta 16, gap 6, bubble 6 + lines + 6, gap 6, the agent's name 18, reply lines,
+  // gap 6, stats 16, padding 10. Lines are 21 px at the 14 px default.
+  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 21 + 6 + 18 + 21 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 84 + 6 + 18 + 126 + 6 + 16 + 10);
+  expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
+  expect(rowHeight(1, 1, 0, 24)).toBe(rowHeight(1, 1) + 6);
+  expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
+  expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
+});
+
+test("reading type: 14 px on 21 px lines by default, and a line of about 70 characters at any width", () => {
+  const d = readType();
+  expect([d.size, d.line, d.small]).toEqual([14, 21, 13.5]);
+  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8).
+  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.43);
+  expect(readType(16).line).toBe(24);
+  expect(readType(40).size).toBe(18);
+  expect(readType(Number.NaN).size).toBe(14);
+  // The reading line is MEASURE characters of prose: 461 px at 14 px, 527 at 16.
+  expect(d.measure).toBe(Math.round(MEASURE * PROSE_EM * 14));
+  expect(MEASURE).toBeGreaterThanOrEqual(65);
+  expect(MEASURE).toBeLessThanOrEqual(75);
+  expect(readType(16).measure).toBeGreaterThan(d.measure);
+  // A wide pane: the reply and the bubble stop at the reading line; a narrow one keeps its width.
+  expect(readWidth(960)).toBe(d.measure);
+  expect(readWidth(520)).toBe(d.measure);
+  expect(readWidth(280)).toBe(replyWidth(280));
+  expect(replyWidth(960)).toBe(928);
+  expect(bubbleMax(960)).toBe(d.measure + 20);
+  expect(bubbleMax(960, 18)).toBeGreaterThan(bubbleMax(960));
+  // At 960 px a long reply wraps at the reading line, not across the pane.
+  const words = "the nightly migration now runs before the deploy so the cache is warm ".repeat(8);
+  const sh = rowShape({ prompt: "x", reply: words, width: 960, promptLines: 1, replyLines: 4 });
+  for (const l of sh.reply) expect(l.length).toBeLessThanOrEqual(Math.ceil(d.measure / d.reply) + 1);
+  expect(sh.reply[0].length).toBeGreaterThan(55);
+  // Bigger text: fewer characters a line, taller lines.
+  const big = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4, size: 18 });
+  const base = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4 });
+  expect(big.reply[0].length).toBeLessThan(base.reply[0].length);
+  expect(big.height).toBe(rowHeight(1, 4, 1, 27));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {
@@ -236,7 +282,7 @@ test("command rows: the chip takes width from the first line and long names cut 
   expect(c).toMatchObject({ label: "/review-pr", lines: ["12"], rows: 1 });
   const long = commandLayout("/plugin-marketplace:review-pull-request", "12 --deep check the retry path and the backoff", 240, 2);
   expect(long.label).toContain("…");
-  expect(long.label.startsWith("/plug")).toBe(true);
+  expect(long.label.startsWith("/pl")).toBe(true);
   expect(long.chipW).toBeLessThanOrEqual(Math.floor(rowTextWidth(240) * 0.45));
   // the args wrap in the space right of the chip, so they need more lines than the full width
   const plain = rowLines("12 --deep check the retry path and the backoff", 2, rowTextWidth(240) / ROW.PROMPT_CHAR);
@@ -388,4 +434,98 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
     const ink = cardLabelColor(c);
     expect(ink === c.foreground || contrast(ink, c.raised) >= 4.5).toBe(true);
   }
+});
+
+test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, leaving Threads at least 240", () => {
+  expect(PIN_SPLIT_MIN).toBe(480);
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 240], [600, 240], [700, 252], [800, 288], [960, 320], [1600, 320]]) {
+    expect(pinColumn(w)).toBe(px);
+    if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+  }
+  expect(pinColumn(Number.NaN)).toBe(null);
+  expect(headerButtonWidth(null)).toBe(24);
+  expect(headerButtonWidth("Pinned 2")).toBe(69);
+});
+
+test("codeRows: a code line wrapped word by word, a long word split across rows", () => {
+  expect(codeRows("ls", 40)).toBe(1);
+  expect(codeRows("", 40)).toBe(1);
+  expect(codeRows("a\nb\nc", 40)).toBe(3);
+  expect(codeRows("aaaa bbbb cccc", 9)).toBe(2);
+  expect(codeRows("x".repeat(25), 10)).toBe(3);
+  expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
+});
+
+test("columnResize: the column by d and Threads by -d, within 200 to 640 px and Threads at least 240", () => {
+  expect(columnResize(252, 700, 40)).toEqual({ column: 292, main: 660 });
+  expect(columnResize(252, 700, -40)).toEqual({ column: 212, main: 740 });
+  expect(columnResize(212, 740, -40)).toEqual({ column: 200, main: 752 });
+  expect(columnResize(200, 752, -40)).toBe(null);
+  expect(columnResize(252, 260, 40)).toEqual({ column: 272, main: 240 });
+  expect(columnResize(272, 240, 40)).toBe(null);
+  expect(columnResize(630, 900, 40)).toEqual({ column: 640, main: 890 });
+  expect(columnResize(undefined, 700, 40)).toBe(null);
+});
+
+test("a collapsed reply as Markdown: whole source lines within the line budget, a cut fence closed", () => {
+  const md = "## Result\n\nThe fix is in.\n\n- one\n- two\n- three\n\n```js\nconst a = 1;\nconst b = 2;\nconst c = 3;\n```\n\nDone.";
+  const all = mdPreview(md, 20, 70);
+  expect(all.cut).toBe(false);
+  expect(all.md).toBe(md);
+  const four = mdPreview(md, 4, 70);
+  expect(four.cut).toBe(true);
+  expect(four.md).toBe("## Result\n\nThe fix is in.\n\n- one");
+  expect(four.lines).toBeLessThanOrEqual(4);
+  // Cut inside the code block: the fence is closed.
+  const code = mdPreview(md, 7.5, 70);
+  expect(code.md.endsWith("const a = 1;\n```")).toBe(true);
+  // A long paragraph counts its wrapped lines and is not split mid-line.
+  const long = `${"word ".repeat(60).trim()}\n\nsecond`;
+  const three = mdPreview(long, 3, 70);
+  expect(three.cut).toBe(true);
+  expect(three.md.endsWith(" …")).toBe(true);
+  expect(three.md.length).toBeLessThanOrEqual(3 * 70);
+  expect(three.lines).toBe(3);
+  expect(mdPreview(long, 5, 70).md).toBe("word ".repeat(60).trim());
+  expect(mdPreview("", 6, 70).md).toBe("");
+});
+
+test("the reading width Threads opens at: 545 px at 14 px, scaled with Text size", () => {
+  expect(fitWidth()).toBe(545);
+  expect(fitWidth(12)).toBe(479);
+  expect(fitWidth(18)).toBe(676);
+});
+
+test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside fenced code", () => {
+  expect(mdChunks("short")).toEqual(["short"]);
+  const para = (i) => `Paragraph ${i}: ${"words in a sentence ".repeat(12).trim()}.`;
+  const fence = `\`\`\`sh\n${"echo one\n\necho two\n".repeat(3)}\`\`\``;
+  const md = [...Array.from({ length: 30 }, (_, i) => para(i)), fence, para(30)].join("\n\n");
+  const parts = mdChunks(md, 1000);
+  expect(parts.length).toBeGreaterThan(3);
+  expect(parts.every((p) => Buffer.byteLength(p) <= 1000)).toBe(true);
+  expect(parts.join("\n\n")).toBe(md);
+  expect(parts.some((p) => p.includes(fence))).toBe(true);
+  // One paragraph longer than the limit splits at words; multibyte text counts in bytes.
+  const long = "naïve café — ".repeat(200).trim();
+  const lp = mdChunks(long, 500);
+  expect(lp.every((p) => Buffer.byteLength(p) <= 500)).toBe(true);
+  expect(lp.join("")).toBe(long);
+});
+
+test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
+  expect(escapeDollars("The $41.250 total includes **4,180 look-ups at $0.009 each**."))
+    .toBe("The \\$41.250 total includes **4,180 look-ups at \\$0.009 each**.");
+  expect(escapeDollars("Run `echo $HOME` and pay \\$5")).toBe("Run `echo $HOME` and pay \\$5");
+  expect(escapeDollars("```sh\nexport A=$B\n```\n$1")).toBe("```sh\nexport A=$B\n```\n\\$1");
+  expect(escapeDollars("no prices")).toBe("no prices");
+});
+
+test("cutMd: a paragraph end when one is near, no empty list item, a bold closed, a table row whole", () => {
+  const md = `${"Intro words here. ".repeat(60)}\n\nThese are the open choices:\n\n1. **Delivery credit:** add $25 to the route account before Friday.\n\n2. **Bulbs:** a dozen are listed twice.`;
+  expect(cutMd(md, md.indexOf("1. **Delivery") + 6)).toMatch(/These are the open choices: …$/);
+  expect(cutMd("Choices:\n\n- one\n- ", 40)).toBe("Choices:\n\n- one …");
+  expect(cutMd("Recommendation: **$25 credit to finish the delivery routes, then cache", 60))
+    .toBe("Recommendation: **$25 credit to finish the delivery routes,** …");
+  expect(cutMd("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\nafter", 40)).toBe("Start\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n…");
 });

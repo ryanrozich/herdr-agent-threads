@@ -90,6 +90,7 @@ test("2.x: builds a finished turn from session_message", () => {
   expect(t.tools).toBe(1);
   expect(t.model).toBe("glm-5.3-flash-free");
   expect(t.effort).toBe("high");
+  expect(t.by).toBe("build"); // the OpenCode agent that replied
   expect(t.durationMs).toBe(4000);
   expect(t.done).toBe(true);
   const st = stats(t);

@@ -107,6 +107,14 @@ export function cursorStore(path) {
   return m ? { data: m[1], id: m[2] } : null;
 }
 
+// Where to look for a Cursor chat's transcript, in order. Transcripts live under Cursor's data
+// folder (~/.cursor, or CURSOR_DATA_DIR), in projects/. The open store names a second
+// folder: older builds keep it in the same data folder (<data>/chats), and newer ones keep it
+// under ~/.config/cursor/chats while the transcripts stay in ~/.cursor/projects.
+export function cursorRoots(dataDir, store) {
+  return [...new Set([dataDir, store?.data].filter(Boolean))];
+}
+
 // The chat named on a Cursor command line: { id, cont }. --resume takes a chat id, or none to
 // pick one in the terminal; --continue is the folder's newest chat.
 export function cursorArgv(argv) {

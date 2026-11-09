@@ -6,7 +6,7 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply } from "../mods/agent-threads/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -65,7 +65,7 @@ let herdrVersion = "0.1.13";
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: () => el, image: () => el }));
 mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
-  InputState: { new: () => ({ on() {}, value: () => "", set_value() {}, focus() {} }) },
+  InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
@@ -74,7 +74,7 @@ mock.module("gpui-base", () => ({
     draw({ start: 0, end: n });
     return el;
   },
-  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: () => { const st = { handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
+  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
 // ("in"), so a test can time the synchronous stretches between awaits.
@@ -117,6 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, MD_MAX, alpha: alphaForTest } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -325,14 +326,15 @@ test("the working card's estimate uses the 21 px prompt and 20 px note lines it 
     const r = v.rows().find((x) => x.kind === "working");
     if (!r) continue;
     seen++;
-    const tw = v.inner() - 2;
     const est = v.estimate(r);
-    // The smallest it can be: one prompt line, one chip row, one note line.
-    expect(est).toBeGreaterThanOrEqual(8 + 2 + 20 + 18 + 8 + 21 + 8 + 27 + 3 + 20);
-    // Each prompt line counts 21 px and each note line 20 px, at the card's text width.
-    const prompt = v.wrapped(r.turn.prompt.split("\n").slice(0, 3).join("\n"), tw, 6.2);
-    const note = v.wrapped("No final reply yet. It appears here when Claude finishes this turn.", tw, 6.0);
-    expect(est).toBeGreaterThanOrEqual(8 + 2 + 20 + 18 + 8 + Math.min(6, prompt) * 21 + 8 + 27 + 3 + note * 20 - 21 * 3);
+    // The smallest it can be: padding, meta, one prompt line in the bubble, the live line,
+    // one note line, padding.
+    expect(est).toBeGreaterThanOrEqual(8 + 16 + 6 + 12 + 21 + 6 + 18 + 6 + 20 + 10);
+    // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
+    const g = v.workingGeom(r.turn);
+    expect(est).toBe(8 + 16 + 6 + 12 + g.lines * 21 + 6 + 18 + 6 + g.note * 20 + 10);
+    const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
+    expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
@@ -455,10 +457,10 @@ test("an agent row's sender label leaves room for the time and #n at 240 px (R6)
   t1.followups = 12; t1.n = 128;
   for (const w of [240, 380]) {
     v.width = w;
-    const tw = (await import("../mods/agent-threads/ui.js")).rowTextWidth(w, true);
+    const tw = (await import("../mods/agent-threads/ui.js")).replyWidth(w);
     const room = v.labelRoom(t1, tw);
-    // icon 12 + label + time + #n + bell + gaps fit inside the text width
-    const used = 12 + room + 8 * 6.6 + 4 * 7.2 + (13 + 2 * 6.6) + 6 * 5;
+    // icon 12 + label + " · " + #n + " · " + time + bell + gaps fit inside the meta line
+    const used = 12 + room + 3 * 6.6 + 8 * 6.6 + 4 * 7.2 + (13 + 2 * 6.6) + 6 * 5;
     expect(used).toBeLessThanOrEqual(tw);
     draw(v, cx);
   }
@@ -637,7 +639,7 @@ test("the footer offers s select with a turn open and q quote with a local termi
   v.toggle(v.sel, cx);
   expect(hints()).not.toContain("s select");
   v.width = 240;
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin"]);
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin", "v pinned"]);
   // quoteKey from the settings file.
   v.width = 380;
   v.applyPrefs('{"quoteKey": "y"}');
@@ -794,12 +796,13 @@ test("the command name is quiet: no fill, muted, foreground when bare, tinted on
 
 test("prompt quotes: rows draw a bar line within the budget, the card draws Markdown", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.width = 380;
   draw(v, cx);
   const snap = () => state.shared["threads.debug"].t4;
   const turn = (n) => snap().detail.find((d) => d.startsWith(`turn#${n} `));
-  // "> two lines\n\ncomment" at Prompt lines 2: one quote line, one comment line.
-  expect(turn(3)).toMatch(/^turn#3 p2\/r\d q1 h\d+ /);
+  // "> two lines\n\ncomment": one quote line, then the comment's lines.
+  expect(turn(3)).toMatch(/^turn#3 p[23]\/r\d q1 h\d+ /);
   expect(turn(3)).toContain("▎The retry path");
   expect(turn(1)).toMatch(/^turn#1 p\d\/r\d q\d qonly /);
   expect(turn(2)).toMatch(/^turn#2 p\d\/r\d h/);
@@ -807,7 +810,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   // Heights match the units.
   const { rowShape } = await import("../mods/agent-threads/ui.js");
   const t3 = v.current().turns[2];
-  expect(v.shape(t3).height).toBe(rowShape({ prompt: t3.prompt.slice(0, 1200), reply: v.shape(t3).reply.join(" "), width: 380, promptLines: 2, replyLines: 3 }).height);
+  expect(v.shape(t3).height).toBe(rowShape({ prompt: t3.prompt.slice(0, 1200), reply: v.shape(t3).reply.join(" "), width: 380, promptLines: v.prefs.promptLines, replyLines: v.prefs.replyLines }).height);
   // With Prompt lines 1 a quote and a comment show the comment only.
   v.prefs = { ...v.prefs, promptLines: 1 };
   draw(v, cx);
@@ -849,13 +852,17 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full = new Set(["0:3"]);
   mdSources.length = 0;
   draw(v, cx);
-  let src = mdSources.find(([id]) => id === "th-you-you:0:3")[1];
+  // Longer than Herdr draws in one Markdown view: stacked blocks, each within MD_MAX.
+  const youParts = () => mdSources.filter(([id]) => id === "th-you-you:0:3" || id.startsWith("th-you-you:0:3-")).map(([, m]) => m);
+  expect(youParts().length).toBeGreaterThan(1);
+  expect(youParts().every((m) => Buffer.byteLength(m) <= MD_MAX)).toBe(true);
+  let src = youParts().join("\n\n");
   expect(src).toContain("TAIL\\-END");
   expect(src).not.toContain("more characters not shown");
   t3b.prompt = `${"word ".repeat(50000)}end`;
   mdSources.length = 0;
   draw(v, cx);
-  src = mdSources.find(([id]) => id === "th-you-you:0:3")[1];
+  src = youParts().join("\n\n");
   expect(src).toMatch(/\*… 50,003 more characters not shown\*$/);
   t3b.prompt = keep;
   v.full.clear();
@@ -864,7 +871,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--links"));
   v.width = 380;
-  v.applyPrefs(JSON.stringify({ links: [
+  v.applyPrefs(JSON.stringify({ bubbleColor: "plain", agentBubbleColor: "plain", links: [
     { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" },
     { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
     { pattern: "(a+)+", url: "https://x.example/$1" },
@@ -883,16 +890,36 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
+  // Code blocks wrap: the editor's soft_wrap is on, so a long line never leaves the block
+  // scrolled sideways, and the box is as tall as the wrapped rows.
+  const code = v.rows().find((r) => r.kind === "code");
+  expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
+  expect(v.codeBoxH(code)).toBe(36);
+  v.makeCode(code.key.split(":").slice(1, 3).join(":"));
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
+  const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
+  const shape = v.codeShape(long);
+  expect(shape.rows).toBeGreaterThan(1);
+  expect(shape.shown).toBe(shape.rows);
+  expect(shape.caption).toBe(false);
+  expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
+  // The label is the fence's language, or nothing: never "code".
+  const head = v.rows().find((r) => r.kind === "codehead");
+  rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  expect(hs).not.toContain("code");
   expect(v.rows().filter((r) => r.kind === "md").at(-1).links).toBe(0);
   const snap = state.shared["threads.debug"].t4;
   expect(snap.detail.find((d) => d.startsWith("md#1"))).toMatch(/^md#1 links 2 h\d+ \| \]\(https:\/\/linear\.app\/acme\/issue\/ACME-123\) \]\(https:\/\/github\.com\/acme\/widgets\/pull\/45\) /);
   expect(snap.detail.find((d) => d.startsWith("you#1"))).toMatch(/ md q1 code0 links3 /);
   expect(snap.links).toMatchObject({ count: 3, valid: 2 });
-  // Collapsed rows stay plain text.
+  // Collapsed rows get no link rules: the reply's own Markdown shows as written, and
+  // ACME-123 and #45 stay plain.
   v.open.clear();
   draw(v, cx);
   const row = state.shared["threads.debug"].t4.detail.find((d) => d.startsWith("turn#1"));
-  expect(row).not.toContain("](");
+  expect(row).not.toContain("[ACME-123](");
+  expect(row).not.toContain("[#45](");
+  expect(v.shape(v.findTurn("0:1")).md).toContain("[ACME-1](https://x.example/one)");
   // Without a repo, the {repo} rule is skipped: #45 stays plain.
   v.remote = { key: "y", repo: null, owner: null, why: "no git remote origin" };
   v.open = new Set(["0:1"]);
@@ -1213,13 +1240,15 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     v.render(cx);
     const drawn = rec;
     rec = null;
-    return { width: v.width, listH: v.listH, rows: v.rows().map((r) => r.key), est: [...v.sizesMemo], list: lastList, drawn };
+    return { width: v.width, pane: v.pw(), listH: v.listH, rows: v.rows().map((r) => r.key), est: [...v.sizesMemo], list: lastList, drawn };
   };
   try {
     for (const w of [240, 380, 640]) {
       const one = run(1, w);
       const z = run(0.9, w * 0.9);
-      expect(z.width).toBeCloseTo(w, 6);
+      // The pane's width in design px, and the column the turns use: at most fitWidth.
+      expect(z.pane).toBeCloseTo(w, 6);
+      expect(z.width).toBeCloseTo(Math.min(w, fitWidth()), 6);
       expect(z.listH).toBeCloseTo(700, 6);
       expect(z.rows).toEqual(one.rows);
       expect(z.est).toEqual(one.est);
@@ -1251,16 +1280,19 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       v.render(cx);
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
       rec = null;
-      expect(v.width).toBeCloseTo(w, 6);
-      const g = v.barGeom(w, v.findTurn(key));
+      // A pane wider than fitWidth centres a column that wide; a press is read in its px.
+      const c = Math.min(w, fitWidth());
+      expect(v.width).toBeCloseTo(c, 6);
+      const left = (w - c) / 2;
+      const g = v.barGeom(c, v.findTurn(key));
       for (const [name, b] of Object.entries(g)) {
         if (!b) continue;
-        down({ local_position: { x: ((b[0] + b[1]) / 2) * 0.9, y: 10 }, bounds: { width: w * 0.9 } });
+        down({ local_position: { x: (left + (b[0] + b[1]) / 2) * 0.9, y: 10 }, bounds: { width: w * 0.9 } });
         v.sel = key;
         // Only the hit is checked: the handlers themselves are covered elsewhere.
         const hit = v.barHit(v.pressX, v.bodyW, v.findTurn(key));
         expect(hit).toBe(name);
-        expect(v.bodyW).toBeCloseTo(w, 6);
+        expect(v.bodyW).toBeCloseTo(c, 6);
       }
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
@@ -1297,7 +1329,8 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       const parts = v.rows().filter((r) => PROBED_KINDS.includes(r.kind) && partOf(r, key));
       expect(parts.map((r) => r.kind)).toEqual(expect.arrayContaining(["you", "rhead", "md", "lhead", "latest", "stats"]));
       const probes = probeEntries(frame(v, cx));
-      expect([...probes.keys()].sort()).toEqual(parts.map((r) => r.key).sort());
+      // The closed rows' Markdown reply blocks are measured too ("cmd:<key>").
+      expect([...probes.keys()].filter((k) => !k.startsWith("cmd:")).sort()).toEqual(parts.map((r) => r.key).sort());
       // Each part reports a height in zoomed px; the list then gets that part's size.
       const fed = new Map();
       parts.forEach((r, i) => {
@@ -1305,6 +1338,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
         fed.set(r.key, H);
         probes.get(r.key)({ width: v.inner() * zoom, height: H * zoom }, cx);
       });
+      for (const [k, f] of probes) if (k.startsWith("cmd:")) f({ width: v.inner() * zoom, height: 42 * zoom }, cx);
       const calls = frame(v, cx);
       expect(probeEntries(calls).size).toBe(0); // measured parts leave the probe
       const rows = v.rows();
@@ -1336,6 +1370,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
 
 test("V3b: reply and latest TextViews never scroll, and only the YOU box over 420 px does", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--langs", "--long", "--blocks"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   v.full = new Set(v.current().turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
   views.length = 0;
@@ -1350,7 +1385,7 @@ test("V3b: reply and latest TextViews never scroll, and only the YOU box over 42
   for (const x of views.filter((y) => y.id.startsWith("th-probe-"))) expect(x.calls.some(([n]) => n === "scrollable")).toBe(false);
 });
 
-test("V3b: the first-frame estimate is never under the 21 px line reference, and at most a line and 18 px over", async () => {
+test("V3b: the first-frame estimate is never under the reading-line reference, and at most a line and 18 px over", async () => {
   const { wrappedLines } = await import("../mods/agent-threads/ui.js");
   const { v, cx } = await pane(fixture("--extra", "4", "--langs", "--edge", "--blocks"));
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
@@ -1359,11 +1394,13 @@ test("V3b: the first-frame estimate is never under the 21 px line reference, and
     let n = 0;
     for (const r of v.rows().filter((x) => x.kind === "md")) {
       const blocks = r.src.split(/\n{2,}/);
-      const per = Math.floor(v.inner() / 6.1);
-      const ref = 6 + blocks.reduce((h, b) => h + wrappedLines(b.replace(/[*_`#>]/g, ""), per) * 21, 0) + (blocks.length - 1) * 12;
+      // The reading line (14 px text on 21 px lines, at most about 70 characters wide).
+      const per = Math.floor(v.prose() / v.charW(6.1));
+      const line = v.rt().line;
+      const ref = 6 + blocks.reduce((h, b) => h + wrappedLines(b.replace(/[*_`#>]/g, ""), per) * line, 0) + (blocks.length - 1) * v.paraGap();
       const est = v.estimate(r);
       expect(est).toBeGreaterThanOrEqual(ref);
-      expect(est).toBeLessThanOrEqual(ref + 21 + 18);
+      expect(est).toBeLessThanOrEqual(ref + line + 18);
       n++;
     }
     expect(n).toBeGreaterThan(5);
@@ -1517,7 +1554,7 @@ test("C2: plain chip names, and i or a click on the stats shows a legend of the 
 
 // ---- round 3: D1 ----------------------------------------------------------------------------
 
-test("D1: FINAL REPLY, LATEST UPDATE, YOU and the counts line draw in muted, or foreground where muted is faint", async () => {
+test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where muted is faint; the chat look has no FINAL REPLY or YOU label", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
@@ -1529,14 +1566,15 @@ test("D1: FINAL REPLY, LATEST UPDATE, YOU and the counts line draw in muted, or 
   };
   const counts = v.countsLine(t);
   let calls = frame(v, cx);
-  for (const label of ["FINAL REPLY", "LATEST UPDATE", "YOU", counts]) expect(colourOf(calls, label)).toBe(theme.muted);
+  for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.muted);
+  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU"))).toBe(false);
   // A theme whose muted reads under 4.5:1 on the card: foreground.
   const faint = { ...theme, muted: "#5a5a5a" };
   const real = theme.muted;
   try {
     Object.assign(theme, faint);
     calls = frame(v, cx);
-    for (const label of ["FINAL REPLY", "LATEST UPDATE", "YOU", counts]) expect(colourOf(calls, label)).toBe(theme.foreground);
+    for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.foreground);
   } finally { theme.muted = real; }
   draw(v, cx);
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);
@@ -1633,7 +1671,7 @@ test("the Quote button in Select view quotes what ⌘C copied and leaves the key
   } finally { v.h.focus = focus; v.barHit = hit; }
 });
 
-test("pasted images: thumbnails in rows from 300 px, a count when narrower, decoded on first draw, larger in the open card", async () => {
+test("pasted images: tiles over the message at any width, decoded on first draw, opened full size one at a time", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--images"));
   const turns = v.current().turns.filter((t) => t.images.length);
   expect(turns.map((t) => t.images.map((i) => i.n))).toEqual([[1], [2, 3], [4]]);
@@ -1641,14 +1679,13 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   expect(turns[2].prompt).toBe("[Image #4]");
   const two = turns[1];
   const key = `0:${two.n}`;
-  // 380 px: a strip of thumbnails adds a 40 px line to the row; 240 px: none, the meta
-  // line counts them.
-  v.width = 380;
-  const at380 = v.shape(two).height;
-  expect(v.shape(two).thumbs).toBe(true);
-  expect(at380 - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(43);
-  v.width = 240;
-  expect(v.shape(two).thumbs).toBeUndefined();
+  // A row of tiles over the bubble: a third of the widest bubble high (56 to 120 px), and a gap.
+  for (const [w, size] of [[240, 58], [380, 91], [640, 120]]) {
+    v.width = w;
+    expect(thumbSize(w)).toBe(size);
+    expect(v.shape(two).thumbs).toBe(true);
+    expect(v.shape(two).height - v.shape({ ...two, images: [], shapeKey: null }).height).toBe(size + ROW.GAP);
+  }
   v.width = 380;
   // Nothing is decoded until a row with images is drawn; then one prompt at a time.
   expect(v.imgs?.size ?? 0).toBe(0);
@@ -1661,26 +1698,42 @@ test("pasted images: thumbnails in rows from 300 px, a count when narrower, deco
   expect(f).toEqual({ i: 0, path: `data/agent-threads/images/f/${two.imgLine}-0.png`, w: 300, h: 600 });
   expect(existsSync(join(app, f.path))).toBe(true);
   expect(v.imgFile(two, 1)).toMatchObject({ w: 400, h: 400 });
-  // Open: one part per image after YOU, at most 260 px tall, never wider than its own size;
-  // a click shows it at full size, and again folds it.
+  // Tiles take their image's shape: a tall one is 0.75 of the height wide, a square one square.
+  const L = v.tileLayout(two);
+  expect(L.tiles).toEqual([{ i: 0, w: 68, x: 0 }, { i: 1, w: 91, x: 74 }]);
+  expect(L.more).toBe(0);
+  // Open: the tiles over the message; a press on the second tile opens it full size under
+  // them, and again closes it.
   v.toggle(key, cx);
-  const parts = v.rows().filter((r) => r.kind === "img" && r.key.startsWith(`img:${key}:`));
-  expect(parts.map((r) => r.i)).toEqual([0, 1]);
-  const rows = v.rows();
-  expect(rows[rows.findIndex((r) => r.key === `you:${key}`) + 1].kind).toBe("img");
-  expect(v.imgBox(parts[0])).toEqual({ w: 130, h: 260 });
-  expect(v.height(parts[0])).toBe(8 + 4 + 18 + 260);
-  v.click(parts[0].key, cx);
-  const big = v.rows().find((r) => r.key === parts[0].key);
-  expect(big.full).toBe(true);
-  expect(v.imgBox(big)).toEqual({ w: 300, h: 600 });
-  v.click(parts[0].key, cx);
-  expect(v.rows().find((r) => r.key === parts[0].key).full).toBe(false);
+  let rows = v.rows();
+  const at = (k) => rows.findIndex((r) => r.key === k);
+  expect(at(`imgs:${key}`)).toBe(at(key) + 1);
+  expect(at(`you:${key}`)).toBe(at(`imgs:${key}`) + 1);
+  expect(v.height(rows[at(`imgs:${key}`)])).toBe(8 + 91);
+  v.bodyW = 380;
+  v.pressX = 380 - ROW.PAD_X - 10; // inside the right-hand tile
+  v.click(`imgs:${key}`, cx);
+  rows = v.rows();
+  const big = rows[at(`imgs:${key}`) + 1];
+  expect(big).toMatchObject({ kind: "img", key: `img:${key}:1`, full: true });
+  const side = Math.min(400, v.inner()); // at the card's width, never enlarged
+  expect(v.imgBox(big)).toEqual({ w: side, h: side });
+  v.click(big.key, cx);
+  expect(v.rows().some((r) => r.kind === "img")).toBe(false);
   // Drawn rows and cards hold image elements with the cached paths.
   rec = [];
   v.render(cx);
   const drawn = rec; rec = null;
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
+});
+
+test("tiles that do not fit the widest bubble end in +N", () => {
+  const sq = { w: 400, h: 400 };
+  const L = tileRow([sq, sq, sq, sq, sq], 380);
+  expect(L.tiles.map((c) => c.i)).toEqual([0, 1]);
+  expect(L.more).toBe(3);
+  expect(L.width).toBeLessThanOrEqual(bubbleMax(380));
+  expect(tileRow([null], 240).tiles).toEqual([{ i: 0, w: 58, x: 0 }]);
 });
 
 test("a session over several days draws a day band per day, with its shown turns counted", async () => {
@@ -2157,7 +2210,7 @@ test("a new reply shows until the turn is read", async () => {
   expect(v.pinnedList()[0].state).toBe("quiet");
 });
 
-test("search: the tray stays, a visit shows the one turn with a note, and the search is kept", async () => {
+test("search: the pins stay, a visit shows the one turn with a note, and the search is kept", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const a = keys()[0];
   v.sel = a;
@@ -2287,18 +2340,15 @@ test("pin keys work in a focused read-only editor, and do nothing when held", as
   expect(v.pinnedList().length).toBe(1);
 });
 
-test("the tray draws at every state and width, folds in a short pane, and marks rows", async () => {
+test("the pins show in the Pinned view at every width; the header and footer say how to reach it", async () => {
   const { v, cx, keys } = await pinPane("--extra", "8", "--agents");
   const k = keys();
   for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
   for (const width of [240, 380, 500]) {
     v.width = width;
-    for (const h of [0, 300, 900]) {
-      v.rootH = h;
-      draw(v, cx);
-      expect(v.trayFold).toBe(h === 300);
-    }
+    for (const view of ["all", "pinned"]) { v.setView(view); for (const h of [0, 300, 900]) { v.rootH = h; draw(v, cx); } }
   }
+  v.setView("all");
   v.rootH = 900;
   v.width = 500;
   const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
@@ -2308,7 +2358,10 @@ test("the tray draws at every state and width, folds in a short pane, and marks 
   v.sel = k[6];
   expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
+  const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
+  expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
   expect(v.footerHints().map((x) => x[1])).toContain("pin");
+  expect(v.footerHints().map((x) => x.join(" "))).toContain("v pinned");
   v.sel = k[0];
   expect(v.footerHints().map((x) => x[1])).toContain("unpin");
   v.quoteKey = "p";
@@ -2317,6 +2370,219 @@ test("the tray draws at every state and width, folds in a short pane, and marks 
   const r = v.report();
   expect(state.shared["threads.debug"].t4.pins.list.length).toBe(5);
   expect(r).toBeUndefined();
+});
+
+test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order, Enter opens one at its place, Esc goes back", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  for (const i of [3, 0, 5]) { v.sel = k[i]; v.action("pin", cx); }
+  v.width = 380;
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(v.view).toBe("pinned");
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
+  expect(v.headerText()).toBe("3 of 5");
+  // The heading leads: the pin and "Pinned", then the agent badge, then the count.
+  const head = (x) => { rec = []; x.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const hv = head(v);
+  expect(hv.indexOf("Pinned")).toBeGreaterThanOrEqual(0);
+  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 5"));
+  rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
+  expect(ids.indexOf("th-pinned-heading")).toBeGreaterThanOrEqual(0);
+  expect(ids.indexOf("th-pinned-heading")).toBeLessThan(ids.indexOf("th-badge"));
+  expect(v.headerLayout().heading).toBeGreaterThan(0);
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Back to all turns (v)", "pinned", true, null, "All turns"]);
+  const rows = v.rows();
+  expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
+  expect(v.footerHints().map((x) => x.join(" "))).toEqual(expect.arrayContaining(["↑↓ next pin", "p unpin", "1-5 go to pin", "v all turns"]));
+  // The selection moves from pin to pin, and Enter opens the pin at its place.
+  v.sel = k[3];
+  v.key(keyEv("down"), cx);
+  expect(v.sel).toBe(k[0]);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(k[0])).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: k[0] });
+  draw(v, cx);
+  // p unpins in the view, and u brings it back.
+  v.key(keyEv("p"), cx);
+  expect(v.rows().filter((r) => r.kind === "turn" || r.kind === "head").map((r) => r.key)).toEqual([k[3], k[5]]);
+  v.key(keyEv("u"), cx);
+  expect(v.pinnedList().length).toBe(3);
+  // Esc closes the open pin, then returns to all turns.
+  v.key(keyEv("escape"), cx);
+  v.key(keyEv("escape"), cx);
+  expect(v.view).toBe("all");
+  expect(v.rows().filter((r) => r.kind === "turn").length).toBe(k.length);
+  // With no pins the view says how to make one.
+  for (const p of [...v.pinnedList()]) v.unpin(p, cx);
+  v.setView("pinned");
+  expect(v.rows()).toEqual([expect.objectContaining({ kind: "note", key: "pins:none" })]);
+  draw(v, cx);
+});
+
+test("v in a pane from 480 px splits the Pinned column beside it, about a third wide, kept apart from the main pane; v moves between them", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
+  draw(v, cx); // no pins yet, so the column does not open by itself
+  expect(v.me().pane).toBe("p2");
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(v.view).toBe("all");
+  const split = log.find(([, n]) => n === "pane.split");
+  expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "pinned" } });
+  // The split applies: the new pane goes in its own map and gets the column's width. v
+  // asked for it, so the keyboard stays in the column.
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 252 }]]);
+  // The header's Pinned button says the column is open, and v or a click focuses it.
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
+  // The Pinned pane: a second panel with view "pinned", which finds its own pane and shows the pins.
+  v.sel = v.turnKeys(v.rows())[1];
+  v.action("pin", cx);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]); // the column is open already
+  await saved(); // the main pane's pins.json, which the Pinned pane reads
+  const props = state.props;
+  state.props = { ...props, view: "pinned" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(w.pinnedPane).toBe(true);
+  expect(w.view).toBe("pinned");
+  expect(w.me().pane).toBe("p3");
+  expect(w.rows().filter((r) => r.kind === "turn").length).toBe(1);
+  // The pins read from the top, pin 1 first, with no spacer to push them to the bottom.
+  w.listH = 900;
+  w.rowsKey = null;
+  expect(w.rows()[0].kind).not.toBe("spacer");
+  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 5" at 240 px.
+  w.width = 240;
+  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
+  expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
+  expect(w.headerLayout().badge).toBe(0);
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 5".length * 6.6));
+  rec = []; w.header(theme); const wh = rec; rec = null;
+  const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 5"]);
+  expect(ws).not.toContain("Claude");
+  // The accent: the header's tint, and its bar along the top.
+  expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
+  // Threads itself keeps a plain header.
+  rec = []; w.view = "all"; w.pinnedPane = false; w.header(theme); const plainHead = rec; rec = null; w.view = "pinned"; w.pinnedPane = true;
+  expect(plainHead.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(false);
+  draw(w, cx2);
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  // v in the Pinned pane goes back to the main pane; Esc does not leave the Pinned view there.
+  log = [];
+  w.key(keyEv("v"), cx2);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  w.key(keyEv("escape"), cx2);
+  expect(w.view).toBe("pinned");
+  // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
+  // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
+  state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
+  log = [];
+  w.key(keyEv("="), cx2);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 292 }, { id: "p2", px: 660 }]);
+  log = [];
+  v.key(keyEv("-"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
+  expect(w.footerHints().map((x) => x.join(" "))).toContain("- = width");
+  // Threads closes: the column closes too, once.
+  log = [];
+  state.panes = state.panes.filter((p) => p.pane !== "p2");
+  w.poll(cx2);
+  w.poll(cx2);
+  expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
+  state.props = props;
+});
+
+test("the first pin opens the Pinned column when there is room and keeps the keyboard in Threads; a closed column stays closed", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  v.width = 960;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  log = [];
+  v.sel = k[2];
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Pinned #\d+ · in the Pinned column · press 1 to come back$/);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+  // A second pin while the split is on its way asks for no second column.
+  v.sel = k[3];
+  v.key(keyEv("p"), cx);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  log = [];
+  v.settleSplit();
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 320 }], ["pane.focus", { pane: "p2" }]]);
+  draw(v, cx);
+  // The owner closes the column: the next pin does not open it again, and v still does.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  draw(v, cx);
+  log = [];
+  v.sel = k[4];
+  v.key(keyEv("p"), cx);
+  expect(toastText(v)).toMatch(/^Pinned #\d+ · press 3 to come back$/);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  v.key(keyEv("v"), cx);
+  expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
+});
+
+test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
+  const first = await pinPane("--extra", "6");
+  log = [];
+  first.v.sel = first.keys()[1];
+  first.v.action("pin", first.cx); // at 380 px: no column
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  const file = await saved();
+  for (const [width, px] of [[479, null], [498, 240]]) {
+    log = [];
+    recordFiles[PINS] = JSON.stringify(file);
+    const w = new Threads();
+    const cx2 = makeCx();
+    state.shared = { "threads.byTerminal": { t4: { pane: "p2" } } };
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    w.init(state.props, cx2);
+    w.width = width;
+    await settle(w);
+    await new Promise((r) => setTimeout(r, 20));
+    draw(w, cx2);
+    draw(w, cx2);
+    expect(w.pinnedList().length).toBe(1);
+    expect(log.filter(([, n]) => n === "pane.split").length).toBe(px ? 1 : 0);
+    if (!px) { expect(w.view).toBe("all"); continue; }
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    w.settleSplit();
+    expect(log.filter(([, n]) => n === "layout.resize")[0][2]).toEqual({ id: "p3", px });
+    expect(log.at(-1)).toEqual(["run", "pane.focus", { pane: "p2" }]);
+  }
+});
+
+test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, under 440 px latest gives way, and under 300 px agents and pin too", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  for (const [width, text] of [[260, 60], [380, 110], [500, 160], [640, 300]]) {
+    v.width = width;
+    const ids = v.headerButtons().map((b) => b[0]);
+    expect(ids.includes("th-agents")).toBe(width >= 300);
+    expect(ids.includes("th-pin")).toBe(width >= 300);
+    expect(ids.includes("th-latest")).toBe(width >= 440);
+    expect(v.headerButtons().find((b) => b[0] === "th-pinned")[6]).toBe("Pinned 1");
+    expect(v.headerLayout().text).toBeGreaterThanOrEqual(text);
+    draw(v, cx);
+  }
 });
 
 test("a reply block is one list item however tall, so a drag can cross its paragraphs", async () => {
@@ -2360,7 +2626,7 @@ test("a pin left on a paragraph by the earlier build: a second press returns to 
   expect(v.scrollTo).toBe(null);
 });
 
-test("adding a pin to the tray does not change the list items of a reply", async () => {
+test("adding a pin does not change the list items of a reply", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   v.rootH = 500;
   v.listH = 400;
@@ -2370,7 +2636,6 @@ test("adding a pin to the tray does not change the list items of a reply", async
   const items = () => v.rows().filter((r) => r.kind === "md").map((r) => r.key).join(",");
   const before = items();
   v.action("pin", cx);
-  v.listH = 366; // the tray took room from the list
   expect(items()).toBe(before);
 });
 
@@ -2406,4 +2671,331 @@ test("the list measuring its first item does not move a pin's place", async () =
   lastList.draw({ start: 0, end: 1 });
   expect(v.topKey).toBe(`you:${key}`);
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
+});
+
+test("bubbles are slate for the person and plum for agents by default, white text on both, and the panel's swatches change them", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  const you = () => v.bubbleLook(theme, false);
+  const agent = () => v.bubbleLook(theme, true);
+  expect(you().style).toMatchObject({ fill: "#47648F", ink: "#FFFFFF", outline: false });
+  expect(agent().style).toMatchObject({ fill: "#715C91", ink: "#FFFFFF", outline: false });
+  // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
+  // a command and Show more read on it.
+  expect(you().theme).toMatchObject({ foreground: "#FFFFFF", accent: "#FFFFFF", background: "#47648F" });
+  v.settingsOpen = true;
+  draw(v, cx);
+  expect(v.action("bubbleColor:teal", cx)).toBe(true);
+  expect(v.prefs.bubbleColor).toBe("teal");
+  expect(you().style.fill).toBe("#36706D");
+  expect(v.action("agentBubbleColor:#abc", cx)).toBe(true);
+  expect(agent().style.fill).toBe("#AABBCC");
+  expect(agent().style.ink).toBe("#111111"); // light fill: dark text
+  draw(v, cx);
+  expect(v.action("bubbleColor:navy", cx)).toBe(false);
+  // Plain: the theme's own look, as before the colours.
+  v.action("bubbleColor:plain", cx);
+  v.action("agentBubbleColor:plain", cx);
+  expect(you().theme).toBe(theme);
+  expect(you().style.fill).toBe("#e6e6e614");
+  expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
+  draw(v, cx);
+  v.action("youName:Sam", cx);
+  expect(v.prefs.youName).toBe("Sam");
+  v.action("resetSettings", cx);
+  expect(v.prefs).toMatchObject({ bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" });
+  await new Promise((r) => setTimeout(r, 20));
+  draw(v, cx);
+});
+
+test("a coloured bubble draws the open message as plain text in its ink, quotes behind their bar; plain draws Markdown", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
+  v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
+  const you = () => v.rows().filter((r) => r.kind === "you").map((r) => v.youMd(r));
+  expect(you().length).toBeGreaterThan(0);
+  expect(you().every((y) => y.plain && y.parts)).toBe(true);
+  expect(you().some((y) => y.parts.some((p) => p.quote))).toBe(true);
+  draw(v, cx);
+  v.action("bubbleColor:plain", cx);
+  expect(you().every((y) => !y.plain && y.md != null)).toBe(true);
+  draw(v, cx);
+});
+
+test("turn header: #n then the name at the left, the time last, for the person's turns and an agent's, open or closed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const strings = (el) => { rec = []; el(); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const turn = v.current().turns.find((tn) => !tn.agent);
+  const closed = strings(() => v.metaLine(theme, turn));
+  expect(closed.slice(0, 3)).toEqual([`#${turn.n}`, "·", "You"]);
+  expect(closed.at(-1)).toBe(fmtTimeForTest(turn.ts));
+  const agentTurn = { ...turn, agent: true, sender: { name: "general-purpose" } };
+  const a = strings(() => v.metaLine(theme, agentTurn));
+  expect(a[0]).toBe(`#${turn.n}`);
+  expect(a.indexOf(`#${turn.n}`)).toBeLessThan(a.findIndex((x) => /general-purpose/.test(x)));
+  // The person's header spans their bubble: as wide as it, at the right with it.
+  const calls = (el) => { rec = []; el(); const c = rec; rec = null; return c; };
+  const c240 = calls(() => v.metaLine(theme, turn, null, fmtTimeForTest(turn.ts), null, 240));
+  expect(c240.some((e) => e[0] === "w" && e[1] === 240)).toBe(true);
+  expect(c240.some((e) => e[0] === "justify_end")).toBe(true);
+  expect(v.headerFit(turn, "7:33 AM", 240, false, null, null)).toMatchObject({ w: 240, name: true });
+  // A short bubble drops the name before the time, and never goes under the number and time.
+  const short = v.headerFit(turn, "7:33 AM", 90, false, null, null);
+  expect(short.name).toBe(false);
+  expect(short.w).toBeGreaterThanOrEqual(90);
+  const tiny = v.headerFit(turn, "7:33 AM", 40, false, null, null);
+  expect(tiny.w).toBeGreaterThan(40);
+  expect(strings(() => v.metaLine(theme, turn, null, "7:33 AM", null, 90))).toEqual([`#${turn.n}`, "7:33 AM"]);
+  // An agent's turn keeps its header at the reply's left edge, the pane's width.
+  expect(calls(() => v.metaLine(theme, agentTurn, null, "7:33 AM", null, null)).some((e) => e[0] === "justify_end")).toBe(false);
+  // Drawn rows pass the bubble's width.
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const rc = calls(() => v.rowItem(theme, row, false));
+  expect(rc.some((e) => e[0] === "w" && e[1] === row.shape.bubbleW)).toBe(true);
+  // The earlier header, for side-by-side review: the person's name and #n after it.
+  v.action("debugHeader:right", cx);
+  expect(strings(() => v.metaLine(theme, turn)).slice(0, 3)).toEqual(["You", "·", `#${turn.n}`]);
+  v.action("debugHeader:split", cx);
+  expect(strings(() => v.metaLine(theme, turn))[0]).toBe(`#${turn.n}`);
+});
+
+test("names: yours over your message, the agent's over its reply, Agent when the session records none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  expect(v.current().agentName).toBe("shop-agent");
+  expect(drawn(row)).toEqual(expect.arrayContaining(["You", "shop-agent"]));
+  expect(v.captionParts(row.turn)[0]).toEqual(["name", "shop-agent"]);
+  // A name the reply itself records (OpenCode's agent) wins; with neither, "Agent".
+  expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
+  v.current().agentName = null;
+  expect(v.agentName(row.turn)).toBe("Agent");
+  // The settings panel's field: typing names you, Esc gives the keys back.
+  const field = v.nameInput;
+  expect(field.value()).toBe("You");
+  field.handlers.focus({}, cx);
+  expect(v.naming).toBe(true);
+  const pins = v.pinnedAll().length;
+  expect(v.key(keyEv("p"), cx)).toBeUndefined(); // the field types it; no pin
+  expect(v.pinnedAll().length).toBe(pins);
+  field.set_value("  Sam ");
+  field.handlers.change({}, cx);
+  expect(v.prefs.youName).toBe("Sam");
+  expect(drawn(row)).toContain("Sam");
+  expect(v.key(keyEv("escape"), cx)).toBe(true);
+  expect(v.naming).toBe(false);
+  expect(field.value()).toBe("Sam");
+  // A cleared field shows the name in use again when it loses the keys.
+  field.handlers.focus({}, cx);
+  field.set_value("");
+  field.handlers.change({}, cx);
+  field.handlers.blur({}, cx);
+  expect(field.value()).toBe("Sam");
+  v.settingsOpen = true;
+  draw(v, cx);
+  v.action("resetSettings", cx);
+  expect(field.value()).toBe("You");
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+
+test("reading type: message and reply text at the Text size on 1.5 lines, a reading line wide at 960 px, labels unchanged", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const sizes = (c) => c.filter((x) => x[0] === "text_size").map((x) => x[1]);
+  v.forcedWidth = 960; v.width = 960;
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const c = calls(() => v.rowItem(theme, row, true));
+  // The message and the reply at 14 px on 21 px lines; the name, the date and the stats stay small.
+  expect(sizes(c)).toEqual(expect.arrayContaining([14, 11.5]));
+  expect(c.some((x) => x[0] === "h" && x[1] === 21)).toBe(true);
+  // The reply stops at the reading line, about 70 characters, not across the pane.
+  const prose = v.prose();
+  expect(prose).toBeLessThan(500);
+  expect(c.some((x) => x[0] === "max_w" && x[1] === prose)).toBe(true);
+  for (const l of row.shape.reply) expect(l.length).toBeLessThanOrEqual(75);
+  // An open reply's text: 14 px, 21 px lines, at most the reading line.
+  v.open = new Set([row.key]);
+  const md = v.rows().find((r) => r.kind === "md");
+  const m = calls(() => v.partContent(theme, md, false));
+  expect(m).toEqual(expect.arrayContaining([["max_w", prose], ["text_size", 14], ["line_height", "21px"]]));
+  // Text size: the stepper goes to 18 and no further, and Reset brings 14 back.
+  for (let i = 0; i < 6; i++) v.action("textSize:+", cx);
+  expect(v.prefs.textSize).toBe(18);
+  expect(v.action("textSize:+", cx)).toBe(false);
+  expect(v.rt().line).toBe(27);
+  expect(v.prose()).toBeGreaterThan(prose);
+  const big = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  expect(big.shape.height).toBeGreaterThan(row.shape.height);
+  v.action("resetSettings", cx);
+  expect(v.prefs.textSize).toBe(14);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fitWidth once, a narrower one keeps its width", async () => {
+  for (const [measured, size, want] of [[900, 14, 545], [900, 18, 676], [480, 14, null]]) {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.prefs = { ...v.prefs, textSize: size };
+    state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+    state.shared["threads.fit"] = { p2: true, p9: true };
+    v.paneW = measured;
+    log = [];
+    v.poll(cx);
+    v.poll(cx);
+    const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+    expect(resized).toEqual(want ? [{ id: "p2", px: want }] : []);
+    // Once only: the flag is gone, and another pane's flag stays.
+    expect(state.shared["threads.fit"]).toEqual({ p9: true });
+  }
+  // A pane the launcher did not just open is left alone.
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.paneW = 900;
+  log = [];
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+});
+
+test("a pane wider than the reading width lays the turns out in a centred column that wide, scaled with Text size", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  for (const [paneW, size, col] of [[960, 14, 545], [960, 18, 676], [500, 14, 500], [300, 14, 300]]) {
+    v.prefs = { ...v.prefs, textSize: size };
+    v.paneW = paneW;
+    draw(v, cx);
+    expect(v.width).toBe(col);
+    expect(v.pw()).toBe(paneW);
+    expect(v.colLeft()).toBe((paneW - col) / 2);
+  }
+  // The header and the Pinned column go by the pane, not the column.
+  v.prefs = { ...v.prefs, textSize: 14 };
+  v.paneW = 960;
+  draw(v, cx);
+  expect(v.headerLayout().width).toBe(960);
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
+});
+
+test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--images"));
+  v.width = 545;
+  draw(v, cx);
+  const rows = v.rows().filter((r) => r.kind === "turn" && r.shape.md != null);
+  expect(rows.length).toBeGreaterThan(0);
+  const withTiles = rows.find((r) => r.shape.thumbs) ?? rows[0];
+  const cmd = v.cmdRow(withTiles);
+  expect(v.probeRows.some((r) => r.key === cmd.key)).toBe(true);
+  const before = v.height(withTiles);
+  v.probed(cmd.key, v.partSig(cmd), { width: 500, height: 63 }, cx);
+  const after = v.height(withTiles);
+  expect(after).toBe(withTiles.shape.mdBase + 63);
+  if (withTiles.shape.thumbs) expect(withTiles.shape.mdBase).toBeGreaterThan(rowHeight(withTiles.shape.p, 0, 0) + 40);
+  expect(typeof before).toBe("number");
+});
+
+test("the sticky day: the day of the item at the top of the pane, not while a band is at the top", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6", "--gap", "43200"));
+  v.width = 545;
+  draw(v, cx);
+  const rows = v.rows();
+  const days = rows.map((r, i) => [r, i]).filter(([r]) => r.kind === "day");
+  expect(days.length).toBeGreaterThan(1);
+  const [d1, i1] = days[1];
+  // The band at the top: no sticky.
+  v.topKey = d1.key;
+  expect(v.stickyDay()).toBe(null);
+  // An item in that day further down: its band shows at the top, and a redraw is asked for.
+  const inside = rows.slice(i1 + 1).find((r) => r.kind !== "day" && !v.beforeDay?.has(r.key));
+  v.stickyShown = null;
+  v.stickyDue = false;
+  v.topKey = inside.key;
+  v.noteTopDay();
+  expect(v.stickyDay()?.key).toBe(d1.key);
+  expect(v.stickyDue).toBe(true);
+  // The item just before the next band: no sticky, so two pills never stack.
+  const before = rows[days[2] ? days[2][1] - 1 : -1];
+  if (before) { v.topKey = before.key; expect(v.stickyDay()).toBe(null); }
+  // The drawn body carries it.
+  v.topKey = inside.key;
+  rec = [];
+  v.render(cx);
+  const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
+  rec = null;
+  expect(ids).toContain("th-sticky-day");
+});
+
+test("a done turn during a background wake-up keeps its reply, with an Updating line under it, never 'no reply yet'", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const s = v.sessions.at(-1);
+  const turn = s.turns.at(-1);
+  expect(turn.done).toBe(true);
+  // A task notification woke the agent: Herdr says working, the turn is still done.
+  state.terminals[0].status = "working";
+  s.followActive = true;
+  s.followSince = Date.now() - 90 * 1000;
+  turn.wakeTools = 3;
+  turn.latest = "Checking the job's output.";
+  s.version++;
+  v.rowsKey = null;
+  const rows = v.rows();
+  expect(rows.some((r) => r.kind === "wrow" || r.kind === "working")).toBe(false);
+  const last = rows.findIndex((r) => r.key === `${v.sessions.length - 1}:${turn.n}`);
+  expect(rows[last].kind).toBe("turn");
+  expect(rows[last + 1].kind).toBe("wake");
+  expect(v.height(rows[last + 1])).toBe(24);
+  rec = []; v.item(theme, rows[last + 1], false, 13); const wake = rec; rec = null;
+  const text = wake.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  expect(text).toMatch(/^Updating · 1:3\d · 3 tool calls · Checking the job's output\.$/);
+  // The turn's own row still has its reply, and nothing on screen says "no reply yet".
+  rec = []; v.rowItem(theme, rows[last], false); const row = rec; rec = null;
+  expect(JSON.stringify(row)).not.toContain("no reply yet");
+  expect(v.liveShown).toBe(true);
+  draw(v, cx);
+  // The wake-up ends: the line goes.
+  s.followActive = false;
+  s.version++;
+  v.rowsKey = null;
+  expect(v.rows().some((r) => r.kind === "wake")).toBe(false);
+});
+
+test("a reply longer than Herdr draws in one Markdown view: stacked blocks, escaped prices, a clean preview cut, and plain text if a block draws nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const turn = v.sessions.at(-1).turns.at(-1);
+  // A made-up reply with the shape of the one that vanished: over 4,096 characters, a table of
+  // prices, bold spans between two prices, and a numbered list after "These are the open choices:".
+  turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.shapeKey = null;
+  const key = `${v.sessions.length - 1}:${turn.n}`;
+  v.open = new Set([key]);
+  v.sel = key;
+  v.rowsKey = null;
+  // The preview stops at a paragraph, never on an empty list item.
+  let md = v.rows().filter((r) => r.kind === "md");
+  expect(md.length).toBe(1);
+  expect(md[0].md).toMatch(/without it the 210 waiting orders stay unrouted\. …$/);
+  expect(md[0].md).not.toMatch(/\n\s*(?:\d+[.)]|[-*+])\s*(?:\*\*)?\s*…$/);
+  expect(v.rows().some((r) => r.kind === "more" && !r.less)).toBe(true);
+  // Show full reply: one list item, drawn as several Markdown views, each within the limit.
+  v.full.add(`r:${key}`);
+  v.rowsKey = null;
+  md = v.rows().filter((r) => r.kind === "md");
+  expect(md.length).toBe(1);
+  expect(Buffer.byteLength(md[0].src)).toBeGreaterThan(4096);
+  mdSources.length = 0;
+  v.partContent(theme, md[0], false);
+  const parts = mdSources.filter(([id]) => id.startsWith(`th-md-${md[0].key}-`)).map(([, m]) => m);
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts.every((m) => Buffer.byteLength(m) <= MD_MAX)).toBe(true);
+  // Dollar signs are escaped, so the bold between two prices is bold, not math.
+  const all = parts.join("\n\n");
+  expect(all).toContain("**4,180 map look-ups at \\$0.009 each**");
+  expect(all.replace(/\\\$/g, "$")).toBe(md[0].src);
+  // Herdr drew a block at no height: it shows as plain text with a note instead of vanishing.
+  const sig = v.partSig(md[0]);
+  v.probed(md[0].key, sig, { height: 6 * v.zoom() }, cx);
+  expect(v.mdBroken.has(md[0].key)).toBe(true);
+  expect(v.rowDetail(md[0])).toMatch(/ plain /);
+  mdSources.length = 0;
+  rec = []; v.partContent(theme, md[0], false); const plain = rec; rec = null;
+  expect(mdSources.some(([id]) => id.startsWith(`th-md-${md[0].key}`))).toBe(false);
+  const text = plain.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  expect(text).toContain("Herdr could not draw this part as Markdown, so it shows as plain text.");
+  expect(text).toContain("the morning van.");
+  draw(v, cx);
 });

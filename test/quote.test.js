@@ -52,7 +52,7 @@ test("rowShape keeps quotes within Prompt lines and always shows a comment line"
         const where = `${name} at ${width} px, ${promptLines} lines`;
         expect(sh.prompt.length, where).toBeLessThanOrEqual(promptLines);
         expect(sh.p, where).toBe(Math.max(1, sh.prompt.length));
-        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r));
+        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0)));
         const hasComment = promptParts(prompt).some((r) => !r.quote);
         const hasQuote = promptParts(prompt).some((r) => r.quote);
         if (!hasQuote) { expect(sh.kinds, where).toBe(null); continue; }
@@ -64,7 +64,7 @@ test("rowShape keeps quotes within Prompt lines and always shows a comment line"
     }
   }
   // The quote line takes one truncated line, then the comment wraps.
-  const sh = rowShape({ prompt: CASES.quoteThenComment, reply: "Done.", width: 380, promptLines: 2, replyLines: 3 });
+  const sh = rowShape({ prompt: CASES.quoteThenComment, reply: "Done.", width: 380, promptLines: 2, replyLines: 3, size: 13 });
   expect(sh.kinds).toEqual(["q", "c"]);
   expect(sh.prompt[0].startsWith("The retry path")).toBe(true);
   expect(sh.prompt[1]).toBe("Cap the retries at five, and log once.");
@@ -268,7 +268,7 @@ test("the quote key: q by default, configurable, never a key already taken", () 
   expect(keyAction(k("q", { platform: true }))).toBe(null);
   expect(keyAction(k("q", { shift: true }))).toBe(null);
   expect(keyAction(k("j"), false, "j")).toBe("next"); // a taken key keeps its action
-  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "g", "i", "j", "k", "o", "s", "t"]);
+  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "g", "i", "j", "k", "o", "s", "t", "v"]);
   // Round 3 (C2): i explains the stat chips, so it cannot be the quote key.
   expect(keyAction(k("i"))).toBe("legend");
   expect(keyAction(k("i"), false, "i")).toBe("legend");

@@ -7,7 +7,8 @@ import { harnessOf } from "./harness.js";
 const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
-  "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend",
+  "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
+  "-": "narrower", "=": "wider",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
 // chose it still has the header's pin button.
@@ -99,6 +100,95 @@ export function langFor(fence) {
 export function wrappedLines(text, per) {
   const p = Math.max(8, per);
   return (text ?? "").split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / p)), 0);
+}
+
+// Rows a code block takes when the editor wraps it at `per` characters: each line filled
+// word by word (a break after a space), a word longer than a row split across rows.
+// Herdr's Markdown view draws nothing for a block over 4,096 characters (on 0.1.14 a block
+// of 4,090 draws and one of 4,099 measures 0 px tall). Longer Markdown is drawn as several
+// blocks of at most MD_MAX bytes, split at blank lines outside fenced code, else at lines,
+// else at words.
+export const MD_MAX = 3500;
+function utf8Len(s) {
+  let n = 0;
+  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; }
+  return n;
+}
+const FENCE = /^\s*(`{3,}|~{3,})/;
+function packed(pieces, sep, max) {
+  const out = [];
+  let acc = "";
+  for (const p of pieces) {
+    const next = acc ? `${acc}${sep}${p}` : p;
+    if (acc && utf8Len(next) > max) { out.push(acc); acc = p; } else acc = next;
+  }
+  if (acc) out.push(acc);
+  return out;
+}
+export function mdChunks(md, max = MD_MAX) {
+  const text = String(md ?? "");
+  if (utf8Len(text) <= max) return [text];
+  const blocks = [];
+  let cur = [];
+  let fence = null;
+  for (const line of text.split("\n")) {
+    const f = line.match(FENCE);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    else if (!fence && !line.trim()) { if (cur.length) blocks.push(cur.join("\n")); cur = []; continue; }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join("\n"));
+  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b]
+    : packed(b.split("\n").flatMap((l) => (utf8Len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", max))), "\n", max)));
+  return packed(pieces, "\n\n", max);
+}
+
+// Herdr's Markdown reads $…$ as inline math and shows the text between as written, so a
+// **bold** span between two prices keeps its asterisks. Dollar signs outside code are
+// escaped; one already escaped stays as it is.
+export function escapeDollars(md) {
+  let fence = null;
+  return String(md ?? "").split("\n").map((line) => {
+    const f = line.match(FENCE);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; return line; }
+    if (fence || !line.includes("$")) return line;
+    return line.split(/(`+[^`]*`+)/).map((part, i) => (i % 2 ? part : part.replace(/\\?\$/g, (m) => (m === "$" ? "\\$" : m)))).join("");
+  }).join("\n");
+}
+
+// The start of a long Markdown block, for an open turn before "Show full reply": it ends at
+// a paragraph when one ends in the last third, else at a word. It never ends on a bare list
+// marker or a table row cut short, closes a bold left open, then adds "…".
+export function cutMd(md, n) {
+  let s = String(md ?? "").slice(0, n);
+  const para = s.lastIndexOf("\n\n");
+  s = para > n * 0.66 ? s.slice(0, para) : s.replace(/\s+\S*$/, "");
+  const lines = s.trimEnd().split("\n");
+  const whole = String(md ?? "").split("\n");
+  const bare = /^\s*(?:[-*+]|\d+[.)])?\s*(?:\*\*|__|\*|_)?\s*$/;
+  const shortRow = (i) => /^\s*\|/.test(lines[i]) && lines[i].trimEnd() !== (whole[i] ?? "").trimEnd();
+  while (lines.length > 1 && (bare.test(lines.at(-1)) || shortRow(lines.length - 1))) lines.pop();
+  let last = lines.at(-1) ?? "";
+  if ((last.match(/\*\*/g) ?? []).length % 2) last = `${last.trimEnd()}**`;
+  lines[lines.length - 1] = last;
+  const body = lines.join("\n").trimEnd();
+  return /^\s*\|/.test(last) ? `${body}\n\n…` : `${body} …`;
+}
+
+export function codeRows(text, per) {
+  const p = Math.max(8, Math.floor(per));
+  let rows = 0;
+  for (const line of (text ?? "").split("\n")) {
+    let n = 1, used = 0;
+    for (const word of line.match(/\S+\s*/g) ?? []) {
+      let w = word.length;
+      if (used > 0 && used + word.trimEnd().length > p) { n++; used = 0; }
+      while (w > p) { if (used > 0) { n++; used = 0; } w -= p; n++; }
+      used += w;
+    }
+    rows += n;
+  }
+  return rows;
 }
 
 // A prompt clipped to `lines` wrapped lines of `per` characters and at most `maxChars`.
@@ -253,6 +343,48 @@ export function rowLines(text, limit, perLine) {
 // reads at most max * 8 + 512 characters outside fenced code. A fence's body is skipped
 // with one search for its closing line, so the prose after a long code block is still
 // read and a fence costs no per-line work.
+// The start of a reply as Markdown for a collapsed row: whole source lines, as many as fit
+// in `lines` reading lines of `per` characters (a blank line, the gap between blocks,
+// counts half a line; a code line counts one and never wraps). A code fence cut open is
+// closed, so the rest of the row does not turn into code. { md, cut, lines }.
+export function mdPreview(md, lines, per, maxChars = Math.min(4000, (lines + 2) * Math.max(8, per) * 3)) {
+  const src = String(md ?? "").slice(0, maxChars).replace(/\r\n?/g, "\n").split("\n");
+  const w = Math.max(8, per);
+  const out = [];
+  let used = 0;
+  let fence = null;
+  let cut = false;
+  for (let i = 0; i < src.length; i++) {
+    const line = src[i];
+    const open = FENCE_OPEN.exec(line);
+    let cost;
+    if (fence) cost = closesFence(line, fence) ? 0 : 1;
+    else if (open) cost = 0;
+    else if (!line.trim()) cost = out.length && out[out.length - 1].trim() ? 0.5 : 0;
+    else cost = Math.max(1, Math.ceil(units(line.replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/, "  ").replace(/[*_`]/g, "")) / w));
+    if (used + cost > lines + 1e-9) {
+      cut = true;
+      // A paragraph or list item longer than the lines left: its start, cut at a word.
+      const room = Math.floor(lines - used + 1e-9);
+      if (!fence && !open && line.trim() && room >= 1) {
+        const max = room * w - 2;
+        let end = 0;
+        let n = 0;
+        for (const m of line.matchAll(/\S+\s*/g)) { const u = units(m[0]); if (n + u > max) break; n += u; end = m.index + m[0].length; }
+        if (end > 0) { out.push(`${line.slice(0, end).trimEnd()} …`); used += room; }
+      }
+      break;
+    }
+    used += cost;
+    out.push(line);
+    if (fence) { if (closesFence(line, fence)) fence = null; } else if (open) fence = open[1];
+  }
+  if (!cut && src.length && String(md ?? "").length > maxChars) cut = true;
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  if (fence) out.push(fence);
+  return { md: out.join("\n"), cut, lines: Math.max(1, Math.ceil(used)), gaps: out.filter((l, i) => !l.trim() && out[i - 1]?.trim()).length };
+}
+
 export function flattenMd(md, max = Infinity) {
   const parts = [];
   let have = 0;
@@ -303,26 +435,100 @@ export function middle(text, max) {
   return `${s.slice(0, head).join("")}…${s.slice(s.length - (keep - head)).join("")}`;
 }
 
-// Row geometry, shared by the drawing and the stated heights. Collapsed rows: 6 px list
-// margin and 10 px padding each side, so text starts 16 px in and keeps a 16 px right
-// gutter. Agent rows are inset 8 px more (and carry a 2 px rail).
-export const ROW = Object.freeze({ PROMPT_LINE: 18, REPLY_LINE: 17, META: 16, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.4, CHIP_CHAR: 7.3 });
-export function rowTextWidth(width, agent = false) { return Math.max(60, width - 32 - (agent ? 10 : 0)); }
+// Row geometry, shared by the drawing and the stated heights. A collapsed turn is drawn as
+// a chat exchange: 16 px in from each side (where an open turn's text starts), the meta line, the person's message in a bubble
+// on the right (an agent's on the left), the reply as plain text under it, then the stats
+// line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px of
+// padding each side and 6 px above and below. The *_CHAR widths are measured at 13 px;
+// readType scales them to the reading size.
+export const ROW = Object.freeze({
+  META: 16, NAME: 18, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
+  BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
+});
 
-// Height of a collapsed row with p prompt lines and r reply lines.
-export function rowHeight(p, r, metaWraps = false) {
-  return 2 + 14 + ROW.META + 3 + ROW.PROMPT_LINE * p + 3 + ROW.REPLY_LINE * r + (metaWraps ? 16 : 0);
+// ---- reading type ----
+// Message and reply text is set for reading, a step above the pane's 11.5 to 12.5 px labels
+// (names, dates, the stats line and Show more keep those): settings textSize, 14 px by
+// default, 12 to 18. Its lines are 1.5 times the size apart (WCAG 2.2 SC 1.4.8 asks for at
+// least 1.5), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
+// more than 80; Bringhurst: 45 to 75, 66 the ideal). PROSE_EM is an average character of
+// English prose in the system sans, in em, so MEASURE * PROSE_EM em is the line's width.
+export const TEXT_SIZE = 14;
+export const TEXT_RANGE = Object.freeze([12, 18]);
+export const MEASURE = 70;
+export const PROSE_EM = 0.47;
+export function readType(size = TEXT_SIZE) {
+  const px = Number.isFinite(size) ? Math.max(TEXT_RANGE[0], Math.min(TEXT_RANGE[1], size)) : TEXT_SIZE;
+  const k = px / 13;
+  return Object.freeze({
+    size: px, small: px - 0.5, line: Math.round(px * 1.5),
+    prompt: ROW.PROMPT_CHAR * k, agent: ROW.AGENT_CHAR * k, reply: ROW.REPLY_CHAR * k,
+    measure: Math.round(MEASURE * PROSE_EM * px),
+  });
+}
+
+// The widest a bubble can be (its text no wider than a reading line), and the width of the
+// text inside it.
+export function bubbleMax(width, size = TEXT_SIZE) {
+  const fit = Math.floor((width - 2 * ROW.PAD_X) * (width < 320 ? 0.9 : 0.82));
+  return Math.max(80, Math.min(fit, readType(size).measure + 2 * ROW.BUBBLE_PX));
+}
+export function rowTextWidth(width, _agent = false, size = TEXT_SIZE) { return Math.max(60, bubbleMax(width, size) - 2 * ROW.BUBBLE_PX); }
+// The pane's text width, less the exchange's padding (labels, code), and the reply's: that,
+// at most one reading line.
+export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
+export function readWidth(width, size = TEXT_SIZE) { return Math.min(replyWidth(width), readType(size).measure); }
+// The width that fits a reading line: the line, 16 px each side, and 52 px more for the
+// bubbles' left gap and the header's buttons. 545 px at 14 px, the width the owner found
+// right; it scales with Text size (479 at 12, 676 at 18). Cmd-Shift-T opens Threads at
+// this width, and a wider pane centres a column this wide.
+export const FIT_EXTRA = 52;
+export function fitWidth(size = TEXT_SIZE) { return readType(size).measure + 2 * ROW.PAD_X + FIT_EXTRA; }
+
+// ---- pasted images over a message ----
+// Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
+// (56 to 120 px), and as wide as its image's shape allows between 0.75 and 1.5 times that.
+export const TILE_GAP = 6;
+export function thumbSize(width, size = TEXT_SIZE) { return Math.max(56, Math.min(120, Math.floor(bubbleMax(width, size) / 3) - 4)); }
+// dims: per image { w, h } once decoded, else null. The tiles that fit in the widest bubble,
+// in order, with "+N" for the rest: { size, tiles: [{ i, w, x }], more, width }, x from the
+// strip's left edge. The "+N" chip takes a tile's place when some do not fit.
+export function tileRow(dims, width, text = TEXT_SIZE) {
+  const size = thumbSize(width, text);
+  const room = bubbleMax(width, text);
+  const ws = dims.map((d) => (d && d.w > 0 && d.h > 0 ? Math.round(Math.max(size * 0.75, Math.min(size * 1.5, (size * d.w) / d.h))) : size));
+  const chip = 44;
+  const tiles = [];
+  let x = 0;
+  for (let i = 0; i < ws.length; i++) {
+    const last = i === ws.length - 1;
+    const need = x + ws[i] + (last ? 0 : TILE_GAP + chip);
+    if (tiles.length && need > room) break;
+    tiles.push({ i, w: ws[i], x });
+    x += ws[i] + TILE_GAP;
+  }
+  const more = ws.length - tiles.length;
+  return { size, tiles, more, width: x - TILE_GAP + (more ? TILE_GAP + chip : 0) };
+}
+
+// Height of a collapsed exchange with p prompt lines and r reply lines of `line` px, and
+// `more` Show more lines (one under a cut message, one under a cut reply). The reply has its
+// agent's name over it.
+export function rowHeight(p, r, more = 0, line = readType().line) {
+  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + ROW.NAME + line * r
+    + ROW.GAP + ROW.STATS + ROW.PAD_B + ROW.MORE * more;
 }
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
 // and the arguments wrap in the space to its right.
-export function commandLayout(name, args, width, limit, agent = false) {
-  const tw = rowTextWidth(width, agent);
+export function commandLayout(name, args, width, limit, agent = false, size = TEXT_SIZE) {
+  const rt = readType(size);
+  const tw = rowTextWidth(width, agent, size);
   const maxChip = Math.floor(tw * 0.45);
   const chipChars = Math.max(3, Math.floor((maxChip - 12) / ROW.CHIP_CHAR));
   const label = middle(name, chipChars);
   const chipW = Math.min(maxChip, Math.ceil([...label].length * ROW.CHIP_CHAR + 12));
-  const per = Math.floor((tw - chipW - 6) / ROW.PROMPT_CHAR);
+  const per = Math.floor((tw - chipW - 6) / rt.prompt);
   const a = args ? rowLines(args, limit, per) : { lines: [], cut: false };
   return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length) };
 }
@@ -331,25 +537,36 @@ export function commandLayout(name, args, width, limit, agent = false) {
 // the prompt quotes something, says how each prompt line is drawn: "q" a muted quote line
 // with a bar, "qonly" a quote that is the whole prompt (foreground, with the bar), "c" the
 // person's own words. q: the quote lines shown.
-export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, agent = false, replyLimit = null, quotes = true }) {
-  const tw = rowTextWidth(width, agent);
+export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, agent = false, replyLimit = null, quotes = true, size = TEXT_SIZE }) {
+  const rt = readType(size);
+  const tw = rowTextWidth(width, agent, size);
   let pr;
   let chip = null;
   if (cmd) {
-    chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent);
-    pr = { lines: chip.lines, rows: chip.rows };
+    chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size);
+    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut };
   } else {
-    pr = quotes ? quoteRows(prompt, promptLines, tw, agent) : null;
+    pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {
       // A task notification that opens a session carries no text: the sender label names it.
-      const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR));
-      pr = { lines: l.lines, rows: Math.max(1, l.lines.length) };
+      const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? rt.agent : rt.prompt));
+      pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut };
     }
   }
-  // The reply line starts after a 12 px icon and a 5 px gap.
-  const rl = rowLines(reply, replyLimit ?? replyLines, (tw - 17) / ROW.REPLY_CHAR);
+  const rl = rowLines(reply, replyLimit ?? replyLines, readWidth(width, size) / rt.reply);
   const r = Math.max(1, rl.lines.length);
-  return { p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, height: rowHeight(pr.rows, r) };
+  const pMore = Boolean(pr.cut);
+  const rMore = Boolean(rl.cut) && (replyLimit ?? replyLines) > 1;
+  // The bubble is as wide as its widest line (a command's chip and arguments side by side),
+  // and wide enough for "Show more".
+  const ch = agent ? rt.agent : rt.prompt;
+  const widest = chip ? chip.chipW + 6 + Math.max(0, ...pr.lines.map((l) => units(l))) * ch
+    : Math.max(0, ...pr.lines.map((l, i) => units(l) * ch + (pr.kinds && pr.kinds[i] !== "c" ? QUOTE_INSET : 0)));
+  const bubbleW = Math.min(bubbleMax(width, size), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
+  return {
+    p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
+    height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line),
+  };
 }
 
 // ---- prompt quotes ----------------------------------------------------------------------
@@ -408,16 +625,17 @@ export const QUOTE_INSET = 10;
 // usual; when the budget would hide every comment line, the comment takes the last line,
 // so with one line the row shows the comment only. A prompt that is only a quote is the
 // whole message: it wraps within the budget.
-export function quoteRows(prompt, budget, tw, agent = false) {
+export function quoteRows(prompt, budget, tw, agent = false, size = TEXT_SIZE) {
   if (!prompt || !/(^|\n) {0,3}>/.test(prompt)) return null;
   const parts = promptParts(prompt);
   if (!parts.some((r) => r.quote)) return null;
+  const rt = readType(size);
   const max = Math.max(1, Math.floor(budget));
-  const qper = (tw - QUOTE_INSET) / ROW.AGENT_CHAR;
-  const per = tw / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR);
+  const qper = (tw - QUOTE_INSET) / rt.agent;
+  const per = tw / (agent ? rt.agent : rt.prompt);
   if (!parts.some((r) => !r.quote)) {
-    const l = rowLines(parts.map((r) => r.lines.join("\n")).join("\n"), max, (tw - QUOTE_INSET) / (agent ? ROW.AGENT_CHAR : ROW.PROMPT_CHAR));
-    return { lines: l.lines, rows: Math.max(1, l.lines.length), kinds: l.lines.map(() => "qonly"), q: l.lines.length };
+    const l = rowLines(parts.map((r) => r.lines.join("\n")).join("\n"), max, (tw - QUOTE_INSET) / (agent ? rt.agent : rt.prompt));
+    return { lines: l.lines, rows: Math.max(1, l.lines.length), kinds: l.lines.map(() => "qonly"), q: l.lines.length, cut: l.cut };
   }
   const lines = [];
   const kinds = [];
@@ -447,7 +665,7 @@ export function quoteRows(prompt, budget, tw, agent = false) {
     }
   }
   if (cut && lines.length) lines[lines.length - 1] = withEllipsis(lines[lines.length - 1], lastPer);
-  return { lines, rows: Math.max(1, lines.length), kinds, q: kinds.filter((k) => k === "q").length };
+  return { lines, rows: Math.max(1, lines.length), kinds, q: kinds.filter((k) => k === "q").length, cut };
 }
 
 // The open card's YOU block text, clipped: each quote run at most `quoteLines` lines and
@@ -1025,6 +1243,39 @@ export function headPinHit(x, w) {
   return x != null && w != null && x >= w - 54 && x <= w - 33;
 }
 
+// - and = make the Pinned column 40 px narrower or wider. Herdr puts the terminal, Threads
+// and the column in one row, Threads and the column at fixed widths, and a drag on the
+// divider between those two resizes Threads alone (the terminal takes up the rest). So the
+// keys resize both, the column by d and Threads by -d, and the terminal keeps its width.
+// From the column's width c and Threads' m: the two new widths, or null when there is no
+// room (the column 200 to 640 px, Threads at least PIN_MAIN_MIN).
+export const PIN_STEP = 40;
+export function columnResize(c, m, d) {
+  if (!(c > 0) || !(m > 0)) return null;
+  let dd = Math.max(200, Math.min(640, Math.round(c + d))) - Math.round(c);
+  if (Math.round(m) - dd < PIN_MAIN_MIN) dd = Math.round(m) - PIN_MAIN_MIN;
+  if (d > 0 ? dd <= 0 : dd >= 0) return null;
+  return { column: Math.round(c) + dd, main: Math.round(m) - dd };
+}
+
+// The Pinned column that v (or the first pin) splits off a Threads pane. It lists pins, so
+// it can be narrow: about a third of the pane, 240 to 320 px. A pane from PIN_SPLIT_MIN
+// (480 px, so a pane set to 500 that measures a pixel or two less still counts) gets the
+// column; narrower, Pinned shows in the same pane. Herdr takes the column's room from the
+// pane's neighbours as well as from Threads. Returns the column's width, or null.
+export const PIN_COL = Object.freeze([240, 320]);
+export const PIN_MAIN_MIN = 240;
+export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
+export function pinColumn(width) {
+  if (!(width >= PIN_SPLIT_MIN)) return null;
+  return Math.max(PIN_COL[0], Math.min(PIN_COL[1], Math.round(width * 0.36)));
+}
+
+// A header button's width: a 24 px icon, or a labelled one (7 px padding a side, 12 px text).
+export function headerButtonWidth(label) {
+  return label ? 14 + Math.ceil(String(label).length * 6.6) + 2 : 24;
+}
+
 // ---- colour -----------------------------------------------------------------------------
 
 function rgb(color) {
@@ -1127,4 +1378,47 @@ export function youHeight(text, innerW, { link = false, max = 420, line = 18, ch
   const n = wrappedLines(text, per);
   const body = Math.min(max, (n + (n > 1 || (text ?? "").length > per * 0.8 ? 1 : 0)) * line);
   return 8 + 10 + 16 + 4 + body + 10 + (link ? 22 : 0) + 10;
+}
+
+// ---- bubble colours (settings.json bubbleColor and agentBubbleColor) ----
+// A preset name or "#rrggbb". Every preset reads at 5:1 or more with white text. The
+// defaults, slate and plum, are muted; blue and purple are the bright pair. "plain" is the
+// theme's own look: the person's bubble is the text colour at 8% over the pane, an agent's
+// bubble is outlined on the pane.
+export const BUBBLES = Object.freeze({
+  slate: "#47648F", plum: "#715C91", blue: "#2563EB", purple: "#7C3AED", teal: "#36706D",
+  green: "#4A6E4F", amber: "#87643A", rose: "#8A5068", gray: "#5B6170", plain: null,
+});
+
+const BUBBLE_NAMES = new Set(Object.keys(BUBBLES));
+
+// A setting's value as stored: a preset's name or "#RRGGBB", or null when it is neither.
+export function bubbleValue(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (BUBBLE_NAMES.has(s)) return s;
+  if (/^#[0-9a-f]{6}$/.test(s)) return s.toUpperCase();
+  if (/^#[0-9a-f]{3}$/.test(s)) return `#${[...s.slice(1)].map((x) => x + x).join("")}`.toUpperCase();
+  return null;
+}
+
+// The text colour on a fill: white or near-black, whichever reads better.
+export function bubbleInk(fill) {
+  return (contrast("#FFFFFF", fill) ?? 0) >= (contrast("#111111", fill) ?? 0) ? "#FFFFFF" : "#111111";
+}
+
+// How a bubble is drawn for a setting's value: { fill, ink, sub, bar, outline }. ink is the
+// message's text colour, sub a quote's, bar a quote's bar. Plain (or a value that does not
+// parse) takes the theme's colours: the person's bubble the text colour at 8%, an agent's
+// bubble outlined, with the agent's prompt muted.
+export function bubbleStyle(value, t, agent) {
+  const v = bubbleValue(value);
+  const hex = v == null ? null : v.startsWith("#") ? v : BUBBLES[v];
+  if (!hex) {
+    return agent
+      ? { fill: t.background, ink: t.muted, sub: t.muted, bar: t.dim, outline: true }
+      : { fill: alpha(t.foreground, 0.08), ink: t.foreground, sub: t.muted, bar: alpha(t.foreground, 0.28), outline: false };
+  }
+  const ink = bubbleInk(hex);
+  return { fill: hex, ink, sub: alpha(ink, 0.78), bar: alpha(ink, 0.5), outline: false };
 }

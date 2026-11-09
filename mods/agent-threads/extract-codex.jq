@@ -11,6 +11,9 @@
 #   i      an interrupted turn  {ts}
 #   c      compaction  {ts}
 #   title  the thread's name  {t}
+#   an     the agent's name, which only a subagent's thread has  {t}: from session_meta's
+#          agent_nickname, which extract.sh reads from the head of the file, since it drops
+#          that line (it holds the whole system prompt) before jq
 # Reasoning, tool input and output, injected context and the image data stay out of the output.
 # Texts are capped at 200 KB, as in extract.jq.
 

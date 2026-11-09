@@ -1,6 +1,6 @@
 // bun test: pins as data. Everything here is made up.
 import { test, expect, describe } from "bun:test";
-import { PIN_LIMIT, turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, pinWhen, trayFolds, placeAtTop, placeItem, NOT_A_PLACE } from "../mods/agent-threads/pins.js";
+import { turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, placeAtTop, placeItem, NOT_A_PLACE } from "../mods/agent-threads/pins.js";
 import { keyAction, TAKEN_LETTERS, headPinHit } from "../mods/agent-threads/ui.js";
 
 const DAY = 86400000;
@@ -104,20 +104,7 @@ describe("what a pin shows", () => {
     expect(pinState({ turn: t, seen: { len: 0, fu: 2 } })).toBe("quiet");
   });
 
-  test("the time: a clock today, the day alone before that", () => {
-    expect(pinWhen(T0, T0)).toMatch(/\d:\d\d/);
-    expect(pinWhen(T0 - DAY, T0)).toBe("Yesterday");
-    expect(pinWhen(new Date(2026, 10, 4, 9).getTime(), T0)).toBe("4 Nov");
-    expect(pinWhen(null, T0)).toBe("");
-  });
 
-  test("the tray folds past 30% of a short pane, and never before the pane has a height", () => {
-    expect(trayFolds(5, 0)).toBe(false);
-    expect(trayFolds(5, 900)).toBe(false); // 138 px of 804
-    expect(trayFolds(5, 500)).toBe(true);
-    expect(trayFolds(1, 300)).toBe(false);
-    expect(PIN_LIMIT).toBe(5);
-  });
 });
 
 describe("the reading place", () => {

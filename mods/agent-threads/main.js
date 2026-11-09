@@ -3,8 +3,9 @@
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
-// other commands it runs are pane.split (to open itself), pane.focus (the Terminal
-// button, and before the quote's paste) and pane.close (its own pane). The only programs
+// other commands it runs are pane.split (to open itself, and the Pinned column beside it),
+// layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
+// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
 // it runs besides its scripts are hc get and git remote get-url (the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
@@ -26,19 +27,20 @@ import {
   focused, props, run, shared, setShared, closeOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, firstLine, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
+  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
 } from "./ui.js";
-import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, pinWhen, trayFolds } from "./pins.js";
-import { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
+import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -46,8 +48,6 @@ const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
 // Pasted images, decoded by image.sh into the mod's data folder (kept across installs, never
 // in the repo, trimmed to 200 MB). image() takes paths from the app home.
 const IMG_DIR = `data/${MOD}/images`;
-const THUMB_W = 64;
-const THUMB_H = 40;
 const IMG_MAX_H = 260;
 const IMG_FULL_H = 1600;
 // Bytes per extractor call. A 6.7 MB busy transcript reads in 4 calls, so the header's
@@ -64,6 +64,17 @@ const EXEC_STALL = 30000;
 // the read's clock starts again instead of the read being judged stalled.
 const TICK_GAP = 3000;
 const MAP_KEY = "threads.byTerminal";
+// shared("threads.pinnedByTerminal"): terminal -> its Pinned pane (v), kept apart from the
+// map above so Cmd-Shift-T still finds the main Threads pane.
+const PIN_MAP_KEY = "threads.pinnedByTerminal";
+// shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
+const FIT_KEY = "threads.fit";
+// Each pane's measured width, so the Pinned column and its Threads pane can resize together.
+const WIDTH_KEY = "threads.width";
+// What Herdr's layout px size adds to the width a pane measures (its frame).
+const PANE_FRAME = 2;
+// The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
+const PINNED_HEADING = 66;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
@@ -85,16 +96,20 @@ const COUNTS_LINE = 16; // the counts line's explicit line height (11 px mono)
 // the editor to inherit; an editor that keeps its own shorter line leaves a few px of the
 // box's own background below the code, never a cut line (R3-2).
 const CODE_LINE = 20;
+// The Updating line under a done turn while a background task has woken the agent.
+const WAKE_H = 24;
+// The code box's borders and the editor's own padding inside it, left and right.
+const CODE_PAD = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
 const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
-const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply"]);
-const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose
+const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
+const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -118,7 +133,8 @@ function launch() {
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (pane?.mod === MOD) {
     // Pressed on a Threads pane: go back to the terminal it reads.
-    const term = Object.entries(shared(MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0];
+    const term = Object.entries(shared(MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0]
+      ?? Object.entries(shared(PIN_MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0];
     if (term && terminals().some((t) => t.address === term)) {
       // By pane id: pane.focus {terminal} prefers a layout block showing the terminal, which
       // may be outside this tab.
@@ -142,17 +158,20 @@ function launch() {
     const made = panes().find((p) => p.mod === MOD && !before.has(p.pane));
     if (!made) return false;
     remember(pane.terminal, made.pane);
+    // The new pane sizes itself to the reading width once it knows its width (fitOnOpen).
+    setShared(FIT_KEY, { ...(shared(FIT_KEY) ?? {}), [made.pane]: true });
     return true;
   };
 }
 
 // shared("threads.byTerminal"): terminal -> its Threads pane, so the launcher focuses an
-// open one instead of splitting again, and a pane knows its own id.
-function remember(terminal, pane) {
-  const map = { ...(shared(MAP_KEY) ?? {}) };
+// open one instead of splitting again, and a pane knows its own id. The Pinned pane is kept
+// in its own map (PIN_MAP_KEY).
+function remember(terminal, pane, key = MAP_KEY) {
+  const map = { ...(shared(key) ?? {}) };
   for (const [k, v] of Object.entries(map)) if (!panes().some((p) => p.pane === v.pane)) delete map[k];
   map[terminal] = { pane };
-  setShared(MAP_KEY, map);
+  setShared(key, map);
 }
 
 // ---- finding the session ----------------------------------------------------------------
@@ -343,19 +362,22 @@ async function resolvePi({ argv, pid, cwd, cwds, cmd }, current) {
   return { kind: "found", id: found.id, file: found.path, via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
 }
 
-// A Cursor process keeps its chat's store open, and the store's path names the chat id and the
-// data folder; its transcript is written with the first reply. Without that, --resume <id>,
+// A Cursor process keeps its chat's store open, and the store's path names the chat id; its
+// transcript is written with the first reply, under Cursor's data folder (cursorRoots). Without that, --resume <id>,
 // else the folder's newest transcript since the process started, as for Pi.
 async function resolveCursor({ argv, pid, cwd, cwds, cmd }, current) {
   const who = { harness: "cursor", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const store = pid ? cursorStore(await locate("cursor-open", String(pid))) : null;
   const openStep = { what: "Chat the process has open", detail: store ? store.id.slice(0, 8) : "none", ok: Boolean(store) };
-  const data = store?.data ?? (await locate("cursor-dir")) ?? `${home()}/.cursor`;
+  // The transcripts' folder first: a newer Cursor keeps the store elsewhere (cursorRoots).
+  const roots = cursorRoots((await locate("cursor-dir")) ?? `${home()}/.cursor`, store);
+  const data = roots[0];
   const named = cursorArgv(argv);
   const id = store?.id ?? named.id;
   if (id) {
-    const file = await locate("cursor-find", data, id);
+    let file = null;
+    for (const r of roots) if (!file) file = await locate("cursor-find", r, id);
     const via = store ? "open file" : "argv";
     if (file) return { kind: "found", id, file, via, ...who, guess: false, tried: [program, openStep] };
     if (store) return { kind: "pending", id, via, ...who, tried: [program, openStep], watch: `${data}/projects` };
@@ -415,6 +437,11 @@ export default class Threads extends View {
     this.pinnedVia = "props";
     this.claudeHome = typeof p?.claudeHome === "string" && p.claudeHome.startsWith("/") ? p.claudeHome.replace(/\/+$/, "") : null;
     this.debug = Boolean(p?.debug);
+    // props().view "pinned": this pane is the Pinned pane that v split off a Threads pane.
+    // view is what the list shows: "all" turns, or the "pinned" ones (the Pinned pane, or
+    // the switch in a pane too narrow to split).
+    this.pinnedPane = p?.view === "pinned";
+    this.view = this.pinnedPane ? "pinned" : "all";
     // Tests only, with debug: a pane width to lay out for when the window does not draw
     // (a window behind another never reports its size). Never set by the launcher.
     this.forcedWidth = this.debug && Number(p?.width) > 0 ? Number(p.width) : null;
@@ -440,6 +467,17 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
+    // The settings panel's name field: while it has the keyboard, keys type (this.naming).
+    this.nameInput = InputState.new({ placeholder: DEFAULTS.youName, value: DEFAULTS.youName });
+    this.naming = false;
+    this.nameInput.on("focus", (_e, cx) => { this.naming = true; cx.notify(); });
+    this.nameInput.on("blur", (_e, cx) => { this.endNaming(cx); });
+    this.nameInput.on("submit", (_e, cx) => { this.endNaming(cx); this.h.focus(); });
+    this.nameInput.on("change", (_e, cx) => {
+      const v = nameValue(this.nameInput.value());
+      if (v && v !== this.prefs.youName) this.changePrefs({ youName: v }, cx);
+      cx.notify();
+    });
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -477,6 +515,8 @@ export default class Threads extends View {
       // No folder watch for the settings (the folder could not be watched): read it here.
       if (this.prefsPoll) { this.readPrefs(cx); this.readPins(cx); }
     });
+    // The sticky day: redraw once the top of the pane moved into another day.
+    cx.timer.every(120, (cx) => { if (this.stickyDue) { this.stickyDue = false; cx.notify(); } });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
       this.watchRead(cx);
@@ -495,7 +535,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
-      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, fold: this.trayFold ?? null, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       header: this.headerText(),
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -513,7 +553,7 @@ export default class Threads extends View {
       // v1 feedback: what each row and card part shows, as text.
       detail: rows.map((r) => this.rowDetail(r)).filter(Boolean),
       counts: this.sessions.length ? this.counts() : null,
-      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}|${b[2]}`),
+      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
@@ -551,8 +591,8 @@ export default class Threads extends View {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
-      case "md": return `md${n} links ${r.links ?? 0} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
-      case "rhead": return `rhead${n} FINAL REPLY${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
+      case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
+      case "rhead": return `rhead${n}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
@@ -654,8 +694,18 @@ export default class Threads extends View {
   setPrefs(values) {
     const was = this.prefs;
     this.prefs = values;
+    // The name field shows the name in use, except while the person is typing in it.
+    if (!this.naming && this.nameInput && this.nameInput.value() !== values.youName) this.nameInput.set_value(values.youName);
     // Hiding agent turns: a hidden selected turn hands the selection to the turn before it.
     if (was.agentTurns && !values.agentTurns) this.reselect = true;
+  }
+
+  // The name field gives the keyboard back and shows the name in use, trimmed. A cleared
+  // field changed nothing, so it shows the name it had.
+  endNaming(cx) {
+    this.naming = false;
+    if (this.nameInput.value() !== this.prefs.youName) this.nameInput.set_value(this.prefs.youName);
+    cx?.notify();
   }
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
@@ -708,6 +758,7 @@ export default class Threads extends View {
   readPins(cx) {
     cx.spawn(async (cx) => {
       const text = await readTextFile(pinsPath(appHome())).catch(() => null);
+      this.pinsRead = true;
       if (this.pinSaving || text === this.pinRaw) return;
       this.pinRaw = text;
       const { store, error } = parsePins(text);
@@ -795,7 +846,7 @@ export default class Threads extends View {
     this.pinTurns = new Set(out.map((p) => p.turn).filter(Boolean));
     return out;
   }
-  // What the tray and the digits show: a pane with two sessions can hold more than the limit.
+  // What the Pinned view and the digits show: a pane with two sessions can hold more than the limit.
   pinnedList() { return this.pinnedAll().slice(0, PIN_LIMIT); }
   isPinned(key) { this.pinnedAll(); return this.pinKeys.has(key); }
   isPinnedTurn(turn) { this.pinnedAll(); return this.pinTurns.has(turn); }
@@ -815,14 +866,16 @@ export default class Threads extends View {
     rec.pins.push(pin);
     this.pinChanged(k, cx);
     const i = this.pinnedList().findIndex((p) => p.pin === pin);
-    this.say(`Pinned #${turn.n} · press ${i + 1} to come back`, "pin", cx, 3000);
+    // A pin opens the Pinned column when there is room and it was not closed this pane's life.
+    const col = !this.pinnedPane && !this.pinnedPaneOpen() && !this.pinColClosed && this.view === "all" && this.openPinned(cx, true);
+    this.say(`Pinned #${turn.n} · ${col ? "in the Pinned column · " : ""}press ${i + 1} to come back`, "pin", cx, 3000);
     return true;
   }
 
   unpin(p, cx) {
     const k = this.sessionKey(p.s);
     const rec = this.pinStore.sessions[k];
-    // By id: a save or another pane's change can have replaced the object since the tray drew.
+    // By id: a save or another pane's change can have replaced the object since the Pinned view drew.
     const at = rec?.pins.findIndex((x) => x.id === p.pin.id) ?? -1;
     if (at < 0) return false;
     const [pin] = rec.pins.splice(at, 1);
@@ -921,49 +974,6 @@ export default class Threads extends View {
     this.editorFocused = false;
   }
 
-  // The tray: outside the list, so it stays on screen while the list scrolls and a tray row
-  // can have its own click handlers; below the list, so adding a pin does not move the text.
-  pinTray(t) {
-    const L = this.pinnedList();
-    this.trayFold = L.length ? trayFolds(L.length, this.rootH) : null;
-    if (!L.length) return null;
-    const narrow = this.narrow();
-    const go = (i) => (_e, cx) => { cx.stop_propagation(); this.toList(); this.goPin(i, cx); cx.notify(); };
-    const wrap = v_flex().id("th-pins").flex_none().bg(this.bandFill(t)).border_t(1).border_color(t.border);
-    const dot = () => div().flex_none().size(6).rounded(3).bg(t.accent);
-    if (this.trayFold) {
-      return wrap.child(h_flex().h(32).px(10).gap(6).items_center().overflow_hidden()
-        .child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent))
-        .children(L.map((p, i) => h_flex().id(`th-pin-${i}`).flex_none().h(22).px(6).gap(4).items_center().rounded(5).border_1().border_color(t.border).cursor_pointer()
-          .when(this.sel === p.key, (el) => el.bg(t.selected))
-          .hover((x) => x.bg(t.hover))
-          .tooltip(firstLine(p.turn?.prompt ?? p.pin.text))
-          .on_click(go(i))
-          .child(div().text_size(11).text_color(p.state === "gone" ? t.dim : t.foreground).child(`${i + 1}`))
-          .when(!narrow, (el) => el.child(div().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(p.turn ? `#${p.turn.n}` : "gone")))
-          .when(p.state === "new", (el) => el.child(dot()))
-          .when(p.state === "live", (el) => el.child(this.liveIcon(this.liveState(t), 10))))));
-    }
-    return wrap.py(4).children(L.map((p, i) => {
-      const gone = p.state === "gone";
-      const live = p.state === "live" ? this.liveState(t) : null;
-      const label = live ? live.label : p.state === "new" ? "New reply" : gone ? "Gone" : p.state === "loading" ? "Reading…" : pinWhen(p.turn?.ts);
-      const color = live ? live.color : p.state === "new" ? t.accent : t.dim;
-      return h_flex().id(`th-pin-${i}`).h(26).pl(10).pr(8).gap(6).items_center().cursor_pointer()
-        .when(this.sel === p.key, (el) => el.bg(t.selected))
-        .hover((x) => x.bg(t.hover))
-        .on_click(go(i))
-        .child(this.kbd(t, String(i + 1)))
-        .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim).child(`#${p.pin.n}`))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(gone ? t.dim : t.foreground).child(firstLine(p.turn?.prompt ?? p.pin.text) || "No text"))
-        .when(p.state === "new", (el) => el.child(dot()))
-        .when(Boolean(live), (el) => el.child(this.liveIcon(live, 11)))
-        // A narrow pane keeps the signs above and the one word that has no sign.
-        .when(Boolean(label) && (!narrow || gone), (el) => el.child(div().flex_none().text_size(11.5).text_color(color).child(label)))
-        .child(this.iconButton(t, `th-unpin-${i}`, "pin-off", `Unpin #${p.pin.n}`, (_e, cx) => { this.unpin(p, cx); cx.notify(); }));
-    }));
-  }
-
   // ---- data ----
 
   current() { return this.sessions[this.sessions.length - 1] ?? null; }
@@ -972,18 +982,35 @@ export default class Threads extends View {
   me() {
     const own = props()?.pane ?? this.myPane;
     if (own) return panes().find((p) => p.pane === own) ?? null;
+    if (this.pinnedPane) return this.pinnedSelf();
     const known = shared(MAP_KEY)?.[this.terminal];
     const mine = known ? panes().find((p) => p.pane === known.pane) : null;
     if (mine) return mine;
     // Opened some other way (props() carries no pane id): the only Threads pane in the
     // terminal's tab that no other terminal has claimed is this one.
     const tab = this.pane()?.tab;
-    const claimed = new Set(Object.entries(shared(MAP_KEY) ?? {}).filter(([t]) => t !== this.terminal).map(([, v]) => v.pane));
+    const claimed = new Set([...Object.entries(shared(MAP_KEY) ?? {}).filter(([t]) => t !== this.terminal).map(([, v]) => v.pane),
+      ...Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane)]);
     const here = panes().filter((p) => p.mod === MOD && p.tab === tab && !claimed.has(p.pane));
     if (here.length === 1) return here[0];
     const anywhere = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane));
     return anywhere.length === 1 ? anywhere[0] : null;
   }
+  // The Pinned pane's own pane: the one in its map, or else the only Threads pane in the
+  // main pane's tab that no map claims (it was split from there, and props carry no id).
+  pinnedSelf() {
+    const known = shared(PIN_MAP_KEY)?.[this.terminal];
+    const mine = known ? panes().find((p) => p.pane === known.pane) : null;
+    if (mine) return mine;
+    const main = shared(MAP_KEY)?.[this.terminal]?.pane;
+    const claimed = new Set([...Object.values(shared(MAP_KEY) ?? {}), ...Object.values(shared(PIN_MAP_KEY) ?? {})].map((v) => v.pane));
+    const tab = panes().find((p) => p.pane === main)?.tab;
+    const here = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane) && (!tab || p.tab === tab));
+    return here.length === 1 ? here[0] : null;
+  }
+  // The main Threads pane of this terminal, and its Pinned pane, when open.
+  mainPane() { const id = shared(MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
+  pinnedPaneOpen() { const id = shared(PIN_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   status() { return this.pane()?.status ?? this.term()?.status ?? null; }
 
   resolve(cx) {
@@ -1278,7 +1305,8 @@ export default class Threads extends View {
     const mine = this.me()?.pane ?? null;
     if (!mine) return;
     this.myPane = mine;
-    if (shared(MAP_KEY)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine));
+    const key = this.pinnedPane ? PIN_MAP_KEY : MAP_KEY;
+    if (shared(key)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine, key));
   }
 
   // Live data changed: a new turn or status in the terminal means look again.
@@ -1295,6 +1323,9 @@ export default class Threads extends View {
   poll(cx) {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
+    this.fitOnOpen();
+    this.settleSplit();
+    this.autoPinned(cx);
     this.lookRepo(cx);
     const t = this.term();
     const now = { turn: t?.turn ?? null, status: t?.status ?? null, there: Boolean(t), fg: this.pane()?.program?.key ?? null };
@@ -1335,14 +1366,16 @@ export default class Threads extends View {
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
       [...this.open].join(","), [...this.full].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
-      `${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
+      this.view, this.view === "pinned" ? this.pinVer : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
       this.baseSizes = this.baseRows.map((r) => this.height(r));
       this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
       this.probeRows = this.baseRows.filter((r) => PROBED.has(r.kind));
+      for (const r of this.baseRows) if (r.kind === "turn" && r.shape?.md != null) this.probeRows.push(this.cmdRow(r));
       this.rowsKey = key;
       this.fitKey = null;
       // The selection is on a turn the list no longer shows: agent turns were hidden, or a
@@ -1362,9 +1395,10 @@ export default class Threads extends View {
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
-      // A short list sits at the bottom, by the newest turn, like the chat.
+      // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
+      // reads from the top: pin 1 first.
       const total = sizes.reduce((x, y) => x + y, 0);
-      if (this.listH > 0 && rows.length && total < this.listH - 1) {
+      if (this.view !== "pinned" && this.listH > 0 && rows.length && total < this.listH - 1) {
         rows = [{ kind: "spacer", key: "spacer", h: this.listH - total }, ...rows];
         sizes = [this.listH - total, ...sizes];
       }
@@ -1375,18 +1409,23 @@ export default class Threads extends View {
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
       this.fitKey = fit;
-      this.liveShown = Boolean(lr?.live);
+      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake");
     }
     return this.rowsMemo;
   }
 
-  // Whether turn ti of session si is the live newest turn (Working or Needs you).
-  isLive(s, si, ti, status) {
-    const turn = s.turns[ti];
-    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && (!turn.done || (s.followActive && status === "working"));
+  // Whether turn ti of session si is the live newest turn (Working or Needs you): only one
+  // still owed its reply. A done turn the agent woke up for again (a background task's
+  // notification) keeps its reply, with an Updating line under it (waking).
+  isLive(s, si, ti, _status) {
+    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && !s.turns[ti].done;
+  }
+  waking(s, si, ti, status) {
+    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && s.turns[ti].done && s.followActive && status === "working";
   }
 
   buildRows(status) {
+    if (this.view === "pinned") return this.pinnedRows(status);
     const out = [];
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
@@ -1428,10 +1467,135 @@ export default class Threads extends View {
         if (live) out.push({ ...item, kind: "wrow", shape: this.shape(turn, true) });
         else if (this.open.has(key)) this.expanded(item, out);
         else out.push({ ...item, shape: this.shape(turn) });
+        if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
       });
       flush();
     });
     return out;
+  }
+
+  // The Pinned view: the pinned turns in pin order (the order of the keys 1 to 5), each
+  // closed or open like any turn, with its number on its meta line.
+  pinnedRows(status) {
+    const L = this.pinnedList();
+    if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];
+    const out = [];
+    L.forEach((p, i) => {
+      if (!p.turn) {
+        out.push({ kind: "note", key: `pins:${i}`, pinNo: i + 1, text: p.state === "gone" ? `${i + 1} · #${p.pin.n} is no longer in this session. Click to unpin it.` : `${i + 1} · #${p.pin.n} · reading this session…` });
+        return;
+      }
+      const si = this.sessions.indexOf(p.s);
+      const live = this.isLive(p.s, si, p.turn.n - 1, status);
+      const item = { kind: "turn", key: p.key, turn: p.turn, s: p.s, si, last: false, live, pinNo: i + 1 };
+      if (live) out.push({ ...item, kind: "wrow", shape: this.shape(p.turn, true) });
+      else if (this.open.has(p.key)) this.expanded(item, out);
+      else out.push({ ...item, shape: this.shape(p.turn) });
+      if (this.waking(p.s, si, p.turn.n - 1, status)) out.push({ kind: "wake", key: `wk:${p.key}`, turn: p.turn, s: p.s });
+    });
+    return out;
+  }
+
+  // Shows all turns or the pinned ones in this pane, keeping the selection.
+  setView(view) {
+    if (this.view === view) return;
+    this.view = view;
+    this.pinVisit = null;
+    if (view === "pinned") {
+      const L = this.pinnedList();
+      if (!L.some((p) => p.key === this.sel)) this.sel = L.find((p) => p.key)?.key ?? null;
+    }
+    this.follow = false;
+    if (this.sel) this.scrollTo = { key: this.sel, how: "center" };
+  }
+
+  // v: the Pinned column beside this pane, from PIN_SPLIT_MIN (480 px) wide; narrower, the
+  // switch in this pane, with a toast that says why. In the Pinned pane, v goes back to the
+  // main pane. auto: opened by a pin or by Threads opening with pins, so no switch when there
+  // is no room, and the keyboard stays in this pane.
+  openPinned(cx, auto = false) {
+    if (this.pinnedPane) {
+      const main = this.mainPane();
+      if (main) run("pane.focus", { pane: main.pane });
+      return true;
+    }
+    const open = this.pinnedPaneOpen();
+    if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
+    if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
+    const me = this.me();
+    const px = pinColumn(this.pw());
+    if (!me || !px) {
+      if (auto) return false;
+      this.setView("pinned");
+      if (me) this.say(`Pinned shows here: the Pinned column needs Threads ${PIN_SPLIT_MIN} px wide`, "pin", cx, 3500);
+      return true;
+    }
+    if (this.splitAsk) return true;
+    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
+    run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
+    return true;
+  }
+
+  // Once the split has applied: the new pane goes in the Pinned map and gets the column's
+  // width. Opened by a pin or by Threads opening, the keyboard goes back to Threads.
+  settleSplit() {
+    const a = this.splitAsk;
+    if (!a) return;
+    const made = panes().find((p) => p.mod === MOD && !a.before.includes(p.pane));
+    if (made) {
+      this.splitAsk = null;
+      remember(this.terminal, made.pane, PIN_MAP_KEY);
+      run("layout.resize", { id: made.pane, px: a.px });
+      if (a.back) run("pane.focus", { pane: a.back });
+    } else if (Date.now() > a.until) this.splitAsk = null;
+  }
+
+  // This pane's width, for its partner (resizeColumn).
+  shareWidth() {
+    const me = this.me();
+    if (!me || this.paneW == null) return;
+    const map = shared(WIDTH_KEY) ?? {};
+    if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
+  }
+
+  // - and =, in the column or in Threads while the column is open: the column 40 px
+  // narrower or wider, and Threads the other way, so the terminal stays put (ui.js
+  // columnResize says why a drag on the divider cannot do this).
+  resizeColumn(d, cx) {
+    const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
+    const main = this.pinnedPane ? this.mainPane() : this.me();
+    if (!col || !main) return false;
+    const w = shared(WIDTH_KEY) ?? {};
+    // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
+    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d);
+    if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
+    run("layout.resize", { id: col.pane, px: next.column });
+    run("layout.resize", { id: main.pane, px: next.main });
+    setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
+    return true;
+  }
+
+  // The Pinned column is the way in: Threads opening with pins opens it once, when there is
+  // room. Closing the column keeps it closed for this pane's life, until v opens it again.
+  // In the column: it closes when its Threads pane closes.
+  autoPinned(cx) {
+    if (this.pinnedPane) {
+      // The column goes with its Threads pane: once the main pane has been seen, its closing
+      // closes the column, so opening Threads again brings both back together.
+      const main = this.mainPane();
+      if (main) this.mainSeen = true;
+      else if (this.mainSeen && !this.closing) {
+        const me = this.me();
+        if (me) { this.closing = true; run("pane.close", { pane: me.pane }); }
+      }
+      return;
+    }
+    const open = Boolean(this.pinnedPaneOpen());
+    if (this.pinColOpen && !open && !this.splitAsk) this.pinColClosed = true;
+    this.pinColOpen = open;
+    if (this.pinAutoDone || !this.width || !this.current()?.loaded || !this.pinsRead) return;
+    this.pinAutoDone = true;
+    if (!open && !this.pinColClosed && this.pinnedList().length) this.openPinned(cx, true);
   }
 
   // Counts for the header, the Agents button and the empty state, kept until the turns,
@@ -1483,14 +1647,21 @@ export default class Threads extends View {
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const text = this.replyText(turn);
-    const key = `${Math.round(this.width)}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
+    const key = `${Math.round(this.width)}|${P.textSize}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
     let preview;
+    let md = null;
     let tone = "reply";
+    // A reply, with no search on, starts as Markdown (mdPreview): whole source lines.
+    if (!live && !why && text && !q) {
+      md = mdPreview(text, P.replyLines, readWidth(this.width, P.textSize) / readType(P.textSize).reply);
+      if (!md.md.trim()) md = null;
+    }
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
+    else if (md) preview = " ";
     else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))));
     else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
@@ -1504,13 +1675,34 @@ export default class Threads extends View {
       cmd: cmd && { name: cmd.name, args: src(cmd.args) },
       promptLines: P.promptLines, replyLines: tone === "reply" ? P.replyLines : 1,
       // While filtering, the row shows the text around the first match, as one run.
-      quotes: !q,
+      quotes: !q, size: P.textSize,
     });
+    // A running turn draws its live line (18 px, a label) where the name and reply go.
+    if (live) sh.height += 18 - ROW.NAME - sh.r * this.rt().line;
+    // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
+    // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
+    // and until then an estimate; mdBase is the row without it.
+    if (md && tone === "reply") {
+      const { line } = this.rt();
+      // No link rules here: a click on a row opens the turn, so rows never carry links.
+      sh.md = md.md;
+      // The source lines, for the debug report and the tests; the block is drawn from md.
+      sh.reply = md.md.split("\n");
+      sh.r = md.lines;
+      sh.rMore = md.cut;
+      sh.mdBase = rowHeight(sh.p, 0, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), line);
+      sh.mdEst = md.lines * line + md.gaps * Math.max(0, this.paraGap() - line / 2);
+      sh.height = sh.mdBase + sh.mdEst;
+    }
     sh.tone = tone;
     sh.cmd = cmd;
-    // Pasted images: a strip of thumbnails under the prompt from 300 px; narrower, the count
-    // in the meta line says they are there.
-    if (turn.images?.length && !this.narrow()) { sh.thumbs = true; sh.height += THUMB_H + 3; }
+    // Pasted images: a row of tiles over the bubble.
+    if (turn.images?.length) {
+      const th = thumbSize(this.width, P.textSize) + ROW.GAP;
+      sh.thumbs = true;
+      sh.height += th;
+      if (sh.mdBase != null) sh.mdBase += th;
+    }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     return sh;
@@ -1526,8 +1718,12 @@ export default class Threads extends View {
     const resume = this.resumeAt();
     const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
+    // Pasted images: their tiles over the message, and under the tiles each one opened full size.
+    if (turn.images?.length) {
+      out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
+      turn.images.forEach((_, i) => { if (this.full.has(`i:${key}:${i}`)) out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: true }); });
+    }
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
-    (turn.images ?? []).forEach((_, i) => out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: this.full.has(`i:${key}:${i}`) }));
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
@@ -1556,7 +1752,7 @@ export default class Threads extends View {
         if (used + md.length > REPLY_BUDGET * 1.4) {
           long = true;
           if (!whole) {
-            md = `${md.slice(0, Math.max(200, REPLY_BUDGET - used)).replace(/\s+\S*$/, "")} …`;
+            md = cutMd(md, Math.max(200, REPLY_BUDGET - used));
             cut = true;
           }
         }
@@ -1582,7 +1778,7 @@ export default class Threads extends View {
       // One block that gpui wraps at the card's width (C5); the estimate counts lines only
       // until the probe has measured it.
       const text = flattenMd(late.slice(0, 4000));
-      const l = rowLines(text, LATEST_LINES + 1, this.inner() / MD_CHAR);
+      const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
       push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
     }
@@ -1591,16 +1787,18 @@ export default class Threads extends View {
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
 
-  // Lines shown, whether it scrolls sideways, and whether it gets a caption.
-  // A code block's box: its lines, 6 px above and below the editor's text, its bottom
-  // border, and room for a horizontal scrollbar when a line is wider than the box.
-  codeBoxH(r) { return r.shown * CODE_LINE + 16 + (r.wide ? 10 : 0); }
+  // A code block's box: its rows, 6 px above and below the editor's text, and its bottom
+  // border.
+  codeBoxH(r) { return r.shown * CODE_LINE + 16; }
 
+  // The editor wraps long lines (soft_wrap), so a block never sits scrolled sideways and
+  // each line starts at the left edge. rows: the wrapped rows (ui.js codeRows) at the box's
+  // width less the editor's padding, 7.3 px a character at 12 px. A block of up to
+  // CODE_LINES rows shows them all; a taller one scrolls inside, and says so.
   codeShape(text) {
     const lines = text.split("\n");
-    const widest = lines.reduce((m, l) => Math.max(m, l.length), 0);
-    const wide = widest * 7.3 > this.inner() - 16;
-    return { lines: lines.length, shown: Math.min(CODE_LINES, lines.length), wide, caption: lines.length > CODE_LINES || wide };
+    const rows = codeRows(text, (this.inner() - CODE_PAD) / 7.3);
+    return { lines: lines.length, rows, shown: Math.min(CODE_LINES, rows), caption: rows > CODE_LINES };
   }
 
   turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow"].includes(r.kind)).map((r) => r.key); }
@@ -1782,21 +1980,35 @@ export default class Threads extends View {
     return { w: Math.min(w, Math.round((h * f.w) / f.h)), h };
   }
 
-  // A collapsed row's thumbnails: as many 64 x 40 boxes as fit, then "+N".
-  thumbStrip(t, turn, key) {
+  // The tiles over a message (ui.js tileRow): the images that fit, then "+N". In an open
+  // card a tile shows a ring while that image is open full size below.
+  tileLayout(turn) { return tileRow(turn.images.map((_, i) => this.imgFile(turn, i)), this.width, this.prefs.textSize); }
+  thumbStrip(t, turn, key, open = false) {
     this.wantImages(turn, key);
-    const room = rowTextWidth(this.width, turn.agent);
-    const fit = Math.max(1, Math.floor((room + 4) / (THUMB_W + 4)));
-    const n = turn.images.length;
-    const shown = n > fit ? Math.max(1, fit - 1) : n;
-    return h_flex().h(THUMB_H).gap(4).items_center().overflow_hidden()
-      .children(turn.images.slice(0, shown).map((_, i) => {
+    const L = this.tileLayout(turn);
+    return h_flex().h(L.size).gap(TILE_GAP).justify_end().items_center().min_w(0)
+      .children(L.tiles.map(({ i, w }) => {
         const f = this.imgFile(turn, i);
-        return div().flex_none().w(THUMB_W).h(THUMB_H).rounded(5).overflow_hidden().border_1().border_color(t.border).bg(t.background)
+        const on = open && this.full.has(`i:${key}:${i}`);
+        return div().flex_none().w(w).h(L.size).rounded(10).overflow_hidden().border_1().border_color(on ? t.accent : t.border).bg(t.background)
           .when(Boolean(f), (el) => el.child(image(f.path).size_full()))
-          .when(!f, (el) => el.flex().items_center().justify_center().child(svg(ICON("image")).size(14).text_color(t.dim)));
+          .when(!f, (el) => el.flex().items_center().justify_center().child(svg(ICON("image")).size(16).text_color(t.dim)));
       }))
-      .when(n > shown, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(`+${n - shown}`)));
+      .when(L.more > 0, (el) => el.child(div().flex_none().w(44).h(L.size).rounded(10).border_1().border_color(t.border).flex().items_center().justify_center()
+        .text_size(12).text_color(t.muted).child(`+${L.more}`)));
+  }
+
+  // The image a press on an open card's tiles landed on, or the first one. The tiles sit on
+  // the right of the card's text width.
+  tileAt(turn) {
+    const L = this.tileLayout(turn);
+    const x = this.pressX;
+    const w = this.bodyW ?? this.width;
+    if (x == null || !(w > 0)) return L.tiles[0]?.i ?? 0;
+    const left = w - ROW.PAD_X - L.width;
+    const hit = L.tiles.find((c) => x >= left + c.x && x < left + c.x + c.w);
+    if (hit) return hit.i;
+    return x >= left + L.width - 44 && L.more ? L.tiles.length : L.tiles[0]?.i ?? 0;
   }
 
   flushCode(cx) {
@@ -1834,7 +2046,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -2173,6 +2385,22 @@ export default class Threads extends View {
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
+    if (kind === "pins" && /^\d+$/.test(id)) {
+      const p = this.pinnedList()[Number(id)];
+      if (p && !p.turn && p.state === "gone") { this.unpin(p, cx); return cx.notify(); }
+      return;
+    }
+    if (kind === "imgs") {
+      const turn = this.findTurn(id);
+      if (!turn?.images?.length) return;
+      const i = this.tileAt(turn);
+      this.pressX = null;
+      // "+N" opens the first image the tiles leave out.
+      const k = `i:${id}:${Math.min(i, turn.images.length - 1)}`;
+      this.full.has(k) ? this.full.delete(k) : this.full.add(k);
+      this.sel = id;
+      return cx.notify();
+    }
     if (kind === "img") {
       const k = `i:${id}`;
       this.full.has(k) ? this.full.delete(k) : this.full.add(k);
@@ -2215,7 +2443,7 @@ export default class Threads extends View {
       if (seg) this.copy(seg.text, `code:${id}`, `Code copied · ${plural(seg.text.split("\n").length, "line")}`, cx);
       return;
     }
-    // The stats part ends in an info chip: a click on it shows or hides what the chips mean.
+    // The stats part ends in an info icon: a click on it shows or hides what the figures mean.
     if (kind === "st") { this.legendOn = !this.legendOn; this.sel = id; return cx.notify(); }
     if (["rhead", "md", "nr", "code", "lh", "sx", "lg"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
@@ -2250,7 +2478,15 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
-    const name = keyAction(e, this.filtering, this.quoteKey);
+    const name = keyAction(e, this.filtering || this.naming, this.quoteKey);
+    // In the name field Esc gives the keyboard back to the list; other keys type.
+    if (this.naming) {
+      if (name !== "escape") return;
+      this.endNaming(cx);
+      this.h.focus();
+      cx.stop_propagation();
+      return true;
+    }
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -2293,6 +2529,11 @@ export default class Threads extends View {
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         // A search: Enter also hands the keys to the list, so p and the digits work on a result.
         if (this.filtering && this.query) this.toList();
+        // In the Pinned view a closed pin opens at its place, as its number key does.
+        if (this.view === "pinned" && this.sel && !this.open.has(this.sel)) {
+          const i = this.pinnedList().findIndex((p) => p.key === this.sel);
+          if (i >= 0) return this.goPin(i, cx);
+        }
         if (this.sel && keys.includes(this.sel)) this.toggle(this.sel, cx);
         return true;
       case "jump": this.filtering = true; this.input.set_value("#"); this.query = "#"; this.input.focus(); return true;
@@ -2306,6 +2547,9 @@ export default class Threads extends View {
       }
       case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
       case "undoUnpin": return this.undoUnpin(cx);
+      case "pinned": return this.openPinned(cx);
+      case "narrower": return this.resizeColumn(-PIN_STEP, cx);
+      case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -2322,13 +2566,14 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) this.filtering = false; return true;
-      case "resetSettings": this.changePrefs({ promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
       case "escape":
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
         if (this.filtering || this.query) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         if (this.sel && this.open.has(this.sel)) { this.toggle(this.sel, cx); return true; }
+        if (this.view === "pinned" && !this.pinnedPane) { this.setView("all"); return true; }
         return false;
     }
     if (name.startsWith("go:")) { this.editorFocused = false; this.h.focus(); return this.goPin(Number(name.slice(3)) - 1, cx); }
@@ -2345,8 +2590,21 @@ export default class Threads extends View {
       this.pick(c, cx);
       return true;
     }
-    // "promptLines:+", "replyLines:-", "promptLines:4".
-    const m = name.match(/^(promptLines|replyLines):([+-]|\d+)$/);
+    // "youName:Sam": the name over the person's messages; an empty one is the default.
+    if (name.startsWith("youName:")) {
+      this.changePrefs({ youName: nameValue(name.slice(8)) ?? DEFAULTS.youName }, cx);
+      return true;
+    }
+    // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
+    const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
+    if (bc) {
+      const v = bubbleValue(bc[2]);
+      if (v == null) return false;
+      this.changePrefs({ [bc[1]]: v }, cx);
+      return true;
+    }
+    // "promptLines:+", "replyLines:-", "promptLines:4", "textSize:15".
+    const m = name.match(/^(textSize|promptLines|replyLines):([+-]|\d+)$/);
     if (m) {
       const [lo, hi] = RANGES[m[1]];
       const cur = this.prefs[m[1]];
@@ -2356,11 +2614,22 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugWidth:240" lays the pane out for that width.
+    // Design review only: "debugHeader:right" draws the earlier header (all on the right
+    // for the person's turns), "debugHeader:split" the current one.
+    if (/^debugHeader:(split|right)$/.test(name)) { this.headerRight = name.endsWith("right"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn's whole reply, as "Show full reply" would.
     if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
     if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land" }; return true; }
+    // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
+    if (this.debug && /^debugClick:\d+:/.test(name)) {
+      const [, x, ...k] = name.split(":");
+      this.pressX = Number(x);
+      this.bodyW = this.width;
+      this.click(k.join(":"), cx);
+      return true;
+    }
     // Tests only (props.debug, which the launcher never sets): a quote press on the selected
     // turn, since keys cannot reach a window that does not draw.
     if (this.debug && name === "debugQuote") return this.quote(cx, "debug") !== false;
@@ -2382,7 +2651,9 @@ export default class Threads extends View {
         const me = this.me();
         const threads = panes().filter((p) => p.mod === MOD);
         const focusedOne = threads.find((p) => p.focused);
-        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me) {
+        const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
+        const mains = threads.filter((p) => !pinnedIds.has(p.pane));
+        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
           if (this.action(c, cx)) cx.notify();
         }
       }
@@ -2411,6 +2682,7 @@ export default class Threads extends View {
   render(cx) {
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
+    this.fitColumn();
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
@@ -2418,7 +2690,7 @@ export default class Threads extends View {
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
     const t = theme();
-    const focusedPanel = this.h.is_focused() || this.input && this.filtering;
+    const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
     if (this.debug) this.measure();
     return v_flex()
       .id("threads-root")
@@ -2431,14 +2703,13 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(w - this.width) > 1) { this.width = w; cx.notify(); }
+        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); this.shareWidth(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
       .child(this.header(t))
       .children(this.banners(t))
       .child(this.body(t, focusedPanel, cx))
-      .children([this.pinTray(t)].filter(Boolean))
       .child(this.footer(t))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -2467,6 +2738,33 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
+  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
+  // wider than fitWidth a centred column that wide, so a reply's reading line and the
+  // bubbles stay together instead of leaving a gutter between them. Before the pane has
+  // measured itself (and in tests that set width) both are this.width.
+  pw() { return this.paneW ?? this.width; }
+  fitColumn() {
+    if (this.forcedWidth || this.paneW == null) return;
+    const w = Math.min(this.paneW, fitWidth(this.prefs.textSize));
+    if (Math.abs(w - this.width) > 0.5) this.width = w;
+  }
+  // How far the column sits in from the pane's left edge.
+  colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
+  // reading width shrinks to it. A narrower one keeps what it was given.
+  fitOnOpen() {
+    if (this.paneW == null || !this.prefsLoaded) return;
+    const me = this.me();
+    const map = shared(FIT_KEY);
+    if (!me || !map?.[me.pane]) return;
+    const { [me.pane]: _, ...rest } = map;
+    setShared(FIT_KEY, rest);
+    const px = fitWidth(this.prefs.textSize);
+    if (this.paneW > px + 2) run("layout.resize", { id: me.pane, px });
+  }
+  // Under 440 px the header's badge drops its word and the latest button gives way (End still
+  // acts), so the text keeps room beside the labelled Pinned button.
+  compact() { return this.width < 440; }
   // Herdr's zoom (settings.json, 0.5 to 3). It scales every length the panel draws, the item
   // sizes given to v_virtual_list included, while on_size_change and mouse positions come in
   // zoomed px. So the panel works in design px (as AGENTS.md says to write sizes), divides
@@ -2490,31 +2788,59 @@ export default class Threads extends View {
         .text_size(9).font_semibold().text_color(on ? t.background : t.muted).child(count)));
   }
 
-  // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on, count].
+  // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on,
+  // count, label]. A labelled button shows its label instead of an icon. Under 440 px the
+  // latest button gives way, and under 300 px the agents and pin buttons too (End, a and p
+  // still act), so the turn count keeps its room beside "Pinned 2". The Pinned pane keeps
+  // only its own two.
   headerButtons() {
     const c = this.counts();
-    const showAgents = c.agentAll > 0 || this.prefs.agentTurns;
-    const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null]];
+    const pins = this.pinnedList().length;
+    const pinned = Boolean(this.sel && this.isPinned(this.sel));
+    const n = this.sel ? this.findTurn(this.sel)?.n : null;
+    const pinBtn = ["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null, null];
+    // The Pinned pane: its pin button gives way under 300 px too, so "1 of 5" keeps its room
+    // beside the heading.
+    if (this.pinnedPane) return [...(this.narrow() ? [] : [pinBtn]), ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
+    const narrow = this.narrow();
+    const showAgents = (c.agentAll > 0 || this.prefs.agentTurns) && !narrow;
+    const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null]];
     if (showAgents) {
       const on = Boolean(this.prefs.agentTurns);
       out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
-        countLabel(on ? c.agentAll : c.hiddenAll)]);
+        countLabel(on ? c.agentAll : c.hiddenAll), null]);
     }
-    const pinned = Boolean(this.sel && this.isPinned(this.sel));
-    const n = this.sel ? this.findTurn(this.sel)?.n : null;
-    out.push(["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null]);
-    out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null]);
-    out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null]);
+    if (!narrow) out.push(pinBtn);
+    const label = `Pinned${pins ? ` ${pins}` : ""}`;
+    const col = this.pinnedPaneOpen();
+    out.push(this.view === "pinned" ? ["th-pinned", null, "Back to all turns (v)", "pinned", true, null, "All turns"]
+      : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
+        : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
+    if (!this.compact()) out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null, null]);
+    out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
+  }
+
+  // A labelled header button: the Pinned control reads "Pinned 2", not an icon to guess at.
+  labelButton(t, id, label, tip, onClick, on = false) {
+    return div().id(id).flex_none().h(24).px(7).flex().items_center().rounded(5).cursor_pointer().border_1()
+      .border_color(on ? t.accent : t.border).text_size(12).text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.raised))
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(tip)
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(label);
   }
 
   // Estimated header layout at the pane width (no window has to draw to read it): the
   // badge, the room left for the text, and the buttons, inside 10 px padding and 8 px gaps.
   headerLayout() {
-    const buttons = this.headerButtons().length;
-    const badge = this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.narrow() ? 28 : 28 + 5 + 38;
-    const text = Math.round(this.width - 20 - badge - 8 - buttons * (24 + 8));
-    return { width: Math.round(this.width), badge, text, buttons, rightGutter: 10 };
+    const list = this.headerButtons();
+    const badge = this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38;
+    const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
+    // The Pinned heading: the pin, a 6 px gap and "Pinned" at 13.5 px semibold.
+    const heading = this.view === "pinned" ? PINNED_HEADING + 8 : 0;
+    const text = Math.round(this.pw() - 20 - (badge ? badge + 8 : 0) - heading - room);
+    return { width: Math.round(this.pw()), badge, heading, text, buttons: list.length, rightGutter: 10 };
   }
 
   badge(t) {
@@ -2533,7 +2859,7 @@ export default class Threads extends View {
       .tooltip(this.badgeTip())
       .child(div().flex_none().size(14).rounded(3).bg(CLAUDE).flex().items_center().justify_center()
         .child(svg(ICON("claude-mark")).size(10).text_color("#ffffff")))
-      .when(!this.narrow(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
+      .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
   }
 
   // "Reading t4 · session 7f3a1b2c · 1.2M tokens · cache 97.1%": which terminal and
@@ -2567,6 +2893,8 @@ export default class Threads extends View {
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null ? ` ${this.readPct(s)}%` : ""}`;
+    // The Pinned view: "3 of 5", after the Pinned heading (pinnedHeading).
+    if (this.view === "pinned") return `${this.pinnedList().length} of ${PIN_LIMIT}`;
     const c = this.counts();
     // "98 turns · 43 hidden": the newest session's shown turns, then the agent messages
     // hidden in the whole list, the same number as the Agents button's count and tooltip
@@ -2575,22 +2903,38 @@ export default class Threads extends View {
       s.title ? `· ${s.title}` : "", this.res.guess ? "· guessed" : ""].filter(Boolean).join(" ");
   }
 
+  // The Pinned view leads its header with a pin and "Pinned", so the column reads as its own
+  // view beside the feed: Herdr titles every copy of a mod's pane with the mod's name, and a
+  // mod cannot rename its pane.
+  pinnedHeading(t) {
+    return h_flex().id("th-pinned-heading").flex_none().gap(6).items_center()
+      .child(svg(ICON("pin")).size(14).flex_none().text_color(t.accent))
+      .child(div().flex_none().text_size(13.5).font_semibold().text_color(t.foreground).child("Pinned"));
+  }
+
   header(t) {
     const q = this.query.trim();
-    return v_flex().flex_none().border_b(1).border_color(t.border)
+    const pinned = this.view === "pinned";
+    // The Pinned view's header: an accent bar along its top and a light accent tint.
+    return v_flex().flex_none().relative().border_b(1).border_color(t.border)
+      .when(pinned, (el) => el.bg(alpha(t.accent, 0.08)).child(div().absolute().top(0).left(0).right(0).h(2).bg(t.accent)))
       .child(h_flex().h(40).px(10).gap(8).items_center()
-        .child(this.badge(t))
+        .when(pinned, (el) => el.child(this.pinnedHeading(t)))
+        .when(!this.pinnedPane, (el) => el.child(this.badge(t)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(this.headerText()))
         .when(this.debug && Boolean(this.timing) && !this.narrow(), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)))
-        .children(this.headerButtons().map(([id, icon, tip, act, on, count]) => this.iconButton(t, id, icon, tip, (_e, cx) => {
-          if (act === "filterToggle") {
-            this.filtering = !this.filtering;
-            this.settingsOpen = false;
-            if (this.filtering) this.input.focus();
-            else { this.input.set_value(""); this.query = ""; this.h.focus(); }
-          } else this.action(act, cx);
-          cx.notify();
-        }, on, count))))
+        .children(this.headerButtons().map(([id, icon, tip, act, on, count, label]) => {
+          const click = (_e, cx) => {
+            if (act === "filterToggle") {
+              this.filtering = !this.filtering;
+              this.settingsOpen = false;
+              if (this.filtering) this.input.focus();
+              else { this.input.set_value(""); this.query = ""; this.h.focus(); }
+            } else this.action(act, cx);
+            cx.notify();
+          };
+          return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count);
+        })))
       .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(h_flex().mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
         .border_1().border_color(this.filtering ? t.accent : t.border).bg(t.chrome)
@@ -2655,6 +2999,14 @@ export default class Threads extends View {
       .child(stepper("promptLines", "Prompt lines"))
       .child(stepper("replyLines", "Reply lines"))
       .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
+      .child(stepper("textSize", "Text size"))
+      .child(h_flex().gap(6).items_center()
+        .child(label("Your name"))
+        .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
+          .border_color(this.naming ? t.accent : t.border).bg(t.background).items_center()
+          .child(Input.new(this.nameInput).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))))
+      .child(this.swatches(t, "bubbleColor", "Your messages"))
+      .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
       // quoteKey and links are edited in the file; the panel says what it read.
       .child(div().text_size(11.5).text_color(t.muted).child(this.settingsLine()))
@@ -2664,7 +3016,30 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(mono).text_color(t.dim).child(path))
         .child(this.button(t, "th-set-copy", this.narrow() ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", "Settings path copied", cx); }, "copy")))
       .child(h_flex().gap(6)
-        .child(this.button(t, "th-set-reset", `Reset to ${DEFAULTS.promptLines} / ${DEFAULTS.replyLines}`, (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")));
+        .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")));
+  }
+
+  // A bubble colour setting: its name and the colour's name, then a swatch for each preset
+  // (ui.js BUBBLES) and, when the file holds one, its own #rrggbb. The chosen one has a ring.
+  swatches(t, key, name) {
+    const cur = this.prefs[key];
+    const agent = key === "agentBubbleColor";
+    const names = Object.keys(BUBBLES);
+    const list = cur.startsWith("#") ? [...names, cur] : names;
+    const dflt = DEFAULTS[key];
+    const shown = cur.startsWith("#") ? cur : `${cur[0].toUpperCase()}${cur.slice(1)}`;
+    return v_flex().gap(6)
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(name))
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(cur === dflt ? `${shown} · default` : shown)))
+      .child(h_flex().gap(6).flex_wrap().children(list.map((v) => {
+        const st = bubbleStyle(v, t, agent);
+        const on = v === cur;
+        return div().id(`th-${key}-${v}`).flex_none().size(22).rounded(11).p(2).cursor_pointer()
+          .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
+          .child(div().size_full().rounded(9).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.border : st.fill));
+      })));
   }
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
@@ -2860,25 +3235,30 @@ export default class Threads extends View {
       } else if (i >= 0) cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
     }
     const dim = Boolean(this.res.ended);
+    const sticky = this.stickyDay();
+    this.stickyShown = sticky?.key ?? null;
     return div().id("threads-body").flex_1().min_h(0).relative()
       .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
-      .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom(); })
+      .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom() - this.colLeft(); })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
       .on_mouse_down("left", (e, cx) => {
         const x = e.local_position?.x;
         const w = e.bounds?.width;
-        this.pressX = x == null ? null : x / this.zoom();
-        this.bodyW = w == null ? null : w / this.zoom();
+        // In the column's own px: a centred column starts colLeft() in.
+        this.pressX = x == null ? null : x / this.zoom() - this.colLeft();
+        this.bodyW = w == null ? null : Math.min(w / this.zoom(), this.width);
         this.notePress(cx);
       })
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
-      .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
-        (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
-        .track_scroll(this.scroll)
-        .on_item_click((key, cx) => this.click(key, cx))
-        .size_full())
+      .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
+        .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+          (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
+          .track_scroll(this.scroll)
+          .on_item_click((key, cx) => this.click(key, cx))
+          .size_full())))
       .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0())
+      .when(Boolean(sticky), (el) => el.child(h_flex().id("th-sticky-day").absolute().top(6).left(0).right(0).justify_center().child(this.dayPill(t, sticky))))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
   }
 
@@ -3043,7 +3423,7 @@ export default class Threads extends View {
   }
 
   // A quote line's bar: 2 px, foreground at 28% (dim on agent rows).
-  quoteBar(t, agent, h = ROW.PROMPT_LINE - 4) {
+  quoteBar(t, agent, h = this.rt().line - 4) {
     return div().flex_none().w(2).h(h).rounded(1).bg(agent ? t.dim : alpha(t.foreground, 0.28));
   }
 
@@ -3065,19 +3445,51 @@ export default class Threads extends View {
   // 5.4 to 5.8 px a character; the estimates allow a little more for word wrapping.
 
   wrapped(text, width, charW) { return wrappedLines(text, Math.floor(width / charW)); }
-  // Card text width: 6 px list margin, 1 px border and 9 px padding each side, so card text
-  // starts 16 px in, where row text starts.
-  inner() { return Math.max(120, this.width - 12 - 18 - 2); }
-  perLine() { return Math.max(8, Math.floor((this.inner() - 20) / YOU_CHAR)); }
+  // An open turn's text width: 16 px in from each side, where a closed exchange's text is.
+  inner() { return Math.max(120, replyWidth(this.width)); }
+  // Reading text (ui.js readType): its size and line, an estimated character's width at that
+  // size, and the width of a reading line: the card's text width, at most about 70
+  // characters.
+  rt() { return readType(this.prefs.textSize); }
+  charW(at13) { return at13 * (this.rt().size / 13); }
+  prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize)); }
+  perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize) / this.charW(YOU_CHAR))); }
+  // A reading block: the reading size and line, at most a reading line wide.
+  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
+  // enough for Herdr to draw (mdChunks). Kept for the text last asked for, as it is redrawn often.
+  mdParts(md) {
+    const memo = (this.mdMemo ??= new Map());
+    let parts = memo.get(md);
+    if (!parts) {
+      parts = mdChunks(escapeDollars(md));
+      if (memo.size > 300) memo.clear();
+      memo.set(md, parts);
+    }
+    return parts;
+  }
+  // One TextView, or several stacked a paragraph apart when the Markdown is too long for one.
+  mdView(id, md, selectable) {
+    const parts = this.mdParts(md);
+    if (parts.length === 1) return TextView.markdown(id, parts[0]).selectable(selectable).w_full();
+    return v_flex().w_full().gap(this.paraGap()).children(parts.map((p, i) => TextView.markdown(`${id}-${i}`, p).selectable(selectable).w_full()));
+  }
+  // The space between paragraphs, for estimates: TextView's own, about 12 px at 13 px.
+  paraGap() { return Math.round((12 * this.rt().size) / 13); }
 
-  // First-frame estimate of Markdown at the card width: 21 px lines, 12 px between blocks,
-  // and one spare line so it does not run short. The probe's measure replaces it.
+  // A collapsed row's reply block, as a probe part of its own: "cmd:<turn key>".
+  cmdRow(r) { return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: r.shape.md, est: r.shape.mdEst }; }
+
+  // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
+  // between blocks, and one spare line so it does not run short. The probe's measure
+  // replaces it.
   mdHeight(md) {
-    const w = this.inner();
+    const w = this.prose();
+    const { line } = this.rt();
     let h = 0;
     const blocks = md.split(/\n{2,}/);
-    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, MD_CHAR) * TV_LINE;
-    return h + (blocks.length - 1) * 12 + TV_LINE;
+    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, this.charW(MD_CHAR)) * line;
+    return h + (blocks.length - 1) * this.paraGap() + line;
   }
 
   chipRows(texts) {
@@ -3164,22 +3576,31 @@ export default class Threads extends View {
     const src = this.youSource(r.turn);
     const q = this.filterText();
     const hl = Boolean(q) && src.toLowerCase().includes(q.toLowerCase());
-    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}`;
+    // TextView draws Markdown in the theme's text colour, whatever its parent sets, which
+    // does not read on a coloured bubble. There the message is plain text in the bubble's
+    // ink, quotes behind their bar, as for a filter match.
+    const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
+    const sig = `${r.full ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
     const max = r.full ? FULL_PROMPT_CHARS / 8 : 4000;
-    const parts = hl ? promptParts(c.text, max) : null;
-    const m = hl ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
+    const parts = plain ? promptParts(c.text, max) : null;
+    const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
       : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
     const extra = 6 * m.quotes + 16 * m.code;
-    const per = Math.max(8, Math.floor((this.inner() - 20) / YOU_CHAR));
+    // The bubble: as wide as the widest line, at most bubbleMax.
+    const bmax = bubbleMax(this.width, this.prefs.textSize);
+    const yc = this.charW(YOU_CHAR);
+    const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
+    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, Math.ceil(widest * yc) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
+    const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / yc));
     const n = wrappedLines(c.text, per);
     // One spare line, so the first frame's estimate does not run short.
-    const raw = c.text ? (n + 1) * TV_LINE + extra : 0;
+    const raw = c.text ? (n + 1) * this.rt().line + extra : 0;
     // Taller than YOU_MAX: a box of that height that scrolls (Show all on a long paste).
     const capped = raw >= YOU_MAX;
-    const v = { ...m, text: c.text, more: c.more, hl, parts, extra, bodyH: Math.min(YOU_MAX, raw), capped };
+    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: Math.min(YOU_MAX, raw), capped };
     r.turn.youMemo = { sig, v };
     return v;
   }
@@ -3188,14 +3609,15 @@ export default class Threads extends View {
     const y = this.youMd(r);
     const clipped = !r.full && y.more > 0;
     const canLess = r.full && this.youClip(r.turn).more > 0;
-    const chip = r.turn.cmd ? ROW.PROMPT_LINE + 4 : 0;
-    const body = y.text ? 8 + 10 + 16 + 4 + y.bodyH + 10 + (clipped || canLess ? 22 : 0) + 10 : 8 + 10 + 16 + 10 + 10;
-    return body + chip;
+    const chip = r.turn.cmd ? this.rt().line + 4 : 0;
+    const label = r.turn.agent ? 16 + 4 : 0;
+    // 6 above, 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
+    return 6 + 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
   }
 
   // The FINAL REPLY caption's parts: [icon, text].
   captionParts(turn) {
-    const out = [];
+    const out = [["name", this.agentName(turn)]];
     if (turn.tools > 0) out.push(["wrench", `${plural(turn.tools, "tool call")} (not shown)`]);
     if (turn.followups > 0) out.push(["bell", plural(turn.followups, "background update")]);
     const by = this.borrowedFrom(turn);
@@ -3206,17 +3628,24 @@ export default class Threads extends View {
   // Lines the caption takes when it wraps: the label, then each part (icon + text).
   captionRows(turn) {
     const w = this.inner();
+    const parts = this.captionParts(turn);
+    if (!parts.length) return 0;
     let rows = 1;
-    let x = 11 * 6.6;
-    for (const [, text] of this.captionParts(turn)) {
-      const cw = 10 + 12 + 4 + text.length * 6.3;
-      if (x + 6 + cw > w) { rows++; x = cw; } else x += 6 + cw;
+    let x = 0;
+    for (const [, text] of parts) {
+      const cw = (x ? 10 : 0) + 12 + 4 + [...text].length * 6.3;
+      if (x && x + 6 + cw > w) { rows++; x = cw; } else x += (x ? 6 : 0) + cw;
     }
     return rows;
   }
 
-  // A part's list height: what the probe measured for it, else the estimate.
+  // A part's list height: what the probe measured for it, else the estimate. A collapsed
+  // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
+    if (r.kind === "turn" && r.shape?.md != null) {
+      const m = this.measured(this.cmdRow(r));
+      return m != null ? r.shape.mdBase + m : r.shape.height;
+    }
     if (PROBED.has(r.kind)) {
       const m = this.measured(r);
       if (m != null) return r.kind === "latest" && !r.md ? 6 + this.latestBox(r) + (this.latestCut(r) ? 22 : 0) : m;
@@ -3229,6 +3658,9 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return r.h;
       case "turn": case "wrow": return r.shape.height;
+      case "wake": return WAKE_H;
+      case "cmd": return r.est;
+      case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
       case "day": return 46;
@@ -3236,18 +3668,12 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
-        const prompt = clipPrompt(r.turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
-        // The working card's text is 2 px narrower than other card text (its 10 px padding),
-        // and its prompt and note have explicit line heights, so this is the drawn height
-        // when the wrap estimate holds (F3).
-        const tw = w - 2;
-        const lines = Math.min(6, this.wrapped(prompt, tw, YOU_CHAR));
-        const note = this.wrapped(`No final reply yet. It appears here when ${this.agent().short} finishes this turn.`, tw, 6.0);
-        return 8 + 2 + 20 + 18 + 8 + lines * TV_LINE + 8 + this.chipRows(["00 tool calls", "000.0k tokens", "00:00"]) * 27 + 3 + note * NOTE_LINE;
+        const g = this.workingGeom(r.turn);
+        return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
-      case "head": return 4 + 1 + 10 + 18;
+      case "head": return ROW.PAD_T + 18;
       case "you": return this.youHeight(r);
-      case "rhead": return 10 + this.captionRows(r.turn) * 18;
+      case "rhead": return 8 + this.captionRows(r.turn) * 18;
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
@@ -3258,15 +3684,15 @@ export default class Threads extends View {
       case "more": return 8 + 26;
       case "stats": {
         const line = this.countsLine(r.turn);
-        // The info chip at the end is about as wide as an empty labelled one.
-        return 10 + this.chipRows([...this.statTexts(r.turn), ""]) * 27 - 5 + (line ? this.countsHeight(line) : 0);
+        const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
+        return 10 + lines * 16 + (line ? this.countsHeight(line) : 0);
       }
       case "legend": {
         const per = (w - 17) / 5.9;
         const lines = this.legendEntries(r.turn).reduce((n, [, text]) => n + wrappedLines(text, Math.floor(per)), 0);
         return 6 + (lines + 1) * 19 + (this.legendEntries(r.turn).length - 1) * 4;
       }
-      case "copy": return 10 + 28 + 10 + 1 + 4;
+      case "copy": return 10 + 28 + ROW.PAD_B;
     }
     return 30;
   }
@@ -3285,11 +3711,12 @@ export default class Threads extends View {
   // signature of everything that changes its layout.
 
   partSig(r) {
-    const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${r.kind}`;
+    const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${this.prefs.textSize}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}`;
+      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
       case "stats": return `${head}|${this.statTexts(r.turn).join("|")}|${this.countsLine(r.turn) ?? ""}|${this.legendOn ? 1 : 0}`;
@@ -3310,13 +3737,23 @@ export default class Threads extends View {
     const h = Math.ceil(size.height / this.zoom() - 1e-6);
     if (!(h > 0)) return;
     this.meas ??= new Map();
+    // A reply block with text that measured no taller than its gap: Herdr drew nothing, so it
+    // is drawn again as plain text (partContent), and measured again.
+    const part = key.startsWith("md:") ? this.baseRows?.[this.baseIndex?.get(key)] : null;
+    if (part?.kind === "md" && part.key === key && !this.mdBroken?.has(key) && h <= (part.gap ?? 6) + 2 && (part.src ?? part.md ?? "").trim()) {
+      (this.mdBroken ??= new Set()).add(key);
+      this.meas.delete(key);
+      cx.notify();
+      return;
+    }
     const was = this.meas.get(key);
     if (was?.sig === sig && was.h === h) return;
     if (this.meas.size > 2000) this.meas.clear();
     this.meas.set(key, { sig, h });
-    const i = this.baseIndex?.get(key);
+    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
+    const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
-    if (r?.key === key) {
+    if (r?.key === rowKey) {
       this.baseSizes[i] = this.height(r);
       this.sizesVer = (this.sizesVer ?? 0) + 1;
     }
@@ -3357,13 +3794,14 @@ export default class Threads extends View {
   // all appears when the text is taller than that (C5).
   latestBox(r) {
     const m = this.measured(r);
-    const full = m ?? Math.max(1, r.estLines ?? 1) * TV_LINE;
-    return Math.min(full, LATEST_LINES * TV_LINE);
+    const { line } = this.rt();
+    const full = m ?? Math.max(1, r.estLines ?? 1) * line;
+    return Math.min(full, LATEST_LINES * line);
   }
   latestCut(r) {
     if (r.md) return false;
     const m = this.measured(r);
-    return m != null ? m > LATEST_LINES * TV_LINE + 1 : (r.estLines ?? 0) > LATEST_LINES;
+    return m != null ? m > LATEST_LINES * this.rt().line + 1 : (r.estLines ?? 0) > LATEST_LINES;
   }
 
   // For the debug report: each open-card part's estimate, measure and list slot.
@@ -3392,7 +3830,7 @@ export default class Threads extends View {
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
       this.topKey = rows[range.start]?.key ?? null;
-      try { this.trackPlace(); } catch (e) { this.drawFailed(e, null); }
+      try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
     }
     const out = [];
     for (let i = range.start; i < range.end; i++) {
@@ -3437,6 +3875,7 @@ export default class Threads extends View {
       case "spacer": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);
+      case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
       case "day": return this.dayItem(t, r);
@@ -3448,110 +3887,234 @@ export default class Threads extends View {
     }
   }
 
-  // The frame of a collapsed row. The 2 px accent ring marks the selected row while the
-  // pane has the keyboard; open cards never take it.
-  // Agent rows are inset 8 px, with a 2 px ansi5 rail and a faint ansi5 fill.
-  rowFrame(t, r, sel, focusedPanel, live, kids) {
-    const agent = r.turn.agent;
-    const box = v_flex().flex_1().min_w(0).px(10).py(7).gap(3)
-      .when(agent, (el) => el.rounded_r(8).bg(alpha(t.ansi5, 0.06)).border_l(2).border_color(alpha(t.ansi5, 0.7)).pl(8))
-      .when(!agent, (el) => el.rounded(8))
+  // The frame of a collapsed exchange: 16 px in from each side, the meta line, the message,
+  // the reply and the stats line 6 px apart (ui.js rowHeight). The selected exchange has a
+  // light fill across the pane and a 2 px bar on its left edge, in the accent colour while
+  // the pane has the keyboard.
+  rowFrame(t, sel, focusedPanel, live, kids) {
+    return v_flex().w_full().relative().px(ROW.PAD_X).pt(ROW.PAD_T).pb(ROW.PAD_B).gap(ROW.GAP).min_w(0)
       .when(sel && !live, (el) => el.bg(t.selected))
-      .when(sel && focusedPanel, (el) => el.border_2().border_color(t.accent).px(8).py(5))
-      .hover((s) => s.bg(sel && !live ? t.selected : t.hover))
+      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .children(kids);
-    return h_flex().px(6).py(1).child(div().when(agent, (el) => el.w(8)).flex_none()).child(box);
   }
 
-  // Width left for an agent row's sender label: the text width less the icon, time, #n,
-  // bell and tool counts beside it and their gaps (at most 60%), so a long name shortens
-  // in the middle instead of pushing the time or #n past the gutter.
+  // Width left for an agent's sender label on the meta line: the pane less the icon, #n,
+  // time, bell and pin beside it (at most 60%), so a long name shortens in the middle.
   labelRoom(turn, tw) {
     const ch = 6.6;
-    const time = fmtTime(turn.ts).length * ch;
+    const time = Math.max(8, fmtTime(turn.ts).length) * ch;
     const n = (`#${turn.n}`.length) * 7.2;
     const bell = turn.followups > 0 ? 13 + countLabel(turn.followups).length * ch : 0;
-    const tools = turn.tools > 0 && !this.narrow() ? 13 + String(turn.tools).length * ch : 0;
-    // Gaps: icon, label, time, #n, the bell and tool counts, tokens (which truncate first).
-    const gaps = 4 + (bell ? 1 : 0) + (tools ? 1 : 0);
-    const pin = this.isPinnedTurn(turn) ? 12 + 6 : 0;
-    const fixed = 12 + time + n + bell + tools + pin + 6 * gaps + 8;
+    const pin = this.isPinnedTurn(turn) ? 12 + 5 : 0;
+    // Six 5 px gaps: icon, label, "·", #n, "·", time, and the bell or pin between.
+    const fixed = 12 + n + 3 * ch + time + bell + pin + 6 * 5 + 8;
     return Math.max(36, Math.floor(Math.min(tw * 0.6, tw - fixed)));
   }
 
-  // The meta line: own rows "#n ✓ 9:05 AM 🔔 12 🔧 4 … tokens · duration"; agent rows
-  // "<icon> t7 review · hc report  9:05 AM  #n … tokens". Tokens and duration truncate first.
-  metaLine(t, turn, lead, time) {
-    const narrow = this.narrow();
-    const dim = t.dim;
+  // The line over the message: "📌 🔔 3 🖼 1 #7 · 8:43 AM" on the right for the person's
+  // own messages; "<icon> t7 review · #7 · 8:43 AM" on the left for an agent's. A stopped
+  // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
+  // bw: the bubble's width, which the header of the person's own turn spans (metaSplit).
+  metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null, bw = null) {
     const agent = turn.agent;
     const ac = this.agentColor(t);
-    const tw = rowTextWidth(this.width, agent);
-    const pin = () => svg(ICON("pin")).size(12).flex_none().text_color(t.accent);
-    const pinned = this.isPinnedTurn(turn);
-    return h_flex().h(ROW.META).gap(6).items_center().text_size(11.5).text_color(dim).min_w(0)
+    const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
+    const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
+    if (!this.headerRight) return this.metaSplit(t, turn, icon, time, pinNo, count, null, bw);
+    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .when(!agent, (el) => el.justify_end()
+        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
+          .font_semibold().text_color(t.muted).child(this.prefs.youName))
+        .child(div().flex_none().child("·")))
       .when(agent, (el) => el
         .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
-        .child(div().flex_none().max_w(this.labelRoom(turn, tw)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-          .text_size(11.5).font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width))))
-      .when(!agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
-      .when(!agent && pinned, (el) => el.child(pin()))
-      .when(Boolean(lead), (el) => el.child(lead))
-      .child(div().flex_none().child(time))
-      .when(agent, (el) => el.child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`)))
-      .when(agent && pinned, (el) => el.child(pin()))
-      .when(turn.followups > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("bell")).size(10)).child(countLabel(turn.followups))))
-      .when(Boolean(turn.images?.length), (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("image")).size(10)).child(String(turn.images.length))))
-      .when(turn.tools > 0 && !narrow, (el) => el.child(h_flex().flex_none().gap(3).items_center()
-        .child(svg(ICON("wrench")).size(10)).child(String(turn.tools))))
-      .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono()).child(this.meta(turn)));
+        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+          .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)))
+        .child(div().flex_none().child("·")))
+      .when(Boolean(icon), (el) => el.child(icon))
+      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
+      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
+      .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
+      .child(div().flex_none().child("·"))
+      .child(div().flex_none().truncate().child(time));
+  }
+
+  // The turn header: "#7 · You" or "#7 · <icon> t7 review", then the time at the right end.
+  // The number is a step brighter than the name. An agent's turn starts it at the reply's
+  // left edge. The person's own spans their bubble (bw), from its left edge to its right
+  // (headerFit): a short bubble gets a short header, which drops the name before the time.
+  metaSplit(t, turn, icon, time, pinNo, count0, tail = null, bw = null) {
+    const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
+    const agent = turn.agent;
+    const ac = this.agentColor(t);
+    const fit = !agent && bw ? this.headerFit(turn, time, bw, Boolean(icon), pinNo, tail) : null;
+    const name = !fit || fit.name;
+    const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .when(Boolean(fit), (el) => el.flex_none().w(fit?.w ?? 0))
+      .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
+      .when(name, (el) => el.child(div().flex_none().child("·")))
+      .when(agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac)))
+      .when(name, (el) => el.child(div().flex_none().max_w(fit ? fit.nameW : this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .font_semibold().text_color(agent ? ac : t.dim).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName)))
+      .when(Boolean(icon), (el) => el.child(icon))
+      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
+      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
+      .child(div().flex_1().min_w(0).truncate().text_right().child(time))
+      .when(Boolean(tail), (el) => el.children(tail));
+    return fit ? h_flex().w_full().min_w(0).justify_end().child(line) : line;
+  }
+
+  // The person's header over a bubble bw wide: its width, and whether the name fits beside
+  // the number, the icons and the time (6.6 px a character at 11.5 px, 7.2 for the mono
+  // number, 5 px gaps). Narrower than the number, icons and time, it keeps that width and
+  // reaches past the bubble's left edge, so the time stays whole.
+  headerFit(turn, time, bw, icon, pinNo, tail) {
+    const ch = 6.6;
+    const icons = (icon ? 17 : 0) + (this.isPinnedTurn(turn) ? 17 : 0) + (pinNo != null ? 12 : 0)
+      + (turn.followups > 0 ? 18 + countLabel(turn.followups).length * ch : 0) + (tail ? tail.length * 19 : 0);
+    const base = Math.ceil(`#${turn.n}`.length * 7.2 + 5 + icons + time.length * ch);
+    const nameW = Math.ceil(this.prefs.youName.length * ch + 2);
+    const w = Math.max(bw, base);
+    return { w, name: base + 10 + 4 + nameW <= w, nameW: Math.max(0, w - base - 14) };
+  }
+
+  // The person's message in a bubble on the right (an agent's: an outlined bubble on the
+  // left), as wide as its widest line (ui.js rowShape bubbleW).
+  bubble(t, turn, kids, w) {
+    const agent = turn.agent;
+    const { style } = this.bubbleLook(t, agent);
+    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill)
+      .when(style.outline, (el) => el.border_1().border_color(t.border))
+      .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+      .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+      .children(kids);
+    return h_flex().w_full().min_w(0).when(!agent, (el) => el.justify_end()).child(box);
+  }
+
+  // How a bubble is drawn (settings bubbleColor and agentBubbleColor, ui.js bubbleStyle),
+  // and the theme its text is drawn with. On a coloured fill the bubble's ink stands in for
+  // the text, muted and accent colours, so a quote, a command's name and Show more read on
+  // it. Plain keeps the pane's theme: the person's bubble is the text colour at 8% over
+  // whatever is under it, so it shows on a selected exchange's fill too.
+  bubbleLook(t, agent) {
+    const v = agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor;
+    const k = `${agent ? 1 : 0}|${v}|${t.foreground}|${t.background}|${t.muted}|${t.dim}|${t.border}`;
+    this.bubbleMemo ??= new Map();
+    let look = this.bubbleMemo.get(k);
+    if (!look) {
+      const style = bubbleStyle(v, t, agent);
+      const plain = style.outline || style.ink === t.foreground;
+      const theme = plain ? t : { ...t, foreground: style.ink, muted: style.sub, dim: style.sub, accent: style.ink, background: style.fill, selected: style.fill, border: style.bar };
+      look = { style, theme };
+      if (this.bubbleMemo.size > 8) this.bubbleMemo.clear();
+      this.bubbleMemo.set(k, look);
+    }
+    return look;
+  }
+
+  // "Show more" under a message or reply that was cut: Enter or a click opens the turn.
+  moreLine(t) {
+    return h_flex().h(ROW.MORE).gap(4).items_center().text_size(12).text_color(t.accent)
+      .child("Show more").child(svg(ICON("chevron-down")).size(12));
+  }
+
+  // The stats under a reply, one line: "52s · 7.7k tokens · opus 5.5 · 3 tool calls". Under
+  // 300 px the words go: "52s · 7.7k · 3 tools".
+  statsText(turn) {
+    const st = stats(turn);
+    const narrow = this.narrow();
+    const parts = [];
+    if (turn.durationMs) parts.push(fmtDuration(turn.durationMs));
+    if (this.showTokens(st) && st.tokens > 0) parts.push(narrow ? fmtTokens(st.tokens) : `${fmtTokens(st.tokens)} tokens`);
+    if (!narrow && turn.model) parts.push(shortModel(turn.model));
+    if (turn.tools > 0) parts.push(narrow ? plural(turn.tools, "tool") : plural(turn.tools, "tool call"));
+    return parts.join(" · ");
+  }
+  // An open turn's stats: the closed exchange's, then cache hit and a compaction.
+  statsFull(turn) {
+    const st = stats(turn);
+    const parts = [this.statsText(turn)];
+    if (st.cachePct != null) parts.push(`cache hit ${fmtPct(st.cachePct)}`);
+    if (turn.compactions) parts.push("context compacted");
+    return parts.filter(Boolean).join(" · ") || "no stats";
+  }
+  statsLine(t, text, color = t.dim) {
+    return h_flex().h(ROW.STATS).min_w(0).items_center().text_size(11.5).font_family(this.mono()).text_color(color)
+      .child(div().flex_1().min_w(0).truncate().child(text || " "));
   }
 
   // A command's chip, then its arguments wrapping to its right.
   promptBlock(t, turn, sh, sel = false) {
     const agent = turn.agent;
     const color = agent ? t.muted : t.foreground;
-    const size = agent ? 12.5 : 13;
+    const rt = this.rt();
+    const size = agent ? rt.small : rt.size;
+    const lh = rt.line;
     if (sh.chip) {
       return h_flex().gap(6).items_start().min_w(0)
-        .child(div().flex_none().h(ROW.PROMPT_LINE).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
-        .when(sh.prompt.length > 0, (el) => el.child(this.lines(t, sh.prompt, color, size, ROW.PROMPT_LINE)));
+        .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
+        .when(sh.prompt.length > 0, (el) => el.child(this.lines(t, sh.prompt, color, size, lh)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
     // quote that is the whole prompt keeps the prompt's own colour and size.
     if (sh.kinds) {
       return v_flex().min_w(0).children(sh.prompt.map((l, i) => {
         const k = sh.kinds[i];
-        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, ROW.PROMPT_LINE));
-        return h_flex().h(ROW.PROMPT_LINE).min_w(0).gap(QUOTE_INSET - 2).items_center()
+        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh));
+        return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
-            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, ROW.PROMPT_LINE))
-            : this.lines(t, [l], t.muted, 12.5, ROW.PROMPT_LINE));
+            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh))
+            : this.lines(t, [l], t.muted, rt.small, lh));
       }));
     }
-    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, ROW.PROMPT_LINE));
+    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, lh));
   }
 
+  // A collapsed exchange: the meta line, the message, the start of the reply, the stats.
   rowItem(t, r, focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const sh = r.shape;
     const tone = sh.tone;
-    const icon = tone === "why" ? "ban" : tone === "error" ? "alert" : "reply";
-    const color = tone === "why" ? t.blocked : t.dim;
-    // Agent rows leave out the done check; interrupted and error icons still show.
-    const status = turn.agent && !turn.interrupted && !this.failed(turn) ? null : this.statusIcon(t, turn);
-    return this.rowFrame(t, r, sel, focusedPanel, false, [
-      this.metaLine(t, turn, status, fmtTime(turn.ts)),
-      this.promptBlock(t, turn, sh, sel),
+    const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
+    const bt = this.bubbleLook(t, turn.agent).theme;
+    return this.rowFrame(t, sel, focusedPanel, false, [
+      this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null, turn.agent ? null : sh.bubbleW),
       ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
-      h_flex().gap(5).items_start().min_w(0)
-        .child(div().flex_none().h(ROW.REPLY_LINE).flex().items_center().child(svg(ICON(icon)).size(12).text_color(color)))
-        .child(this.lines(t, sh.reply, tone === "reply" ? t.muted : t.dim, 12.5, ROW.REPLY_LINE)),
+      this.bubble(t, turn, [
+        this.promptBlock(bt, turn, sh, sel),
+        ...(sh.pMore ? [this.moreLine(bt)] : []),
+      ], sh.bubbleW),
+      v_flex().min_w(0).max_w(this.prose())
+        .child(this.nameLine(t, turn))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
+        .when(sh.rMore, (el) => el.child(this.moreLine(t))),
+      this.statsLine(t, this.statsText(turn)),
     ]);
+  }
+
+  // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
+  // a click on the row opens the turn.
+  cmdBlock(md, id) {
+    return this.readBlock(div()).child(this.mdView(id, md, false));
+  }
+
+  // The agent's name over its reply (ROW.NAME high).
+  nameLine(t, turn) {
+    return div().h(ROW.NAME).pb(2).flex().items_center().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.muted)
+      .child(this.agentName(turn));
+  }
+
+  // Who replied: the name the harness records for the turn (OpenCode's agent) or the session
+  // (Claude Code's agent name, a Codex subagent's nickname), else "Agent".
+  agentName(turn) {
+    if (turn.by) return turn.by;
+    for (const s of this.sessions) if (s.turns[turn.n - 1] === turn) return s.agentName || "Agent";
+    return "Agent";
   }
 
   liveState(t) {
@@ -3566,75 +4129,118 @@ export default class Threads extends View {
     return st.spin ? icon.spin(900) : icon;
   }
 
-  // The running turn when it is not selected: a row like the others, with the live state
-  // on the reply line.
+  // Under a done turn while a background task has woken the agent: a quiet line with this
+  // wake-up's own clock (from its notification), its tool calls and what it said last. The
+  // reply above stays as it was.
+  wakeRow(t, r) {
+    const { turn, s } = r;
+    const clock = s.followSince ? fmtClock(Date.now() - s.followSince) : null;
+    const said = (turn.latest ?? "").replace(/\s+/g, " ").trim();
+    return h_flex().h(WAKE_H).px(ROW.PAD_X).gap(6).items_center().min_w(0).text_size(12).text_color(t.dim)
+      .child(svg(ICON("spinner")).size(12).flex_none().text_color(t.muted).spin(900))
+      .child(div().flex_1().min_w(0).truncate()
+        .child(["Updating", clock, turn.wakeTools ? plural(turn.wakeTools, "tool call") : null, said || null].filter(Boolean).join(" · ")));
+  }
+
+  // The running turn when it is not selected: the message, then where the reply will be,
+  // the live state, its clock and tool calls so far, in the live colour.
   workingRow(t, r, focusedPanel) {
     const { turn, key } = r;
     const st = this.liveState(t);
     const sel = this.sel === key;
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
-    const tools = `${plural(turn.tools, "tool call")} so far, no reply yet`;
     const sh = r.shape;
-    return this.rowFrame(t, r, sel, focusedPanel, true, [
-      h_flex().h(ROW.META).gap(6).items_center().text_size(11.5).text_color(t.dim)
-        .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
-          .child(div().flex_none().max_w(Math.floor(rowTextWidth(this.width, true) * 0.6)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-            .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
-        .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
-        .when(this.isPinned(key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-        .child(this.liveIcon(st, 12))
-        .child(div().flex_none().child(st.spin ? "now" : fmtTime(turn.ts)))
-        .child(div().flex_1().min_w(0).truncate().text_right().font_family(this.mono())
-          .child([this.showTokens(stats(turn)) ? fmtTokens(stats(turn).tokens) : null, clock].filter(Boolean).join(" · "))),
-      this.promptBlock(t, turn, sh),
-      h_flex().h(ROW.REPLY_LINE).gap(5).items_center().min_w(0)
-        .child(this.liveIcon(st, 12))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(`${st.label} · ${tools}`)),
+    const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
+    return this.rowFrame(t, sel, focusedPanel, true, [
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : sh.bubbleW),
+      this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
+      h_flex().h(18).gap(6).items_center().min_w(0)
+        .child(this.liveIcon(st, 13))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
+          .child([this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
+      this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ]);
   }
 
-  // The running turn when selected: the working card, with live counts and a clock.
+  // The running turn when selected: the message in full (up to 6 lines), the live state with
+  // its clock, tool calls and tokens so far, and a note on where the reply will appear.
+  // Every line has a fixed height, so the drawn height is the estimate (F3).
   workingItem(t, r) {
     const { turn } = r;
     const s = stats(turn);
     const st = this.liveState(t);
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
-    const chip = (icon, text) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).bg(t.raised)
-      .text_size(11.5).font_family(this.mono()).text_color(t.muted).child(svg(ICON(icon)).size(11).text_color(t.dim)).child(text);
-    return div().px(6).py(4).child(v_flex().p(10).gap(8).rounded(9).bg(alpha(st.color, 0.08)).border_1().border_color(alpha(st.color, 0.55))
-      .child(h_flex().h(18).gap(6).items_center().text_size(11.5)
-        .child(div().text_color(t.dim).font_family(this.mono()).child(`#${turn.n}`))
-        .when(this.isPinned(r.key), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-        .child(this.liveIcon(st, 12))
-        .child(div().text_color(st.color).font_medium().child(`${st.label}${clock ? ` · ${clock}` : ""}`)))
-      .child(div().text_size(13).line_height(`${TV_LINE}px`).text_color(t.foreground).child(clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text))
-      .child(h_flex().gap(5).flex_wrap()
-        .child(chip("wrench", plural(turn.tools, "tool call")))
-        .when(this.showTokens(s), (el) => el.child(chip("arrows", `${fmtTokens(s.tokens)} tokens`)))
-        .when(Boolean(clock), (el) => el.child(chip("clock", clock))))
-      .child(div().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(st.label === "Needs you"
-        ? `${this.agent().short} is waiting for you in the terminal.`
-        : st.spin ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
-          : "This turn has no final reply yet. It may have been stopped.")));
+    const g = this.workingGeom(turn);
+    const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
+    return this.rowFrame(t, true, this.h.is_focused(), true, [
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bubbleMax(this.width, this.prefs.textSize)),
+      this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize)),
+      h_flex().h(18).gap(6).items_center().min_w(0)
+        .child(this.liveIcon(st, 13))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
+      div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
+    ]);
+  }
+  workingGeom(turn) {
+    const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
+    const tw = bubbleMax(this.width, this.prefs.textSize) - 2 * ROW.BUBBLE_PX;
+    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
+    const st = this.status();
+    const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
+      : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
+        : "This turn has no final reply yet. It may have been stopped.";
+    const note = this.wrapped(noteText, this.inner(), 6.0);
+    return { prompt, lines, note, noteText };
   }
 
-  // A day divider: a band across the whole pane, 12 px below the turn above, with a rule
-  // above and below, a calendar icon in the accent colour, the day and its date, and the
-  // day's shown turns on the right. Its fill is ui.js bandFill.
+  // A day: its name, date and shown turns centred between two hairlines, 10 px below the
+  // exchange above.
+  // A day band: lines either side of a filled pill, "Today" in the text colour and the date
+  // and count in muted, so a new day shows while scrolling and stays quieter than a message.
   dayItem(t, r) {
-    return v_flex().pt(12)
-      .child(h_flex().h(30).px(16).gap(8).items_center().bg(this.bandFill(t)).border_t_1().border_b_1().border_color(t.border)
-        .child(svg(ICON("calendar")).size(13).flex_none().text_color(t.accent))
-        .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child(r.name))
-        .when(Boolean(r.date), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(r.date)))
-        .child(div().flex_1())
-        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(plural(r.count, "turn"))));
+    return v_flex().pt(10).pb(6)
+      .child(h_flex().h(30).px(16).gap(10).items_center()
+        .child(div().flex_1().h(1).bg(t.border))
+        .child(this.dayPill(t, r))
+        .child(div().flex_1().h(1).bg(t.border)));
+  }
+  // bandFill searches a mix, so it is kept per theme.
+  band(t) {
+    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
+    if (this.bandKey !== k) { this.bandKey = k; this.bandVal = bandFill(t); }
+    return this.bandVal;
+  }
+  dayPill(t, r) {
+    return h_flex().flex_none().h(24).px(10).gap(6).items_center().rounded(12).bg(this.band(t)).border_1().border_color(t.border).text_size(12)
+      .child(div().font_semibold().text_color(t.foreground).child(r.name))
+      .when(Boolean(r.date), (el) => el.child(div().text_color(t.muted).child(`· ${r.date}`)))
+      .child(div().text_color(t.muted).child(`· ${plural(r.count, "turn")}`));
   }
 
-  bandFill(t) {
-    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
-    if (this.bandMemo?.k !== k) this.bandMemo = { k, fill: bandFill(t) };
-    return this.bandMemo.fill;
+  // The day the top of the pane is in, kept at the top of the list while its band is
+  // scrolled away (the list item at the top comes from the list's own drawing, topKey). The
+  // drawing pass may not redraw the pane, so stickyDue asks the 120 ms timer to.
+  stickyDay() {
+    const rows = this.rowsMemo ?? [];
+    if (this.dayOfRows !== rows) {
+      this.dayOfRows = rows;
+      this.dayOf = new Map();
+      this.beforeDay = new Set();
+      let day = null;
+      rows.forEach((r, i) => {
+        if (r.kind === "day") day = r;
+        this.dayOf.set(r.key, day);
+        if (rows[i + 1]?.kind === "day") this.beforeDay.add(r.key);
+      });
+    }
+    const top = this.topKey;
+    const day = top ? this.dayOf.get(top) : null;
+    // Not while the band itself, or the next day's band, is at the top: two pills would stack.
+    return day && day.key !== top && !this.beforeDay.has(top) ? day : null;
+  }
+  noteTopDay() {
+    const k = this.stickyDay()?.key ?? null;
+    if (k !== this.stickyShown) this.stickyDue = true;
   }
 
   dividerItem(t, r) {
@@ -3645,31 +4251,30 @@ export default class Threads extends View {
   }
 
   // The line a return to a pin puts over a place further down the turn: the prompt and the
-  // start of the reply are above it. A click shows the turn from its head.
+  // start of the reply are above it. A click shows the turn from its head. It carries the
+  // turn's fill and bar when selected, like the turn's other slices.
   resumeItem(t, r, size) {
-    return v_flex().h(size).px(6).child(v_flex().h(size).flex_none().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).justify_center()
+    const sel = this.sel === r.key.slice("resume:".length);
+    return v_flex().h(size).w_full().relative().justify_center().px(ROW.PAD_X)
+      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(this.h.is_focused() ? t.accent : t.border)))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
         .child(svg(ICON("chevron-up")).size(12).flex_none())
-        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`))));
+        .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`)));
   }
 
-  // One slice of an expanded turn's card: exactly its slot's height, with the card's
-  // raised fill and side borders, so slices stack into one card with no seam. Only the
-  // first part has the top edge and the last the bottom edge. The card keeps the border
-  // stroke whether or not it is selected.
+  // One slice of an open turn: exactly its slot's height, 16 px in from each side like a
+  // closed exchange. The first part has the 8 px top padding and the last the 10 px bottom
+  // padding. The selected turn's slices carry its fill and the bar on the left, so they
+  // read as one exchange with no seam.
   cardPart(t, r, size) {
-    const { turn } = r;
-    // Flex containers, so a child's top margin stays inside the card instead of collapsing
-    // through it and leaving a gap between list items.
-    const h = size - (r.part === "top" ? 4 : 0) - (r.part === "bottom" ? 4 : 0);
-    // An agent turn's card keeps a 3 px ansi5 rail down its left edge, so a slice scrolled
-    // into view on its own still says who spoke.
-    const rail = turn.agent;
-    return v_flex().h(size).px(6).child(v_flex().h(h).flex_none().overflow_hidden().px(9).bg(t.raised).border_l(1).border_r(1).border_color(t.border).relative()
-      .when(r.part === "top", (el) => el.mt(4).pt(10).border_t(1).rounded_t(9))
-      .when(r.part === "bottom", (el) => el.mb(4).pb(10).border_b(1).rounded_b(9))
-      .when(rail, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(3).bg(t.ansi5)))
-      .child(this.partContent(t, r, false)));
+    const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
+    const sel = this.sel === tkey;
+    const focusedPanel = this.h.is_focused();
+    return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
+      .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
+      .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
+      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .child(this.partContent(t, r, false));
   }
 
   // What a card part shows. probe: drawn in the hidden probe (own TextView ids, no scroll,
@@ -3681,16 +4286,27 @@ export default class Threads extends View {
     const mono = this.mono();
     switch (r.kind) {
       case "head":
-        return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim)
-          .child(div().font_family(mono).child(`#${turn.n}`))
-          .child(this.statusIcon(t, turn))
-          .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))))
-          .child(div().flex_1().min_w(0).truncate().child([when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
-          // A list item takes one click handler, so click() tells the pin by position (headPinHit).
+        // The meta line of an open turn, on the right like a closed one's: "#7 · Sat 8:43 AM ·
+        // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
+        // handler, so click() tells the pin by position (headPinHit).
+        if (!this.headerRight) {
+          // The person's: over their bubble, as wide as it (youMd bw), ending at its right edge.
+          const bw = turn.agent ? null : this.youMd({ turn, full: this.full.has(r.key) }).bw;
+          return div().when(Boolean(turn.agent), (el) => el.pr(4)).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
+            [when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · "), null, null,
+            [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()], bw));
+        }
+        return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim).pr(4)
+          .when(turn.interrupted || this.failed(turn), (el) => el.child(this.statusIcon(t, turn)))
+          .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
+            .child(div().flex_none().max_w(this.labelRoom(turn, this.inner())).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+              .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
+          .child(div().flex_1().min_w(0).truncate().text_right().child([`#${turn.n}`, when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
           .child(svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim))
           .child(svg(ICON("chevron-up")).size(14).flex_none());
       case "you": {
         const y = this.youMd(r);
+        const { style, theme: bt } = this.bubbleLook(t, turn.agent);
         const c = { text: y.text, more: y.more };
         const canLess = r.full && this.youClip(turn).more > 0;
         // A prompt taller than YOU_MAX scrolls inside a box of that height; any other is
@@ -3699,47 +4315,60 @@ export default class Threads extends View {
         // Markdown through TextView (quotes, code and link rules drawn the way the reply is),
         // or with a filter that matches the prompt, the matches marked and each quote run
         // behind the same bar.
-        const text = y.hl
+        const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
-            ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? t.dim : alpha(t.foreground, 0.28)))
-              .child(this.hlBlock(t, p.lines.join("\n"), t.muted))
-            : this.hlBlock(t, p.lines.join("\n"), t.foreground)).concat(y.cut
-            ? [div().text_size(11.5).italic().text_color(t.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
-          : y.capped
-            ? TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).when(scroll, (el) => el.scrollable(true).size_full()).when(!scroll, (el) => el.w_full())
-            : TextView.markdown(tv(`th-you-${r.key}`), y.md).selectable(false).w_full();
+            ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
+              .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
+            : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
+            ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
+          : y.capped && scroll && this.mdParts(y.md).length === 1
+            ? TextView.markdown(tv(`th-you-${r.key}`), this.mdParts(y.md)[0]).selectable(false).scrollable(true).size_full()
+            : y.capped && scroll
+              ? v_flex().id(tv(`th-you-scroll-${r.key}`)).size_full().overflow_y_scrollbar().child(this.mdView(tv(`th-you-${r.key}`), y.md, false))
+              : this.mdView(tv(`th-you-${r.key}`), y.md, false);
         const cmd = commandParts(turn);
-        const ac = this.agentColor(t);
-        const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.hl ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
-        return v_flex().mt(8).p(10).gap(4).rounded(7).bg(turn.agent ? alpha(t.ansi5, 0.08) : t.background)
-          .child(h_flex().gap(5).items_center()
-            .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac)))
-            .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(10.5).font_semibold()
-              .text_color(turn.agent ? ac : this.labelInk(t, t.background)).child(this.youLabel(turn))))
-          .when(Boolean(cmd), (el) => el.child(h_flex().h(ROW.PROMPT_LINE).child(this.chip(t, middle(cmd.name, Math.floor((this.inner() - 32) / ROW.CHIP_CHAR)), this.inner() - 20, !cmd.args))))
-          .when(Boolean(c.text), (el) => el.child(box.text_size(13).text_color(t.foreground).child(text)))
-          .when(c.more > 0, (el) => el.child(div().text_size(12).text_color(t.accent).child(`+ ${plural(c.more, "more line")} · Show all`)))
-          .when(canLess, (el) => el.child(div().text_size(12).text_color(t.accent).child("Show less")));
+        const ac = style.outline ? this.agentColor(t) : bt.foreground;
+        const box = y.capped ? (probe ? div().h(YOU_MAX).overflow_hidden() : y.plain ? v_flex().id(`th-you-${tkey}`).h(YOU_MAX).overflow_y_scrollbar() : div().h(YOU_MAX)) : div();
+        // The message in its bubble, on the right (an agent's outlined, on the left, under its
+        // sender), as wide as its widest line.
+        const agent = turn.agent;
+        return h_flex().w_full().mt(6).when(!agent, (el) => el.justify_end())
+          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+            .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
+            .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+            .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+            .when(agent, (el) => el.child(h_flex().gap(5).items_center()
+              .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
+              .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(11.5).font_semibold()
+                .text_color(ac).child(this.youLabel(turn)))))
+            .when(Boolean(cmd), (el) => el.child(h_flex().h(this.rt().line).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
+            .when(Boolean(c.text), (el) => el.child(box.text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(text)))
+            .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
+              .child(`Show all · ${plural(c.more, "more line")}`).child(svg(ICON("chevron-down")).size(12))))
+            .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
+              .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
       case "rhead":
-        // "FINAL REPLY · 🔧 9 tool calls (not shown) · 🔔 144 background updates", wrapping.
-        return h_flex().mt(10).gap_x(6).flex_wrap().items_center().text_size(10.5)
-          .child(div().h(18).flex().items_center().font_semibold().text_color(this.labelInk(t)).child("FINAL REPLY"))
-          .children(this.captionParts(turn).map(([icon, text]) => h_flex().h(18).gap(4).items_center().text_size(11.5).text_color(t.dim)
-            .child(div().child("·")).child(svg(ICON(icon)).size(11).flex_none()).child(text)));
+        // Under the message, before the reply: who replied, then what the reply does not
+        // show, wrapping ("Agent · 🔧 9 tool calls (not shown) · 🔔 144 background updates").
+        return h_flex().mt(8).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
+          .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
+            .when(i > 0, (el) => el.child(div().child("·")))
+            .when(icon === "name", (el) => el.child(div().font_semibold().text_color(t.muted).child(text)))
+            .when(icon !== "name", (el) => el.child(svg(ICON(icon)).size(11).flex_none()).child(text))));
       case "lhead":
         return h_flex().mt(14).gap(6).items_center().text_size(10.5)
-          .child(div().font_semibold().text_color(this.labelInk(t)).child("LATEST UPDATE"))
+          .child(div().font_semibold().text_color(this.labelInk(t, t.background)).child("LATEST UPDATE"))
           .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim).min_w(0)
             .child(div().child("·")).child(svg(ICON("bell")).size(11).flex_none())
             .child(div().min_w(0).truncate().child(`after ${plural(turn.followups, "background update")}`)));
       case "latest": {
         if (r.md) return v_flex().mt(6)
-          .child(div().text_size(13).child(TextView.markdown(tv(`th-lmd-${r.key}`), r.md).selectable(this.replySelectable()).w_full()))
+          .child(this.readBlock(div()).child(this.mdView(tv(`th-lmd-${r.key}`), r.md, this.replySelectable())))
           .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
-        const block = div().w_full().text_size(13).line_height("21px").text_color(t.foreground).child(r.text);
+        const block = this.readBlock(div()).text_color(t.foreground).child(r.text);
         if (probe) return block;
         return v_flex().mt(6)
           .child(div().h(this.latestBox(r)).overflow_hidden().child(block))
@@ -3752,11 +4381,20 @@ export default class Threads extends View {
             .child(this.noReplyText(turn));
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
+      case "cmd":
+        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`));
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
-        return div().mt(r.gap ?? 6).text_size(13)
-          .child(TextView.markdown(tv(`th-md-${r.key}`), r.md).selectable(this.replySelectable()).w_full());
+        // A block Herdr drew at no height (mdBroken) shows as plain text with a note, so a
+        // reply never vanishes.
+        if (this.mdBroken?.has(r.key)) return v_flex().mt(r.gap ?? 6).gap(4)
+          .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.warning ?? t.dim)
+            .child(svg(ICON("alert")).size(12).flex_none())
+            .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
+          .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
+        return this.readBlock(div().mt(r.gap ?? 6))
+          .child(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()));
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)
@@ -3770,7 +4408,8 @@ export default class Threads extends View {
       case "codehead": {
         const copied = this.copied?.id === `code:${r.key.slice(3)}`;
         return (h_flex().mt(8).h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
-          .child(div().flex_1().text_size(11.5).font_family(mono).text_color(t.dim).child(r.seg.lang || "code"))
+          // The fence's language when it names one; no label otherwise.
+          .child(div().flex_1().text_size(11.5).font_family(mono).text_color(t.dim).child(r.seg.lang || ""))
           .child(h_flex().h(22).px(7).gap(5).items_center().rounded(5).text_size(11.5)
             .text_color(copied ? t.ansi2 : t.muted).when(copied, (el) => el.bg(alpha(t.ansi2, 0.13)))
             .child(svg(ICON(copied ? "check" : "copy")).size(12)).child(copied ? "Copied" : "Copy")));
@@ -3783,24 +4422,24 @@ export default class Threads extends View {
             .child(st ? Editor.new(st).size_full().py(6) : div().p(8).text_size(12).line_height(`${CODE_LINE}px`).font_family(mono).text_color(t.muted).child(r.seg.text)))
           // One 18 px line at any width (its height is fixed): short, and cut with an ellipsis.
           .when(r.caption, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
-            .child(`${plural(r.lines, "line")} · scrolls inside`))));
+            .child(`${plural(r.rows, "row")} · scrolls inside`))));
       }
       case "more":
         return (h_flex().mt(8).h(26).px(9).gap(5).items_center().rounded(6).border_1().border_color(t.border).text_size(12).text_color(t.muted)
           .child(svg(ICON(r.less ? "chevron-up" : "chevron-down")).size(12))
           .child(r.less ? "Show less" : `Show full reply · ${r.words.toLocaleString()} words`));
       case "stats": {
-        const chip = (icon, text) => h_flex().flex_none().h(22).px(7).gap(5).items_center().rounded(5).bg(t.background)
-          .text_size(11.5).font_family(mono).text_color(t.muted).child(svg(ICON(icon)).size(11).text_color(t.dim)).child(text);
-        return h_flex().mt(10).gap(5).flex_wrap()
-          .children(this.statChips(turn).map(([, icon, text]) => chip(icon, text)))
-          // The info chip: a click anywhere on the stats (or i) explains the chips.
-          .child(h_flex().flex_none().h(22).px(6).items_center().rounded(5).bg(this.legendOn ? t.raised : t.background)
-            .border_1().border_color(this.legendOn ? t.accent : t.background)
-            .child(svg(ICON("info")).size(11).text_color(this.legendOn ? t.foreground : t.dim)))
-          // The exact counts, 16 px lines (C1): its height is measured with the chips.
-          .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t)).child(this.countsLine(turn))));
+        // The stats under the reply, as on a closed exchange, with what only an open turn
+        // shows after them: cache hit and a compaction. The info icon (or i, or a click on
+        // the line) explains them. The exact counts follow on their own 16 px lines (C1).
+        return v_flex().mt(10)
+          .child(h_flex().gap(6).items_start()
+            .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").font_family(mono).text_color(t.dim).child(this.statsFull(turn)))
+            .child(h_flex().flex_none().h(16).items_center()
+              .child(svg(ICON("info")).size(12).text_color(this.legendOn ? t.accent : t.dim))))
+          .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t, t.background)).child(this.countsLine(turn))));
       }
+      case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey, true));
       case "img": {
         this.wantImages(turn, tkey);
         const f = this.imgFile(turn, r.i);
@@ -3882,10 +4521,21 @@ export default class Threads extends View {
     const narrow = this.narrow();
     if (this.selecting) return narrow ? [["⌘C", "copy"], [this.quoteKey, "quote"], ["Esc", "back"]]
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
+    if (this.view === "pinned") {
+      const pv = [["↑↓", "next pin"], ["↵", "open"], ["p", "unpin"]];
+      if (narrow) return [...pv, ...(this.pinnedPane ? [["- =", "width"]] : []), ["v", this.pinnedPane ? "back" : "all"]];
+      pv.push(["1-5", "go to pin"], ["u", "undo"], ["c", "copy reply"]);
+      if (this.quotable()) pv.push([this.quoteKey, "quote"]);
+      if (this.pinnedPane) pv.push(["- =", "width"]);
+      pv.push(["v", this.pinnedPane ? "back to all" : "all turns"]);
+      if (this.pane()) pv.push(["t", "terminal"]);
+      return pv;
+    }
     const out = [["↑↓", "move"], ["↵", "open"], ["c", narrow ? "copy" : "copy reply"]];
     if (!narrow && this.quotable()) out.push([this.quoteKey, "quote"]);
     out.push(["/", "filter"]);
     if (this.quoteKey !== "p") out.push(["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]);
+    out.push(["v", "pinned"]);
     if (narrow) return out;
     if (this.sel && this.open.has(this.sel)) out.push(["s", "select"], ["i", "explain"]);
     out.push(["g", "jump"], ["End", "latest"]);
@@ -3898,7 +4548,7 @@ export default class Threads extends View {
   footer(t) {
     const hint = (k, label) => h_flex().gap(4).items_center().child(this.kbd(t, k)).child(div().text_size(11.5).text_color(t.dim).child(label));
     return h_flex().id("th-footer").flex_none().pl(10).pr(16).py(7).gap(10).flex_wrap().items_center().border_t(1).border_color(t.border)
-      // The hints wrap to two lines or more, and a toast has to clear them when there is a tray.
+      // The hints wrap to two lines or more, and a toast sits above them.
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
         if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }
@@ -3914,10 +4564,8 @@ export default class Threads extends View {
   }
 
   toastView(t) {
-    // Above the tray when there is one, so it never covers a pin. With no tray it keeps its old
-    // place over the footer.
-    const tray = !this.pinnedList().length ? 0 : this.trayFold ? 33 : this.pinnedList().length * 26 + 9;
-    return h_flex().absolute().bottom(tray ? (this.footerH ?? 61) + tray + 6 : 44).left(0).right(0).justify_center()
+    // Just above the footer, whose hints can wrap to two lines.
+    return h_flex().absolute().bottom((this.footerH ?? 38) + 6).left(0).right(0).justify_center()
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))

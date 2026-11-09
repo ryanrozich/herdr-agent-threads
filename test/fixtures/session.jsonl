@@ -55,4 +55,5 @@
 {"parentUuid":"00000000-0000-4000-9000-000000000051","isSidechain":false,"userType":"external","cwd":"/tmp/threads-demo","sessionId":"00000000-0000-4000-8000-000000000001","version":"2.1.316","gitBranch":"main","type":"system","subtype":"stop_hook_summary","hookCount":1,"uuid":"00000000-0000-4000-9000-000000000052","timestamp":"2026-11-01T09:17:00.000Z"}
 {"parentUuid":"00000000-0000-4000-9000-000000000052","isSidechain":false,"userType":"external","cwd":"/tmp/threads-demo","sessionId":"00000000-0000-4000-8000-000000000001","version":"2.1.316","gitBranch":"main","type":"system","subtype":"turn_duration","durationMs":19000,"messageCount":9,"uuid":"00000000-0000-4000-9000-000000000053","timestamp":"2026-11-01T09:17:00.000Z"}
 {"type":"custom-title","customTitle":"login flake","sessionId":"00000000-0000-4000-8000-000000000001"}
+{"type":"agent-name","agentName":"shop-agent","sessionId":"00000000-0000-4000-8000-000000000001"}
 {"type":"last-prompt","lastPrompt":"Add a retry note to the README","sessionId":"00000000-0000-4000-8000-000000000001"}

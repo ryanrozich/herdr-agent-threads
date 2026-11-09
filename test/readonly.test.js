@@ -92,8 +92,9 @@ function violations(modDir, installSh, recipe = join(root, "RECIPE.md")) {
 
         if (!allowed) out.push(`${at} file write`);
       }
-      if (name.endsWith(".js") && /run\(\s*["'`](?!pane\.(split|focus|close)["'`])[^"'`]+["'`]/.test(line)
-        && !(inQuote(name, i) && /run\("terminal\.paste"\);/.test(line))) out.push(`${at} command other than pane.split/focus/close`);
+      // layout.resize sizes the Pinned pane that v splits off; it touches no terminal.
+      if (name.endsWith(".js") && /run\(\s*["'`](?!(pane\.(split|focus|close)|layout\.resize)["'`])[^"'`]+["'`]/.test(line)
+        && !(inQuote(name, i) && /run\("terminal\.paste"\);/.test(line))) out.push(`${at} command other than pane.split/focus/close or layout.resize`);
       // Calls the literal checks above cannot read: a command name, hc argument list or
       // exec program held in a variable, or run/hc/exec passed around as a value.
       if (name.endsWith(".js") && /^\s*import\b/.test(line) && !/\bfrom\b/.test(line)) inImport = true;

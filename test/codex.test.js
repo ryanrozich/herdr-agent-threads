@@ -176,3 +176,17 @@ test("image.sh refuses an id with no ordinal", () => {
   catch (e) { code = e.status; }
   expect(code).toBe(2);
 });
+
+test("a subagent's thread is named by its nickname; a thread of its own has no name", () => {
+  expect(read(rollout(), 1 << 20).agentName).toBe(null);
+  const file = join(mkdtempSync(join(tmpdir(), "threads-codex-")), "rollout-2026-11-01T09-00-00-00000000-0000-7000-8000-000000000002.jsonl");
+  writeFileSync(file, [
+    line("session_meta", { id: ID, cwd: "/home/dev/shop", agent_nickname: "Ohm", agent_path: "/root/review", thread_source: "subagent", base_instructions: { text: "x".repeat(9000) } }),
+    prompt("turn-0001", [{ type: "text", text: "Review the cart" }]),
+    say("Two nits."),
+    done(1000),
+  ].join(""));
+  const s = read(file, 1 << 20);
+  expect(s.agentName).toBe("Ohm");
+  expect(s.turns.map((t) => t.prompt)).toEqual(["Review the cart"]);
+});
