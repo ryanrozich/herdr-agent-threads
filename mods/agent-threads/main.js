@@ -37,7 +37,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth,
+  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -69,6 +69,10 @@ const MAP_KEY = "threads.byTerminal";
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
 // shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
 const FIT_KEY = "threads.fit";
+// Each pane's measured width, so the Pinned column and its Threads pane can resize together.
+const WIDTH_KEY = "threads.width";
+// What Herdr's layout px size adds to the width a pane measures (its frame).
+const PANE_FRAME = 2;
 // The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
 const PINNED_HEADING = 66;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
@@ -92,6 +96,8 @@ const COUNTS_LINE = 16; // the counts line's explicit line height (11 px mono)
 // the editor to inherit; an editor that keeps its own shorter line leaves a few px of the
 // box's own background below the code, never a cut line (R3-2).
 const CODE_LINE = 20;
+// The code box's borders and the editor's own padding inside it, left and right.
+const CODE_PAD = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
 const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
@@ -1536,6 +1542,31 @@ export default class Threads extends View {
     } else if (Date.now() > a.until) this.splitAsk = null;
   }
 
+  // This pane's width, for its partner (resizeColumn).
+  shareWidth() {
+    const me = this.me();
+    if (!me || this.paneW == null) return;
+    const map = shared(WIDTH_KEY) ?? {};
+    if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
+  }
+
+  // - and =, in the column or in Threads while the column is open: the column 40 px
+  // narrower or wider, and Threads the other way, so the terminal stays put (ui.js
+  // columnResize says why a drag on the divider cannot do this).
+  resizeColumn(d, cx) {
+    const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
+    const main = this.pinnedPane ? this.mainPane() : this.me();
+    if (!col || !main) return false;
+    const w = shared(WIDTH_KEY) ?? {};
+    // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
+    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d);
+    if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
+    run("layout.resize", { id: col.pane, px: next.column });
+    run("layout.resize", { id: main.pane, px: next.main });
+    setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
+    return true;
+  }
+
   // The Pinned column is the way in: Threads opening with pins opens it once, when there is
   // room. Closing the column keeps it closed for this pane's life, until v opens it again.
   // In the column: it closes when its Threads pane closes.
@@ -1748,16 +1779,18 @@ export default class Threads extends View {
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
 
-  // Lines shown, whether it scrolls sideways, and whether it gets a caption.
-  // A code block's box: its lines, 6 px above and below the editor's text, its bottom
-  // border, and room for a horizontal scrollbar when a line is wider than the box.
-  codeBoxH(r) { return r.shown * CODE_LINE + 16 + (r.wide ? 10 : 0); }
+  // A code block's box: its rows, 6 px above and below the editor's text, and its bottom
+  // border.
+  codeBoxH(r) { return r.shown * CODE_LINE + 16; }
 
+  // The editor wraps long lines (soft_wrap), so a block never sits scrolled sideways and
+  // each line starts at the left edge. rows: the wrapped rows (ui.js codeRows) at the box's
+  // width less the editor's padding, 7.3 px a character at 12 px. A block of up to
+  // CODE_LINES rows shows them all; a taller one scrolls inside, and says so.
   codeShape(text) {
     const lines = text.split("\n");
-    const widest = lines.reduce((m, l) => Math.max(m, l.length), 0);
-    const wide = widest * 7.3 > this.inner() - 16;
-    return { lines: lines.length, shown: Math.min(CODE_LINES, lines.length), wide, caption: lines.length > CODE_LINES || wide };
+    const rows = codeRows(text, (this.inner() - CODE_PAD) / 7.3);
+    return { lines: lines.length, rows, shown: Math.min(CODE_LINES, rows), caption: rows > CODE_LINES };
   }
 
   turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow"].includes(r.kind)).map((r) => r.key); }
@@ -2005,7 +2038,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -2507,6 +2540,8 @@ export default class Threads extends View {
       case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
       case "undoUnpin": return this.undoUnpin(cx);
       case "pinned": return this.openPinned(cx);
+      case "narrower": return this.resizeColumn(-PIN_STEP, cx);
+      case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -2660,7 +2695,7 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); cx.notify(); }
+        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); this.shareWidth(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
@@ -3843,12 +3878,13 @@ export default class Threads extends View {
   // The line over the message: "📌 🔔 3 🖼 1 #7 · 8:43 AM" on the right for the person's
   // own messages; "<icon> t7 review · #7 · 8:43 AM" on the left for an agent's. A stopped
   // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
-  metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null) {
+  // bw: the bubble's width, which the header of the person's own turn spans (metaSplit).
+  metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null, bw = null) {
     const agent = turn.agent;
     const ac = this.agentColor(t);
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
     const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
-    if (!this.headerRight) return this.metaSplit(t, turn, icon, time, pinNo, count);
+    if (!this.headerRight) return this.metaSplit(t, turn, icon, time, pinNo, count, null, bw);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
       .when(!agent, (el) => el.justify_end()
         .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
@@ -3868,26 +3904,44 @@ export default class Threads extends View {
       .child(div().flex_none().truncate().child(time));
   }
 
-  // The turn header: "#7 · You" or "#7 · <icon> t7 review" at the left, the time at the
-  // right, the same in both bubble directions and open or closed, so the numbers make one
-  // column down the left edge and the times one down the right. The number is a step
-  // brighter than the name.
-  metaSplit(t, turn, icon, time, pinNo, count0, tail = null) {
+  // The turn header: "#7 · You" or "#7 · <icon> t7 review", then the time at the right end.
+  // The number is a step brighter than the name. An agent's turn starts it at the reply's
+  // left edge. The person's own spans their bubble (bw), from its left edge to its right
+  // (headerFit): a short bubble gets a short header, which drops the name before the time.
+  metaSplit(t, turn, icon, time, pinNo, count0, tail = null, bw = null) {
     const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
     const agent = turn.agent;
     const ac = this.agentColor(t);
-    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+    const fit = !agent && bw ? this.headerFit(turn, time, bw, Boolean(icon), pinNo, tail) : null;
+    const name = !fit || fit.name;
+    const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .when(Boolean(fit), (el) => el.flex_none().w(fit?.w ?? 0))
       .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
-      .child(div().flex_none().child("·"))
+      .when(name, (el) => el.child(div().flex_none().child("·")))
       .when(agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac)))
-      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-        .font_semibold().text_color(agent ? ac : t.dim).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName))
+      .when(name, (el) => el.child(div().flex_none().max_w(fit ? fit.nameW : this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .font_semibold().text_color(agent ? ac : t.dim).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName)))
       .when(Boolean(icon), (el) => el.child(icon))
       .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
       .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
       .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
       .child(div().flex_1().min_w(0).truncate().text_right().child(time))
       .when(Boolean(tail), (el) => el.children(tail));
+    return fit ? h_flex().w_full().min_w(0).justify_end().child(line) : line;
+  }
+
+  // The person's header over a bubble bw wide: its width, and whether the name fits beside
+  // the number, the icons and the time (6.6 px a character at 11.5 px, 7.2 for the mono
+  // number, 5 px gaps). Narrower than the number, icons and time, it keeps that width and
+  // reaches past the bubble's left edge, so the time stays whole.
+  headerFit(turn, time, bw, icon, pinNo, tail) {
+    const ch = 6.6;
+    const icons = (icon ? 17 : 0) + (this.isPinnedTurn(turn) ? 17 : 0) + (pinNo != null ? 12 : 0)
+      + (turn.followups > 0 ? 18 + countLabel(turn.followups).length * ch : 0) + (tail ? tail.length * 19 : 0);
+    const base = Math.ceil(`#${turn.n}`.length * 7.2 + 5 + icons + time.length * ch);
+    const nameW = Math.ceil(this.prefs.youName.length * ch + 2);
+    const w = Math.max(bw, base);
+    return { w, name: base + 10 + 4 + nameW <= w, nameW: Math.max(0, w - base - 14) };
   }
 
   // The person's message in a bubble on the right (an agent's: an outlined bubble on the
@@ -3992,7 +4046,7 @@ export default class Threads extends View {
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, false, [
-      this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null),
+      this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null, turn.agent ? null : sh.bubbleW),
       ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
       this.bubble(t, turn, [
         this.promptBlock(bt, turn, sh, sel),
@@ -4048,7 +4102,7 @@ export default class Threads extends View {
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
     return this.rowFrame(t, sel, focusedPanel, true, [
-      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : sh.bubbleW),
       this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
@@ -4069,7 +4123,7 @@ export default class Threads extends View {
     const g = this.workingGeom(turn);
     const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts)),
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bubbleMax(this.width, this.prefs.textSize)),
       this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize)),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
@@ -4186,9 +4240,11 @@ export default class Threads extends View {
         // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
         // handler, so click() tells the pin by position (headPinHit).
         if (!this.headerRight) {
-          return div().pr(4).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
+          // The person's: over their bubble, as wide as it (youMd bw), ending at its right edge.
+          const bw = turn.agent ? null : this.youMd({ turn, full: this.full.has(r.key) }).bw;
+          return div().when(Boolean(turn.agent), (el) => el.pr(4)).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
             [when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · "), null, null,
-            [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()]));
+            [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()], bw));
         }
         return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim).pr(4)
           .when(turn.interrupted || this.failed(turn), (el) => el.child(this.statusIcon(t, turn)))
@@ -4293,7 +4349,8 @@ export default class Threads extends View {
       case "codehead": {
         const copied = this.copied?.id === `code:${r.key.slice(3)}`;
         return (h_flex().mt(8).h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
-          .child(div().flex_1().text_size(11.5).font_family(mono).text_color(t.dim).child(r.seg.lang || "code"))
+          // The fence's language when it names one; no label otherwise.
+          .child(div().flex_1().text_size(11.5).font_family(mono).text_color(t.dim).child(r.seg.lang || ""))
           .child(h_flex().h(22).px(7).gap(5).items_center().rounded(5).text_size(11.5)
             .text_color(copied ? t.ansi2 : t.muted).when(copied, (el) => el.bg(alpha(t.ansi2, 0.13)))
             .child(svg(ICON(copied ? "check" : "copy")).size(12)).child(copied ? "Copied" : "Copy")));
@@ -4306,7 +4363,7 @@ export default class Threads extends View {
             .child(st ? Editor.new(st).size_full().py(6) : div().p(8).text_size(12).line_height(`${CODE_LINE}px`).font_family(mono).text_color(t.muted).child(r.seg.text)))
           // One 18 px line at any width (its height is fixed): short, and cut with an ellipsis.
           .when(r.caption, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
-            .child(`${plural(r.lines, "line")} · scrolls inside`))));
+            .child(`${plural(r.rows, "row")} · scrolls inside`))));
       }
       case "more":
         return (h_flex().mt(8).h(26).px(9).gap(5).items_center().rounded(6).border_1().border_color(t.border).text_size(12).text_color(t.muted)
@@ -4407,9 +4464,10 @@ export default class Threads extends View {
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
     if (this.view === "pinned") {
       const pv = [["↑↓", "next pin"], ["↵", "open"], ["p", "unpin"]];
-      if (narrow) return [...pv, ["v", this.pinnedPane ? "back" : "all"]];
+      if (narrow) return [...pv, ...(this.pinnedPane ? [["- =", "width"]] : []), ["v", this.pinnedPane ? "back" : "all"]];
       pv.push(["1-5", "go to pin"], ["u", "undo"], ["c", "copy reply"]);
       if (this.quotable()) pv.push([this.quoteKey, "quote"]);
+      if (this.pinnedPane) pv.push(["- =", "width"]);
       pv.push(["v", this.pinnedPane ? "back to all" : "all turns"]);
       if (this.pane()) pv.push(["t", "terminal"]);
       return pv;

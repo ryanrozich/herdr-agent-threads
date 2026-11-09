@@ -74,7 +74,7 @@ mock.module("gpui-base", () => ({
     draw({ start: 0, end: n });
     return el;
   },
-  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: () => { const st = { handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
+  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
 // ("in"), so a test can time the synchronous stretches between awaits.
@@ -886,6 +886,23 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
+  // Code blocks wrap: the editor's soft_wrap is on, so a long line never leaves the block
+  // scrolled sideways, and the box is as tall as the wrapped rows.
+  const code = v.rows().find((r) => r.kind === "code");
+  expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
+  expect(v.codeBoxH(code)).toBe(36);
+  v.makeCode(code.key.split(":").slice(1, 3).join(":"));
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
+  const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
+  const shape = v.codeShape(long);
+  expect(shape.rows).toBeGreaterThan(1);
+  expect(shape.shown).toBe(shape.rows);
+  expect(shape.caption).toBe(false);
+  expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
+  // The label is the fence's language, or nothing: never "code".
+  const head = v.rows().find((r) => r.kind === "codehead");
+  rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  expect(hs).not.toContain("code");
   expect(v.rows().filter((r) => r.kind === "md").at(-1).links).toBe(0);
   const snap = state.shared["threads.debug"].t4;
   expect(snap.detail.find((d) => d.startsWith("md#1"))).toMatch(/^md#1 links 2 h\d+ \| \]\(https:\/\/linear\.app\/acme\/issue\/ACME-123\) \]\(https:\/\/github\.com\/acme\/widgets\/pull\/45\) /);
@@ -2467,6 +2484,16 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
   w.key(keyEv("escape"), cx2);
   expect(w.view).toBe("pinned");
+  // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
+  // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
+  state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
+  log = [];
+  w.key(keyEv("="), cx2);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 292 }, { id: "p2", px: 660 }]);
+  log = [];
+  v.key(keyEv("-"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
+  expect(w.footerHints().map((x) => x.join(" "))).toContain("- = width");
   // Threads closes: the column closes too, once.
   log = [];
   state.panes = state.panes.filter((p) => p.pane !== "p2");
@@ -2700,6 +2727,25 @@ test("turn header: #n then the name at the left, the time last, for the person's
   const a = strings(() => v.metaLine(theme, agentTurn));
   expect(a[0]).toBe(`#${turn.n}`);
   expect(a.indexOf(`#${turn.n}`)).toBeLessThan(a.findIndex((x) => /general-purpose/.test(x)));
+  // The person's header spans their bubble: as wide as it, at the right with it.
+  const calls = (el) => { rec = []; el(); const c = rec; rec = null; return c; };
+  const c240 = calls(() => v.metaLine(theme, turn, null, fmtTimeForTest(turn.ts), null, 240));
+  expect(c240.some((e) => e[0] === "w" && e[1] === 240)).toBe(true);
+  expect(c240.some((e) => e[0] === "justify_end")).toBe(true);
+  expect(v.headerFit(turn, "7:33 AM", 240, false, null, null)).toMatchObject({ w: 240, name: true });
+  // A short bubble drops the name before the time, and never goes under the number and time.
+  const short = v.headerFit(turn, "7:33 AM", 90, false, null, null);
+  expect(short.name).toBe(false);
+  expect(short.w).toBeGreaterThanOrEqual(90);
+  const tiny = v.headerFit(turn, "7:33 AM", 40, false, null, null);
+  expect(tiny.w).toBeGreaterThan(40);
+  expect(strings(() => v.metaLine(theme, turn, null, "7:33 AM", null, 90))).toEqual([`#${turn.n}`, "7:33 AM"]);
+  // An agent's turn keeps its header at the reply's left edge, the pane's width.
+  expect(calls(() => v.metaLine(theme, agentTurn, null, "7:33 AM", null, null)).some((e) => e[0] === "justify_end")).toBe(false);
+  // Drawn rows pass the bubble's width.
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const rc = calls(() => v.rowItem(theme, row, false));
+  expect(rc.some((e) => e[0] === "w" && e[1] === row.shape.bubbleW)).toBe(true);
   // The earlier header, for side-by-side review: the person's name and #n after it.
   v.action("debugHeader:right", cx);
   expect(strings(() => v.metaLine(theme, turn)).slice(0, 3)).toEqual(["You", "·", `#${turn.n}`]);

@@ -8,7 +8,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth,
 } from "../mods/agent-threads/ui.js";
 
@@ -445,6 +445,26 @@ test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, l
   expect(pinColumn(Number.NaN)).toBe(null);
   expect(headerButtonWidth(null)).toBe(24);
   expect(headerButtonWidth("Pinned 2")).toBe(69);
+});
+
+test("codeRows: a code line wrapped word by word, a long word split across rows", () => {
+  expect(codeRows("ls", 40)).toBe(1);
+  expect(codeRows("", 40)).toBe(1);
+  expect(codeRows("a\nb\nc", 40)).toBe(3);
+  expect(codeRows("aaaa bbbb cccc", 9)).toBe(2);
+  expect(codeRows("x".repeat(25), 10)).toBe(3);
+  expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
+});
+
+test("columnResize: the column by d and Threads by -d, within 200 to 640 px and Threads at least 240", () => {
+  expect(columnResize(252, 700, 40)).toEqual({ column: 292, main: 660 });
+  expect(columnResize(252, 700, -40)).toEqual({ column: 212, main: 740 });
+  expect(columnResize(212, 740, -40)).toEqual({ column: 200, main: 752 });
+  expect(columnResize(200, 752, -40)).toBe(null);
+  expect(columnResize(252, 260, 40)).toEqual({ column: 272, main: 240 });
+  expect(columnResize(272, 240, 40)).toBe(null);
+  expect(columnResize(630, 900, 40)).toEqual({ column: 640, main: 890 });
+  expect(columnResize(undefined, 700, 40)).toBe(null);
 });
 
 test("a collapsed reply as Markdown: whole source lines within the line budget, a cut fence closed", () => {

@@ -8,6 +8,7 @@ const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
+  "-": "narrower", "=": "wider",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
 // chose it still has the header's pin button.
@@ -99,6 +100,24 @@ export function langFor(fence) {
 export function wrappedLines(text, per) {
   const p = Math.max(8, per);
   return (text ?? "").split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / p)), 0);
+}
+
+// Rows a code block takes when the editor wraps it at `per` characters: each line filled
+// word by word (a break after a space), a word longer than a row split across rows.
+export function codeRows(text, per) {
+  const p = Math.max(8, Math.floor(per));
+  let rows = 0;
+  for (const line of (text ?? "").split("\n")) {
+    let n = 1, used = 0;
+    for (const word of line.match(/\S+\s*/g) ?? []) {
+      let w = word.length;
+      if (used > 0 && used + word.trimEnd().length > p) { n++; used = 0; }
+      while (w > p) { if (used > 0) { n++; used = 0; } w -= p; n++; }
+      used += w;
+    }
+    rows += n;
+  }
+  return rows;
 }
 
 // A prompt clipped to `lines` wrapped lines of `per` characters and at most `maxChars`.
@@ -1151,6 +1170,21 @@ export function barLayout(w, { quote = true, terminal = true } = {}) {
 // that, then a 6 px gap, then the 13 px pin. The zone stops short of the chevron.
 export function headPinHit(x, w) {
   return x != null && w != null && x >= w - 54 && x <= w - 33;
+}
+
+// - and = make the Pinned column 40 px narrower or wider. Herdr puts the terminal, Threads
+// and the column in one row, Threads and the column at fixed widths, and a drag on the
+// divider between those two resizes Threads alone (the terminal takes up the rest). So the
+// keys resize both, the column by d and Threads by -d, and the terminal keeps its width.
+// From the column's width c and Threads' m: the two new widths, or null when there is no
+// room (the column 200 to 640 px, Threads at least PIN_MAIN_MIN).
+export const PIN_STEP = 40;
+export function columnResize(c, m, d) {
+  if (!(c > 0) || !(m > 0)) return null;
+  let dd = Math.max(200, Math.min(640, Math.round(c + d))) - Math.round(c);
+  if (Math.round(m) - dd < PIN_MAIN_MIN) dd = Math.round(m) - PIN_MAIN_MIN;
+  if (d > 0 ? dd <= 0 : dd >= 0) return null;
+  return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
 
 // The Pinned column that v (or the first pin) splits off a Threads pane. It lists pins, so
