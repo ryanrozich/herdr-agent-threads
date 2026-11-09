@@ -2569,8 +2569,9 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugWidth:240" lays the pane out for that width.
-    // Design review only: "debugHeader:split" or "debugHeader:right" draws that turn header.
-    if (/^debugHeader:(split|right)$/.test(name)) { this.headerSplit = name.endsWith("split"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
+    // Design review only: "debugHeader:right" draws the earlier header (all on the right
+    // for the person's turns), "debugHeader:split" the current one.
+    if (/^debugHeader:(split|right)$/.test(name)) { this.headerRight = name.endsWith("right"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn's whole reply, as "Show full reply" would.
     if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
@@ -3828,7 +3829,7 @@ export default class Threads extends View {
     const ac = this.agentColor(t);
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
     const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
-    if (this.headerSplit) return this.metaSplit(t, turn, icon, time, pinNo, count);
+    if (!this.headerRight) return this.metaSplit(t, turn, icon, time, pinNo, count);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
       .when(!agent, (el) => el.justify_end()
         .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
@@ -3848,18 +3849,20 @@ export default class Threads extends View {
       .child(div().flex_none().truncate().child(time));
   }
 
-  // The split header (the owner's idea, under design review): the name and #n at the left,
-  // the time at the right, the same in both bubble directions and open or closed.
+  // The turn header: "#7 · You" or "#7 · <icon> t7 review" at the left, the time at the
+  // right, the same in both bubble directions and open or closed, so the numbers make one
+  // column down the left edge and the times one down the right. The number is a step
+  // brighter than the name.
   metaSplit(t, turn, icon, time, pinNo, count0, tail = null) {
     const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
     const agent = turn.agent;
     const ac = this.agentColor(t);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
+      .child(div().flex_none().child("·"))
       .when(agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac)))
       .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-        .font_semibold().text_color(agent ? ac : t.muted).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName))
-      .child(div().flex_none().child("·"))
-      .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
+        .font_semibold().text_color(agent ? ac : t.dim).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName))
       .when(Boolean(icon), (el) => el.child(icon))
       .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
       .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
@@ -4163,7 +4166,7 @@ export default class Threads extends View {
         // The meta line of an open turn, on the right like a closed one's: "#7 · Sat 8:43 AM ·
         // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
         // handler, so click() tells the pin by position (headPinHit).
-        if (this.headerSplit) {
+        if (!this.headerRight) {
           return div().pr(4).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
             [when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · "), null, null,
             [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()]));

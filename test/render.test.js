@@ -6,7 +6,7 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply } from "../mods/agent-threads/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -2669,6 +2669,24 @@ test("a coloured bubble draws the open message as plain text in its ink, quotes 
   v.action("bubbleColor:plain", cx);
   expect(you().every((y) => !y.plain && y.md != null)).toBe(true);
   draw(v, cx);
+});
+
+test("turn header: #n then the name at the left, the time last, for the person's turns and an agent's, open or closed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const strings = (el) => { rec = []; el(); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const turn = v.current().turns.find((tn) => !tn.agent);
+  const closed = strings(() => v.metaLine(theme, turn));
+  expect(closed.slice(0, 3)).toEqual([`#${turn.n}`, "·", "You"]);
+  expect(closed.at(-1)).toBe(fmtTimeForTest(turn.ts));
+  const agentTurn = { ...turn, agent: true, sender: { name: "general-purpose" } };
+  const a = strings(() => v.metaLine(theme, agentTurn));
+  expect(a[0]).toBe(`#${turn.n}`);
+  expect(a.indexOf(`#${turn.n}`)).toBeLessThan(a.findIndex((x) => /general-purpose/.test(x)));
+  // The earlier header, for side-by-side review: the person's name and #n after it.
+  v.action("debugHeader:right", cx);
+  expect(strings(() => v.metaLine(theme, turn)).slice(0, 3)).toEqual(["You", "·", `#${turn.n}`]);
+  v.action("debugHeader:split", cx);
+  expect(strings(() => v.metaLine(theme, turn))[0]).toBe(`#${turn.n}`);
 });
 
 test("names: yours over your message, the agent's over its reply, Agent when the session records none", async () => {
