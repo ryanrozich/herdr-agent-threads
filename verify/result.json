@@ -4,16 +4,16 @@
   "commit": "a9386c095793315ff044e8b2fbda138c75338c86",
   "environmentUrl": "https://htmlpreview.github.io",
   "host": "laptop",
-  "startedAt": "2026-11-09T03:01:52.898Z",
-  "finishedAt": "2026-11-09T03:03:17.385Z",
+  "startedAt": "2026-11-09T04:57:46.538Z",
+  "finishedAt": "2026-11-09T04:58:58.645Z",
   "result": "pass",
   "steps": [
     {
       "n": 1,
-      "name": "Review page loads with all 36 screenshots",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Review page loads with all 54 screenshots",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 19664,
+      "ms": 12443,
       "screenshot": "steps/01.png",
       "viewport": {
         "width": 1280,
@@ -23,10 +23,10 @@
     },
     {
       "n": 2,
-      "name": "The Pinned column section comes first",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Opening width: 545 px, then left against centred at 960 px",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 5136,
+      "ms": 4741,
       "screenshot": "steps/02.png",
       "viewport": {
         "width": 1280,
@@ -36,10 +36,10 @@
     },
     {
       "n": 3,
-      "name": "Threads at 960 px with the column at 320 px opens full size",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Centred at 960 px opens full size, Esc closes",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 5589,
+      "ms": 4320,
       "screenshot": "steps/03.png",
       "viewport": {
         "width": 1280,
@@ -49,10 +49,10 @@
     },
     {
       "n": 4,
-      "name": "Right arrow steps to the header close-up, Esc closes",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Collapsed replies: today against Markdown",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 7485,
+      "ms": 2852,
       "screenshot": "steps/04.png",
       "viewport": {
         "width": 1280,
@@ -62,10 +62,10 @@
     },
     {
       "n": 5,
-      "name": "The header: Pinned 2 and All turns",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Markdown comparison full size, right arrow to today's",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 4950,
+      "ms": 4573,
       "screenshot": "steps/05.png",
       "viewport": {
         "width": 1280,
@@ -75,10 +75,10 @@
     },
     {
       "n": 6,
-      "name": "Threads at 700 px and 500 px with the column",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Day bands: today against the pill, and the day at the top",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 5005,
+      "ms": 7576,
       "screenshot": "steps/06.png",
       "viewport": {
         "width": 1280,
@@ -88,10 +88,10 @@
     },
     {
       "n": 7,
-      "name": "Under 480 px and Threads reopened",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "The sticky day's limits are stated",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 4931,
+      "ms": 3226,
       "screenshot": "steps/07.png",
       "viewport": {
         "width": 1280,
@@ -101,10 +101,10 @@
     },
     {
       "n": 8,
-      "name": "Try steps name the column and the Pinned button",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Turn header: today against new at 545 px",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 5121,
+      "ms": 3824,
       "screenshot": "steps/08.png",
       "viewport": {
         "width": 1280,
@@ -114,24 +114,50 @@
     },
     {
       "n": 9,
-      "name": "Phone width: no sideways scroll",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Turn header at 280 and 960 px, and a turn an agent sent",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 4012,
+      "ms": 6056,
       "screenshot": "steps/09.png",
       "viewport": {
-        "width": 390,
-        "height": 844
+        "width": 1280,
+        "height": 800
       },
-      "layoutWidth": 390
+      "layoutWidth": 1280
     },
     {
       "n": 10,
-      "name": "Phone width: the Pinned column section",
-      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/f0c19cec2bbe7ba185db4734f6367cf45eaad864/index.html",
+      "name": "Try steps cover the width, Markdown rows, header and day pill",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
       "result": "pass",
-      "ms": 4928,
+      "ms": 3098,
       "screenshot": "steps/10.png",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "layoutWidth": 1280
+    },
+    {
+      "n": 11,
+      "name": "Notes answer the Ryan Rozich label",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
+      "result": "pass",
+      "ms": 3106,
+      "screenshot": "steps/11.png",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "layoutWidth": 1280
+    },
+    {
+      "n": 12,
+      "name": "Phone width: no sideways scroll",
+      "url": "https://htmlpreview.github.io/?https://github.com/ryanrozich/herdr-agent-threads/blob/4981a950d18853cb11740e7e26483d52dde9fd7f/index.html",
+      "result": "pass",
+      "ms": 4254,
+      "screenshot": "steps/12.png",
       "viewport": {
         "width": 390,
         "height": 844
@@ -141,7 +167,7 @@
   ],
   "replay": {
     "status": "present",
-    "sessionId": "267e0276-642d-471d-8f2f-a54af6e0c37e",
+    "sessionId": "2f1423a5-3227-45c6-881d-eb8366774d45",
     "file": "replay.json",
     "waitedSec": 4
   },
