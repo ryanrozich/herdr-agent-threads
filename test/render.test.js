@@ -82,6 +82,8 @@ let marks = null;
 const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
+    // A link the pane opens is logged, never opened.
+    if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
@@ -2998,4 +3000,34 @@ test("a reply longer than Herdr draws in one Markdown view: stacked blocks, esca
   expect(text).toContain("Herdr could not draw this part as Markdown, so it shows as plain text.");
   expect(text).toContain("the morning van.");
   draw(v, cx);
+});
+
+test("an Amp terminal: Amp isn't supported, why in one line, and a button to the README section", async () => {
+  const { UNREAD } = await import("../mods/agent-threads/harness.js");
+  hcOut = JSON.stringify({ foreground: { name: "amp", argv: ["amp"], pid: 77 } });
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "amp" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "amp", name: "Amp", agent: true } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", debug: true }, shared: {},
+  };
+  const v = new Threads();
+  const cx = makeCx();
+  v.init(state.props, cx);
+  for (let i = 0; i < 200 && v.res?.kind !== "unsupported"; i++) await new Promise((r) => setTimeout(r, 25));
+  hcOut = JSON.stringify({ foreground: { name: "claude", argv: ["claude"], pid: 42 } });
+  expect(v.res).toMatchObject({ kind: "unsupported", name: "Amp", key: "amp" });
+  expect(v.headerText()).toBe("Not readable");
+  rec = []; v.body(theme, true, cx); const drawn = rec; rec = null;
+  const strings = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(strings).toEqual(expect.arrayContaining(["Amp isn't supported", UNREAD.amp.why, "Why Amp isn't supported"]));
+  // Amp is not offered among the agents Threads reads.
+  expect(strings.join(" ")).not.toMatch(/reads .*Amp/);
+  // The button opens the README section, and does nothing else.
+  const at = drawn.findIndex((e) => e[0] === "id" && e[1] === "th-why-unread");
+  const click = drawn.slice(at).find((e) => e[0] === "on_click")[1];
+  log = [];
+  click({}, cx);
+  await new Promise((r) => setTimeout(r, 10));
+  expect(log).toEqual([["open", "https://github.com/ryanrozich/herdr-agent-threads#why-amp-isnt-supported"]]);
+  expect(UNREAD.amp.url).toMatch(/#why-amp-isnt-supported$/);
 });

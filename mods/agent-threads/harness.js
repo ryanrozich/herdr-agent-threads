@@ -1,6 +1,7 @@
 // agent-threads: the agents the pane can read, as pure functions (no Herdr imports), so the
-// tests run them under bun. Claude Code, Codex, Pi and Cursor append to a JSONL file. OpenCode
-// keeps every session in one SQLite database, so its "file" is "<database>#<session id>".
+// tests run them under bun. Claude Code, Codex, Pi, Cursor and Antigravity append to a JSONL
+// file. OpenCode keeps every session in one SQLite database, so its "file" is
+// "<database>#<session id>".
 
 export const HARNESS = {
   claude: { key: "claude", name: "Claude Code", short: "Claude", cmd: "claude" },
@@ -8,6 +9,31 @@ export const HARNESS = {
   opencode: { key: "opencode", name: "OpenCode", short: "OpenCode", cmd: "opencode" },
   pi: { key: "pi", name: "Pi", short: "Pi", cmd: "pi" },
   cursor: { key: "cursor", name: "Cursor", short: "Cursor", cmd: "cursor-agent" },
+  antigravity: { key: "antigravity", name: "Antigravity", short: "Antigravity", cmd: "agy" },
+};
+
+// Agents the pane knows but does not read, and why. Amp keeps its threads on its own servers,
+// not on disk, and Threads reads only local files (README, "Why Amp isn't supported").
+export const UNREAD = {
+  amp: {
+    key: "amp", name: "Amp",
+    why: "Amp keeps its chats online, on Amp's servers, so Threads cannot read them.",
+    // Opened with `open` (macOS), so it must stay a fixed https link.
+    url: "https://github.com/ryanrozich/herdr-agent-threads#why-amp-isnt-supported",
+  },
+};
+
+// Each agent's mark, as Herdr itself draws it (Herdr's bundled icons: LobeHub icons, MIT, and
+// Pi's own mark; see ICONS.md). tint: a one-colour mark drawn in white on the tile (svg()),
+// else a full-colour one drawn as it is (image()). Claude keeps its own orange tile.
+export const MARKS = {
+  claude: { icon: "claude-mark", tile: "#d97757", tint: true },
+  codex: { icon: "logo-codex", tile: "#1c1d21", tint: false },
+  opencode: { icon: "logo-opencode", tile: "#1c1d21", tint: true },
+  pi: { icon: "logo-pi", tile: "#1c1d21", tint: true },
+  cursor: { icon: "logo-cursor", tile: "#1c1d21", tint: true },
+  antigravity: { icon: "logo-antigravity", tile: "#1c1d21", tint: false },
+  amp: { icon: "logo-amp", tile: "#1c1d21", tint: false },
 };
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -28,7 +54,21 @@ export function harnessOf(fg, pane) {
   for (const key of ["codex", "opencode", "pi"]) {
     if (cmd === key || name === key || script === key || pane?.app === key) return key;
   }
+  // Antigravity's CLI is a native program named agy.
+  if (cmd === "agy" || name === "agy" || pane?.app === "antigravity") return "antigravity";
   if (cmd === "claude" || script === "claude" || /^\d+\.\d+\.\d+/.test(fg?.name ?? "") || pane?.app === "claude-code") return "claude";
+  return null;
+}
+
+// An agent from UNREAD running in the terminal ("amp"), or null.
+export function unreadOf(fg, pane) {
+  const argv = fg?.argv ?? [];
+  const cmd = base(argv[0] ?? fg?.name);
+  const name = base(fg?.name);
+  const script = WRAPPERS.has(cmd) ? base(argv[1]).replace(/\.[cm]?js$/, "") : null;
+  for (const key of Object.keys(UNREAD)) {
+    if (cmd === key || name === key || script === key || pane?.app === key || pane?.program?.key === key) return key;
+  }
   return null;
 }
 
@@ -38,11 +78,15 @@ const CURSOR_SCRIPT = /\/cursor-agent\/versions\/[^/]+\/index\.js$/;
 const PI_FILE = /\/(\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)_([^/]+)\.jsonl$/;
 // Cursor writes a chat to <data>/projects/<folder>/agent-transcripts/<id>/<id>.jsonl.
 const CURSOR_FILE = /\/agent-transcripts\/([^/]+)\/\1\.jsonl$/;
+// Antigravity's CLI writes a conversation to <data>/brain/<id>/.system_generated/logs/
+// transcript_full.jsonl (transcript.jsonl beside it cuts long fields).
+const AGY_FILE = /\/brain\/([0-9A-Za-z_-]+)\/\.system_generated\/logs\/transcript(?:_full)?\.jsonl$/;
 
 export function harnessOfFile(file) {
   const f = file ?? "";
   if (f.includes(".db#")) return "opencode";
   if (CURSOR_FILE.test(f)) return "cursor";
+  if (AGY_FILE.test(f)) return "antigravity";
   if (PI_FILE.test(f)) return "pi";
   return /\/rollout-[^/]*\.jsonl$/.test(f) ? "codex" : "claude";
 }
@@ -88,6 +132,8 @@ export function idOfFile(file) {
   if (f.includes(".db#")) return f.slice(f.lastIndexOf("#") + 1);
   const pi = PI_FILE.exec(f);
   if (pi) return pi[2];
+  const other = AGY_FILE.exec(f);
+  if (other) return other[1];
   const name = f.split("/").pop().replace(/\.jsonl$/, "");
   const m = /^rollout-.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(name);
   return m ? m[1] : name;
@@ -128,6 +174,33 @@ export function cursorArgv(argv) {
       if (/^[0-9A-Za-z_-]{8,}$/.test(next)) id = next;
     } else if (a.startsWith("--resume=")) id = a.slice(9);
     else if (a === "--continue") cont = true;
+  }
+  return { id: /^[0-9A-Za-z_-]{8,}$/.test(id ?? "") ? id : null, cont };
+}
+
+// The transcript of an Antigravity conversation, under its data folder.
+export function agyFile(data, id) {
+  return `${data}/brain/${id}/.system_generated/logs/transcript_full.jsonl`;
+}
+
+// The conversation an Antigravity process has open, from a folder it holds open
+// (<data>/brain/<id>): { data, id }, or null.
+export function agyBrain(path) {
+  const m = /^(.+)\/brain\/([0-9A-Za-z_-]{8,})\/?$/.exec(path ?? "");
+  return m ? { data: m[1], id: m[2] } : null;
+}
+
+// The conversation named on an agy command line: { id, cont }. --conversation <id> resumes
+// one; -c or --continue the most recent.
+export function agyArgv(argv) {
+  const args = argv ?? [];
+  let id = null;
+  let cont = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--conversation") id = args[i + 1] ?? null;
+    else if (a.startsWith("--conversation=")) id = a.slice(15);
+    else if (a === "-c" || a === "--continue") cont = true;
   }
   return { id: /^[0-9A-Za-z_-]{8,}$/.test(id ?? "") ? id : null, cont };
 }

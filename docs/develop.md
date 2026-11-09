@@ -55,7 +55,7 @@ In a separate Herdr window on a Retina display, at zoom 1, with `promptLines` 2,
 mkdir -p ~/code/acme-web && git -C ~/code/acme-web init -q
 git -C ~/code/acme-web remote add origin https://github.com/acme/acme-web.git
 bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-03T20:05:00Z days   # three days: shoot on 5 Nov for Today and Yesterday
-bun test/make-agents.js agents ~/code/acme-web 2026-11-05T15:10:00Z       # Codex, OpenCode, Pi and Cursor sessions
+bun test/make-agents.js agents ~/code/acme-web 2026-11-05T15:10:00Z       # Codex, OpenCode, Pi, Cursor and Antigravity sessions
 cc -o stage-claude test/hero/screen.c
 herdr-app do space.new --name acme-web --folder ~/code/acme-web --tab acme-web \
   --argv '["/abs/stage-claude","/abs/screen.txt","/abs/input.txt"]'

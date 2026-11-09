@@ -1,6 +1,7 @@
 #!/bin/sh
-# agent-threads: read one chunk of a Claude Code, Codex, Pi or Cursor transcript from a byte offset.
-# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex|pi|cursor]
+# agent-threads: read one chunk of a Claude Code, Codex, Pi, Cursor or Antigravity transcript from a
+# byte offset.
+# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex|pi|cursor|antigravity]
 # Prints {"k":"file","size":N,"head":"<first uuid>"}, {"k":"chunk","used":N} (bytes of
 # whole lines read), then extract.jq's events. Reads only the bytes between offset and
 # offset+max-bytes, so a 700 MB transcript is never loaded at once. A cut-off last line is
@@ -20,12 +21,15 @@ here=$(dirname "$0")
 limit=6291456
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
-# The first line uuid (a Codex file: its first timestamp, a Pi file: its header's id) names the
-# file's contents: a replaced file has another one.
+# The first line uuid (a Codex file: its first timestamp, a Pi file: its header's id, an
+# Antigravity file: its first step's time) names the file's contents: a replaced file has
+# another one.
 if [ "$harness" = cursor ]; then
   head=""
 elif [ "$harness" = pi ]; then
   head=$(head -c 400 "$file" | LC_ALL=C grep -m 1 -o '"id":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
+elif [ "$harness" = antigravity ]; then
+  head=$(head -c 65536 "$file" | LC_ALL=C grep -m 1 -o '"created_at":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
 elif [ "$harness" = codex ]; then
   head=$(head -c 200 "$file" | LC_ALL=C grep -m 1 -o '"timestamp":"[^"]*"' | head -n 1 | cut -d '"' -f 4) || head=""
 else
@@ -70,6 +74,12 @@ while :; do
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '"role":"(toolResult|system|bashExecution)"' \
         | jq -Rc -f "$here/extract-pi.jq" > "$out"
+    elif [ "$harness" = antigravity ]; then
+      # Tool output (GENERIC steps) is most of an Antigravity file. A quote inside a string is
+      # escaped, so this pattern only matches a step's own type.
+      head -c "$used" "$tmp" \
+        | LC_ALL=C grep -v -F '"type":"GENERIC"' \
+        | jq -Rc -f "$here/extract-agy.jq" > "$out"
     elif [ "$harness" = codex ]; then
       # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
       # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
