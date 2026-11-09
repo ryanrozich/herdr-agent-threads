@@ -57,15 +57,16 @@ section { display: flex; flex-direction: column; gap: 14px; }
 table { border-collapse: collapse; font-size: 14px; width: 100%; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.prose h3 { font-size: 17px; margin: 28px 0 8px; }
 .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 </style>
 
 <main>
   <header class="prose">
     <h1>Agent Threads chat look</h1>
-    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, the Pinned column as the way to your pins, the opening width, collapsed replies as Markdown, stronger day bands with the day shown while you scroll, and the turn header. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
+    <p>The chat look with the four picks you approved, plus everything asked for since: softer bubble colours, bigger image tiles, names over each message, reading type for messages and replies, the Pinned column as the way to your pins, the opening width, collapsed replies as Markdown, stronger day bands with the day shown while you scroll, and the turn header. The first section has what changed in this update: the header over your bubble, keys to resize the Pinned column, wrapped code blocks, and a fix for finished turns that showed as Working. It is draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/8">PR 8</a>, based on main now that pinning is merged. Nothing merges until you say so.</p>
     <div class="status">
-      <span class="pill"><b>321</b> tests pass</span>
+      <span class="pill"><b>326</b> tests pass</span>
       <span class="pill">Biome, shellcheck, private scan, gitleaks clean</span>
       <span class="pill"><span class="dot" style="background:var(--you)"></span>Your messages: slate</span>
       <span class="pill"><span class="dot" style="background:var(--agent)"></span>Agent messages: plum</span>
@@ -73,6 +74,51 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
     </div>
     <p class="small">Every screenshot is from an isolated Herdr window on the mini, with a made-up session. Click any image to open it full size. Arrow keys step through, Esc closes.</p>
   </header>
+
+  <section>
+    <div class="prose">
+      <h2>New in this update</h2>
+      <p>Four changes since the Pinned callout, all on PR 8.</p>
+      <h3>The header sits over your bubble</h3>
+      <p>On your turns, "#146 · You" now starts at your bubble's left edge, and the time ends at its right edge, so the header is exactly as wide as the bubble. A short bubble that is too narrow for the number, the name and the time drops the name first, then keeps the number and the time. An agent's turns keep the header at the reply's left edge. This holds open and closed, and in the Pinned column.</p>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot wide"><img src="shots/h04-new-545.jpg" alt="545 px, the header before: You at the left of the pane"><span>Before, 545 px: the header spans the pane</span></button>
+      <button class="shot wide"><img src="shots/a01-header-545.jpg" alt="545 px, the header over each bubble"><span>New, 545 px: the header over each bubble; the open turn too</span></button>
+      <button class="shot"><img src="shots/a02-header-280.jpg" alt="280 px, the header over the bubble"><span>280 px: the open turn drops the name to fit</span></button>
+      <button class="shot"><img src="shots/a04-header-closed-545.jpg" alt="545 px with every turn closed"><span>545 px, every turn closed</span></button>
+      <button class="shot wide"><img src="shots/a03-header-960.jpg" alt="960 px, the header over the bubble"><span>960 px</span></button>
+    </div>
+    <div class="prose">
+      <h3>Dragging the divider, and keys that resize the column</h3>
+      <p>Herdr causes the drag problem, and a mod cannot fix it. The tab is one row of three panes: the terminal, Threads and the Pinned column. Threads and the column have fixed widths and the terminal takes whatever is left. Dragging the divider between Threads and the column changes Threads' width, so the terminal gives or takes the difference and Threads moves at its left edge. Herdr gives a mod no say in how a drag is shared out.</p>
+      <p>The closest workaround is two keys. In either pane, <kbd>=</kbd> widens the Pinned column by 40 px and <kbd>-</kbd> narrows it, and Threads gives or takes the same 40 px, so the terminal keeps its width. The column stays between 200 and 640 px, and Threads keeps at least 240 px. The keys bar in the column shows <kbd>- =</kbd> width.</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/k01-width-before.jpg" alt="The column before pressing equals"><span>Before: the column at 250 px</span></button>
+      <button class="shot"><img src="shots/k02-width-after.jpg" alt="The column after pressing equals twice"><span>After <kbd>=</kbd> twice: the column wider, Threads narrower, the terminal unchanged</span></button>
+    </div>
+    <div class="prose">
+      <h3>Code blocks wrap, and show their language</h3>
+      <p>I chose wrapping. Code blocks now wrap long lines at a word, so every line starts at its first character and nothing scrolls sideways. A block of 12 rows or fewer shows all of them. A taller one scrolls inside, as before. The label is the block's language, such as "sh", or nothing when the block has none. It no longer says "code".</p>
+      <p>Why it slid: I could not reproduce the slide on Herdr 0.1.13 or 0.1.14 in the test window, so this is the likely cause, not a proven one. Herdr draws a code block with its own code editor, which puts the cursor at the end of the text and scrolls to keep the cursor in view. On a long line that is a sideways scroll to the end, which shows as a slide and leaves the start of the line out of view. A mod has no way to move that cursor or set the scroll, so starting at the left edge was not possible. Wrapping leaves no sideways scroll to slide through. A block taller than 12 rows could still scroll down to its end on your build. A test checks that blocks are made with wrapping on and that the row count matches the wrapped text.</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/c01-code-before.jpg" alt="Code blocks before: lines cut off at the right, labelled code"><span>Before: long lines cut off at the right, "code" for no language</span></button>
+      <button class="shot"><img src="shots/c02-code-wrapped.jpg" alt="Code blocks wrapped"><span>New: wrapped from the start of each line, "sh" or no label</span></button>
+    </div>
+    <div class="grid" data-g>
+      <button class="shot"><img src="shots/c03-code-320.jpg" alt="Wrapped code blocks at 320 px"><span>320 px: the same blocks wrapped</span></button>
+    </div>
+    <div class="prose">
+      <h3>A finished turn stays finished during a background update</h3>
+      <p>When a background task woke the agent after a turn had ended, the turn showed "Working, no reply yet", hid its reply, and ran its clock from the prompt (28 hours in the shot). Now Working shows only on a turn that has not finished. A finished turn keeps its reply, and a quiet line under it reads "Updating · 2:02 · 3 tool calls · <i>what the agent said last</i>". That clock starts at the notification that woke the agent. Tool calls made during background updates are counted apart, so the turn's own stats line keeps only its own calls.</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/u01-wake-before.jpg" alt="Before: a finished turn showing Working and no reply"><span>Before: Working, the reply hidden, a 28-hour clock</span></button>
+      <button class="shot"><img src="shots/u02-wake-new.jpg" alt="New: the reply kept with an Updating line"><span>New: the reply kept, and the Updating line</span></button>
+    </div>
+  </section>
 
   <section>
     <div class="prose">
@@ -148,6 +194,7 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
   <section>
     <div class="prose">
       <h2>Turn header</h2>
+      <p class="small">Updated since: on your turns the header now sits over your bubble (see "New in this update"). The shots in this section show the step before.</p>
       <p>Your idea: name and turn number at the left, time at the right. A separate design pass compared it with today's header in both bubble directions at 280, 545 and 960 px, and recommended your layout with one change: the number goes first. The header now reads "<b>#7</b> · You" at the left and "7:33 AM" at the right, for your turns and an agent's, open or closed. The number is one step brighter than the name.</p>
       <ul>
         <li><b>Scanning.</b> The numbers make one column down the left edge and the times one down the right. Today the number moves with the length of the time, and jumps to the other side on a turn an agent sent.</li>
@@ -283,6 +330,10 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
       <li>Close Threads and the column. Open Threads with <kbd>Cmd-Shift-T</kbd>: it opens about 545 px wide. Drag it wider: the turns stay at the reading width, centred.</li>
       <li>Look at a collapsed reply with a list or a heading: it shows as Markdown and stops at a whole line. Each header reads "#7 · You" at the left and the time at the right.</li>
       <li>Scroll up past a day band, such as Yesterday. The band is a filled pill, and the day you are in shows at the top of the list while you scroll.</li>
+      <li>Look at one of your turns: "#7 · You" starts at your bubble's left edge and the time ends at its right edge. Narrow the pane to about 280 px: a short bubble's header drops "You" before the time.</li>
+      <li>With the Pinned column open, press <kbd>=</kbd> twice, then <kbd>-</kbd> twice, in either pane. The column widens and narrows, Threads gives and takes the same room, and the terminal stays the same width.</li>
+      <li>Open a reply with a long shell command in a code block. It wraps and starts at the left, with no slide, and its label is the language or nothing.</li>
+      <li>Next time a background task wakes an agent after its turn has ended, the turn keeps its reply and shows an "Updating" line under it with its own clock and tool count.</li>
     </ol>
     <p class="small">A settings file saved by an earlier build of this branch holds that build's colours (blue and purple), because a save writes every value. Reset to defaults switches to slate and plum.</p>
   </div>
