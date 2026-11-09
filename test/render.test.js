@@ -117,7 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, alpha: alphaForTest } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -2361,7 +2361,16 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order,
   expect(v.view).toBe("pinned");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
-  expect(v.headerText()).toBe("Pinned · 3 of 5");
+  expect(v.headerText()).toBe("3 of 5");
+  // The heading leads: the pin and "Pinned", then the agent badge, then the count.
+  const head = (x) => { rec = []; x.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const hv = head(v);
+  expect(hv.indexOf("Pinned")).toBeGreaterThanOrEqual(0);
+  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 5"));
+  rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
+  expect(ids.indexOf("th-pinned-heading")).toBeGreaterThanOrEqual(0);
+  expect(ids.indexOf("th-pinned-heading")).toBeLessThan(ids.indexOf("th-badge"));
+  expect(v.headerLayout().heading).toBeGreaterThan(0);
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Back to all turns (v)", "pinned", true, null, "All turns"]);
   const rows = v.rows();
   expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
@@ -2435,12 +2444,21 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   w.listH = 900;
   w.rowsKey = null;
   expect(w.rows()[0].kind).not.toBe("spacer");
-  // Its header: no badge, the pin button and "All turns", with room for "Pinned · 1 of 5" at 240 px.
+  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 5" at 240 px.
   w.width = 240;
-  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pin", null], ["th-pinned", "All turns"]]);
-  expect(w.headerButtons()[1][2]).toBe("Back to Threads, all turns (v)");
+  expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
+  expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
   expect(w.headerLayout().badge).toBe(0);
-  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("Pinned · 1 of 5".length * 6.6));
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 5".length * 6.6));
+  rec = []; w.header(theme); const wh = rec; rec = null;
+  const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 5"]);
+  expect(ws).not.toContain("Claude");
+  // The accent: the header's tint, and its bar along the top.
+  expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
+  // Threads itself keeps a plain header.
+  rec = []; w.view = "all"; w.pinnedPane = false; w.header(theme); const plainHead = rec; rec = null; w.view = "pinned"; w.pinnedPane = true;
+  expect(plainHead.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(false);
   draw(w, cx2);
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
   // v in the Pinned pane goes back to the main pane; Esc does not leave the Pinned view there.

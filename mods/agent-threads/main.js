@@ -69,6 +69,8 @@ const MAP_KEY = "threads.byTerminal";
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
 // shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
 const FIT_KEY = "threads.fit";
+// The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
+const PINNED_HEADING = 66;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
@@ -2754,7 +2756,9 @@ export default class Threads extends View {
     const pinned = Boolean(this.sel && this.isPinned(this.sel));
     const n = this.sel ? this.findTurn(this.sel)?.n : null;
     const pinBtn = ["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null, null];
-    if (this.pinnedPane) return [pinBtn, ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
+    // The Pinned pane: its pin button gives way under 300 px too, so "1 of 5" keeps its room
+    // beside the heading.
+    if (this.pinnedPane) return [...(this.narrow() ? [] : [pinBtn]), ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
     const narrow = this.narrow();
     const showAgents = (c.agentAll > 0 || this.prefs.agentTurns) && !narrow;
     const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null]];
@@ -2790,8 +2794,10 @@ export default class Threads extends View {
     const list = this.headerButtons();
     const badge = this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38;
     const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
-    const text = Math.round(this.pw() - 20 - (badge ? badge + 8 : 0) - room);
-    return { width: Math.round(this.pw()), badge, text, buttons: list.length, rightGutter: 10 };
+    // The Pinned heading: the pin, a 6 px gap and "Pinned" at 13.5 px semibold.
+    const heading = this.view === "pinned" ? PINNED_HEADING + 8 : 0;
+    const text = Math.round(this.pw() - 20 - (badge ? badge + 8 : 0) - heading - room);
+    return { width: Math.round(this.pw()), badge, heading, text, buttons: list.length, rightGutter: 10 };
   }
 
   badge(t) {
@@ -2844,8 +2850,8 @@ export default class Threads extends View {
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null ? ` ${this.readPct(s)}%` : ""}`;
-    // The Pinned view: "Pinned · 3 of 5".
-    if (this.view === "pinned") return `Pinned · ${this.pinnedList().length} of ${PIN_LIMIT}`;
+    // The Pinned view: "3 of 5", after the Pinned heading (pinnedHeading).
+    if (this.view === "pinned") return `${this.pinnedList().length} of ${PIN_LIMIT}`;
     const c = this.counts();
     // "98 turns · 43 hidden": the newest session's shown turns, then the agent messages
     // hidden in the whole list, the same number as the Agents button's count and tooltip
@@ -2854,10 +2860,23 @@ export default class Threads extends View {
       s.title ? `· ${s.title}` : "", this.res.guess ? "· guessed" : ""].filter(Boolean).join(" ");
   }
 
+  // The Pinned view leads its header with a pin and "Pinned", so the column reads as its own
+  // view beside the feed: Herdr titles every copy of a mod's pane with the mod's name, and a
+  // mod cannot rename its pane.
+  pinnedHeading(t) {
+    return h_flex().id("th-pinned-heading").flex_none().gap(6).items_center()
+      .child(svg(ICON("pin")).size(14).flex_none().text_color(t.accent))
+      .child(div().flex_none().text_size(13.5).font_semibold().text_color(t.foreground).child("Pinned"));
+  }
+
   header(t) {
     const q = this.query.trim();
-    return v_flex().flex_none().border_b(1).border_color(t.border)
+    const pinned = this.view === "pinned";
+    // The Pinned view's header: an accent bar along its top and a light accent tint.
+    return v_flex().flex_none().relative().border_b(1).border_color(t.border)
+      .when(pinned, (el) => el.bg(alpha(t.accent, 0.08)).child(div().absolute().top(0).left(0).right(0).h(2).bg(t.accent)))
       .child(h_flex().h(40).px(10).gap(8).items_center()
+        .when(pinned, (el) => el.child(this.pinnedHeading(t)))
         .when(!this.pinnedPane, (el) => el.child(this.badge(t)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(this.headerText()))
         .when(this.debug && Boolean(this.timing) && !this.narrow(), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)))
