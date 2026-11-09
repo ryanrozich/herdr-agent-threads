@@ -1,6 +1,6 @@
 # Agent Threads
 
-Agent Threads opens a panel beside your agent's terminal and lists your prompts and its replies, so you can find an earlier answer without scrolling back through the session. You can search, copy a reply, quote it into your next prompt and see the images you pasted. It works with Claude Code, Codex, OpenCode, Pi and Cursor.
+Agent Threads opens a pane beside your agent's terminal that shows the session as a chat: each prompt you sent in a bubble, and the reply under it with the agent's name, about 70 characters a line, so you can find an earlier answer without scrolling back through the session. You can search, copy a reply, quote it into your next prompt, pin turns to a column beside the list and see the images you pasted. It works with Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity.
 
 ![Agent Threads](preview.png)
 

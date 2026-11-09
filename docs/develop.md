@@ -49,37 +49,40 @@ To act out `/clear`, write a second fixture made with `--clear` into the same pr
 
 `preview.png` and `docs/screenshots/` show a staged session on a made-up project, with no retouching. `test/make-hero.js` writes the transcript, `test/hero/screen.c` is a stand-in for Claude Code in the left terminal (it builds on macOS), and `test/hero/render.py` draws what that terminal shows. A quote really pastes: the stand-in turns on bracketed paste and logs what it receives, and the renderer redraws the prompt from that log.
 
-In a separate Herdr window on a Retina display, at zoom 1, with `promptLines` 2, `replyLines` 3 and the two link rules from the README:
+In a separate Herdr window on a Retina display, at zoom 1, with the default row lines and the two link rules from the README:
 
 ```sh
 mkdir -p ~/code/acme-web && git -C ~/code/acme-web init -q
 git -C ~/code/acme-web remote add origin https://github.com/acme/acme-web.git
-bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-03T20:05:00Z days   # three days: shoot on 5 Nov for Today and Yesterday
-bun test/make-agents.js agents ~/code/acme-web 2026-11-05T15:10:00Z       # Codex, OpenCode, Pi, Cursor and Antigravity sessions
+bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-09T15:05:00Z        # one day, so no day band or day pill
+bun test/make-hero.js days.jsonl ~/code/acme-web 2026-11-07T15:05:00Z days   # three days: shoot two days after the start, for Today and Yesterday
+bun test/make-agents.js agents ~/code/acme-web 2026-11-09T15:10:00Z          # Codex, OpenCode, Pi, Cursor and Antigravity sessions
 cc -o stage-claude test/hero/screen.c
 herdr-app do space.new --name acme-web --folder ~/code/acme-web --tab acme-web \
   --argv '["/abs/stage-claude","/abs/screen.txt","/abs/input.txt"]'
 herdr-app do pane.split --pane <pane> --direction right --mod agent-threads \
   --props '{"terminal":"<t>","transcript":"/abs/hero.jsonl","debug":false}'
-herdr-app do layout.resize --id <new pane> --px 500
+herdr-app do layout.resize --id <new pane> --px 545
 python3 test/hero/render.py <cols> <rows> /abs/screen.txt /abs/input.txt &    # size from: hc get <t> --json
 ```
 
-Start each shot from a fresh launch with the window size set in `window.json`. Put the project under the app's own HOME, so the terminal header shows `~/code/acme-web`, and keep the app off the network (an unreachable `HTTPS_PROXY`) so no update toast covers the pane. Then run its `agent-threads.<command>` commands with `herdr-app do`, and take `herdr-app shot`. Each crop is `sips -c <height> <width> --cropOffset <y> <x>`.
+Start each shot from a fresh launch with the window size set in `window.json`, with only the `acme-web` space open (the privacy scan fails a shot that shows the sidebar's labels). Put the project under the app's own HOME, so the terminal header shows `~/code/acme-web`, and keep the app off the network (an unreachable `HTTPS_PROXY`) so no update toast covers the pane. Then run its `agent-threads.<command>` commands with `herdr-app do`, and take `herdr-app shot`. A `search:#N` needs two `open`s: the first leaves the field, the second opens the turn. Crops are in shot px (`x0 y0 x1 y1`); Threads at 545 px spans x 1814 to 2904 in a 1460 px window.
 
 | File | Window | Commands | Crop |
 |---|---|---|---|
-| `preview.png` | 1460x1150 | `open` | `2136 2358`, offset `96 552` |
-| `days.png` | 1460x1150 | `first` | `2136 1012`, offset `96 1898` |
-| `panel.png` | 1460x1150 | `open` | `2136 1012`, offset `96 1898` |
-| `open-turn.png` | 1460x1150 | `open` | `1024 990`, offset `1074 1908` |
-| `search.png` | 1460x700 | `search:tests` | `1236 1012`, offset `96 1898` |
-| `images.png` | 1460x1150 | `search:#5`, `open`, `open` | `2136 1012`, offset `96 1898` |
-| `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open` | `2136 1012`, offset `96 1898` |
-| `quote.png` | 1460x1150 | `search:#6`, `open`, `open`, `debugQuote` | `810 2356`, offset `1418 552` |
-| `light.png` | 1460x1150 | `open`, with `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `2136 2358`, offset `96 552` |
-| `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed | `first`, `open` | `1276 1012`, offset `96 1898` each, then `magick montage codex.png opencode.png pi.png cursor.png -tile 4x1 -geometry +20+20 -background '#0f1012' agents.png` |
+| `preview.png` | 1460x1150, `render.py` running | `open` | `552 96 2912 2232` |
+| `panel.png` | the same shot | | `1808 96 2912 2232` |
+| `open-turn.png` | the same shot | | `1808 1140 2912 2090` |
+| `light.png` | 1460x1150, `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `open` | `552 96 2912 2232` |
+| `days.png` | 1460x1150, `days.jsonl` | `first` | `1808 96 2912 2232` |
+| `search.png` | 1460x700 | `search:tests` | `1808 96 2912 1332` |
+| `images.png` | 1460x1150, `"debug": true` | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5` | `1808 242 2912 2232`, below the header, which shows timings in debug |
+| `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open`, `open`, then `agents:off` after the shot | `1808 96 2912 2232` |
+| `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
+| `pinned.png` | 1760x1150 | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin` | `1904 96 3512 2232` |
+| `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
+| `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
-`quote.png` needs `"debug": true` in the props, because `debugQuote` runs only with it, and debug adds a timing text to the pane header, which that crop leaves out. `agents:on` saves to settings, so turn it off before the next shot.
+`quote.png` and `images.png` need `"debug": true` in the props, because `debugQuote` and `debugClick` run only with it, and debug adds a timing text to the pane header, which those crops leave out. `agents:on` saves to settings, so turn it off before the next shot.
 
 After changing an image, run `sh test/scan-private.sh` with its line removed from `test/scan-approved.txt`, so OCR reads it, and pin the new hash only once the owner has approved it.

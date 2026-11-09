@@ -1,6 +1,6 @@
 # Agent Threads
 
-Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls, and finding it means scrolling. Agent Threads opens a pane beside your agent's terminal that shows only the conversation: each prompt you sent and the reply that came back, grouped by day. It works with Claude Code, Codex, OpenCode, Pi and Cursor.
+Long agent sessions are hard to look back through. The answer you got an hour ago sits under pages of tool calls, and finding it means scrolling. Agent Threads opens a pane beside your agent's terminal that shows only the conversation, as a chat: each prompt you sent in a bubble and the reply that came back under it, grouped by day. It works with Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity.
 
 ![Agent Threads beside a Claude Code terminal](preview.png)
 
@@ -10,10 +10,11 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 - **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
-- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi and Cursor have none, see [Which agents it reads](#which-agents-it-reads).
-- **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image full size.
+- **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi, Cursor and Antigravity have none, see [Which agents it reads](#which-agents-it-reads).
+- **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image larger, under the tiles.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Keep a few turns at hand.** `p` pins a turn, and your pins show in a Pinned column beside the list. See [Pins](#pins).
+- **See background work after a turn.** When a background task wakes the agent after a turn has ended, the turn keeps its reply, and a line under it reads "Updating" with its clock, tool calls and what the agent said last.
 - **Choose how much each row shows.** A row shows 4 lines of your prompt and 6 of the reply before "Show more". Settings change both.
 
 ## How it works
@@ -70,23 +71,27 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 
 <table>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn with a list, a code block and stats"></a><br>An open turn shows the formatted reply, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats"></a><br>An open turn: your prompt in its bubble, then the formatted reply under the agent's name, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests"></a><br>Typing "tests" after <code>/</code> narrows six turns to three.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A row with an image thumbnail and an open turn with the larger image"></a><br>A pasted image is a thumbnail on its row and larger in the open turn.</td>
-<td width="50%" valign="top"><a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as its own row in the list"></a><br>With agent messages on, a subagent's report gets its own row.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it"></a><br>A pasted image is a tile over your message. In an open turn a click on the tile shows it larger.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left"></a><br>With agent messages on, a subagent's report is a plum bubble on the left, under its name.</td>
 </tr>
 <tr>
 <td colspan="2" valign="top"><a href="docs/screenshots/quote.png"><img src="docs/screenshots/quote.png" alt="The terminal prompt holding a quoted line, beside the pane"></a><br>After <code>q</code>, the prompt holds the reply as a <code>&gt;</code> quote, with the cursor under it.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/days.png"><img src="docs/screenshots/days.png" alt="The list with a band for each day"></a><br>A session that runs over several days gets a band for each day, with its turn count.</td>
-<td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi and Cursor sessions"></a><br>The pane beside Codex, OpenCode, Pi and Cursor. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi, Cursor, Antigravity and Amp"></a><br>The pane beside Codex, OpenCode, Pi, Cursor and Antigravity, each with its own mark, and beside Amp, which it does not read. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/light.png"><img src="docs/screenshots/light.png" alt="Agent Threads beside a terminal in the light theme"></a><br>The same session in Herdr's light theme.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Two pinned turns in the Pinned column beside the list"></a><br>Two pinned turns in the Pinned column beside the list. Each pinned turn shows its pin number in its header.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/updating.png"><img src="docs/screenshots/updating.png" alt="A finished turn with an Updating line under it"></a><br>A background task woke the agent after the last turn ended. The turn keeps its reply, and the Updating line shows the clock, tool calls and what the agent said last.</td>
 </tr>
 </table>
 

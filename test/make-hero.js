@@ -2,13 +2,16 @@
 // storefront project, acme-web. Same line shapes as test/make-fixture.js. Nothing here
 // comes from a real session, and both pasted images are drawn below, with no text in them.
 // docs/develop.md has the steps that turn this into the screenshots.
-// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days]
+// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake]
 // With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
+// With "wake", a background update follows the last turn: a task notification woke the agent
+// 95 s before the script ran and it is still working, so with the terminal reporting working the
+// last turn shows its "Updating" line. Its times are relative to now, so write it just before the shot.
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
-const [out, cwd, start, spread] = process.argv.slice(2);
-const DAY = spread === "days" ? 86400 - 3600 : 0;
+const [out, cwd, start, ...flags] = process.argv.slice(2);
+const DAY = flags.includes("days") ? 86400 - 3600 : 0;
 const sessionId = "00000000-0000-4000-8000-000000000042";
 const version = "2.1.316";
 const model = "claude-opus-5-5";
@@ -224,7 +227,24 @@ assistant([{ type: "text", text: [
 ].join("\n") }], { out: 420, read: 88000, write: 3600 });
 end(151000);
 
+// A background update after the turn ended, still running (only with "wake").
+if (flags.includes("wake")) {
+  const now = Date.now();
+  const at = (ago) => new Date(now - ago * 1000).toISOString();
+  push({ ...base(), type: "user", origin: { kind: "task-notification" }, promptSource: "system",
+    message: { role: "user", content: "<task-notification>the nightly checkout run finished</task-notification>" }, uuid: uid(), timestamp: at(95) });
+  const wake = (block, ago) => push({ ...base(), type: "assistant", message: { id: `msg_01w${++msg}`, model, role: "assistant", type: "message",
+    content: [block], stop_reason: "tool_use", usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90000, cache_creation_input_tokens: 0 } }, uuid: uid(), timestamp: at(ago) });
+  wake({ type: "text", text: "The nightly run finished. Checking its log for the checkout tests." }, 92);
+  for (const [i, [name, ago]] of [["Bash", 80], ["Read", 60], ["Bash", 35]].entries()) {
+    wake({ type: "tool_use", id: `toolu_w${i}`, name, input: {} }, ago);
+    push({ ...base(), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_w${i}`, content: "…" }] }, uuid: uid(), timestamp: at(ago - 3) });
+  }
+  wake({ type: "text", text: "All 18 checkout tests passed in the nightly run, three runs in a row." }, 20);
+}
+
 push({ type: "custom-title", customTitle: "checkout fixes", sessionId });
 push({ type: "last-prompt", lastPrompt: "Fix that one-cent checkout bug, it's ACME-123", sessionId });
+push({ type: "agent-name", agentName: "checkout-agent", sessionId });
 writeFileSync(out, `${lines.join("\n")}\n`);
 console.log(`${out}: ${lines.length} lines`);
