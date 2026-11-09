@@ -117,7 +117,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, fitWidth } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -891,11 +891,14 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   expect(snap.detail.find((d) => d.startsWith("md#1"))).toMatch(/^md#1 links 2 h\d+ \| \]\(https:\/\/linear\.app\/acme\/issue\/ACME-123\) \]\(https:\/\/github\.com\/acme\/widgets\/pull\/45\) /);
   expect(snap.detail.find((d) => d.startsWith("you#1"))).toMatch(/ md q1 code0 links3 /);
   expect(snap.links).toMatchObject({ count: 3, valid: 2 });
-  // Collapsed rows stay plain text.
+  // Collapsed rows get no link rules: the reply's own Markdown shows as written, and
+  // ACME-123 and #45 stay plain.
   v.open.clear();
   draw(v, cx);
   const row = state.shared["threads.debug"].t4.detail.find((d) => d.startsWith("turn#1"));
-  expect(row).not.toContain("](");
+  expect(row).not.toContain("[ACME-123](");
+  expect(row).not.toContain("[#45](");
+  expect(v.shape(v.findTurn("0:1")).md).toContain("[ACME-1](https://x.example/one)");
   // Without a repo, the {repo} rule is skipped: #45 stays plain.
   v.remote = { key: "y", repo: null, owner: null, why: "no git remote origin" };
   v.open = new Set(["0:1"]);
@@ -1305,7 +1308,8 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       const parts = v.rows().filter((r) => PROBED_KINDS.includes(r.kind) && partOf(r, key));
       expect(parts.map((r) => r.kind)).toEqual(expect.arrayContaining(["you", "rhead", "md", "lhead", "latest", "stats"]));
       const probes = probeEntries(frame(v, cx));
-      expect([...probes.keys()].sort()).toEqual(parts.map((r) => r.key).sort());
+      // The closed rows' Markdown reply blocks are measured too ("cmd:<key>").
+      expect([...probes.keys()].filter((k) => !k.startsWith("cmd:")).sort()).toEqual(parts.map((r) => r.key).sort());
       // Each part reports a height in zoomed px; the list then gets that part's size.
       const fed = new Map();
       parts.forEach((r, i) => {
@@ -1313,6 +1317,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
         fed.set(r.key, H);
         probes.get(r.key)({ width: v.inner() * zoom, height: H * zoom }, cx);
       });
+      for (const [k, f] of probes) if (k.startsWith("cmd:")) f({ width: v.inner() * zoom, height: 42 * zoom }, cx);
       const calls = frame(v, cx);
       expect(probeEntries(calls).size).toBe(0); // measured parts leave the probe
       const rows = v.rows();
@@ -2779,4 +2784,52 @@ test("a pane wider than the reading width lays the turns out in a centred column
   draw(v, cx);
   expect(v.headerLayout().width).toBe(960);
   expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
+});
+
+test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--images"));
+  v.width = 545;
+  draw(v, cx);
+  const rows = v.rows().filter((r) => r.kind === "turn" && r.shape.md != null);
+  expect(rows.length).toBeGreaterThan(0);
+  const withTiles = rows.find((r) => r.shape.thumbs) ?? rows[0];
+  const cmd = v.cmdRow(withTiles);
+  expect(v.probeRows.some((r) => r.key === cmd.key)).toBe(true);
+  const before = v.height(withTiles);
+  v.probed(cmd.key, v.partSig(cmd), { width: 500, height: 63 }, cx);
+  const after = v.height(withTiles);
+  expect(after).toBe(withTiles.shape.mdBase + 63);
+  if (withTiles.shape.thumbs) expect(withTiles.shape.mdBase).toBeGreaterThan(rowHeight(withTiles.shape.p, 0, 0) + 40);
+  expect(typeof before).toBe("number");
+});
+
+test("the sticky day: the day of the item at the top of the pane, not while a band is at the top", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6", "--gap", "43200"));
+  v.width = 545;
+  draw(v, cx);
+  const rows = v.rows();
+  const days = rows.map((r, i) => [r, i]).filter(([r]) => r.kind === "day");
+  expect(days.length).toBeGreaterThan(1);
+  const [d1, i1] = days[1];
+  // The band at the top: no sticky.
+  v.topKey = d1.key;
+  expect(v.stickyDay()).toBe(null);
+  // An item in that day further down: its band shows at the top, and a redraw is asked for.
+  const inside = rows.slice(i1 + 1).find((r) => r.kind !== "day" && !v.beforeDay?.has(r.key));
+  v.stickyShown = null;
+  v.stickyDue = false;
+  v.topKey = inside.key;
+  v.noteTopDay();
+  expect(v.stickyDay()?.key).toBe(d1.key);
+  expect(v.stickyDue).toBe(true);
+  // The item just before the next band: no sticky, so two pills never stack.
+  const before = rows[days[2] ? days[2][1] - 1 : -1];
+  if (before) { v.topKey = before.key; expect(v.stickyDay()).toBe(null); }
+  // The drawn body carries it.
+  v.topKey = inside.key;
+  rec = [];
+  v.render(cx);
+  const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
+  rec = null;
+  expect(ids).toContain("th-sticky-day");
 });

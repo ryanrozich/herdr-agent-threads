@@ -253,6 +253,48 @@ export function rowLines(text, limit, perLine) {
 // reads at most max * 8 + 512 characters outside fenced code. A fence's body is skipped
 // with one search for its closing line, so the prose after a long code block is still
 // read and a fence costs no per-line work.
+// The start of a reply as Markdown for a collapsed row: whole source lines, as many as fit
+// in `lines` reading lines of `per` characters (a blank line, the gap between blocks,
+// counts half a line; a code line counts one and never wraps). A code fence cut open is
+// closed, so the rest of the row does not turn into code. { md, cut, lines }.
+export function mdPreview(md, lines, per, maxChars = Math.min(4000, (lines + 2) * Math.max(8, per) * 3)) {
+  const src = String(md ?? "").slice(0, maxChars).replace(/\r\n?/g, "\n").split("\n");
+  const w = Math.max(8, per);
+  const out = [];
+  let used = 0;
+  let fence = null;
+  let cut = false;
+  for (let i = 0; i < src.length; i++) {
+    const line = src[i];
+    const open = FENCE_OPEN.exec(line);
+    let cost;
+    if (fence) cost = closesFence(line, fence) ? 0 : 1;
+    else if (open) cost = 0;
+    else if (!line.trim()) cost = out.length && out[out.length - 1].trim() ? 0.5 : 0;
+    else cost = Math.max(1, Math.ceil(units(line.replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/, "  ").replace(/[*_`]/g, "")) / w));
+    if (used + cost > lines + 1e-9) {
+      cut = true;
+      // A paragraph or list item longer than the lines left: its start, cut at a word.
+      const room = Math.floor(lines - used + 1e-9);
+      if (!fence && !open && line.trim() && room >= 1) {
+        const max = room * w - 2;
+        let end = 0;
+        let n = 0;
+        for (const m of line.matchAll(/\S+\s*/g)) { const u = units(m[0]); if (n + u > max) break; n += u; end = m.index + m[0].length; }
+        if (end > 0) { out.push(`${line.slice(0, end).trimEnd()} …`); used += room; }
+      }
+      break;
+    }
+    used += cost;
+    out.push(line);
+    if (fence) { if (closesFence(line, fence)) fence = null; } else if (open) fence = open[1];
+  }
+  if (!cut && src.length && String(md ?? "").length > maxChars) cut = true;
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  if (fence) out.push(fence);
+  return { md: out.join("\n"), cut, lines: Math.max(1, Math.ceil(used)), gaps: out.filter((l, i) => !l.trim() && out[i - 1]?.trim()).length };
+}
+
 export function flattenMd(md, max = Infinity) {
   const parts = [];
   let have = 0;

@@ -9,6 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth,
+  mdPreview, fitWidth,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -444,4 +445,33 @@ test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, l
   expect(pinColumn(Number.NaN)).toBe(null);
   expect(headerButtonWidth(null)).toBe(24);
   expect(headerButtonWidth("Pinned 2")).toBe(69);
+});
+
+test("a collapsed reply as Markdown: whole source lines within the line budget, a cut fence closed", () => {
+  const md = "## Result\n\nThe fix is in.\n\n- one\n- two\n- three\n\n```js\nconst a = 1;\nconst b = 2;\nconst c = 3;\n```\n\nDone.";
+  const all = mdPreview(md, 20, 70);
+  expect(all.cut).toBe(false);
+  expect(all.md).toBe(md);
+  const four = mdPreview(md, 4, 70);
+  expect(four.cut).toBe(true);
+  expect(four.md).toBe("## Result\n\nThe fix is in.\n\n- one");
+  expect(four.lines).toBeLessThanOrEqual(4);
+  // Cut inside the code block: the fence is closed.
+  const code = mdPreview(md, 7.5, 70);
+  expect(code.md.endsWith("const a = 1;\n```")).toBe(true);
+  // A long paragraph counts its wrapped lines and is not split mid-line.
+  const long = `${"word ".repeat(60).trim()}\n\nsecond`;
+  const three = mdPreview(long, 3, 70);
+  expect(three.cut).toBe(true);
+  expect(three.md.endsWith(" …")).toBe(true);
+  expect(three.md.length).toBeLessThanOrEqual(3 * 70);
+  expect(three.lines).toBe(3);
+  expect(mdPreview(long, 5, 70).md).toBe("word ".repeat(60).trim());
+  expect(mdPreview("", 6, 70).md).toBe("");
+});
+
+test("the reading width Threads opens at: 545 px at 14 px, scaled with Text size", () => {
+  expect(fitWidth()).toBe(545);
+  expect(fitWidth(12)).toBe(479);
+  expect(fitWidth(18)).toBe(676);
 });

@@ -37,7 +37,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth,
+  thumbSize, tileRow, TILE_GAP, mdPreview, rowHeight, pinColumn, PIN_SPLIT_MIN, headerButtonWidth, fitWidth,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -94,7 +94,7 @@ const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.
 const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
-const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply"]);
+const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const CLAUDE = "#d97757";
@@ -505,6 +505,8 @@ export default class Threads extends View {
       // No folder watch for the settings (the folder could not be watched): read it here.
       if (this.prefsPoll) { this.readPrefs(cx); this.readPins(cx); }
     });
+    // The sticky day: redraw once the top of the pane moved into another day.
+    cx.timer.every(120, (cx) => { if (this.stickyDue) { this.stickyDue = false; cx.notify(); } });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
       this.watchRead(cx);
@@ -1363,6 +1365,7 @@ export default class Threads extends View {
       this.baseSizes = this.baseRows.map((r) => this.height(r));
       this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
       this.probeRows = this.baseRows.filter((r) => PROBED.has(r.kind));
+      for (const r of this.baseRows) if (r.kind === "turn" && r.shape?.md != null) this.probeRows.push(this.cmdRow(r));
       this.rowsKey = key;
       this.fitKey = null;
       // The selection is on a turn the list no longer shows: agent turns were hidden, or a
@@ -1608,9 +1611,16 @@ export default class Threads extends View {
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
     let preview;
+    let md = null;
     let tone = "reply";
+    // A reply, with no search on, starts as Markdown (mdPreview): whole source lines.
+    if (!live && !why && text && !q) {
+      md = mdPreview(text, P.replyLines, readWidth(this.width, P.textSize) / readType(P.textSize).reply);
+      if (!md.md.trim()) md = null;
+    }
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
+    else if (md) preview = " ";
     else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))));
     else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
@@ -1628,10 +1638,30 @@ export default class Threads extends View {
     });
     // A running turn draws its live line (18 px, a label) where the name and reply go.
     if (live) sh.height += 18 - ROW.NAME - sh.r * this.rt().line;
+    // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
+    // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
+    // and until then an estimate; mdBase is the row without it.
+    if (md && tone === "reply") {
+      const { line } = this.rt();
+      // No link rules here: a click on a row opens the turn, so rows never carry links.
+      sh.md = md.md;
+      // The source lines, for the debug report and the tests; the block is drawn from md.
+      sh.reply = md.md.split("\n");
+      sh.r = md.lines;
+      sh.rMore = md.cut;
+      sh.mdBase = rowHeight(sh.p, 0, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), line);
+      sh.mdEst = md.lines * line + md.gaps * Math.max(0, this.paraGap() - line / 2);
+      sh.height = sh.mdBase + sh.mdEst;
+    }
     sh.tone = tone;
     sh.cmd = cmd;
     // Pasted images: a row of tiles over the bubble.
-    if (turn.images?.length) { sh.thumbs = true; sh.height += thumbSize(this.width, P.textSize) + ROW.GAP; }
+    if (turn.images?.length) {
+      const th = thumbSize(this.width, P.textSize) + ROW.GAP;
+      sh.thumbs = true;
+      sh.height += th;
+      if (sh.mdBase != null) sh.mdBase += th;
+    }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     return sh;
@@ -2539,6 +2569,8 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugWidth:240" lays the pane out for that width.
+    // Design review only: "debugHeader:split" or "debugHeader:right" draws that turn header.
+    if (/^debugHeader:(split|right)$/.test(name)) { this.headerSplit = name.endsWith("split"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn's whole reply, as "Show full reply" would.
     if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
@@ -3140,6 +3172,8 @@ export default class Threads extends View {
       } else if (i >= 0) cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
     }
     const dim = Boolean(this.res.ended);
+    const sticky = this.stickyDay();
+    this.stickyShown = sticky?.key ?? null;
     return div().id("threads-body").flex_1().min_h(0).relative()
       .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
       .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom() - this.colLeft(); })
@@ -3161,6 +3195,7 @@ export default class Threads extends View {
           .on_item_click((key, cx) => this.click(key, cx))
           .size_full())))
       .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0())
+      .when(Boolean(sticky), (el) => el.child(h_flex().id("th-sticky-day").absolute().top(6).left(0).right(0).justify_center().child(this.dayPill(t, sticky))))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
   }
 
@@ -3361,6 +3396,9 @@ export default class Threads extends View {
   // The space between paragraphs, for estimates: TextView's own, about 12 px at 13 px.
   paraGap() { return Math.round((12 * this.rt().size) / 13); }
 
+  // A collapsed row's reply block, as a probe part of its own: "cmd:<turn key>".
+  cmdRow(r) { return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: r.shape.md, est: r.shape.mdEst }; }
+
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure
   // replaces it.
@@ -3520,8 +3558,13 @@ export default class Threads extends View {
     return rows;
   }
 
-  // A part's list height: what the probe measured for it, else the estimate.
+  // A part's list height: what the probe measured for it, else the estimate. A collapsed
+  // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
+    if (r.kind === "turn" && r.shape?.md != null) {
+      const m = this.measured(this.cmdRow(r));
+      return m != null ? r.shape.mdBase + m : r.shape.height;
+    }
     if (PROBED.has(r.kind)) {
       const m = this.measured(r);
       if (m != null) return r.kind === "latest" && !r.md ? 6 + this.latestBox(r) + (this.latestCut(r) ? 22 : 0) : m;
@@ -3534,6 +3577,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return r.h;
       case "turn": case "wrow": return r.shape.height;
+      case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
@@ -3590,6 +3634,7 @@ export default class Threads extends View {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}`;
+      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
       case "stats": return `${head}|${this.statTexts(r.turn).join("|")}|${this.countsLine(r.turn) ?? ""}|${this.legendOn ? 1 : 0}`;
@@ -3614,9 +3659,10 @@ export default class Threads extends View {
     if (was?.sig === sig && was.h === h) return;
     if (this.meas.size > 2000) this.meas.clear();
     this.meas.set(key, { sig, h });
-    const i = this.baseIndex?.get(key);
+    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
+    const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
-    if (r?.key === key) {
+    if (r?.key === rowKey) {
       this.baseSizes[i] = this.height(r);
       this.sizesVer = (this.sizesVer ?? 0) + 1;
     }
@@ -3693,7 +3739,7 @@ export default class Threads extends View {
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
       this.topKey = rows[range.start]?.key ?? null;
-      try { this.trackPlace(); } catch (e) { this.drawFailed(e, null); }
+      try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
     }
     const out = [];
     for (let i = range.start; i < range.end; i++) {
@@ -3782,6 +3828,7 @@ export default class Threads extends View {
     const ac = this.agentColor(t);
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
     const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
+    if (this.headerSplit) return this.metaSplit(t, turn, icon, time, pinNo, count);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
       .when(!agent, (el) => el.justify_end()
         .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
@@ -3799,6 +3846,26 @@ export default class Threads extends View {
       .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
       .child(div().flex_none().child("·"))
       .child(div().flex_none().truncate().child(time));
+  }
+
+  // The split header (the owner's idea, under design review): the name and #n at the left,
+  // the time at the right, the same in both bubble directions and open or closed.
+  metaSplit(t, turn, icon, time, pinNo, count0, tail = null) {
+    const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
+    const agent = turn.agent;
+    const ac = this.agentColor(t);
+    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+      .when(agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac)))
+      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .font_semibold().text_color(agent ? ac : t.muted).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName))
+      .child(div().flex_none().child("·"))
+      .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
+      .when(Boolean(icon), (el) => el.child(icon))
+      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
+      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
+      .child(div().flex_1().min_w(0).truncate().text_right().child(time))
+      .when(Boolean(tail), (el) => el.children(tail));
   }
 
   // The person's message in a bubble on the right (an agent's: an outlined bubble on the
@@ -3911,10 +3978,16 @@ export default class Threads extends View {
       ], sh.bubbleW),
       v_flex().min_w(0).max_w(this.prose())
         .child(this.nameLine(t, turn))
-        .child(this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.statsLine(t, this.statsText(turn)),
     ]);
+  }
+
+  // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
+  // a click on the row opens the turn.
+  cmdBlock(md, id) {
+    return this.readBlock(div()).child(TextView.markdown(id, md).selectable(false).w_full());
   }
 
   // The agent's name over its reply (ROW.NAME high).
@@ -3996,15 +4069,52 @@ export default class Threads extends View {
 
   // A day: its name, date and shown turns centred between two hairlines, 10 px below the
   // exchange above.
+  // A day band: lines either side of a filled pill, "Today" in the text colour and the date
+  // and count in muted, so a new day shows while scrolling and stays quieter than a message.
   dayItem(t, r) {
     return v_flex().pt(10).pb(6)
       .child(h_flex().h(30).px(16).gap(10).items_center()
         .child(div().flex_1().h(1).bg(t.border))
-        .child(h_flex().flex_none().gap(6).items_center().text_size(11.5)
-          .child(div().font_semibold().text_color(t.muted).child(r.name))
-          .when(Boolean(r.date), (el) => el.child(div().text_color(t.dim).child(`· ${r.date}`)))
-          .child(div().text_color(t.dim).child(`· ${plural(r.count, "turn")}`)))
+        .child(this.dayPill(t, r))
         .child(div().flex_1().h(1).bg(t.border)));
+  }
+  // bandFill searches a mix, so it is kept per theme.
+  band(t) {
+    const k = `${t.background}|${t.foreground}|${t.raised}|${t.selected}`;
+    if (this.bandKey !== k) { this.bandKey = k; this.bandVal = bandFill(t); }
+    return this.bandVal;
+  }
+  dayPill(t, r) {
+    return h_flex().flex_none().h(24).px(10).gap(6).items_center().rounded(12).bg(this.band(t)).border_1().border_color(t.border).text_size(12)
+      .child(div().font_semibold().text_color(t.foreground).child(r.name))
+      .when(Boolean(r.date), (el) => el.child(div().text_color(t.muted).child(`· ${r.date}`)))
+      .child(div().text_color(t.muted).child(`· ${plural(r.count, "turn")}`));
+  }
+
+  // The day the top of the pane is in, kept at the top of the list while its band is
+  // scrolled away (the list item at the top comes from the list's own drawing, topKey). The
+  // drawing pass may not redraw the pane, so stickyDue asks the 120 ms timer to.
+  stickyDay() {
+    const rows = this.rowsMemo ?? [];
+    if (this.dayOfRows !== rows) {
+      this.dayOfRows = rows;
+      this.dayOf = new Map();
+      this.beforeDay = new Set();
+      let day = null;
+      rows.forEach((r, i) => {
+        if (r.kind === "day") day = r;
+        this.dayOf.set(r.key, day);
+        if (rows[i + 1]?.kind === "day") this.beforeDay.add(r.key);
+      });
+    }
+    const top = this.topKey;
+    const day = top ? this.dayOf.get(top) : null;
+    // Not while the band itself, or the next day's band, is at the top: two pills would stack.
+    return day && day.key !== top && !this.beforeDay.has(top) ? day : null;
+  }
+  noteTopDay() {
+    const k = this.stickyDay()?.key ?? null;
+    if (k !== this.stickyShown) this.stickyDue = true;
   }
 
   dividerItem(t, r) {
@@ -4053,6 +4163,11 @@ export default class Threads extends View {
         // The meta line of an open turn, on the right like a closed one's: "#7 · Sat 8:43 AM ·
         // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
         // handler, so click() tells the pin by position (headPinHit).
+        if (this.headerSplit) {
+          return div().pr(4).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
+            [when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · "), null, null,
+            [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()]));
+        }
         return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim).pr(4)
           .when(turn.interrupted || this.failed(turn), (el) => el.child(this.statusIcon(t, turn)))
           .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
@@ -4136,6 +4251,8 @@ export default class Threads extends View {
             .child(this.noReplyText(turn));
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
+      case "cmd":
+        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`));
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
