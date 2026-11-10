@@ -190,3 +190,42 @@ test("a subagent's thread is named by its nickname; a thread of its own has no n
   expect(s.agentName).toBe("Ohm");
   expect(s.turns.map((t) => t.prompt)).toEqual(["Review the cart"]);
 });
+
+// Codex 0.166's pasted image, in the shapes its TUI writes: the message names the image and
+// its temporary file around the data, and the prompt event keeps the path and an
+// "[Image #1]" placeholder in its text. The turn is still running (no task_complete).
+test("a pasted image in a running Codex 0.166 turn reads and decodes", () => {
+  ordinal = 0;
+  second = 0;
+  const file = join(mkdtempSync(join(tmpdir(), "threads-codex-")), `rollout-2026-11-10T01-00-00-${ID}.jsonl`);
+  const tmpPng = "/var/folders/xx/yy/T/codex-clipboard-AbCdEf.png";
+  writeFileSync(file, [
+    line("session_meta", { id: ID, cwd: "/home/dev/shop" }),
+    line("event_msg", { type: "task_started" }),
+    ctx("gpt-6.1", "medium"),
+    line("response_item", { type: "message", role: "user", content: [
+      { type: "input_text", text: `<image name=[Image #1] path="${tmpPng}">` },
+      { type: "input_image", image_url: `data:image/png;base64,${PNG}`, detail: "high" },
+      { type: "input_text", text: "</image>" },
+      { type: "input_text", text: "[Image #1] The chips wrap on tablet." },
+    ] }),
+    line("event_msg", { type: "item_completed", thread_id: ID, turn_id: "turn-0009", item: { type: "UserMessage", id: "m1", content: [
+      { type: "local_image", path: tmpPng },
+      { type: "text", text: "[Image #1] The chips wrap on tablet.", text_elements: [{ byte_range: { start: 0, end: 10 }, placeholder: "[Image #1]" }] },
+    ] } }),
+    say("Looking at the chips.", "commentary"),
+    tool("exec_command"),
+  ].join(""));
+  const s = read(file, 1 << 20);
+  expect(s.turns).toHaveLength(1);
+  const [t] = s.turns;
+  expect(t.done).toBe(false);
+  expect(t.prompt).toBe("[Image #1] The chips wrap on tablet.");
+  expect(t.images.map((i) => i.mt)).toEqual(["image/png"]);
+  // The temporary file is gone by the time the pane draws: the data on the message is enough.
+  expect(existsSync(tmpPng)).toBe(false);
+  const cache = mkdtempSync(join(tmpdir(), "threads-img-"));
+  const got = JSON.parse(execFileSync("sh", [imager, file, t.imgLine, cache, ID, "codex"], { encoding: "utf8" }).trim());
+  expect(got.i).toBe(0);
+  expect(readFileSync(join(cache, ID, got.file)).toString("base64")).toBe(PNG);
+});
