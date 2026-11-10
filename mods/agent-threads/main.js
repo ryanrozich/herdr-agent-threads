@@ -619,6 +619,7 @@ export default class Threads extends View {
         const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "c" ? l : `▎${l}`)) : sh.prompt;
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
+      case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
       case "head": return `head${n}${who} | ${[when(r.turn.ts), fmtDuration(r.turn.durationMs)].filter(Boolean).join(" · ")}`;
       case "you": {
         const y = this.youMd(r);
@@ -1499,7 +1500,7 @@ export default class Threads extends View {
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
         const live = this.isLive(s, si, ti, status);
         const item = { kind: "turn", key, turn, s, si, last, live };
-        if (live) out.push({ ...item, kind: "wrow", shape: this.shape(turn, true) });
+        if (live) this.liveRows(item, out);
         else if (this.open.has(key)) this.expanded(item, out);
         else out.push({ ...item, shape: this.shape(turn) });
         if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
@@ -1507,6 +1508,15 @@ export default class Threads extends View {
       flush();
     });
     return out;
+  }
+
+  // The running turn. With pasted images its meta line and tiles are an item of their own
+  // ("wtop", keyed imgs:<turn>), so a click on a tile can open the viewer (a list item has
+  // one click handler), and the rest of the row follows without its meta line ("split").
+  liveRows(item, out) {
+    const split = Boolean(item.turn.images?.length);
+    if (split) out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
+    out.push({ ...item, kind: "wrow", split, shape: this.shape(item.turn, true) });
   }
 
   // The Pinned view: the pinned turns in pin order (the order of the keys 1 to 5), each
@@ -1523,7 +1533,7 @@ export default class Threads extends View {
       const si = this.sessions.indexOf(p.s);
       const live = this.isLive(p.s, si, p.turn.n - 1, status);
       const item = { kind: "turn", key: p.key, turn: p.turn, s: p.s, si, last: false, live, pinNo: i + 1 };
-      if (live) out.push({ ...item, kind: "wrow", shape: this.shape(p.turn, true) });
+      if (live) this.liveRows(item, out);
       else if (this.open.has(p.key)) this.expanded(item, out);
       else out.push({ ...item, shape: this.shape(p.turn) });
       if (this.waking(p.s, si, p.turn.n - 1, status)) out.push({ kind: "wake", key: `wk:${p.key}`, turn: p.turn, s: p.s });
@@ -1733,8 +1743,8 @@ export default class Threads extends View {
     }
     sh.tone = tone;
     sh.cmd = cmd;
-    // Pasted images: a row of tiles over the bubble.
-    if (turn.images?.length) {
+    // Pasted images: a row of tiles over the bubble (a running turn's are in its wtop item).
+    if (turn.images?.length && !live) {
       const th = thumbSize(this.width, P.textSize) + ROW.GAP;
       sh.thumbs = true;
       sh.height += th;
@@ -2037,7 +2047,8 @@ export default class Threads extends View {
 
   // The image a press on an open card's tiles landed on, or the first one. The tiles sit on
   // the right of the card's text width.
-  tileAt(turn) {
+  // With strict, a press that misses the tiles gives null.
+  tileAt(turn, strict = false) {
     const L = this.tileLayout(turn);
     const x = this.pressX;
     const w = this.bodyW ?? this.width;
@@ -2045,7 +2056,8 @@ export default class Threads extends View {
     const left = w - ROW.PAD_X - L.width;
     const hit = L.tiles.find((c) => x >= left + c.x && x < left + c.x + c.w);
     if (hit) return hit.i;
-    return x >= left + L.width - 44 && L.more ? L.tiles.length : L.tiles[0]?.i ?? 0;
+    if (x >= left + L.width - 44 && (!strict || x < left + L.width) && L.more) return L.tiles.length;
+    return strict ? null : L.tiles[0]?.i ?? 0;
   }
 
   flushCode(cx) {
@@ -2430,8 +2442,16 @@ export default class Threads extends View {
     if (kind === "imgs") {
       const turn = this.findTurn(id);
       if (!turn?.images?.length) return;
-      const i = this.tileAt(turn);
+      const top = this.baseRows?.some((r) => r.key === key && r.kind === "wtop");
+      const i = this.tileAt(turn, top);
       this.pressX = null;
+      // A running turn's tiles: one opens the message's images full window, as the larger
+      // image does in a finished turn. A press beside them selects the turn.
+      if (top) {
+        this.sel = id;
+        if (i != null) this.openGallery(turn, Math.min(i, turn.images.length - 1));
+        return cx.notify();
+      }
       // "+N" opens the first image the tiles leave out.
       const k = `i:${id}:${Math.min(i, turn.images.length - 1)}`;
       this.full.has(k) ? this.full.delete(k) : this.full.add(k);
@@ -3843,7 +3863,9 @@ export default class Threads extends View {
     const w = this.inner();
     switch (r.kind) {
       case "spacer": return r.h;
-      case "turn": case "wrow": return r.shape.height;
+      case "turn": return r.shape.height;
+      case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + ROW.META : 0);
+      case "wtop": return ROW.PAD_T + ROW.META + ROW.GAP + thumbSize(this.width, this.prefs.textSize);
       case "wake": return WAKE_H;
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
@@ -3855,7 +3877,7 @@ export default class Threads extends View {
       case "resume": return 30;
       case "working": {
         const g = this.workingGeom(r.turn);
-        return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
+        return (r.split ? ROW.GAP : ROW.PAD_T + ROW.META + ROW.GAP) + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T + 18;
       case "you": return this.youHeight(r);
@@ -4061,6 +4083,7 @@ export default class Threads extends View {
       case "spacer": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);
+      case "wtop": return this.workingTop(t, r, focusedPanel);
       case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
@@ -4077,8 +4100,8 @@ export default class Threads extends View {
   // the reply and the stats line 6 px apart (ui.js rowHeight). The selected exchange has a
   // light fill across the pane and a 2 px bar on its left edge, in the accent colour while
   // the pane has the keyboard.
-  rowFrame(t, sel, focusedPanel, live, kids) {
-    return v_flex().w_full().relative().px(ROW.PAD_X).pt(ROW.PAD_T).pb(ROW.PAD_B).gap(ROW.GAP).min_w(0)
+  rowFrame(t, sel, focusedPanel, live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
+    return v_flex().w_full().relative().px(ROW.PAD_X).pt(top).pb(bottom).gap(ROW.GAP).min_w(0)
       .when(sel && !live, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
       .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
@@ -4338,14 +4361,27 @@ export default class Threads extends View {
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
     return this.rowFrame(t, sel, focusedPanel, true, [
-      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : sh.bubbleW),
+      ...(r.split ? [] : [this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : sh.bubbleW)]),
       this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
           .child([this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
-    ]);
+    ], r.split ? ROW.GAP : ROW.PAD_T);
+  }
+
+  // A running turn's meta line and its pasted images' tiles, over the rest of its row. A
+  // click on a tile opens the message's images full window.
+  workingTop(t, r, focusedPanel) {
+    const { turn } = r;
+    const st = this.liveState(t);
+    const sel = this.sel === r.turnKey;
+    const bw = sel ? bubbleMax(this.width, this.prefs.textSize) : this.shape(turn, true).bubbleW;
+    return this.rowFrame(t, sel, focusedPanel, true, [
+      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bw),
+      this.thumbStrip(t, turn, r.turnKey),
+    ], ROW.PAD_T, 0);
   }
 
   // The running turn when selected: the message in full (up to 6 lines), the live state with
@@ -4359,13 +4395,13 @@ export default class Threads extends View {
     const g = this.workingGeom(turn);
     const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bubbleMax(this.width, this.prefs.textSize)),
+      ...(r.split ? [] : [this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bubbleMax(this.width, this.prefs.textSize))]),
       this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize)),
       h_flex().h(18).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
-    ]);
+    ], r.split ? ROW.GAP : ROW.PAD_T);
   }
   workingGeom(turn) {
     const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;

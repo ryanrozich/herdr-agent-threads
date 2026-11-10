@@ -1741,6 +1741,70 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   expect(drawn.some(([n]) => n === "size_full")).toBe(true);
 });
 
+// A running turn with pasted images (what the owner saw in Codex: the tiles came only once
+// the turn ended). Its meta line and tiles are an item of their own over the running row, and
+// a press on a tile opens the message's images full window.
+test("a running turn shows its pasted images, and a tile opens the viewer", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2", "--images"));
+  const s = v.current();
+  const two = s.turns.find((t) => t.images.length === 2);
+  const last = s.turns.at(-1);
+  Object.assign(last, { images: two.images, imgLine: two.imgLine, done: false, shapeKey: null });
+  s.version++;
+  v.width = 380;
+  v.sel = null; v.fitKey = null;
+  const key = `0:${last.n}`;
+  let rows = v.rows();
+  const at = (k) => rows.findIndex((r) => r.key === k);
+  expect(rows[at(`imgs:${key}`)]).toMatchObject({ kind: "wtop", turnKey: key });
+  expect(rows[at(`imgs:${key}`) + 1]).toMatchObject({ kind: "wrow", key, split: true });
+  // The tiles are 91 px at 380 px, under the meta line; the row under them starts at its bubble.
+  expect(v.height(rows[at(`imgs:${key}`)])).toBe(ROW.PAD_T + ROW.META + ROW.GAP + 91);
+  const wrow = rows[at(key)];
+  expect(v.shape(last, true).thumbs).toBeUndefined();
+  expect(v.height(wrow)).toBe(v.shape(last, true).height - ROW.PAD_T - ROW.META);
+  // Decoded on first draw, as in a finished turn.
+  for (let i = 0; i < 40 && v.imgState(last) !== "ok"; i++) {
+    v.render(cx); cx.flush();
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  expect(v.imgState(last)).toBe("ok");
+  rec = [];
+  draw(v, cx);
+  const drawn = rec; rec = null;
+  expect(drawn.some(([n]) => n === "size_full")).toBe(true);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.startsWith(`wtop#${last.n} tiles 2`))).toBe(true);
+  // Selected, it is the working card, still under its tiles, 24 px shorter than one with no tiles.
+  v.sel = key; v.fitKey = null;
+  rows = v.rows();
+  const card = rows[at(key)];
+  expect(card).toMatchObject({ kind: "working", split: true });
+  expect(rows[at(key) - 1].kind).toBe("wtop");
+  const g = v.workingGeom(last);
+  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 21 + 6 + 18 + 6 + g.note * 20 + 10);
+  draw(v, cx);
+  // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
+  overlays.length = 0;
+  v.sel = null;
+  v.bodyW = 380;
+  v.pressX = 40;
+  v.click(`imgs:${key}`, cx);
+  expect(overlays).toHaveLength(0);
+  expect(v.sel).toBe(key);
+  v.pressX = 380 - ROW.PAD_X - 10;
+  v.click(`imgs:${key}`, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0]).toMatchObject({ kind: "dialog", width: 1, height: 1, props: { gallery: { at: 1, title: `#${last.n}` } } });
+  expect(overlays[0].props.gallery.images).toHaveLength(2);
+  // No image tile is drawn larger under a running turn.
+  expect(v.rows().some((r) => r.kind === "img")).toBe(false);
+  // Once it ends it is an ordinary row with its tiles over the bubble.
+  last.done = true; last.shapeKey = null; s.version++; v.fitKey = null;
+  rows = v.rows();
+  expect(rows.some((r) => r.kind === "wtop")).toBe(false);
+  expect(rows[at(key)].shape.thumbs).toBe(true);
+});
+
 test("tiles that do not fit the widest bubble end in +N", () => {
   const sq = { w: 400, h: 400 };
   const L = tileRow([sq, sq, sq, sq, sq], 380);
