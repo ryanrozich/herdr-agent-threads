@@ -1,0 +1,150 @@
+<title>Running turn images</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for the words, wide galleries of tall pane shots under each heading. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1e24; --muted: #5a6170; --line: #dde1e8;
+  --you: #47648F; --agent: #715C91; --link: #2f5fb8; --chip: #eef1f6;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #47648F; --agent: #715C91; --link: #7ea6f2; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121418; --panel: #1a1d22; --fg: #e6e8ec; --muted: #9aa1ad; --line: #2b3038; --chip: #23272e;
+  --you: #47648F; --agent: #715C91; --link: #7ea6f2; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; }
+main { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.prose { max-width: 68ch; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+a { color: var(--link); }
+code, kbd { font-family: var(--mono); font-size: 0.88em; background: var(--chip); border-radius: 4px; padding: 1px 5px; }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font-size: 13px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--panel); }
+.pill b { font-weight: 600; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+.steps { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.steps pre { margin: 6px 0 0; font-family: var(--mono); font-size: 13px; overflow-x: auto; background: var(--chip); border-radius: 6px; padding: 8px 10px; }
+section { display: flex; flex-direction: column; gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-items: start; }
+.grid .wide { grid-column: span 2; }
+@media (max-width: 440px) { .grid { grid-template-columns: 1fr 1fr; } .grid .wide { grid-column: span 2; } }
+.shot { all: unset; cursor: zoom-in; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shot img { width: 100%; height: 380px; object-fit: cover; object-position: top; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); display: block; }
+.shot span { font-size: 13px; color: var(--muted); line-height: 1.4; }
+.shot:focus-visible img { outline: 3px solid var(--link); outline-offset: 2px; }
+.notes li { color: var(--fg); }
+.small { font-size: 13px; color: var(--muted); }
+#lb { position: fixed; inset: 0; z-index: 50; background: rgba(8,10,14,0.92); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+#lb.on { display: flex; }
+#lb .frame { flex: 1; min-height: 0; width: 100%; overflow: auto; display: flex; justify-content: center; align-items: flex-start; }
+#lb img { max-width: 100%; height: auto; border-radius: 6px; }
+#lb .bar { display: flex; gap: 10px; align-items: center; color: #e6e8ec; font-size: 14px; flex-wrap: wrap; justify-content: center; }
+#lb button { font: inherit; color: #e6e8ec; background: #2a2f38; border: 1px solid #3a404b; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+#lb button:focus-visible { outline: 2px solid #4f86f0; }
+@media (prefers-reduced-motion: no-preference) { .shot img { transition: transform .15s ease; } .shot:hover img { transform: translateY(-2px); } }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+.grid .hero { grid-column: 1 / -1; }
+.hero img { height: auto; max-height: none; object-fit: contain; max-width: 980px; }
+table { border-collapse: collapse; font-size: 14px; width: 100%; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.prose h3 { font-size: 17px; margin: 28px 0 8px; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+</style>
+
+<main>
+  <header class="prose">
+    <h1>Images in a running turn</h1>
+    <p>You pasted an image in Codex and Threads showed none. Codex records it the way Threads reads it. The pane left the tiles out of a turn the agent is still working on, for every agent, so the image came only when the turn ended, which in a long Codex turn is minutes later. Draft <a href="https://github.com/ryanrozich/herdr-agent-threads/pull/14">PR 14</a> shows the tiles while the turn runs, and a click on one opens the viewer. Nothing merges until you say so.</p>
+    <div class="status">
+      <span class="pill">Reproduced with Codex 0.166</span>
+      <span class="pill">342 tests pass</span>
+      <span class="pill">Made-up image, scratch folder</span>
+    </div>
+    <p class="small">Shots are from the isolated Herdr window on the mini, with Codex 0.166 (your version) in a scratch folder and a made-up image, the turn still running. The header shows debug timings because the shots use the debug commands. Click any image to open it full size. Arrow keys step through, Esc closes.</p>
+  </header>
+
+  <section>
+    <div class="prose"><h2>Before and after</h2>
+      <p>The same running Codex turn. On main the bubble shows <code>[Image #1]</code> and no image. With the fix its tile sits over the message while Codex works.</p>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/before.jpg" alt="Threads on main: the running turn with no image"><span>Before (main): no tile while the turn runs</span></button>
+      <button class="shot"><img src="shots/after.jpg" alt="Threads with the fix: the tile over the message"><span>After: the tile over the message</span></button>
+    </div>
+    <div class="compare" data-g>
+      <button class="shot"><img src="shots/before-wide.jpg" alt="Codex and Threads on main"><span>Before, beside Codex</span></button>
+      <button class="shot"><img src="shots/after-wide.jpg" alt="Codex and Threads with the fix"><span>After, beside Codex</span></button>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose"><h2>A click on the tile</h2>
+      <p>In a running turn a click on a tile opens the viewer at that image. A click beside the tiles selects the turn. Once the turn ends it behaves as before: open it, click a tile for the larger image, click that for the viewer.</p>
+    </div>
+    <div class="grid" data-g style="grid-template-columns:1fr">
+      <button class="shot"><img src="shots/viewer.jpg" alt="The viewer over the window, Image 1 of 1"><span>After a click on the running turn&#x27;s tile</span></button>
+    </div>
+  </section>
+
+  <section class="prose notes">
+    <h2>What I found</h2>
+    <ul>
+      <li>Your Codex session (by field shape only) has the image twice: as data on the message line, and as the path of a temporary file (<code>codex-clipboard-….png</code>) on the prompt event. Threads decodes the data, so a deleted temporary file does not matter.</li>
+      <li>In your session the reader and decoder both found the image. The image cache had no Codex folder, because the turn was still running and the running row never asked for its images.</li>
+      <li>Other agents: Claude Code and OpenCode record pasted images and show them. Pi shows them while the temporary file it saved is still there, and otherwise says the image is gone. Cursor writes the word <code>[Image]</code> and keeps no image. Antigravity keeps none the pane can read. The fix applies to every agent's running turn.</li>
+      <li>Not checked with a real click or key: the test window cannot press, so the press runs through the pane's debug click, as for the viewer in PR 11.</li>
+    </ul>
+    <h2>Try it</h2>
+    <ol>
+      <li><code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout live-images &amp;&amp; git pull &amp;&amp; ./install.sh</code></li>
+      <li>In a Codex terminal with Threads open, paste an image into a prompt that will take Codex a while, and send it.</li>
+      <li>While Codex works, the tile shows over your message in Threads. Click it: the viewer fills the window. Esc closes.</li>
+      <li>When the turn ends, open it: a click on the tile shows the image larger, and a click on that opens the viewer, as before.</li>
+    </ol>
+  </section>
+</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="frame"><img alt=""></div>
+  <div class="bar"><button id="lb-prev" aria-label="Previous">←</button><span class="cap"></span><button id="lb-next" aria-label="Next">→</button><button id="lb-close">Close (Esc)</button></div>
+</div>
+
+<script>
+(() => {
+  const shots = [...document.querySelectorAll(".shot")];
+  const lb = document.getElementById("lb");
+  const img = lb.querySelector("img");
+  const cap = lb.querySelector(".cap");
+  let i = 0, opener = null;
+  const show = (n) => {
+    i = (n + shots.length) % shots.length;
+    const s = shots[i].querySelector("img");
+    img.src = s.src; img.alt = s.alt;
+    cap.textContent = `${i + 1} of ${shots.length} · ${shots[i].querySelector("span").textContent}`;
+    lb.querySelector(".frame").scrollTop = 0;
+  };
+  const open = (n) => { opener = document.activeElement; show(n); lb.classList.add("on"); document.getElementById("lb-close").focus(); };
+  const close = () => { lb.classList.remove("on"); opener?.focus?.(); };
+  shots.forEach((b, n) => b.addEventListener("click", () => open(n)));
+  document.getElementById("lb-prev").addEventListener("click", () => show(i - 1));
+  document.getElementById("lb-next").addEventListener("click", () => show(i + 1));
+  document.getElementById("lb-close").addEventListener("click", close);
+  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.classList.contains("frame")) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (!lb.classList.contains("on")) return;
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowRight") show(i + 1);
+    else if (e.key === "ArrowLeft") show(i - 1);
+  });
+})();
+</script>
