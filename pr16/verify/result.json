@@ -1,0 +1,33 @@
+{
+  "result": "pass",
+  "steps": [
+    {
+      "name": "Review page loads with test steps and shots",
+      "result": "pass"
+    },
+    {
+      "name": "Pin number before and after",
+      "result": "pass"
+    },
+    {
+      "name": "A shot opens full size in the lightbox",
+      "result": "pass"
+    },
+    {
+      "name": "Arrow keys step to the next shot",
+      "result": "pass"
+    },
+    {
+      "name": "Esc closes the lightbox",
+      "result": "pass"
+    },
+    {
+      "name": "The new-reply dot pair",
+      "result": "pass"
+    },
+    {
+      "name": "Review page on a phone",
+      "result": "pass"
+    }
+  ]
+}
