@@ -3425,3 +3425,148 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
+
+// A press on the list, the pointer's moves while it is held, and the click the list sends on
+// the release, as Herdr delivers them (window px).
+function gesture(v, cx, key, { from = { x: 200, y: 500 }, to = from, count = 1 } = {}) {
+  const calls = frame(v, cx);
+  const ev = (p) => ({ position: p, local_position: p, bounds: { width: v.width, height: 800 }, modifiers: {} });
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev(from), button: "left", click_count: count }, cx);
+  const steps = 6;
+  for (let i = 1; i <= steps; i++) {
+    handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }), cx);
+  }
+  v.click(key, cx);
+}
+
+test("a drag that selects text never closes or collapses anything; a click that does not move still does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `0:${t.n}`;
+  v.open = new Set([key]);
+  v.full.add(`l:${key}`);
+  const lt = () => v.rows().find((r) => r.kind === "latest");
+  expect(lt().all).toBe(true);
+  // The owner's case: a drag up through the open update, released on it, on its Show less, on the
+  // card's head or on the message above. Each one leaves everything as it was.
+  for (const target of [lt().key, key, `you:${key}`, `rhead:${key}`]) {
+    v.sel = null;
+    gesture(v, cx, target, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+    expect(v.full.has(`l:${key}`)).toBe(true);
+    expect(v.open.has(key)).toBe(true);
+    expect(v.full.has(key)).toBe(false);
+    // The turn is selected, so c and q act on it.
+    expect(v.sel).toBe(key);
+  }
+  // A sideways drag along one line counts too.
+  gesture(v, cx, lt().key, { from: { x: 100, y: 500 }, to: { x: 112, y: 500 } });
+  expect(v.full.has(`l:${key}`)).toBe(true);
+  // A double press selects a word and a triple press a paragraph: neither toggles.
+  for (const count of [2, 3]) {
+    gesture(v, cx, lt().key, { count });
+    expect(v.full.has(`l:${key}`)).toBe(true);
+    gesture(v, cx, key, { count });
+    expect(v.open.has(key)).toBe(true);
+  }
+  // A press that moves a pixel or two is still a click: Show less closes the update, and a
+  // click on the head closes the card.
+  gesture(v, cx, lt().key, { from: { x: 200, y: 500 }, to: { x: 202, y: 501 } });
+  expect(v.full.has(`l:${key}`)).toBe(false);
+  gesture(v, cx, key);
+  expect(v.open.has(key)).toBe(false);
+  // A click after a drag is a click again: the next press starts afresh.
+  gesture(v, cx, key, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+  expect(v.open.has(key)).toBe(false);
+  gesture(v, cx, key);
+  expect(v.open.has(key)).toBe(true);
+});
+
+test("a drag ending on Show less under a whole reply or on the action bar does nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const turn = v.sessions.at(-1).turns.at(-1);
+  turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.shapeKey = null;
+  const key = `${v.sessions.length - 1}:${turn.n}`;
+  v.open = new Set([key]);
+  v.full.add(`r:${key}`);
+  v.rowsKey = null;
+  const less = v.rows().find((r) => r.kind === "more" && r.less);
+  expect(less.key).toBe(`more:${key}`);
+  gesture(v, cx, less.key, { from: { x: 150, y: 300 }, to: { x: 260, y: 700 } });
+  expect(v.full.has(`r:${key}`)).toBe(true);
+  // The action bar: a drag that ends on Copy reply copies nothing.
+  const copies = [];
+  v.copyReply = (id) => copies.push(id);
+  v.pressX = v.barGeom(v.width, turn).copy[0] + 4;
+  gesture(v, cx, `cp:${key}`, { from: { x: 150, y: 300 }, to: { x: 160, y: 720 } });
+  expect(copies).toEqual([]);
+  // Without the drag the same release on Show less shows the cut reply again.
+  gesture(v, cx, less.key);
+  expect(v.full.has(`r:${key}`)).toBe(false);
+});
+
+// The selected turn's fill and its bar, as drawn this frame.
+function fillAndBar(calls) {
+  return { fill: calls.filter(([n, x]) => n === "bg" && x === theme.selected).length, bar: calls.filter(([n, x]) => n === "w" && x === 2).length };
+}
+
+test("while you select text in a turn its fill lifts so Herdr's highlight shows, and the bar stays", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `0:${t.n}`;
+  v.open = new Set([key]);
+  v.sel = key;
+  v.full.add(`l:${key}`);
+  const md = v.rows().find((r) => r.kind === "md");
+  const before = fillAndBar(frame(v, cx));
+  expect(before.fill).toBeGreaterThan(0);
+  expect(before.bar).toBeGreaterThan(0);
+  // The drag starts: the fill goes as soon as the press has moved, before the release.
+  let calls = frame(v, cx);
+  const ev = (p) => ({ position: p, local_position: p, bounds: { width: v.width, height: 800 }, modifiers: {} });
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 600 }), button: "left", click_count: 1 }, cx);
+  handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: 121, y: 601 }), cx);
+  expect(v.textSel ?? null).toBe(null);
+  handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: 300, y: 450 }), cx);
+  expect(v.textSel).toBe(key);
+  const now = fillAndBar(frame(v, cx));
+  expect(now.fill).toBe(0);
+  expect(now.bar).toBe(before.bar);
+  // The release, and c, q and ? after it, keep it off: the highlight stays to copy and quote.
+  v.click(md.key, cx);
+  for (const name of ["copy", "quote", "keys", "keys"]) v.action(name, cx);
+  expect(fillAndBar(frame(v, cx)).fill).toBe(0);
+  // A click that does not move clears Herdr's selection, and the fill is back.
+  gesture(v, cx, md.key);
+  expect(v.textSel).toBe(null);
+  expect(fillAndBar(frame(v, cx)).fill).toBe(before.fill);
+  // A double press (a word) lifts it at once; a key that moves on brings it back.
+  calls = frame(v, cx);
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 600 }), button: "left", click_count: 2 }, cx);
+  expect(v.textSel).toBe(key);
+  v.action("up", cx);
+  expect(v.textSel).toBe(null);
+  // A drag that ends in another open turn leaves that turn selected without a fill.
+  const other = v.current().turns.find((x) => x.n !== t.n && v.replyText(x));
+  const okey = `0:${other.n}`;
+  v.open.add(okey);
+  v.sel = key;
+  gesture(v, cx, `md:${okey}:0`, { from: { x: 120, y: 600 }, to: { x: 300, y: 300 } });
+  expect(v.sel).toBe(okey);
+  expect(v.textSel).toBe(okey);
+  expect(fillAndBar(frame(v, cx)).fill).toBe(0);
+});
+
+test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag leaves the fill", async () => {
+  const was = herdrVersion;
+  herdrVersion = "0.1.12";
+  try {
+    const { v, cx } = await pane(fixture("--extra", "1"));
+    const key = `0:${v.current().turns.at(-1).n}`;
+    v.open = new Set([key]);
+    v.sel = key;
+    gesture(v, cx, key, { from: { x: 120, y: 600 }, to: { x: 300, y: 450 } });
+    expect(v.textSel ?? null).toBe(null);
+    expect(fillAndBar(frame(v, cx)).fill).toBeGreaterThan(0);
+  } finally { herdrVersion = was; }
+});
