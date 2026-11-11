@@ -90,6 +90,19 @@ export function mergeDirty(fresh, ours, dirty) {
   return { version: 1, sessions };
 }
 
+// When a pin's turn was asked, for the Pinned view's time order: the turn's own time, or the
+// time in the pin's fingerprint while its session is still being read or the turn is gone.
+export function pinTime(pin, turn) {
+  if (turn?.ts) return turn.ts;
+  const sec = Number(String(pin?.id ?? "").split("|")[0]);
+  return Number.isFinite(sec) && sec > 0 ? sec * 1000 : Number.POSITIVE_INFINITY;
+}
+const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+// Pins oldest first: by time, then session, then turn number. The saved order (the order
+// they were pinned) does not matter, so a file saved before this order loads in it as is.
+export function byTime(a, b) {
+  return cmp(pinTime(a.pin, a.turn), pinTime(b.pin, b.turn)) || cmp(a.si ?? 0, b.si ?? 0) || cmp(a.turn?.n ?? 0, b.turn?.n ?? 0);
+}
 export function seenOf(turn) { return { len: reply(turn).length, fu: turn.followups ?? 0 }; }
 
 export function newPin(turns, turn, now = Date.now()) {

@@ -41,7 +41,7 @@ import {
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
   keySheet, fitHints, agentState,
 } from "./ui.js";
-import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
+import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
@@ -871,7 +871,8 @@ export default class Threads extends View {
 
   sessionKey(s) { return `${harnessOfFile(s.file)}:${s.id}`; }
 
-  // The pins of every session in the pane, in order: { pin, s, turn, key, state }.
+  // The pins of every session in the pane, oldest turn first: { pin, s, si, turn, key, state }.
+  // Their place in this order is their number (1 to 5) and digit key.
   pinnedAll() {
     const memoKey = `${this.pinVer}|${this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",")}|${this.status()}|${this.sel}|${this.sel && this.open.has(this.sel) ? 1 : 0}`;
     if (this.pinMemoKey === memoKey) return this.pinMemo;
@@ -890,9 +891,10 @@ export default class Threads extends View {
           const seen = seenOf(turn);
           if (seen.len !== pin.seen?.len || seen.fu !== pin.seen?.fu) { pin.seen = seen; this.pinChangedLater(this.sessionKey(s)); }
         }
-        out.push({ pin, s, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen }) });
+        out.push({ pin, s, si, turn, key, state: pinState({ turn, loaded: s.loaded, live, seen: pin.seen }) });
       }
     });
+    out.sort(byTime);
     this.pinMemoKey = memoKey;
     this.pinMemo = out;
     this.pinKeys = new Set(out.map((p) => p.key).filter(Boolean));
@@ -1541,10 +1543,9 @@ export default class Threads extends View {
     out.push({ ...item, kind: "wrow", split, shape: this.shape(item.turn, true) });
   }
 
-  // The Pinned view: the pinned turns in pin order (the order of the keys 1 to 5), each
+  // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 5), each
   // closed or open like any turn, with its number on its meta line. A row shows only its
-  // time, so a day header goes above a pin whose day differs from the pin above it. The pins
-  // keep their order, so a day can show twice.
+  // time, so a day header goes above the first pin of each day.
   pinnedRows(status) {
     const L = this.pinnedList();
     if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];

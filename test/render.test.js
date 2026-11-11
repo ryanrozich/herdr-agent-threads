@@ -2453,7 +2453,7 @@ test("the pins show in the Pinned view at every width; the header and footer say
   expect(r).toBeUndefined();
 });
 
-test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order, Enter opens one at its place, Esc goes back", async () => {
+test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first, Enter opens one at its place, Esc goes back", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const k = keys();
   for (const i of [3, 0, 5]) { v.sel = k[i]; v.action("pin", cx); }
@@ -2475,19 +2475,20 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order,
   expect(v.headerLayout().heading).toBeGreaterThan(0);
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Back to all turns (v)", "pinned", true, null, "All turns"]);
   const rows = v.rows();
-  expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
+  // Pinned 3, 0, 5: shown and numbered oldest first.
+  expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[0], 1], [k[3], 2], [k[5], 3]]);
   expect(v.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "c copy", "q quote", "? keys"]);
   // The selection moves from pin to pin, and Enter opens the pin at its place.
-  v.sel = k[3];
+  v.sel = k[0];
   v.key(keyEv("down"), cx);
-  expect(v.sel).toBe(k[0]);
+  expect(v.sel).toBe(k[3]);
   v.key(keyEv("enter"), cx);
-  expect(v.open.has(k[0])).toBe(true);
-  expect(v.scrollTo).toMatchObject({ key: k[0] });
+  expect(v.open.has(k[3])).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: k[3] });
   draw(v, cx);
   // p unpins in the view, and u brings it back.
   v.key(keyEv("p"), cx);
-  expect(v.rows().filter((r) => r.kind === "turn" || r.kind === "head").map((r) => r.key)).toEqual([k[3], k[5]]);
+  expect(v.rows().filter((r) => r.kind === "turn" || r.kind === "head").map((r) => r.key)).toEqual([k[0], k[5]]);
   v.key(keyEv("u"), cx);
   expect(v.pinnedList().length).toBe(3);
   // Esc closes the open pin, then returns to all turns.
@@ -2628,25 +2629,51 @@ test("Pinned view: pins all from one day get one day header, above the first pin
   expect(state.shared["threads.debug"].t4.rows[0]).toBe("pday");
 });
 
-test("Pinned view: pins across days keep pin order, with a header at each change of day, so a day can show twice", async () => {
-  // Four turns 12 hours apart from 1 Nov 09:12 UTC span two or three local days, and two of
-  // them always share a day. Pin one of those, then a turn from another day, then the other:
-  // the first day's header shows twice.
-  const flags = ["--only", "4", "--gap", "43200"];
-  const probe = await pinPane(...flags);
-  const days = probe.v.turnKeys(probe.v.rows()).map((key) => dayKey(probe.v.findTurn(key).ts));
-  const a = days.findIndex((d, i) => days.indexOf(d) !== i);
-  const first = days.indexOf(days[a]);
-  const other = days.findIndex((d) => d !== days[a]);
-  const { v } = await pinsShown(flags, [first, other, a]);
-  expect(headsAndPins(v).map((x) => x.replace(/^day .*/, "head"))).toEqual(["head", "pin 1", "head", "pin 2", "head", "pin 3"]);
+test("Pinned view: pins across days show oldest first, with one day pill per day, whatever order they were pinned in", async () => {
+  // Four turns 12 hours apart from 1 Nov 09:12 UTC span two or three local days.
+  const { v, k } = await pinsShown(["--only", "4", "--gap", "43200"], [3, 0, 2, 1]);
+  const turns = v.rows().filter((r) => r.kind === "turn");
+  expect(turns.map((r) => r.key)).toEqual([k[0], k[1], k[2], k[3]]);
+  expect(turns.map((r) => r.pinNo)).toEqual([1, 2, 3, 4]);
+  // One pill per day, each above that day's first pin.
   const heads = v.rows().filter((r) => r.kind === "pday");
-  expect(heads[0].name).toBe(heads[2].name);
-  expect(heads[1].name).not.toBe(heads[0].name);
-  // Pins stay in pin order, whatever their days.
-  expect(v.rows().filter((r) => r.kind === "turn").map((r) => r.pinNo)).toEqual([1, 2, 3]);
-  // No turn count: the pins under a header are not all of that day's turns.
+  const days = new Set(turns.map((r) => dayKey(r.turn.ts)));
+  expect(heads.length).toBe(days.size);
+  expect(new Set(heads.map((r) => r.name)).size).toBe(heads.length);
   for (const r of heads) expect(r.count).toBeUndefined();
+});
+
+test("pin numbers follow time order: pinning an older turn renumbers the newer pins, unpinning closes the gap", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  for (const i of [4, 2]) { v.sel = k[i]; v.action("pin", cx); }
+  expect(toastText(v)).toMatch(/press 1 to come back$/); // #3 is older than #5, so it is 1
+  expect([v.pinNumber(v.findTurn(k[2])), v.pinNumber(v.findTurn(k[4]))]).toEqual([1, 2]);
+  v.sel = k[0]; v.action("pin", cx);
+  expect([0, 2, 4].map((i) => v.pinNumber(v.findTurn(k[i])))).toEqual([1, 2, 3]);
+  expect(v.headerButtons().find((b) => b[0] === "th-pinned")[6]).toBe("Pinned 3");
+  // The digit keys follow the numbers: 2 goes to the middle pin.
+  v.goPin(1, cx);
+  expect(v.sel).toBe(k[2]);
+  v.sel = k[0]; v.action("pin", cx); // unpin the oldest
+  expect([2, 4].map((i) => v.pinNumber(v.findTurn(k[i])))).toEqual([1, 2]);
+  v.goPin(0, cx);
+  expect(v.sel).toBe(k[2]);
+});
+
+test("pins saved in the order they were pinned load oldest first, all of them, with the file left as it was", async () => {
+  const first = await pinPane("--extra", "6");
+  const k = first.keys();
+  for (const i of [5, 1, 3]) { first.v.sel = k[i]; first.v.action("pin", first.cx); }
+  const saved = await new Promise((r) => setTimeout(r, 30)).then(() => recordFiles[PINS]);
+  const order = (j) => allPins(JSON.parse(j)).map((p) => p.n);
+  expect(order(saved)).toEqual([6, 2, 4]); // the file keeps the order they were pinned in
+  // A new pane reads that file as an older build wrote it.
+  const { v } = await pane(fixture("--extra", "6"));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(v.pinnedList().map((p) => p.turn?.n)).toEqual([2, 4, 6]);
+  expect(v.pinnedList().map((p) => p.state)).not.toContain("gone");
+  expect(order(recordFiles[PINS])).toEqual([6, 2, 4]); // loading changed nothing
 });
 
 test("Pinned view: Today and Yesterday roll over at midnight, and the 1 s timer redraws when the day changes", async () => {
@@ -3406,17 +3433,18 @@ test("a pinned turn shows its pin number in the list's top line, as in the Pinne
   v.width = 545;
   const texts = (r) => { rec = []; v.item(theme, r, true, 200); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const row = (key) => v.rows().find((r) => r.key === key && r.kind === "turn");
-  // Pinned second and first: the list shows 2 and 1 beside the pin, like the column.
-  expect(v.pinNumber(row(k[1]).turn)).toBe(2);
-  expect(texts(row(k[1]))).toContain("2");
-  expect(texts(row(k[3]))).toContain("1");
+  // Pinned 3 then 1: numbered oldest first, so the list shows 1 and 2 beside the pin, like the column.
+  expect(v.pinNumber(row(k[1]).turn)).toBe(1);
+  expect(texts(row(k[1]))).toContain("1");
+  expect(texts(row(k[3]))).toContain("2");
   expect(v.pinNumber(row(k[0]).turn)).toBe(null);
   expect(texts(row(k[0]))).not.toContain("1");
   // The open card's head carries it too, and unpinning drops it.
   v.toggle(k[1], cx);
   const head = v.rows().find((r) => r.kind === "head" && r.key === `h:${k[1]}`) ?? v.rows().find((r) => r.kind === "head");
   rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
-  expect(hs).toContain("2");
+  expect(hs).toContain("1");
+  // Unpinning the first renumbers the other.
   v.sel = k[1]; v.action("pin", cx);
   expect(v.pinNumber(v.findTurn(k[3]))).toBe(1);
   expect(v.pinNumber(v.findTurn(k[1]))).toBe(null);
