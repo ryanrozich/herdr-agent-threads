@@ -1,5 +1,6 @@
 # Screenshots the owner approved for the repo by name (2026-11-04; retaken and approved again
-# 2026-11-09 with the chat look, pins and six agents). All show the staged acme-web session
+# 2026-11-09 with the chat look, pins and six agents; days, images, viewer and width retaken or
+# added 2026-11-11 for the reading width and the image viewer). All show the staged acme-web session
 # (test/make-hero.js, test/make-agents.js), and each passed the PNG check before it was pinned. The
 # check skips a pinned file only while its sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
@@ -13,3 +14,7 @@ c6ff9d0deaca62b450c9626b3ed70841b576cf0fc99f814e6674e3d911794c00 docs/screenshot
 2d9ac4f7d93a381b26c6d2f28406993c89ea500062b6091226b4eeefd3de8d8e docs/screenshots/agents.png
 0241380e3be38be83ac0e73138db857878176e46440588ccd570bb6abe6fecc7 docs/screenshots/pinned.png
 942c9efbc303dbf34ee6c32de8fb2d596a87890f91a3e45762680d35f6df5ae4 docs/screenshots/updating.png
+232380856024e6501e01e68c5fd91e8c04c68dd61c744437d663d576c7b982de docs/screenshots/days.png
+1a7ae535ab78a7de7d741b326394d5f4d5fe9b5d3119fe0b83afd4796452413e docs/screenshots/images.png
+2f4e4ba2e0abc5e6c01e672b5d636bf606451d525055115ca78c9d840ef506d2 docs/screenshots/viewer.png
+61e386c1bab1f3aefc107f1d6697e07758cb8d5e1a5712c4ddb1f836236afd40 docs/screenshots/width.png
