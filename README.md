@@ -14,6 +14,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 - **See the images you pasted.** They sit over your message as tiles, about a third of the bubble wide. In an open turn a click on a tile shows that image larger, under the tiles, and a click on the larger image opens all the message's images in a viewer that fills the Herdr window. While the agent is still working on that turn, a click on a tile opens the viewer.
 - **Turn ticket and PR numbers into links.** Add a rule in settings, for example `ACME-123` to your tracker or `#456` to the repo's pull request.
 - **Keep a few turns at hand.** `p` pins a turn, and your pins show in a Pinned column beside the list. See [Pins](#pins).
+- **See where the agent is from anywhere in the list.** A dot and a word beside the agent's badge say Working, Needs you, Done or Exited, even while you read an older reply. When a turn or reply comes in below what you are reading, the jump-to-latest button gets a dot until you go down to it. Codex, OpenCode, Pi, Cursor and Antigravity report no live status, so for them the header shows only Done, read from the transcript, and nothing while a turn runs.
 - **See background work after a turn.** When a background task wakes the agent after a turn has ended, the turn keeps its reply, and a line under it reads "Updating" with its clock, tool calls and what the agent said last.
 - **Choose how much each row shows.** A row shows 4 lines of your prompt and 6 of the reply before "Show more". Settings change both.
 
@@ -135,10 +136,11 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `i` | Explain the stats on an open turn |
 | `p` | Pin or unpin the selected turn |
 | `v` | Open or go to the Pinned column beside the list, or show the pins in the same pane when it is under 480 px wide |
-| `1` to `5` | Return to that pin |
+| `1` to `5` | Return to that pin (a pinned turn shows its number beside its pin) |
 | `u` | Undo the last unpin |
 | `w` | Fit Threads to the reading width (and the Pinned column to its width) |
 | `,` | Settings |
+| `?` | Every key, grouped (the footer shows only the most-used ones) |
 | `Esc` | Back out: search, Select view, settings, the open turn |
 
 ## Pins

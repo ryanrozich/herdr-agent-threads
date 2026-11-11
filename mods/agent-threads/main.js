@@ -1,4 +1,4 @@
-// agent-threads: a pane beside a Claude Code, Codex, OpenCode, Pi or Cursor terminal that lists each prompt
+// agent-threads: a pane beside a Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity terminal that lists each prompt
 // and the agent's final reply, with tool calls hidden. Read-only toward the agent, with one
 // exception (RECIPE.md, How it behaves): quoteToTerminal() pastes a quote of a reply into the
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
@@ -39,6 +39,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
+  keySheet, fitHints, agentState,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -88,6 +89,9 @@ const PANE_FRAME = 2;
 const PINNED_HEADING = 66;
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
+// Every agent Threads reads, for the notices that name them (one list, so a new agent is
+// named everywhere at once).
+const AGENT_NAMES = "Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity";
 const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the settings)
 const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
@@ -126,7 +130,7 @@ const LATEST_LINES = 6;
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
 const idOf = (p) => idOfFile(p);
-const POLL_MS = 3000; // how often a pane on Codex, OpenCode, Pi or Cursor looks for a new session
+const POLL_MS = 3000; // how often a pane on Codex, OpenCode, Pi, Cursor or Antigravity looks for a new session
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 const tilde = (p) => (p?.startsWith(home()) ? `~${p.slice(home().length)}` : p ?? "");
 const now = () => globalThis.performance?.now?.() ?? Date.now();
@@ -154,7 +158,7 @@ function launch() {
     return null;
   }
   if (!pane?.terminal) {
-    notify({ title: "Agent Threads", body: "Focus a Claude Code, Codex, OpenCode, Pi or Cursor terminal first, then open Threads beside it.", level: "info", timeout: 4000 });
+    notify({ title: "Agent Threads", body: `Focus a ${AGENT_NAMES} terminal first, then open Threads beside it.`, level: "info", timeout: 4000 });
     return null;
   }
   const known = shared(MAP_KEY)?.[pane.terminal];
@@ -534,6 +538,9 @@ export default class Threads extends View {
     this.pinResume = null; // { key, part }: the "starts above" line a return put over a place
     this.pinAgain = null; // the turn a return just showed from its head, for a second press
     this.topKey = null; // the list item at the top of the pane
+    this.bottomShown = true; // the list's last item is on screen
+    this.unseen = false; // a turn or reply came in below the screen (the latest button's dot)
+    this.keysOpen = false; // the ? sheet
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
     this.commands(cx);
@@ -570,7 +577,7 @@ export default class Threads extends View {
     const snap = {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
-      header: this.headerText(),
+      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
@@ -586,7 +593,7 @@ export default class Threads extends View {
       // v1 feedback: what each row and card part shows, as text.
       detail: rows.map((r) => this.rowDetail(r)).filter(Boolean),
       counts: this.sessions.length ? this.counts() : null,
-      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}|${b[2]}`),
+      headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
@@ -884,6 +891,8 @@ export default class Threads extends View {
   pinnedList() { return this.pinnedAll().slice(0, PIN_LIMIT); }
   isPinned(key) { this.pinnedAll(); return this.pinKeys.has(key); }
   isPinnedTurn(turn) { this.pinnedAll(); return this.pinTurns.has(turn); }
+  // A pinned turn's number (1 to 5, its place in the Pinned view and its digit key), or null.
+  pinNumber(turn) { const i = this.pinnedList().findIndex((p) => p.turn === turn); return i < 0 ? null : i + 1; }
 
   togglePin(key, cx) {
     const turn = key && this.findTurn(key);
@@ -1169,6 +1178,8 @@ export default class Threads extends View {
           let chunk = CHUNK;
           let retried = false;
           const count = s.turns.length;
+          const wasLoaded = s.loaded;
+          const before = this.newestSig();
           while (chunk && live()) {
             let c;
             try {
@@ -1224,6 +1235,7 @@ export default class Threads extends View {
           this.readStalls = 0;
           // Following the newest turn (nothing moved the selection away): keep it on the newest.
           if ((s.turns.length !== count || !this.sel) && this.follow) this.jumpLatest(true);
+          else if (wasLoaded) this.noteNew(before);
         } while (this.readAgain && live());
       } catch (e) {
         if (this.readGen === gen) {
@@ -1886,8 +1898,27 @@ export default class Threads extends View {
 
   // Selects the newest turn (when asked, or when nothing is selected) and scrolls to it on
   // the next render, once the list holds the new rows.
+  // The newest shown turn and whether it has ended: what the latest button's dot watches.
+  newestSig() {
+    const si = this.sessions.length - 1;
+    const s = this.sessions[si];
+    if (!s) return null;
+    const agentTurns = Boolean(this.prefs.agentTurns);
+    for (let ti = s.turns.length - 1; ti >= 0; ti--) {
+      const turn = s.turns[ti];
+      if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti) })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
+    }
+    return null;
+  }
+  // After a read: a new turn, or the reply to the newest one, came in while the end of the
+  // list was off screen. The latest button gets a dot until the list shows its end.
+  noteNew(before) {
+    if (this.view !== "pinned" && !this.bottomShown && this.newestSig() !== before) this.unseen = true;
+  }
+
   jumpLatest(select = true) {
     this.follow = true;
+    this.unseen = false;
     const keys = this.turnKeys(this.rows());
     if ((select || !this.sel) && keys.length) this.sel = keys[keys.length - 1];
     this.toBottom = true;
@@ -2629,9 +2660,11 @@ export default class Threads extends View {
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
-      case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) this.filtering = false; return true;
+      case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
+      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) this.settingsOpen = false; return true;
       case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
       case "escape":
+        if (this.keysOpen) { this.keysOpen = false; return true; }
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
@@ -2865,6 +2898,7 @@ export default class Threads extends View {
       .children(this.banners(t))
       .child(this.body(t, focusedPanel, cx))
       .child(this.footer(t))
+      .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
@@ -2962,7 +2996,7 @@ export default class Threads extends View {
   }
   mono() { return settings().font_family ?? "JetBrains Mono"; }
 
-  iconButton(t, id, icon, tip, onClick, on = false, count = null) {
+  iconButton(t, id, icon, tip, onClick, on = false, count = null, dot = false) {
     return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer().relative()
       .text_color(on ? t.foreground : t.dim).when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -2972,11 +3006,13 @@ export default class Threads extends View {
       // A count at the corner (the Agents button: hidden or shown agent messages).
       .when(count != null, (el) => el.child(div().absolute().top(-3).right(-5).h(13).px(3).rounded(7)
         .flex().items_center().bg(on ? t.ansi5 : t.raised).border_1().border_color(on ? t.ansi5 : t.border)
-        .text_size(9).font_semibold().text_color(on ? t.background : t.muted).child(count)));
+        .text_size(9).font_semibold().text_color(on ? t.background : t.muted).child(count)))
+      // A dot at the corner (the latest button: a turn or reply came in below the screen).
+      .when(Boolean(dot), (el) => el.child(div().id(`${id}-dot`).absolute().top(1).right(1).size(8).rounded(4).bg(t.accent).border_1().border_color(t.background)));
   }
 
   // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on,
-  // count, label]. A labelled button shows its label instead of an icon. Under 440 px the
+  // count, label, dot]. A labelled button shows its label instead of an icon. Under 440 px the
   // latest button gives way, and under 300 px the agents and pin buttons too (End, a and p
   // still act), so the turn count keeps its room beside "Pinned 2". The Pinned pane keeps
   // only its own two.
@@ -3004,7 +3040,8 @@ export default class Threads extends View {
       : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
         : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
     if (this.tooWide()) out.push(["th-fit", "fold-horizontal", `Fit to the reading width, ${this.readingPx()} px (w)`, "fit", false, null, null]);
-    if (!this.compact()) out.push(["th-latest", "chevrons-down", "Jump to latest (End)", "latest", false, null, null]);
+    // With something new below the screen it stays at every width, with a dot.
+    if (!this.compact() || this.unseen) out.push(["th-latest", "chevrons-down", this.unseen ? "New below · jump to latest (End)" : "Jump to latest (End)", "latest", false, null, null, this.unseen]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
   }
@@ -3023,12 +3060,46 @@ export default class Threads extends View {
   // badge, the room left for the text, and the buttons, inside 10 px padding and 8 px gaps.
   headerLayout() {
     const list = this.headerButtons();
-    const badge = this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38;
+    const st = this.pinnedPane || this.compact() ? null : this.agentStateNow();
+    // The state: a 7 px dot, and its word at 12 px (6.6 px a character) after a 5 px gap.
+    const state = st ? 8 + 7 + 5 + Math.ceil(st.word.length * 6.6) : 0;
+    const badge = (this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38) + state;
     const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
     // The Pinned heading: the pin, a 6 px gap and "Pinned" at 13.5 px semibold.
     const heading = this.view === "pinned" ? PINNED_HEADING + 8 : 0;
     const text = Math.round(this.pw() - 20 - (badge ? badge + 8 : 0) - heading - room);
     return { width: Math.round(this.pw()), badge, heading, text, buttons: list.length, rightGutter: 10 };
+  }
+
+  // The agent's state beside the badge, so a reader scrolled up into an older reply still
+  // sees it: Working, Needs you, Done or Exited (ui.js agentState), or nothing when the agent
+  // reports no status and the transcript cannot tell.
+  agentStateNow() {
+    const s = this.current();
+    if (!s?.loaded || this.res.kind === "unsupported" || this.res.kind === "remote") return null;
+    return agentState({ ended: this.res.ended, status: this.status(), reports: this.agent().key === "claude", newest: s.turns[s.turns.length - 1] ?? null });
+  }
+  stateTip(st) {
+    const a = this.agent();
+    if (st.word === "Exited") return `${a.cmd} ${this.res.ended === "closed" ? "closed with its terminal" : "exited"}`;
+    if (st.word === "Needs you") return `${a.short} is waiting for you in the terminal`;
+    if (st.word === "Working") return `${a.short} is working`;
+    return a.key === "claude" ? `${a.short} finished its newest turn`
+      : `${a.short} finished its newest turn. ${a.name} reports no live status, so this is read from the transcript.`;
+  }
+  // Under 440 px (where the badge drops its word too) the dot sits on the badge's corner
+  // instead (stateDot), and the badge's tooltip says the word, so the header text keeps its room.
+  stateChip(t) {
+    const st = this.agentStateNow();
+    const color = t[st.tone] ?? t.dim;
+    return h_flex().id("th-state").flex_none().gap(5).items_center().tooltip(this.stateTip(st))
+      .child(div().flex_none().size(7).rounded(4).bg(color))
+      .child(div().flex_none().text_size(12).text_color(st.tone === "blocked" ? color : t.muted).child(st.word));
+  }
+  stateDot(t, el) {
+    const st = this.compact() ? this.agentStateNow() : null;
+    return el.relative().when(Boolean(st), (b) => b.child(div().id("th-state-dot").absolute().top(-3).right(-3).size(8).rounded(4)
+      .bg(t[st?.tone] ?? t.dim).border_1().border_color(t.background)));
   }
 
   badge(t) {
@@ -3038,20 +3109,24 @@ export default class Threads extends View {
     const other = this.res.kind === "unsupported" ? this.res.name
       : this.res.kind === "remote" ? (this.terminal ?? "").split("/")[0]
         : agent.key !== "claude" ? agent.name : null;
-    if (other) return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
+    if (other) return this.stateDot(t, h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
       .when(this.res.kind !== "unsupported" && this.res.kind !== "remote", (el) => el.tooltip(this.badgeTip())
         .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted)))
       .when(this.res.kind === "remote", (el) => el.child(svg(ICON("cpu")).size(12).text_color(t.muted)))
-      .child(div().max_w(120).truncate().text_size(12).text_color(t.foreground).child(other));
-    return h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
+      .child(div().max_w(120).truncate().text_size(12).text_color(t.foreground).child(other)));
+    return this.stateDot(t, h_flex().id("th-badge").flex_none().gap(5).h(22).px(6).items_center().rounded(5).border_1().border_color(t.border)
       .tooltip(this.badgeTip())
       .child(mark("claude", 14))
-      .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude")));
+      .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude"))));
   }
 
   // "Reading t4 · session 7f3a1b2c · 1.2M tokens · cache 97.1%": which terminal and
   // session the pane is bound to, so a wrong binding shows without a click.
   badgeTip() {
+    const st = this.compact() ? this.agentStateNow() : null;
+    return st ? `${st.word}: ${this.stateTip(st)} · ${this.bindingTip()}` : this.bindingTip();
+  }
+  bindingTip() {
     const s = this.current();
     if (!s) return `Reading ${this.terminal ?? "no terminal"}`;
     let input = 0, output = 0, cr = 0, cc = 0;
@@ -3108,9 +3183,10 @@ export default class Threads extends View {
       .child(h_flex().h(40).px(10).gap(8).items_center()
         .when(pinned, (el) => el.child(this.pinnedHeading(t)))
         .when(!this.pinnedPane, (el) => el.child(this.badge(t)))
+        .when(!this.pinnedPane && !this.compact() && Boolean(this.agentStateNow()), (el) => el.child(this.stateChip(t)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(this.headerText()))
         .when(this.debug && Boolean(this.timing) && !this.narrow(), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)))
-        .children(this.headerButtons().map(([id, icon, tip, act, on, count, label]) => {
+        .children(this.headerButtons().map(([id, icon, tip, act, on, count, label, dot]) => {
           const click = (_e, cx) => {
             if (act === "filterToggle") {
               this.filtering = !this.filtering;
@@ -3120,7 +3196,7 @@ export default class Threads extends View {
             } else this.action(act, cx);
             cx.notify();
           };
-          return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count);
+          return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count, dot);
         })))
       .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(h_flex().mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
@@ -3354,7 +3430,7 @@ export default class Threads extends View {
       return this.empty(t, mark(u.key, 36) ?? "messages", `${u.name} isn't supported`, u.why, "Threads reads only the sessions agents keep on this computer.",
         [this.button(t, "th-why-unread", `Why ${u.name} isn't supported`, () => { exec("open", [u.url]).catch(() => null); }, "info")]);
     }
-    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, "Threads reads Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity sessions. Other terminal panes are left alone.", null,
+    if (r.kind === "unsupported") return this.empty(t, "messages", `${r.name} isn't supported yet`, `Threads reads ${AGENT_NAMES.replace(/ or ([^ ]+)$/, " and $1")} sessions. Other terminal panes are left alone.`, null,
       [HARNESS.claude, HARNESS.codex, HARNESS.opencode, HARNESS.pi, HARNESS.cursor, HARNESS.antigravity].map((h) => h_flex().h(22).px(7).gap(5).items_center().rounded(5).border_1().border_color(t.border).text_size(11.5).text_color(t.muted)
         .child(mark(h.key, 12))
         .child(h.key === "claude" ? "Claude Code" : h.name)), true);
@@ -3513,7 +3589,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).text_size(14).font_semibold().child(`No session found for ${this.terminal}`)))
       .child(div().text_size(12).text_color(t.muted).child(r.claude
         ? "Claude runs in this pane, but no transcript could be matched."
-        : `No Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity process runs in ${this.terminal}, and no transcript was matched for its folder.`))
+        : `No ${AGENT_NAMES} process runs in ${this.terminal}, and no transcript was matched for its folder.`))
       .child(v_flex().rounded(8).bg(t.chrome).border_1().border_color(t.border).overflow_hidden()
         .child(div().px(10).pt(9).pb(7).text_size(10.5).font_semibold().text_color(t.dim).child("WHAT WE TRIED"))
         .children(steps.map((x) => h_flex().px(10).py(8).gap(8).items_start().border_t(1).border_color(t.border)
@@ -4039,6 +4115,10 @@ export default class Threads extends View {
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
       this.topKey = rows[range.start]?.key ?? null;
       try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
+      // The end of the list on screen: the latest button's dot has been seen (the 120 ms
+      // timer redraws the header, since the drawing pass may not).
+      this.bottomShown = range.end >= rows.length;
+      if (this.bottomShown && this.unseen) { this.unseen = false; this.stickyDue = true; }
     }
     const out = [];
     for (let i = range.start; i < range.end; i++) {
@@ -4115,7 +4195,7 @@ export default class Threads extends View {
     const time = Math.max(8, fmtTime(turn.ts).length) * ch;
     const n = (`#${turn.n}`.length) * 7.2;
     const bell = turn.followups > 0 ? 13 + countLabel(turn.followups).length * ch : 0;
-    const pin = this.isPinnedTurn(turn) ? 12 + 5 : 0;
+    const pin = (this.isPinnedTurn(turn) ? 12 + 5 : 0) + (this.pinNumber(turn) != null ? 12 : 0);
     // Six 5 px gaps: icon, label, "·", #n, "·", time, and the bell or pin between.
     const fixed = 12 + n + 3 * ch + time + bell + pin + 6 * 5 + 8;
     return Math.max(36, Math.floor(Math.min(tw * 0.6, tw - fixed)));
@@ -4126,6 +4206,7 @@ export default class Threads extends View {
   // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
   // bw: the bubble's width, which the header of the person's own turn spans (metaSplit).
   metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null, bw = null) {
+    pinNo ??= this.pinNumber(turn);
     const agent = turn.agent;
     const ac = this.agentColor(t);
     const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
@@ -4155,6 +4236,7 @@ export default class Threads extends View {
   // left edge. The person's own spans their bubble (bw), from its left edge to its right
   // (headerFit): a short bubble gets a short header, which drops the name before the time.
   metaSplit(t, turn, icon, time, pinNo, count0, tail = null, bw = null) {
+    pinNo ??= this.pinNumber(turn);
     const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
     const agent = turn.agent;
     const ac = this.agentColor(t);
@@ -4736,45 +4818,56 @@ export default class Threads extends View {
     return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""} · Quote key · ${this.quoteKey}`;
   }
 
-  // Key hints that apply now: [key, label]. Below 300 px only move, open, copy and filter.
-  // In Select view: how to select, copy, quote and go back.
+  // Key hints that apply now, on one row: [key, label]. The most-used keys (move, open,
+  // copy, quote, filter, pin) and "? keys", which opens the sheet with every key; what does
+  // not fit the pane's width gives way from the right, "? keys" last (ui.js fitHints). In
+  // Select view: how to select, copy, quote and go back.
   footerHints() {
     const narrow = this.narrow();
     if (this.selecting) return narrow ? [["⌘C", "copy"], [this.quoteKey, "quote"], ["Esc", "back"]]
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
-    if (this.view === "pinned") {
-      const pv = [["↑↓", "next pin"], ["↵", "open"], ["p", "unpin"]];
-      if (narrow) return [...pv, ...(this.pinnedPane ? [["- =", "width"]] : []), ["v", this.pinnedPane ? "back" : "all"]];
-      pv.push(["1-5", "go to pin"], ["u", "undo"], ["c", "copy reply"]);
-      if (this.quotable()) pv.push([this.quoteKey, "quote"]);
-      if (this.pinnedPane) pv.push(["- =", "width"]);
-      pv.push(["v", this.pinnedPane ? "back to all" : "all turns"]);
-      if (this.pane()) pv.push(["t", "terminal"]);
-      return pv;
-    }
-    const out = [["↑↓", "move"], ["↵", "open"], ["c", narrow ? "copy" : "copy reply"]];
-    if (!narrow && this.quotable()) out.push([this.quoteKey, "quote"]);
-    out.push(["/", "filter"]);
-    if (this.quoteKey !== "p") out.push(["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]);
-    out.push(["v", "pinned"]);
-    if (narrow) return out;
-    if (this.sel && this.open.has(this.sel)) out.push(["s", "select"], ["i", "explain"]);
-    out.push(["g", "jump"], ["End", "latest"]);
-    if (this.pane()) out.push(["t", "terminal"]);
-    if (this.counts().agentAll > 0 || this.prefs.agentTurns) out.push(["a", "agents"]);
-    if (this.manyDays()) out.push(["[ ]", "day"]);
-    return out;
+    const quote = this.quotable() ? [[this.quoteKey, "quote"]] : [];
+    const pin = this.quoteKey !== "p";
+    const out = this.view === "pinned"
+      ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
+      : [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ...quote, ["/", "filter"], ...(pin ? [["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]] : [])];
+    return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
   footer(t) {
-    const hint = (k, label) => h_flex().gap(4).items_center().child(this.kbd(t, k)).child(div().text_size(11.5).text_color(t.dim).child(label));
-    return h_flex().id("th-footer").flex_none().pl(10).pr(16).py(7).gap(10).flex_wrap().items_center().border_t(1).border_color(t.border)
-      // The hints wrap to two lines or more, and a toast sits above them.
+    const hint = (k, label) => (k === "?"
+      ? h_flex().id("th-keys-hint").cursor_pointer().tooltip("Every key (?)")
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
+      : h_flex()).flex_none().gap(4).items_center().child(this.kbd(t, k)).child(div().flex_none().whitespace_nowrap().text_size(11.5).text_color(t.dim).child(label));
+    // One row: the hints that fit (footerHints), and a toast sits above them.
+    return h_flex().id("th-footer").flex_none().pl(10).pr(16).py(7).gap(10).items_center().overflow_hidden().border_t(1).border_color(t.border)
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
         if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }
       })
       .children(this.footerHints().map(([k, label]) => hint(k, label)));
+  }
+
+  // ?: every key, grouped (ui.js keySheet), over the list between the header and the footer.
+  // Esc, ?, the close button or a click outside the card closes it.
+  keySheetView(t) {
+    const close = (_e, cx) => { cx.stop_propagation(); this.keysOpen = false; cx.notify(); };
+    const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
+      .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
+      .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
+    return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
+      .on_click(close)
+      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).bottom((this.footerH ?? 38) + 6)
+        .rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_md()
+        .on_click((_e, cx) => cx.stop_propagation())
+        .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
+          .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child("Keys"))
+          .child(this.kbd(t, "?"))
+          .child(this.iconButton(t, "th-keys-close", "x", "Close (Esc)", close)))
+        .child(v_flex().id("th-keys-list").flex_1().min_h(0).overflow_y_scrollbar().px(12).py(10).gap(12)
+          .children(keySheet(this.quoteKey).map(([group, items]) => v_flex().gap(6)
+            .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
+            .children(items.map(row))))));
   }
 
   // True when the shown turns span more than one day (day dividers, and [ ] moves by day).
