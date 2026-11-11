@@ -604,6 +604,9 @@ export default class Threads extends View {
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       contrast: this.contrastList(),
+      // Each theme's selected-turn fill and text-selection colour, for the highlight check.
+      textSel: this.textSel ?? null, press: { moved: Math.round(this.pressMoved ?? 0), count: this.pressCount ?? 1 },
+      selColors: themes().map((x) => ({ name: x.name, light: x.light, background: x.colors?.background, selected: x.colors?.selected, selection: x.colors?.selection })),
       // Round 2: the quote key, the last quote press (never its text), the link rules and
       // the repo they use.
       quoteKey: this.quoteKey, settingsNotes: this.prefsNotes, lastQuote: this.lastQuote,
@@ -2229,9 +2232,20 @@ export default class Threads extends View {
   // and comes from an open reply is what ⌘C copied, and q quotes it.
   // How far the pointer has gone from the last press, in window px. The list's click
   // arrives on the release, so a drag that selected text arrives as a click too.
-  notePointer(at) {
+  notePointer(at, cx) {
     if (!this.pressAt || !at) return;
     this.pressMoved = Math.max(this.pressMoved ?? 0, Math.hypot(at.x - this.pressAt.x, at.y - this.pressAt.y));
+    if (cx && this.selectGesture()) this.liftFill(this.sel, cx);
+  }
+  // Herdr paints a text selection under the text in the theme's selection colour, which a
+  // mod cannot change. On the selected turn's fill it is hard to see (graphite: #394454 on
+  // the fill is 1.4:1, on the background 1.8:1, as in a terminal; paper: 1.2:1 and 1.4:1). So
+  // while you select text in a turn, its card drops the fill and keeps the bar on the left,
+  // until a click that does not move or a key that moves on.
+  liftFill(key, cx) {
+    if (!key || this.textSel === key || !this.replySelectable()) return;
+    this.textSel = key;
+    cx?.notify();
   }
   // A press that moved more than DRAG_SLOP design px before its release, or a double or
   // triple press (a word or a paragraph selected), is a selection, not a click.
@@ -2465,9 +2479,11 @@ export default class Threads extends View {
     if (this.selectGesture()) {
       this.toList();
       const turnKey = /^\d+$/.test(kind) ? key : rest.slice(0, 2).join(":");
-      if (this.findTurn(turnKey)) this.sel = turnKey;
+      if (this.findTurn(turnKey)) { this.sel = turnKey; this.liftFill(turnKey); }
       return cx.notify();
     }
+    // A plain click clears Herdr's text selection, so the fill comes back.
+    this.textSel = null;
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
     if (kind === "resume") {
@@ -2628,6 +2644,7 @@ export default class Threads extends View {
 
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
+    if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
     const at = keys.indexOf(this.sel);
@@ -2740,6 +2757,8 @@ export default class Threads extends View {
     // for the person's turns), "debugHeader:split" the current one.
     if (/^debugHeader:(split|right)$/.test(name)) { this.headerRight = name.endsWith("right"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
+    // Tests only: the selected turn as it looks while you select text in it.
+    if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
     // Tests only: the selected turn's whole reply, as "Show full reply" would.
     if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
@@ -3541,10 +3560,10 @@ export default class Threads extends View {
     // while a band is at the top), so the list does not move when the day appears.
     const strip = this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
-      .on_mouse_move((e) => {
+      .on_mouse_move((e, cx) => {
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
-        this.notePointer(e.position);
+        this.notePointer(e.position, cx);
       })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
@@ -3557,6 +3576,8 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
+        // A double or triple press selects a word or a paragraph straight away.
+        if (this.pressCount > 1) this.liftFill(this.sel, cx);
         this.notePress(cx);
       })
       .when(strip, (el) => el.child(h_flex().id("th-day-strip").h(DAY_STRIP).flex_none().w_full().justify_center().items_center().bg(t.background)
@@ -4610,11 +4631,13 @@ export default class Threads extends View {
   cardPart(t, r, size) {
     const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
     const sel = this.sel === tkey;
+    const fill = sel && this.textSel !== tkey;
     const focusedPanel = this.h.is_focused();
     return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
       .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
       .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
-      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .when(fill, (el) => el.bg(t.selected))
+      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(this.partContent(t, r, false));
   }
 
