@@ -122,7 +122,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, MD_MAX, alpha: alphaForTest } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -2595,6 +2595,115 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   w.poll(cx2);
   expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
   state.props = props;
+});
+
+// ---- day headers in the Pinned view ----------------------------------------------------
+
+// Pins the turns at these indexes, in this order, then shows the Pinned view in this pane.
+async function pinsShown(fixtureFlags, order, width = 400) {
+  const { v, cx, keys } = await pinPane(...fixtureFlags);
+  const k = keys();
+  for (const i of order) { v.sel = k[i]; v.action("pin", cx); }
+  v.width = width;
+  v.key(keyEv("v"), cx); // under 480 px, v shows Pinned in this pane
+  expect(v.view).toBe("pinned");
+  return { v, cx, k };
+}
+const headsAndPins = (v) => v.rows().filter((r) => r.kind === "pday" || r.kind === "turn")
+  .map((r) => (r.kind === "pday" ? `day ${r.name}` : `pin ${r.pinNo}`));
+
+test("Pinned view: pins all from one day get one day header, above the first pin", async () => {
+  const { v, cx } = await pinsShown(["--extra", "6"], [4, 1, 3]);
+  const rows = v.rows();
+  expect(rows[0].kind).toBe("pday");
+  expect(rows.filter((r) => r.kind === "pday").length).toBe(1);
+  expect(headsAndPins(v).slice(1)).toEqual(["pin 1", "pin 2", "pin 3"]);
+  expect(rows[0].name).toMatch(/^(Today|Yesterday|[A-Z][a-z]+day \d{1,2} [A-Z][a-z]{2})$/);
+  expect(v.height(rows[0])).toBe(30);
+  // It is not a turn: the arrows and the digits still move between pins only.
+  expect(v.turnKeys(rows).length).toBe(3);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.rows[0]).toBe("pday");
+});
+
+test("Pinned view: pins across days keep pin order, with a header at each change of day, so a day can show twice", async () => {
+  // Four turns 12 hours apart from 1 Nov 09:12 UTC span two or three local days, and two of
+  // them always share a day. Pin one of those, then a turn from another day, then the other:
+  // the first day's header shows twice.
+  const flags = ["--only", "4", "--gap", "43200"];
+  const probe = await pinPane(...flags);
+  const days = probe.v.turnKeys(probe.v.rows()).map((key) => dayKey(probe.v.findTurn(key).ts));
+  const a = days.findIndex((d, i) => days.indexOf(d) !== i);
+  const first = days.indexOf(days[a]);
+  const other = days.findIndex((d) => d !== days[a]);
+  const { v } = await pinsShown(flags, [first, other, a]);
+  expect(headsAndPins(v).map((x) => x.replace(/^day .*/, "head"))).toEqual(["head", "pin 1", "head", "pin 2", "head", "pin 3"]);
+  const heads = v.rows().filter((r) => r.kind === "pday");
+  expect(heads[0].name).toBe(heads[2].name);
+  expect(heads[1].name).not.toBe(heads[0].name);
+  // Pins stay in pin order, whatever their days.
+  expect(v.rows().filter((r) => r.kind === "turn").map((r) => r.pinNo)).toEqual([1, 2, 3]);
+  // No turn count: the pins under a header are not all of that day's turns.
+  for (const r of heads) expect(r.count).toBeUndefined();
+});
+
+test("Pinned view: Today and Yesterday roll over at midnight, and the 1 s timer redraws when the day changes", async () => {
+  const { v, cx } = await pinsShown(["--extra", "3"], [2, 0]);
+  const ts = v.rows().find((r) => r.kind === "turn").turn.ts;
+  const real = Date.now;
+  const d = new Date(ts);
+  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+  const tick = cx.everies.find((x) => x.ms === 1000).fn;
+  let notes = 0;
+  cx.notifyHook = () => { notes++; };
+  try {
+    Date.now = () => midnight - 60000; // one minute before midnight, the pins' day
+    tick(cx);
+    expect(v.rows()[0]).toMatchObject({ kind: "pday", name: "Today" });
+    expect(v.rows()[0].date).toMatch(/^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}$/);
+    notes = 0;
+    tick(cx);
+    expect(notes).toBe(0); // the same day: no redraw for it
+    Date.now = () => midnight + 60000; // one minute after
+    tick(cx);
+    expect(notes).toBe(1);
+    expect(v.rows()[0]).toMatchObject({ kind: "pday", name: "Yesterday" });
+    Date.now = () => midnight + 86400000 + 60000; // a day later
+    tick(cx);
+    expect(v.rows()[0].name).toMatch(/^[A-Z][a-z]+day \d{1,2} [A-Z][a-z]{2}$/);
+    expect(v.rows()[0].date).toBe(null);
+  } finally { Date.now = real; cx.notifyHook = null; }
+});
+
+test("Pinned view: a digit key brings its pin to the top with the day header above it", async () => {
+  const { v, cx } = await pinsShown(["--extra", "4"], [3, 1]);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]) };
+  v.goPin(0, cx);
+  expect(v.scrollTo).toMatchObject({ how: "head" });
+  v.scrollTo.until = 0;
+  cx.timers = [];
+  draw(v, cx);
+  cx.flush();
+  const rows = v.rows();
+  const pin = rows.findIndex((r) => r.key === v.pinnedList()[0].key); // a row or an open card's head
+  expect(rows[pin - 1].kind).toBe("pday");
+  expect(scrolled.at(-1)).toEqual([pin - 1, "top"]);
+});
+
+test("Pinned column: the same day headers as the narrow view, drawn as a compact pill with no count", async () => {
+  const { v, cx } = await pinsShown(["--only", "4", "--gap", "43200"], [3, 0]);
+  const narrow = headsAndPins(v);
+  // The column draws the same rows (pinnedRows): compare with a Pinned pane at 252 px.
+  v.width = 252; v.rowsKey = null;
+  expect(headsAndPins(v)).toEqual(narrow);
+  const head = v.rows().find((r) => r.kind === "pday");
+  rec = []; v.item(theme, head, true, 30); const calls = rec; rec = null;
+  const words = calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(words[0]).toBe(head.name);
+  expect(words.join(" ")).not.toMatch(/turn/);
+  expect(calls.some((e) => e[0] === "text_size" && e[1] === 11.5)).toBe(true);
+  draw(v, cx);
 });
 
 test("the first pin opens the Pinned column when there is room and keeps the keyboard in Threads; a closed column stays closed", async () => {
