@@ -96,6 +96,7 @@ const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the 
 const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
+const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
 const REPLY_BUDGET = 1600; // characters of prose shown before "Show full reply"
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
 // (measured against the same text drawn whole: 748 px and 748 px).
@@ -2226,6 +2227,18 @@ export default class Threads extends View {
   // A mod cannot read a highlight, and it never sees ⌘C once Herdr's copy action has handled
   // it. So the clipboard is noted at each press in the list: text that arrived after the press
   // and comes from an open reply is what ⌘C copied, and q quotes it.
+  // How far the pointer has gone from the last press, in window px. The list's click
+  // arrives on the release, so a drag that selected text arrives as a click too.
+  notePointer(at) {
+    if (!this.pressAt || !at) return;
+    this.pressMoved = Math.max(this.pressMoved ?? 0, Math.hypot(at.x - this.pressAt.x, at.y - this.pressAt.y));
+  }
+  // A press that moved more than DRAG_SLOP design px before its release, or a double or
+  // triple press (a word or a paragraph selected), is a selection, not a click.
+  selectGesture() {
+    return (this.pressMoved ?? 0) > DRAG_SLOP * this.zoom() || (this.pressCount ?? 1) > 1;
+  }
+
   notePress(cx) {
     this.clipBefore = this.clipAtPress;
     this.clipAtPress = readClip(cx);
@@ -2444,6 +2457,16 @@ export default class Threads extends View {
         if (this.sel !== turnKey) { this.sel = turnKey; cx.notify(); }
         return;
       }
+    }
+    // A drag that selected text, or a double or triple press, never opens, closes, expands
+    // or collapses anything and never presses a button: the release lands on whatever item
+    // is under the pointer, often a card's head, Show less or an update's own toggle. The
+    // turn is still selected, so c, q and s act on it. Only a press that did not move clicks.
+    if (this.selectGesture()) {
+      this.toList();
+      const turnKey = /^\d+$/.test(kind) ? key : rest.slice(0, 2).join(":");
+      if (this.findTurn(turnKey)) this.sel = turnKey;
+      return cx.notify();
     }
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
@@ -2726,6 +2749,8 @@ export default class Threads extends View {
       const [, x, ...k] = name.split(":");
       this.pressX = Number(x);
       this.bodyW = this.width;
+      this.pressMoved = 0;
+      this.pressCount = 1;
       this.click(k.join(":"), cx);
       return true;
     }
@@ -3516,7 +3541,11 @@ export default class Threads extends View {
     // while a band is at the top), so the list does not move when the day appears.
     const strip = this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
-      .on_mouse_move((e) => { const x = e.local_position?.x; this.mouseX = x == null ? null : x / this.zoom() - this.colLeft(); })
+      .on_mouse_move((e) => {
+        const x = e.local_position?.x;
+        this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
+        this.notePointer(e.position);
+      })
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
       .on_mouse_down("left", (e, cx) => {
@@ -3525,6 +3554,9 @@ export default class Threads extends View {
         // In the column's own px: a centred column starts colLeft() in.
         this.pressX = x == null ? null : x / this.zoom() - this.colLeft();
         this.bodyW = w == null ? null : Math.min(w / this.zoom(), this.width);
+        this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
+        this.pressMoved = 0;
+        this.pressCount = e.click_count ?? 1;
         this.notePress(cx);
       })
       .when(strip, (el) => el.child(h_flex().id("th-day-strip").h(DAY_STRIP).flex_none().w_full().justify_center().items_center().bg(t.background)

@@ -3425,3 +3425,82 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
+
+// A press on the list, the pointer's moves while it is held, and the click the list sends on
+// the release, as Herdr delivers them (window px).
+function gesture(v, cx, key, { from = { x: 200, y: 500 }, to = from, count = 1 } = {}) {
+  const calls = frame(v, cx);
+  const ev = (p) => ({ position: p, local_position: p, bounds: { width: v.width, height: 800 }, modifiers: {} });
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev(from), button: "left", click_count: count }, cx);
+  const steps = 6;
+  for (let i = 1; i <= steps; i++) {
+    handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }), cx);
+  }
+  v.click(key, cx);
+}
+
+test("a drag that selects text never closes or collapses anything; a click that does not move still does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `0:${t.n}`;
+  v.open = new Set([key]);
+  v.full.add(`l:${key}`);
+  const lt = () => v.rows().find((r) => r.kind === "latest");
+  expect(lt().all).toBe(true);
+  // The owner's case: a drag up through the open update, released on it, on its Show less, on the
+  // card's head or on the message above. Each one leaves everything as it was.
+  for (const target of [lt().key, key, `you:${key}`, `rhead:${key}`]) {
+    v.sel = null;
+    gesture(v, cx, target, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+    expect(v.full.has(`l:${key}`)).toBe(true);
+    expect(v.open.has(key)).toBe(true);
+    expect(v.full.has(key)).toBe(false);
+    // The turn is selected, so c and q act on it.
+    expect(v.sel).toBe(key);
+  }
+  // A sideways drag along one line counts too.
+  gesture(v, cx, lt().key, { from: { x: 100, y: 500 }, to: { x: 112, y: 500 } });
+  expect(v.full.has(`l:${key}`)).toBe(true);
+  // A double press selects a word and a triple press a paragraph: neither toggles.
+  for (const count of [2, 3]) {
+    gesture(v, cx, lt().key, { count });
+    expect(v.full.has(`l:${key}`)).toBe(true);
+    gesture(v, cx, key, { count });
+    expect(v.open.has(key)).toBe(true);
+  }
+  // A press that moves a pixel or two is still a click: Show less closes the update, and a
+  // click on the head closes the card.
+  gesture(v, cx, lt().key, { from: { x: 200, y: 500 }, to: { x: 202, y: 501 } });
+  expect(v.full.has(`l:${key}`)).toBe(false);
+  gesture(v, cx, key);
+  expect(v.open.has(key)).toBe(false);
+  // A click after a drag is a click again: the next press starts afresh.
+  gesture(v, cx, key, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+  expect(v.open.has(key)).toBe(false);
+  gesture(v, cx, key);
+  expect(v.open.has(key)).toBe(true);
+});
+
+test("a drag ending on Show less under a whole reply or on the action bar does nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const turn = v.sessions.at(-1).turns.at(-1);
+  turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
+  turn.shapeKey = null;
+  const key = `${v.sessions.length - 1}:${turn.n}`;
+  v.open = new Set([key]);
+  v.full.add(`r:${key}`);
+  v.rowsKey = null;
+  const less = v.rows().find((r) => r.kind === "more" && r.less);
+  expect(less.key).toBe(`more:${key}`);
+  gesture(v, cx, less.key, { from: { x: 150, y: 300 }, to: { x: 260, y: 700 } });
+  expect(v.full.has(`r:${key}`)).toBe(true);
+  // The action bar: a drag that ends on Copy reply copies nothing.
+  const copies = [];
+  v.copyReply = (id) => copies.push(id);
+  v.pressX = v.barGeom(v.width, turn).copy[0] + 4;
+  gesture(v, cx, `cp:${key}`, { from: { x: 150, y: 300 }, to: { x: 160, y: 720 } });
+  expect(copies).toEqual([]);
+  // Without the drag the same release on Show less shows the cut reply again.
+  gesture(v, cx, less.key);
+  expect(v.full.has(`r:${key}`)).toBe(false);
+});

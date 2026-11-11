@@ -68,7 +68,7 @@ Amp keeps its conversations on its own servers, not on disk. Reading them would 
 
 Select an image to open it full size. The session in these shots is made up.
 
-To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. A drag can cross paragraphs, but not into a code block, which is a separate part of the turn. `s` selects across everything.
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. A drag can cross paragraphs, but not into a code block, which is a separate part of the turn. Letting go of a drag never closes the turn or collapses the text, even on **Show less**. `s` selects across everything.
 
 <table>
 <tr>
