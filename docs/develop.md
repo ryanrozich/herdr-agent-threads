@@ -81,7 +81,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5) | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5`, `debugClick:300:img:0:5:0` | none, the whole window |
 | `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open`, `open`, then `agents:off` after the shot | `1808 96 2912 2232` |
 | `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
-| `pinned.png` | 1760x1150 | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin` | `1904 96 3512 2232` |
+| `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1904 96 3512 2232` |
 | `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
 | `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
 | `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
