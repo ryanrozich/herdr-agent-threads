@@ -83,6 +83,7 @@ const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
 const DAY_STRIP = 32; // the strip above the list that shows the day while scrolling
+const PDAY_H = 30; // a day header in the Pinned view
 // What Herdr's layout px size adds to the width a pane measures (its frame).
 const PANE_FRAME = 2;
 // The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
@@ -567,6 +568,9 @@ export default class Threads extends View {
       this.flushCode(cx);
       if (this.pinDueAt != null && Date.now() >= this.pinDueAt) this.savePins(cx);
       if (this.liveShown && ["working", "blocked"].includes(this.status())) cx.notify();
+      // Past midnight, Today becomes Yesterday in the day bands and the Pinned view's headers.
+      const today = dayKey(Date.now());
+      if (this.today !== today) { const was = this.today; this.today = today; if (was) cx.notify(); }
       if (this.debug) this.report();
     });
   }
@@ -651,6 +655,7 @@ export default class Threads extends View {
         return `copy${n} ${L.labels.copy} + ${b(L.labels.select, this.selecting === `${r.si}:${r.turn.n}` ? "Formatted" : "Select", "select")}${L.quote ? ` + ${b(L.labels.quote, "Quote", "quote")}` : ""}${L.terminal ? ` + ${b(L.labels.terminal, "Terminal", "terminal")}` : ""}`;
       }
       case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
+      case "pday": return `pday ${r.name}${r.date ? ` · ${r.date}` : ""}`;
       case "hidden": return `unmatched ${r.n}`;
       default: return null;
     }
@@ -1422,7 +1427,7 @@ export default class Threads extends View {
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
-      this.view, this.view === "pinned" ? this.pinVer : "",
+      this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()),
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
@@ -1538,12 +1543,21 @@ export default class Threads extends View {
   }
 
   // The Pinned view: the pinned turns in pin order (the order of the keys 1 to 5), each
-  // closed or open like any turn, with its number on its meta line.
+  // closed or open like any turn, with its number on its meta line. A row shows only its
+  // time, so a day header goes above a pin whose day differs from the pin above it. The pins
+  // keep their order, so a day can show twice.
   pinnedRows(status) {
     const L = this.pinnedList();
     if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];
     const out = [];
+    const now = Date.now();
+    let day = null;
     L.forEach((p, i) => {
+      const d = dayKey(p.turn?.ts);
+      if (d && d !== day) {
+        day = d;
+        out.push({ kind: "pday", key: `pday:${i}`, ...dayParts(p.turn.ts, now) });
+      }
       if (!p.turn) {
         out.push({ kind: "note", key: `pins:${i}`, pinNo: i + 1, text: p.state === "gone" ? `${i + 1} · #${p.pin.n} is no longer in this session. Click to unpin it.` : `${i + 1} · #${p.pin.n} · reading this session…` });
         return;
@@ -3531,6 +3545,7 @@ export default class Threads extends View {
       // the turn. It lands like a place, so a head already on screen still goes to the top.
       if (i >= 0 && how === "head") {
         if (rows[i - 1]?.key === `visit:${rows[i].key}`) i -= 1;
+        if (rows[i - 1]?.kind === "pday") i -= 1; // a pin's day header comes with it
         how = "land";
       }
       if (i >= 0 && how === "card") {
@@ -3539,7 +3554,8 @@ export default class Threads extends View {
         let j = i;
         while (j + 1 < rows.length && CARD.has(rows[j + 1].kind) && rows[j + 1].kind !== "head") j++;
         // A return to a turn the search hides: its note shows above its head.
-        const top = rows[i - 1]?.key === `visit:${rows[i].key}` ? i - 1 : i;
+        let top = rows[i - 1]?.key === `visit:${rows[i].key}` ? i - 1 : i;
+        if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
@@ -4004,6 +4020,7 @@ export default class Threads extends View {
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
       case "day": return 46;
+      case "pday": return PDAY_H;
       case "hidden": return 28;
       case "note": return 34;
       case "resume": return 30;
@@ -4227,6 +4244,7 @@ export default class Threads extends View {
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
       case "day": return this.dayItem(t, r);
+      case "pday": return this.pinDayItem(t, r);
       case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
       case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
@@ -4566,6 +4584,16 @@ export default class Threads extends View {
         .child(div().flex_1().h(1).bg(t.border))
         .child(this.dayPill(t, r))
         .child(div().flex_1().h(1).bg(t.border)));
+  }
+  // The Pinned view's day header: the day pill made compact for the narrow column, with no
+  // turn count (the pins under it are not all of that day's turns).
+  pinDayItem(t, r) {
+    return h_flex().h(PDAY_H).px(12).pt(4).gap(8).items_center()
+      .child(div().flex_1().h(1).bg(t.border))
+      .child(h_flex().flex_none().h(20).px(8).gap(5).items_center().rounded(10).bg(this.band(t)).border_1().border_color(t.border).text_size(11.5)
+        .child(div().font_semibold().text_color(t.foreground).child(r.name))
+        .when(Boolean(r.date), (el) => el.child(div().text_color(t.muted).child(`· ${r.date}`))))
+      .child(div().flex_1().h(1).bg(t.border));
   }
   // bandFill searches a mix, so it is kept per theme.
   band(t) {
