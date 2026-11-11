@@ -87,16 +87,20 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 <td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi, Cursor, Antigravity and Amp"></a><br>The pane beside Codex, OpenCode, Pi, Cursor and Antigravity, each with its own mark, and beside Amp, which it does not read. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own"></a><br>The pane on its own, with the newest turn open. Beside the badge, Done says the agent finished its turn.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/light.png"><img src="docs/screenshots/light.png" alt="Agent Threads beside a terminal in the light theme"></a><br>The same session in Herdr's light theme.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Two pinned turns in the Pinned column beside the list"></a><br>Two pinned turns in the Pinned column beside the list. Each pinned turn shows its pin number in its header.</td>
-<td width="50%" valign="top"><a href="docs/screenshots/updating.png"><img src="docs/screenshots/updating.png" alt="A finished turn with an Updating line under it"></a><br>A background task woke the agent after the last turn ended. The turn keeps its reply, and the Updating line shows the clock, tool calls and what the agent said last.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Two pinned turns in the Pinned column beside the list"></a><br>Two pinned turns in the Pinned column beside the list. Each pinned turn shows its pin number beside its pin, in the list and in the column.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/updating.png"><img src="docs/screenshots/updating.png" alt="A finished turn with an Updating line under it"></a><br>A background task woke the agent after the last turn ended. The turn keeps its reply, and the Updating line shows the clock, tool calls and what the agent said last. The header says Working.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer filling the Herdr window, on the first of two images"></a><br>The image viewer fills the Herdr window. Left and Right step through the message's images, and Esc closes it.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/width.png"><img src="docs/screenshots/width.png" alt="A wide Threads pane with its turns in a centred column and a Fit button in the header"></a><br>With Keep to reading width off, a wider pane keeps its turns in a centred column, and the Fit button (or <code>w</code>) brings it back to 545 px.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/keys.png"><img src="docs/screenshots/keys.png" alt="The key sheet over the list, with every key in four groups"></a><br><code>?</code> shows every key in four groups. The footer keeps to the keys you use most.</td>
+<td width="50%" valign="top"></td>
 </tr>
 </table>
 

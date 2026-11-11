@@ -3,13 +3,3 @@
 # (test/make-hero.js, test/make-agents.js), and each passed the PNG check before it was pinned. The
 # check skips a pinned file only while its sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
-89f084c4217033417ba85925dbfa42c33f6bb22954f8e1651c29b1bc13797058 preview.png
-dd189c46ae88656375ea06dde958fb5f9cdae1bf4a7da03f3056158144c184fc docs/screenshots/agent-messages.png
-e0aadc3efe8f546d272b1ca6ed861f51ebe56470169c6da2a5f093829d984d68 docs/screenshots/light.png
-c5587b56f9df6530d11e712deddf8ac3e690108b4e5d74e2c51cea7d4d2ee447 docs/screenshots/open-turn.png
-36a8faf7c97b228dbf3555011ff479ca5d71d43a70c84ab3263409bd652195ba docs/screenshots/panel.png
-cbea593060db52d47d48ca6748c14435cb12ae36d241a581405851d68c3966dc docs/screenshots/quote.png
-c6ff9d0deaca62b450c9626b3ed70841b576cf0fc99f814e6674e3d911794c00 docs/screenshots/search.png
-2d9ac4f7d93a381b26c6d2f28406993c89ea500062b6091226b4eeefd3de8d8e docs/screenshots/agents.png
-0241380e3be38be83ac0e73138db857878176e46440588ccd570bb6abe6fecc7 docs/screenshots/pinned.png
-942c9efbc303dbf34ee6c32de8fb2d596a87890f91a3e45762680d35f6df5ae4 docs/screenshots/updating.png

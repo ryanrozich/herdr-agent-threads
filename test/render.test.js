@@ -3296,6 +3296,12 @@ function grownFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
+// The list as gpui draws it with only the rows from start to end on screen.
+function drawRange(v, start, end) {
+  const rows = v.rows();
+  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
+}
+
 test("a turn that comes in below the screen puts a dot on the latest button until the end of the list shows", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
@@ -3303,22 +3309,28 @@ test("a turn that comes in below the screen puts a dot on the latest button unti
   expect(v.current().turns.length).toBe(2);
   v.width = 380; // the latest button is hidden under 440 px until there is something new
   expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
-  // Scrolled up, reading the first turn.
+  // Reading the first turn, with the old last row still in view (as on the rig).
   v.sel = v.turnKeys(v.rows())[0];
   v.follow = false;
-  v.bottomShown = false;
+  drawRange(v, 0);
   appendFileSync(file, rest);
   v.read(cx);
   await settle(v);
   expect(v.current().turns.length).toBe(3);
+  // The next draw decides; the new row is off screen.
+  expect(v.unseen).toBe("pending");
+  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
+  v.stickyDue = false;
+  drawRange(v, 0, v.rows().length - 1);
   expect(v.unseen).toBe(true);
+  expect(v.stickyDue).toBe(true);
   const latest = v.headerButtons().find((b) => b[0] === "th-latest");
   expect(latest[7]).toBe(true);
   expect(latest[2]).toBe("New below · jump to latest (End)");
   rec = []; v.header(theme); const hids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
   expect(hids).toContain("th-latest-dot");
   expect(v.sel).toBe(v.turnKeys(v.rows())[0]); // the selection stays where the reader is
-  // Drawing the list's end (here every item draws) clears it, and asks the timer to redraw.
+  // A draw that reaches the end of the list clears it, and asks the timer to redraw.
   v.stickyDue = false;
   draw(v, cx);
   expect(v.unseen).toBe(false);
@@ -3330,29 +3342,33 @@ test("a turn that comes in below the screen puts a dot on the latest button unti
   expect(v.unseen).toBe(false);
 });
 
-test("no dot when the end of the list was on screen, or when the list follows the newest turn", async () => {
+test("no dot when the new end of the list draws on screen, or when the list follows the newest turn", async () => {
   const { appendFileSync } = await import("node:fs");
   for (const how of ["bottom", "follow"]) {
     const { file, rest } = grownFixture();
     const { v, cx } = await pane(file);
     v.follow = how === "follow";
-    v.bottomShown = how === "bottom";
+    if (how === "bottom") v.sel = v.turnKeys(v.rows())[0];
     appendFileSync(file, rest);
     v.read(cx);
     await settle(v);
     expect(v.current().turns.length).toBe(3);
+    v.stickyDue = false;
+    draw(v, cx); // every row on screen
     expect(v.unseen).toBe(false);
+    expect(v.stickyDue).toBe(false); // nothing to redraw: the dot never showed
     if (how === "follow") expect(v.sel).toBe(v.turnKeys(v.rows()).at(-1));
   }
   // The reply to the newest turn counts as new too: its turn ends.
   const { v } = await scripted([{ k: "p", o: "human", t: "Fix the cart total", ts: at(0) }]);
-  v.bottomShown = false;
   const before = v.newestSig();
   const { apply } = await import("../mods/agent-threads/turns.js");
   apply(v.current(), { k: "t", t: "Fixed." });
   apply(v.current(), { k: "d", ms: 900, ts: at(1) });
   v.noteNew(before);
-  expect(v.unseen).toBe(true);
+  expect(v.unseen).toBe("pending");
+  v.noteNew(v.newestSig());
+  expect(v.unseen).toBe("pending"); // nothing new since: unchanged
 });
 
 test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it, and the footer's ? keys opens it", async () => {
@@ -3402,4 +3418,10 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect([v.keysOpen, v.settingsOpen]).toEqual([true, false]);
   draw(v, cx);
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
+  // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
+  v.footerH = 38;
+  v.rootH = 1100;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 4 * 22 + 22 * 25 + 3 * 12 + 8);
+  v.rootH = 500;
+  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });

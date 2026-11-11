@@ -539,7 +539,9 @@ export default class Threads extends View {
     this.pinAgain = null; // the turn a return just showed from its head, for a second press
     this.topKey = null; // the list item at the top of the pane
     this.bottomShown = true; // the list's last item is on screen
-    this.unseen = false; // a turn or reply came in below the screen (the latest button's dot)
+    // A turn or reply came in: "pending" until the next draw of the list says whether the end
+    // is on screen (then false) or not (then true, the latest button's dot).
+    this.unseen = false;
     this.keysOpen = false; // the ? sheet
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
@@ -577,7 +579,7 @@ export default class Threads extends View {
     const snap = {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
-      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, keysOpen: this.keysOpen,
+      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
@@ -1910,10 +1912,10 @@ export default class Threads extends View {
     }
     return null;
   }
-  // After a read: a new turn, or the reply to the newest one, came in while the end of the
-  // list was off screen. The latest button gets a dot until the list shows its end.
+  // After a read: a new turn, or the reply to the newest one, came in. The next draw of the
+  // list decides: with the list's end off screen the latest button gets a dot until it shows.
   noteNew(before) {
-    if (this.view !== "pinned" && !this.bottomShown && this.newestSig() !== before) this.unseen = true;
+    if (this.view !== "pinned" && this.newestSig() !== before) this.unseen = "pending";
   }
 
   jumpLatest(select = true) {
@@ -3041,7 +3043,8 @@ export default class Threads extends View {
         : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
     if (this.tooWide()) out.push(["th-fit", "fold-horizontal", `Fit to the reading width, ${this.readingPx()} px (w)`, "fit", false, null, null]);
     // With something new below the screen it stays at every width, with a dot.
-    if (!this.compact() || this.unseen) out.push(["th-latest", "chevrons-down", this.unseen ? "New below · jump to latest (End)" : "Jump to latest (End)", "latest", false, null, null, this.unseen]);
+    const dot = this.unseen === true;
+    if (!this.compact() || dot) out.push(["th-latest", "chevrons-down", dot ? "New below · jump to latest (End)" : "Jump to latest (End)", "latest", false, null, null, dot]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
   }
@@ -4115,10 +4118,13 @@ export default class Threads extends View {
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
       this.topKey = rows[range.start]?.key ?? null;
       try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
-      // The end of the list on screen: the latest button's dot has been seen (the 120 ms
-      // timer redraws the header, since the drawing pass may not).
+      // The end of the list on screen clears the latest button's dot; a new turn or reply
+      // with the end off screen sets it (the 120 ms timer redraws the header, since the
+      // drawing pass may not).
       this.bottomShown = range.end >= rows.length;
-      if (this.bottomShown && this.unseen) { this.unseen = false; this.stickyDue = true; }
+      this.lastRange = `${range.start}-${range.end}/${rows.length}`;
+      if (this.unseen && this.bottomShown) { if (this.unseen === true) this.stickyDue = true; this.unseen = false; }
+      else if (this.unseen === "pending") { this.unseen = true; this.stickyDue = true; }
     }
     const out = [];
     for (let i = range.start; i < range.end; i++) {
@@ -4848,6 +4854,16 @@ export default class Threads extends View {
       .children(this.footerHints().map(([k, label]) => hint(k, label)));
   }
 
+  // The sheet's card: as tall as its keys (a 36 px title, 10 px padding above and below, each
+  // group's 16 px name, 25 px a key row, 6 px gaps inside a group and 12 px between groups),
+  // and no taller than the room between the header and the footer, where its list scrolls.
+  keySheetH(groups) {
+    const rows = groups.reduce((n, [, items]) => n + items.length, 0);
+    const want = 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+    const room = (this.rootH || 600) - 46 - (this.footerH ?? 38) - 6;
+    return Math.max(120, Math.min(want, room));
+  }
+
   // ?: every key, grouped (ui.js keySheet), over the list between the header and the footer.
   // Esc, ?, the close button or a click outside the card closes it.
   keySheetView(t) {
@@ -4855,9 +4871,10 @@ export default class Threads extends View {
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
       .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
+    const groups = keySheet(this.quoteKey);
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
-      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).bottom((this.footerH ?? 38) + 6)
+      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
         .rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
@@ -4865,7 +4882,7 @@ export default class Threads extends View {
           .child(this.kbd(t, "?"))
           .child(this.iconButton(t, "th-keys-close", "x", "Close (Esc)", close)))
         .child(v_flex().id("th-keys-list").flex_1().min_h(0).overflow_y_scrollbar().px(12).py(10).gap(12)
-          .children(keySheet(this.quoteKey).map(([group, items]) => v_flex().gap(6)
+          .children(groups.map(([group, items]) => v_flex().gap(6)
             .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
             .children(items.map(row))))));
   }

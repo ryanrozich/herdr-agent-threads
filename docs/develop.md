@@ -83,6 +83,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
 | `pinned.png` | 1760x1150 | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin` | `1904 96 3512 2232` |
 | `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
+| `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
 | `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
 | `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
