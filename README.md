@@ -75,14 +75,14 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 <td width="50%" valign="top"><a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests"></a><br>Typing "tests" after <code>/</code> narrows six turns to three.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it"></a><br>A pasted image is a tile over your message. In an open turn a click on the tile shows it larger.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it"></a><br>A pasted image is a tile over your message. In an open turn a click on the tile shows it larger, and a click on that opens the viewer.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left"></a><br>With agent messages on, a subagent's report is a plum bubble on the left, under its name.</td>
 </tr>
 <tr>
 <td colspan="2" valign="top"><a href="docs/screenshots/quote.png"><img src="docs/screenshots/quote.png" alt="The terminal prompt holding a quoted line, beside the pane"></a><br>After <code>q</code>, the prompt holds the reply as a <code>&gt;</code> quote, with the cursor under it.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/days.png"><img src="docs/screenshots/days.png" alt="The list with a band for each day"></a><br>A session that runs over several days gets a band for each day, with its turn count.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/days.png"><img src="docs/screenshots/days.png" alt="The list scrolled into a day, with that day's pill in a strip above it"></a><br>A session that runs over several days gets a band for each day, with its turn count. While you scroll through a day, its pill stays in a strip of its own above the list.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/agents.png"><img src="docs/screenshots/agents.png" alt="The pane beside Codex, OpenCode, Pi, Cursor, Antigravity and Amp"></a><br>The pane beside Codex, OpenCode, Pi, Cursor and Antigravity, each with its own mark, and beside Amp, which it does not read. Each shows what its agent records, so Cursor's turn has no tokens or model.</td>
 </tr>
 <tr>
@@ -92,6 +92,10 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Two pinned turns in the Pinned column beside the list"></a><br>Two pinned turns in the Pinned column beside the list. Each pinned turn shows its pin number in its header.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/updating.png"><img src="docs/screenshots/updating.png" alt="A finished turn with an Updating line under it"></a><br>A background task woke the agent after the last turn ended. The turn keeps its reply, and the Updating line shows the clock, tool calls and what the agent said last.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer filling the Herdr window, on the first of two images"></a><br>The image viewer fills the Herdr window. Left and Right step through the message's images, and Esc closes it.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/width.png"><img src="docs/screenshots/width.png" alt="A wide Threads pane with its turns in a centred column and a Fit button in the header"></a><br>With Keep to reading width off, a wider pane keeps its turns in a centred column, and the Fit button (or <code>w</code>) brings it back to 545 px.</td>
 </tr>
 </table>
 
