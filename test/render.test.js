@@ -115,7 +115,7 @@ function herdrRest() { return {
   focused: () => focusNow, props: () => state.props,
   run: (name, args) => { log.push(["run", name, args ?? null]); if (name === "pane.focus") afterFocus(args); return null; },
   shared: (k) => state.shared[k], setShared: (k, v) => { state.shared[k] = v; },
-  closeOverlay: (id) => { closed.push(id); return null; }, openOverlay: (spec) => { overlays.push(spec); return `ov${overlays.length}`; }, notify: () => null, nextCommand: never,
+  closeOverlay: (id) => { closed.push(id); return null; }, openOverlay: (spec) => { overlays.push(spec); return `ov${overlays.length}`; }, notify: (n) => { log.push(["notify", n]); return null; }, nextCommand: never,
 }; }
 
 // main.js finds its scripts under appHome()/mods/agent-threads.
@@ -636,15 +636,18 @@ test("in Select view q quotes what ⌘C copied from the reply, and never the who
   expect(v.selectHint()).toBe("⌘C, then q quotes it · s returns");
 });
 
-test("the footer offers s select with a turn open and q quote with a local terminal", async () => {
+test("the footer is one row of the most-used keys with q quote for a local terminal, and ? keys last", async () => {
   const { v, cx } = await quotePane();
   const hints = () => v.footerHints().map(([k, l]) => `${k} ${l}`);
-  expect(hints()).toContain("s select");
-  expect(hints().indexOf("q quote")).toBe(hints().indexOf("c copy reply") + 1);
+  v.width = 545; // the reading width
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "/ filter", "p pin", "? keys"]);
+  v.width = 380;
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "? keys"]);
   v.toggle(v.sel, cx);
   expect(hints()).not.toContain("s select");
   v.width = 240;
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "/ filter", "p pin", "v pinned"]);
+  // What does not fit gives way from the right; ? keys stays.
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "? keys"]);
   // quoteKey from the settings file.
   v.width = 380;
   v.applyPrefs('{"quoteKey": "y"}');
@@ -1524,7 +1527,7 @@ test("C2: plain chip names, and i or a click on the stats shows a legend of the 
   expect(texts.some((x) => / tok$|^compacted$|^cache \d/.test(x))).toBe(false);
   const kinds = () => v.rows().filter((r) => partOf(r, key)).map((r) => r.kind);
   expect(kinds()).not.toContain("legend");
-  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).toContain("i explain");
+  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
   v.key(keyEv("i"), cx);
   expect(kinds()).toContain("legend");
   expect(kinds().indexOf("legend")).toBe(kinds().indexOf("stats") + 1);
@@ -1549,9 +1552,7 @@ test("C2: plain chip names, and i or a click on the stats shows a legend of the 
   // A turn without a cache count or compaction lists only its own chips.
   const plain = v.current().turns.find((x) => !x.compactions && stats(x).cachePct == null);
   if (plain) expect(v.legendEntries(plain).map((x) => x[1].split(":")[0])).toEqual(v.statChips(plain).map((c) => ({ tokens: "tokens", duration: "duration", model: "model · effort", tools: "tool calls" })[c[0]]));
-  // The footer hint shows from 300 px, with a turn open.
-  v.width = 240;
-  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
+  // The footer keeps to the most-used keys; i is on the ? sheet.
   v.width = 380;
   v.open.clear();
   expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
@@ -2439,7 +2440,7 @@ test("the pins show in the Pinned view at every width; the header and footer say
   const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
   expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
   expect(v.footerHints().map((x) => x[1])).toContain("pin");
-  expect(v.footerHints().map((x) => x.join(" "))).toContain("v pinned");
+  expect(v.footerHints().map((x) => x.join(" "))).toContain("? keys");
   v.sel = k[0];
   expect(v.footerHints().map((x) => x[1])).toContain("unpin");
   v.quoteKey = "p";
@@ -2473,7 +2474,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins in pin order,
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Back to all turns (v)", "pinned", true, null, "All turns"]);
   const rows = v.rows();
   expect(rows.filter((r) => r.kind === "turn").map((r) => [r.key, r.pinNo])).toEqual([[k[3], 1], [k[0], 2], [k[5], 3]]);
-  expect(v.footerHints().map((x) => x.join(" "))).toEqual(expect.arrayContaining(["↑↓ next pin", "p unpin", "1-5 go to pin", "v all turns"]));
+  expect(v.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "c copy", "q quote", "? keys"]);
   // The selection moves from pin to pin, and Enter opens the pin at its place.
   v.sel = k[3];
   v.key(keyEv("down"), cx);
@@ -2585,7 +2586,8 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 545 }]);
-  expect(w.footerHints().map((x) => x.join(" "))).toContain("- = width");
+  // The column's footer: the same one row, ? keys last (- and = are on the sheet).
+  expect(w.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "? keys"]);
   // Threads closes: the column closes too, once.
   log = [];
   state.panes = state.panes.filter((p) => p.pane !== "p2");
@@ -2661,7 +2663,8 @@ test("the header fits at the widths Threads has beside the column: the Pinned bu
   const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
   v.sel = keys()[0];
   v.action("pin", cx);
-  for (const [width, text] of [[260, 60], [380, 110], [500, 160], [640, 300]]) {
+  // From 440 px the agent's state ("Done", about 47 px) sits beside the badge.
+  for (const [width, text] of [[260, 60], [380, 110], [500, 110], [640, 250]]) {
     v.width = width;
     const ids = v.headerButtons().map((b) => b[0]);
     expect(ids.includes("th-agents")).toBe(width >= 300);
@@ -3191,4 +3194,234 @@ test("the day while scrolling has a strip of its own above the list, never over 
   // The list's height is measured from its own box, under the strip.
   handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: 380, height: 500 }, cx);
   expect(v.listH).toBe(500);
+});
+
+// ---- design-review picks (2026-11-11) -----------------------------------------------------
+
+test("a pinned turn shows its pin number in the list's top line, as in the Pinned view", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys();
+  for (const i of [3, 1]) { v.sel = k[i]; v.action("pin", cx); }
+  v.width = 545;
+  const texts = (r) => { rec = []; v.item(theme, r, true, 200); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const row = (key) => v.rows().find((r) => r.key === key && r.kind === "turn");
+  // Pinned second and first: the list shows 2 and 1 beside the pin, like the column.
+  expect(v.pinNumber(row(k[1]).turn)).toBe(2);
+  expect(texts(row(k[1]))).toContain("2");
+  expect(texts(row(k[3]))).toContain("1");
+  expect(v.pinNumber(row(k[0]).turn)).toBe(null);
+  expect(texts(row(k[0]))).not.toContain("1");
+  // The open card's head carries it too, and unpinning drops it.
+  v.toggle(k[1], cx);
+  const head = v.rows().find((r) => r.kind === "head" && r.key === `h:${k[1]}`) ?? v.rows().find((r) => r.kind === "head");
+  rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  expect(hs).toContain("2");
+  v.sel = k[1]; v.action("pin", cx);
+  expect(v.pinNumber(v.findTurn(k[3]))).toBe(1);
+  expect(v.pinNumber(v.findTurn(k[1]))).toBe(null);
+  draw(v, cx);
+});
+
+test("the first-run notice and the unsupported note name every agent Threads reads, Antigravity included", async () => {
+  const g = new Threads();
+  const cx = makeCx();
+  state = { terminals: [], panes: [{ pane: "p9", tab: "A", terminal: null }], props: { overlay: "ov9" }, shared: {} };
+  focusNow = { pane: "p9" };
+  log = [];
+  g.init(state.props, cx);
+  cx.flush(10);
+  const n = log.find((x) => x[0] === "notify")?.[1];
+  expect(n.body).toBe("Focus a Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity terminal first, then open Threads beside it.");
+  const src = readFileSync(join(modDir, "main.js"), "utf8");
+  expect(src).toContain("Threads reads ${AGENT_NAMES.replace(");
+  expect("Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity".replace(/ or ([^ ]+)$/, " and $1")).toBe("Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity");
+});
+
+test("the header shows the agent's state beside the badge: Working, Needs you, Done or Exited, and nothing it cannot know", async () => {
+  const { HARNESS } = await import("../mods/agent-threads/harness.js");
+  const { v, cx } = await pane(fixture("--only", "3"));
+  v.width = 545;
+  const word = () => v.agentStateNow()?.word ?? null;
+  const ids = () => { rec = []; v.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "id").map((e) => e[1]); };
+  const strs = () => { rec = []; v.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  // Claude Code reports its status to Herdr.
+  expect(v.current().turns.at(-1).done).toBe(true);
+  state.terminals[0].status = "idle";
+  expect(word()).toBe("Done");
+  expect(strs()).toContain("Done");
+  expect(ids()).toContain("th-state");
+  state.terminals[0].status = "working";
+  expect(word()).toBe("Working");
+  state.terminals[0].status = "blocked";
+  expect(word()).toBe("Needs you");
+  expect(v.stateTip(v.agentStateNow())).toBe("Claude is waiting for you in the terminal");
+  state.terminals[0].status = "idle";
+  // The header text keeps its room: the layout counts the state's width.
+  const withState = v.headerLayout().text;
+  v.res = { ...v.res, ended: "exited" };
+  expect(word()).toBe("Exited");
+  v.res = { ...v.res, ended: null };
+  // Under 440 px the word goes and a dot sits on the badge's corner; its tooltip says it.
+  v.width = 380;
+  expect(ids()).not.toContain("th-state");
+  expect(ids()).toContain("th-state-dot");
+  expect(v.badgeTip()).toMatch(/^Done: Claude finished its newest turn · Reading t4/);
+  v.width = 545;
+  expect(ids()).not.toContain("th-state-dot");
+  expect(withState).toBeGreaterThan(100);
+  // An agent that reports no status (Codex here): the transcript says only that the newest
+  // turn ended. A running turn gets no word, even while Herdr says "working".
+  v.agent = () => HARNESS.codex;
+  state.terminals[0].status = "working";
+  expect(word()).toBe("Done");
+  expect(v.stateTip(v.agentStateNow())).toBe("Codex finished its newest turn. Codex reports no live status, so this is read from the transcript.");
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  apply(v.current(), { k: "p", o: "human", t: "One more change", ts: "2026-11-01T10:00:00.000Z" });
+  expect(v.current().turns.at(-1).done).toBeFalsy();
+  expect(word()).toBe(null);
+  expect(ids()).not.toContain("th-state");
+  state.terminals[0].status = "blocked";
+  expect(word()).toBe(null);
+  draw(v, cx);
+  expect(JSON.parse(JSON.stringify(state.shared["threads.debug"].t4)).state).toBe(null);
+});
+
+// A transcript cut before its third prompt, and the rest, to append as a live session would.
+function grownFixture() {
+  const file = fixture("--only", "3");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  const prompts = lines.map((l, i) => [JSON.parse(l), i]).filter(([j]) => j.type === "user" && !j.isMeta && (typeof j.message?.content === "string" || j.message?.content?.some?.((c) => c.type === "text"))).map(([, i]) => i);
+  const cut = prompts[2];
+  writeFileSync(file, `${lines.slice(0, cut).join("\n")}\n`);
+  return { file, rest: `${lines.slice(cut).join("\n")}\n` };
+}
+
+// The list as gpui draws it with only the rows from start to end on screen.
+function drawRange(v, start, end) {
+  const rows = v.rows();
+  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
+}
+
+test("a turn that comes in below the screen puts a dot on the latest button until the end of the list shows", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, rest } = grownFixture();
+  const { v, cx } = await pane(file);
+  expect(v.current().turns.length).toBe(2);
+  v.width = 380; // the latest button is hidden under 440 px until there is something new
+  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
+  // Reading the first turn, with the old last row still in view (as on the rig).
+  v.sel = v.turnKeys(v.rows())[0];
+  v.follow = false;
+  drawRange(v, 0);
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.length).toBe(3);
+  // The next draw decides; the new row is off screen.
+  expect(v.unseen).toBe("pending");
+  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
+  v.stickyDue = false;
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.unseen).toBe(true);
+  expect(v.stickyDue).toBe(true);
+  const latest = v.headerButtons().find((b) => b[0] === "th-latest");
+  expect(latest[7]).toBe(true);
+  expect(latest[2]).toBe("New below · jump to latest (End)");
+  rec = []; v.header(theme); const hids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
+  expect(hids).toContain("th-latest-dot");
+  expect(v.sel).toBe(v.turnKeys(v.rows())[0]); // the selection stays where the reader is
+  // A draw that reaches the end of the list clears it, and asks the timer to redraw.
+  v.stickyDue = false;
+  draw(v, cx);
+  expect(v.unseen).toBe(false);
+  expect(v.stickyDue).toBe(true);
+  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
+  // End clears it too.
+  v.unseen = true;
+  v.action("latest", cx);
+  expect(v.unseen).toBe(false);
+});
+
+test("no dot when the new end of the list draws on screen, or when the list follows the newest turn", async () => {
+  const { appendFileSync } = await import("node:fs");
+  for (const how of ["bottom", "follow"]) {
+    const { file, rest } = grownFixture();
+    const { v, cx } = await pane(file);
+    v.follow = how === "follow";
+    if (how === "bottom") v.sel = v.turnKeys(v.rows())[0];
+    appendFileSync(file, rest);
+    v.read(cx);
+    await settle(v);
+    expect(v.current().turns.length).toBe(3);
+    v.stickyDue = false;
+    draw(v, cx); // every row on screen
+    expect(v.unseen).toBe(false);
+    expect(v.stickyDue).toBe(false); // nothing to redraw: the dot never showed
+    if (how === "follow") expect(v.sel).toBe(v.turnKeys(v.rows()).at(-1));
+  }
+  // The reply to the newest turn counts as new too: its turn ends.
+  const { v } = await scripted([{ k: "p", o: "human", t: "Fix the cart total", ts: at(0) }]);
+  const before = v.newestSig();
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  apply(v.current(), { k: "t", t: "Fixed." });
+  apply(v.current(), { k: "d", ms: 900, ts: at(1) });
+  v.noteNew(before);
+  expect(v.unseen).toBe("pending");
+  v.noteNew(v.newestSig());
+  expect(v.unseen).toBe("pending"); // nothing new since: unchanged
+});
+
+test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it, and the footer's ? keys opens it", async () => {
+  const { keySheet } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await quotePane();
+  v.width = 545;
+  expect(v.footerHints().at(-1)).toEqual(["?", "keys"]);
+  v.key(keyEv("?", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.keysOpen).toBe(true);
+  const c = frame(v, cx);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids).toEqual(expect.arrayContaining(["th-keys", "th-keys-list", "th-keys-close"]));
+  const texts = c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  for (const [group, items] of keySheet("q")) {
+    expect(texts).toContain(group);
+    for (const [, what] of items) expect(texts).toContain(what);
+  }
+  // Esc closes it before anything else it would back out of (here the open turn).
+  if (!v.open.has(v.sel)) v.toggle(v.sel, cx);
+  v.key(keyEv("escape"), cx);
+  expect(v.keysOpen).toBe(false);
+  expect(v.open.has(v.sel)).toBe(true);
+  // ? again closes it; Shift-/ is the same key.
+  v.key(keyEv("/", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.keysOpen).toBe(true);
+  v.key(keyEv("?", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.keysOpen).toBe(false);
+  // The footer's "? keys" and the sheet's close button.
+  const f = frame(v, cx);
+  handlerAfterId(f, "th-keys-hint", "on_click")({}, cx);
+  expect(v.keysOpen).toBe(true);
+  const g = frame(v, cx);
+  // An icon button sets more styles between its id and its handler than handlerAfterId scans.
+  const at = g.findIndex((e) => e[0] === "id" && e[1] === "th-keys-close");
+  g.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.keysOpen).toBe(false);
+  // While the search field has the keyboard, ? types.
+  v.action("filter", cx);
+  v.key(keyEv("?", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.keysOpen).toBe(false);
+  // Opening settings closes the sheet, and the sheet closes settings.
+  v.action("escape", cx);
+  v.action("keys", cx);
+  v.action("settings", cx);
+  expect([v.keysOpen, v.settingsOpen]).toEqual([false, true]);
+  v.action("keys", cx);
+  expect([v.keysOpen, v.settingsOpen]).toEqual([true, false]);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
+  // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
+  v.footerH = 38;
+  v.rootH = 1100;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 4 * 22 + 22 * 25 + 3 * 12 + 8);
+  v.rootH = 500;
+  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });

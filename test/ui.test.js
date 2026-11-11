@@ -10,6 +10,7 @@ import {
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox,
+  keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -536,4 +537,54 @@ test("galleryBox: an image fits the room with its shape, never past its own pixe
   expect(galleryBox({ w: 300, h: 200 }, 1400, 900)).toEqual({ w: 300, h: 200 });
   expect(galleryBox({ w: 0, h: 0 }, 1400, 900)).toEqual({ w: 1400, h: 900 });
   expect(galleryBox(null, 10, 10)).toEqual({ w: 40, h: 40 });
+});
+
+test("? opens the key sheet, as ? or Shift-/, but not while the search field types", () => {
+  expect(keyAction(key("?", { shift: true }))).toBe("keys");
+  expect(keyAction(key("/", { shift: true }))).toBe("keys");
+  expect(keyAction(key("?"))).toBe("keys");
+  expect(keyAction(key("?", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("/"))).toBe("filter");
+});
+
+test("the key sheet lists every key the panel takes, and a pin key gives way to a quote key of the same letter", () => {
+  const shown = (q) => new Set(keySheet(q).flatMap(([, items]) => items.flatMap(([keys]) => keys)));
+  const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End" };
+  const all = shown("q");
+  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G"]) {
+    expect(all.has(names[k] ?? k)).toBe(true);
+  }
+  expect(all.has("1-5")).toBe(true);
+  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "View"]);
+  expect(shown("p").has("p")).toBe(true); // as the quote key
+  expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
+  expect(keySheet("u").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "u")).toBe(false);
+});
+
+test("the footer's hints keep to one row: what does not fit gives way from the right, ? keys last", () => {
+  const hints = [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ["q", "quote"], ["/", "filter"], ["p", "pin"], ["?", "keys"]];
+  const total = (h) => h.reduce((s, x) => s + hintWidth(x), 0) + 10 * (h.length - 1) + 26;
+  expect(fitHints(hints, 2000)).toEqual(hints);
+  for (const w of [200, 240, 300, 380, 440, 545]) {
+    const out = fitHints(hints, w);
+    expect(out.at(-1)).toEqual(["?", "keys"]);
+    expect(out.length === 1 || total(out) <= w).toBe(true);
+    expect(out).toEqual(hints.filter((h) => out.includes(h))); // order kept, a prefix plus ? keys
+    expect(out.slice(0, -1)).toEqual(hints.slice(0, out.length - 1));
+  }
+  expect(fitHints(hints, 20)).toEqual([["?", "keys"]]);
+});
+
+test("the agent's state: Claude Code's reported status, else only what the transcript shows", () => {
+  const done = { done: true }, running = { done: false };
+  expect(agentState({ ended: "exited", status: "working", reports: true, newest: running })).toEqual({ word: "Exited", tone: "dim" });
+  expect(agentState({ status: "blocked", reports: true, newest: running })).toEqual({ word: "Needs you", tone: "blocked" });
+  expect(agentState({ status: "working", reports: true, newest: done })).toEqual({ word: "Working", tone: "working" });
+  expect(agentState({ status: "idle", reports: true, newest: done })).toEqual({ word: "Done", tone: "done" });
+  expect(agentState({ status: "idle", reports: true, newest: running })).toBe(null);
+  // No reported status: never Working or Needs you, and nothing for a running turn.
+  expect(agentState({ status: "working", reports: false, newest: running })).toBe(null);
+  expect(agentState({ status: "blocked", reports: false, newest: done })).toEqual({ word: "Done", tone: "done" });
+  expect(agentState({ reports: false, newest: null })).toBe(null);
+  expect(agentState()).toBe(null);
 });

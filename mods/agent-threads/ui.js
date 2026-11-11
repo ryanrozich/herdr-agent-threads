@@ -8,7 +8,7 @@ const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
-  "-": "narrower", "=": "wider", w: "fit",
+  "-": "narrower", "=": "wider", w: "fit", "?": "keys",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
 // chose it still has the header's pin button.
@@ -19,11 +19,61 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const m = e?.modifiers ?? {};
   if (m.platform || m.control || m.alt || m.function) return null;
   const k = e?.key ?? "";
-  if (m.shift) return k === "g" || k === "G" ? "latest" : null;
+  // ? is Shift-/ on most layouts; Herdr may name it either way.
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   if (k === "G") return "latest";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
+// Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
+// to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then.
+export function keySheet(quoteKey = "q") {
+  const pin = (k) => quoteKey !== k;
+  return [
+    ["List", [
+      [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space", "o"], "Open or close a turn"],
+      [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      [["a"], "Show or hide agent messages"], [["Esc"], "Back out: search, Select view, settings, the open turn"],
+    ]],
+    ["Open turn", [
+      [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
+      [["i"], "Explain the stats"], [["t"], "Focus the terminal"],
+    ]],
+    ["Pins", [
+      ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
+      ...(pin("u") ? [[["u"], "Undo the last unpin"]] : []), [["v"], "Open or go to the Pinned column"],
+    ]],
+    ["View", [
+      [["w"], "Fit to the reading width"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+    ]],
+  ];
+}
+
+// The footer's hints on one row: an estimate of each hint's width (the key cap at 10.5 px,
+// a 4 px gap, the label at 11.5 px), and the hints that fit in width px. The last hint
+// ("? keys") always stays; the one before it gives way first.
+export function hintWidth([k, label]) {
+  return Math.max(18, 12 + Math.ceil(String(k).length * 6.6)) + 4 + Math.ceil(String(label).length * 6.4);
+}
+export function fitHints(hints, width, gap = 10, pad = 26) {
+  const out = [...hints];
+  const total = () => out.reduce((sum, h) => sum + hintWidth(h), 0) + gap * Math.max(0, out.length - 1) + pad;
+  while (out.length > 1 && total() > width) out.splice(out.length - 2, 1);
+  return out;
+}
+
+// The agent's state for the header: { word, tone } or null. Only Claude Code reports a live
+// status to Herdr (reports); for the others the transcript says only that the newest turn
+// ended, so "Done" is all they get, and a running turn shows no word rather than a guess
+// (it may be waiting on an approval). tone names a theme colour.
+export function agentState({ ended = null, status = null, reports = false, newest = null } = {}) {
+  if (ended) return { word: "Exited", tone: "dim" };
+  if (reports && status === "blocked") return { word: "Needs you", tone: "blocked" };
+  if (reports && status === "working") return { word: "Working", tone: "working" };
+  if (newest?.done) return { word: "Done", tone: "done" };
+  return null;
+}
+
 // Letters the panel already uses, so the quote key cannot be one of them.
 export const TAKEN_LETTERS = Object.freeze(Object.keys(KEYS).filter((k) => /^[a-z]$/.test(k)));
 
