@@ -1,0 +1,117 @@
+<title>Agent Threads Design</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; a two-up gallery of frames; a lightbox over everything. Mirrors Herdr's graphite chrome. */
+:root{
+  --bg:#f4f5f7; --panel:#ffffff; --raised:#eceef2; --border:#d9dce3;
+  --fg:#16181d; --muted:#5b6170; --dim:#868c99; --accent:#3b6fd8; --done:#2f8a5b; --warn:#a4660b;
+  --ui:"Geist",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --shade:rgba(10,12,16,.92);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111317; --panel:#181b20; --raised:#20242b; --border:#2b3038;
+  --fg:#e7e9ee; --muted:#a2a8b4; --dim:#737a87; --accent:#7aa2f7; --done:#5fbf8a; --warn:#e0a94a; --shade:rgba(5,6,8,.94); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111317; --panel:#181b20; --raised:#20242b; --border:#2b3038;
+  --fg:#e7e9ee; --muted:#a2a8b4; --dim:#737a87; --accent:#7aa2f7; --done:#5fbf8a; --warn:#e0a94a; --shade:rgba(5,6,8,.94); color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--ui);font-size:15px;line-height:1.55;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 64px}
+main{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+h1,h2{text-wrap:balance;margin:0;font-weight:600;letter-spacing:-.01em}
+h1{font-size:28px} h2{font-size:18px}
+p{margin:0;max-width:68ch}
+.eyebrow{font-family:var(--mono);font-size:12px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+header{display:flex;flex-direction:column;gap:10px}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font-family:var(--mono);font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;color:var(--muted);background:var(--panel)}
+section{display:flex;flex-direction:column;gap:14px}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+figure{margin:0;display:flex;flex-direction:column;gap:8px;min-width:0}
+figure button{all:unset;cursor:zoom-in;display:block;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--panel);aspect-ratio:4/3}
+figure button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+figure img{width:100%;height:100%;object-fit:cover;object-position:top;display:block;transition:transform .2s}
+figure button:hover img{transform:scale(1.02)}
+figcaption{font-size:13px;color:var(--muted)} figcaption b{color:var(--fg);font-weight:500}
+ol,ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px;max-width:72ch}
+.ask{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.ask li b{font-weight:600}
+.rec{color:var(--done);font-family:var(--mono);font-size:12px}
+.note{border-left:3px solid var(--warn);padding:2px 0 2px 12px;color:var(--muted)}
+code{font-family:var(--mono);font-size:.88em;background:var(--raised);padding:1px 5px;border-radius:4px}
+#lb{position:fixed;inset:0;background:var(--shade);z-index:20;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 12px) max(12px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(12px,env(safe-area-inset-left,0px))}
+#lb .bar{display:flex;align-items:center;gap:10px;color:#e7e9ee;font-size:13px}
+#lb .bar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lb button{font:inherit;color:#e7e9ee;background:#252a32;border:1px solid #3a404b;border-radius:5px;padding:5px 11px;cursor:pointer}
+#lb button:focus-visible{outline:2px solid #7aa2f7}
+#lb .stage{flex:1;overflow:auto;margin-top:10px;display:flex;justify-content:center;align-items:flex-start}
+#lb img{max-width:none;width:auto;max-height:none;cursor:zoom-out}
+#lb.fit img{max-width:100%;max-height:100%;cursor:zoom-in;margin:auto}
+@media (prefers-reduced-motion:reduce){figure img{transition:none}}
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Design · revision 2 · Nov 11, 2026</div>
+    <h1>Agent Threads, as shipped</h1>
+    <p>The Pen file now draws Agent Threads as it runs today, at herdr-agent-threads main a67b7dd (PRs 8 to 18): the chat look, the agent's state in the header, the new-reply dot, the one-row footer, the ? key sheet, pin numbers, and the Pinned column with its day pills. Revision 1 (the Nov 1 row design) and the Nov 8 chat-look proposal stay in git history.</p>
+    <div class="meta"><span class="chip">6 frames</span><span class="chip">synthetic acme-web session</span><span class="chip">Pen source: designs/herdr-threads.pen</span><span class="chip">matches the shipped mod</span></div>
+  </header>
+
+  <section>
+    <h2>Frames</h2>
+    <p style="color:var(--muted)">Click any frame to open it full size. Arrow keys step through the frames, Z switches between fit and actual size, and Esc closes. The last four images are the shipped mod, for comparison.</p>
+    <div class="gallery" id="gallery"></div>
+  </section>
+
+  <section>
+    <h2>What changed since revision 1</h2>
+    <ul>
+      <li><b>Chat look (PR 8).</b> Your message is a slate bubble on the right under its number and time, and the reply is plain text under the agent's name, with stats in one mono line. Day bands mark each day.</li>
+      <li><b>Pins (PRs 6, 8, 16, 18).</b> p pins a turn and 1 to 5 return to it. Pins show in a Pinned column beside the list (or in the same pane under 480 px), with the pin number on each pinned turn's meta line. A compact day pill sits above a pin whose day differs from the pin above it.</li>
+      <li><b>Header (PR 16).</b> A dot and word beside the badge say Working, Needs you, Done or Exited. Under 440 px the dot moves onto the badge. The jump-to-latest button gets a dot when a turn arrives below.</li>
+      <li><b>Footer and keys (PR 16).</b> The footer is one row ending in ? keys, and ? opens a sheet with every key in four groups.</li>
+      <li><b>Removed from the design.</b> Cost chips, the row layout, the three-harness frame and the remote states. The chat-look proposal's other pin layouts and the quote tracking frames were not built, so they are not in this file.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>How it was checked</h2>
+    <p>Each frame was exported and compared with the shipped mod's screenshots, which were taken in an isolated Herdr window on the same synthetic session. Colours are the running panel's, in the graphite and paper themes. The design does not show the live behaviour: scrolling, selection, the midnight change from Today to Yesterday, or how a theme other than graphite and paper looks.</p>
+  </section>
+</main>
+
+<div id="lb" class="fit" hidden role="dialog" aria-modal="true" aria-label="Frame viewer">
+  <div class="bar"><span id="lbcap"></span><button id="lbprev" aria-label="Previous frame">←</button><button id="lbnext" aria-label="Next frame">→</button><button id="lbzoom">Actual size</button><button id="lbclose" aria-label="Close">Esc</button></div>
+  <div class="stage" id="lbstage"><img id="lbimg" alt=""></div>
+</div>
+
+<script>
+const FRAMES=[
+ ["previews/01-threads-dark.jpg","Threads · dark","545 px, graphite. A day band, closed turns, and turn #7 open and selected with its code block, stats and action bar. The footer is one row."],
+ ["previews/02-threads-light.jpg","Threads · light","The same in paper."],
+ ["previews/03-pinned-column-day-pills.jpg","Pinned column with day pills","Threads with three pins and the Pinned column beside it. Pins keep their order, so Yesterday shows twice."],
+ ["previews/04-pinned-view-narrow.jpg","Pinned view · 400 px","Under 480 px the same pane shows the pins, with the same day pills."],
+ ["previews/05-key-sheet.jpg","The ? key sheet","Every key in List, Open turn, Pins and View."],
+ ["previews/06-header-states-and-parts.jpg","Header states and parts","Working, Needs you, Done, Exited, an agent with no status, the new-reply dot, the narrow header and footer, the day band and pill, and a pinned turn's meta line."],
+ ["shipped/panel.jpg","Shipped · Threads","The running mod (README panel.png), for comparison with frame 1."],
+ ["shipped/pinned.jpg","Shipped · Pinned column","The running mod (README pinned.png), for comparison with frame 3."],
+ ["shipped/pinned-narrow.jpg","Shipped · Pinned view at 400 px","From the PR 18 review, for comparison with frame 4."],
+ ["shipped/keys.jpg","Shipped · ? sheet","The running mod (README keys.png), for comparison with frame 5."],
+];
+const g=document.getElementById('gallery'),lb=document.getElementById('lb'),img=document.getElementById('lbimg'),cap=document.getElementById('lbcap'),zoom=document.getElementById('lbzoom');
+let cur=0,opener=null;
+FRAMES.forEach(([src,t,d],i)=>{const f=document.createElement('figure');
+ f.innerHTML=`<button aria-label="Open ${t} full size"><img src="${src}" alt="${t}" loading="lazy"></button><figcaption><b>${t}.</b> ${d}</figcaption>`;
+ f.querySelector('button').addEventListener('click',e=>{opener=e.currentTarget;show(i)});g.appendChild(f)});
+function show(i){cur=(i+FRAMES.length)%FRAMES.length;const [src,t]=FRAMES[cur];img.src=src;img.alt=t;cap.textContent=`${cur+1} / ${FRAMES.length} · ${t}`;
+ lb.classList.add('fit');zoom.textContent='Actual size';lb.hidden=false;document.getElementById('lbclose').focus();document.getElementById('lbstage').scrollTo(0,0)}
+function close(){lb.hidden=true;opener&&opener.focus()}
+function toggle(){lb.classList.toggle('fit');zoom.textContent=lb.classList.contains('fit')?'Actual size':'Fit'}
+document.getElementById('lbprev').onclick=()=>show(cur-1);document.getElementById('lbnext').onclick=()=>show(cur+1);
+document.getElementById('lbclose').onclick=close;zoom.onclick=toggle;img.onclick=toggle;
+document.addEventListener('keydown',e=>{if(lb.hidden)return;if(e.key==='Escape')close();else if(e.key==='ArrowRight')show(cur+1);else if(e.key==='ArrowLeft')show(cur-1);else if(e.key==='z'||e.key==='Z')toggle()});
+</script>
