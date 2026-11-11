@@ -91,7 +91,7 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 <td width="50%" valign="top"><a href="docs/screenshots/light.png"><img src="docs/screenshots/light.png" alt="Agent Threads beside a terminal in the light theme"></a><br>The same session in Herdr's light theme.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns from two days in the Pinned column beside the list, each under a day pill"></a><br>Three pinned turns in the Pinned column beside the list, oldest first. Each pinned turn shows its pin number beside its pin, in the list and in the column, and a day pill sits above each day's first pin.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns from two days in the Pinned column beside the list, oldest first, under one day pill per day"></a><br>Three pinned turns in the Pinned column beside the list, oldest first. Each pinned turn shows its pin number beside its pin, in the list and in the column, and a day pill sits above each day's first pin.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/updating.png"><img src="docs/screenshots/updating.png" alt="A finished turn with an Updating line under it"></a><br>A background task woke the agent after the last turn ended. The turn keeps its reply, and the Updating line shows the clock, tool calls and what the agent said last. The header says Working.</td>
 </tr>
 <tr>
