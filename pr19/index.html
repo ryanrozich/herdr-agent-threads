@@ -1,0 +1,78 @@
+<title>Pinned Time Order</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of before/after pairs, each pair side by side, stacking on phones. */
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); }
+code { font: 13px var(--mono); }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.steps { display: grid; gap: 14px; }
+.steps ol { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 75ch; }
+.group { display: grid; gap: 28px; }
+.pair, .single { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 75ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.single figure { max-width: 520px; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · draft PR</div>
+  <h1>Pinned column in time order</h1>
+  <p class="lede">Pins now run oldest first, so each day shows once, and their numbers follow that order. Shots are of the synthetic acme-web session, taken on 11 Nov, so Today is Wed 11 Nov. Before is main at a67b7dd; after is this branch. Click any shot to open it full size; arrow keys step through them and Esc closes.</p>
+</header>
+<section class="steps"><h2>What to test</h2><ol><li><strong>Install.</strong> Reinstall Agent Threads from the <code>pin-time-order</code> branch. Your saved pins stay; nothing needs moving.</li><li><strong>Your session.</strong> Open the Pinned column on the session where Monday showed twice. The pins now run oldest first, so each day shows once under its pill, and a lower turn number never sits under a higher one.</li><li><strong>Numbers follow the order.</strong> The top pin is 1. Press <kbd>1</kbd> to <kbd>4</kbd>: each goes to the pin at that place. The list on the left shows the same number beside each pinned turn.</li><li><strong>Pin an older turn.</strong> Pin a turn older than your pins with <kbd>p</kbd>. It goes to the top as 1, and the others move down a number. The toast says which digit brings you back.</li><li><strong>Unpin.</strong> Unpin one with <kbd>p</kbd>. The ones below it move up a number. <kbd>u</kbd> brings it back to its place.</li><li><strong>Narrow view.</strong> Drag Threads under 480 px and press <kbd>v</kbd>: the same order and numbers.</li></ol></section>
+<section class="group"><h2>Before and after</h2><section class="pair"><h3>The Pinned column</h3><p class="note">The same three pins, pinned in the order #3, #7, #5. Before, they showed in that order, so Yesterday showed twice and #5 sat under #7 from today. After, they show oldest first, #3 and #5 under one Yesterday pill and #7 under Today, numbered 1, 2 and 3. The list on the left shows the same numbers.</p><div class="duo"><figure><button class="shot" aria-label="Open The Pinned column, before full size"><img src="img/column-before.jpg" width="1608" height="2136" alt="The Pinned column, before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open The Pinned column, after full size"><img src="img/column-after.jpg" width="1608" height="2136" alt="The Pinned column, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="pair"><h3>The narrow Pinned view (400 px)</h3><p class="note">The same order and numbers in the same pane.</p><div class="duo"><figure><button class="shot" aria-label="Open The narrow Pinned view (400 px), before full size"><img src="img/narrow-before.jpg" width="818" height="2136" alt="The narrow Pinned view (400 px), before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open The narrow Pinned view (400 px), after full size"><img src="img/narrow-after.jpg" width="818" height="2136" alt="The narrow Pinned view (400 px), after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="pair"><h3>Light theme</h3><p class="note">The same in a light theme.</p><div class="duo"><figure><button class="shot" aria-label="Open Light theme, before full size"><img src="img/column-light-before.jpg" width="1608" height="2136" alt="Light theme, before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open Light theme, after full size"><img src="img/column-light-after.jpg" width="1608" height="2136" alt="Light theme, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="pair"><h3>README pinned.png</h3><p class="note">The README shot, retaken with the pins oldest first.</p><div class="duo"><figure><button class="shot" aria-label="Open README pinned.png, before full size"><img src="img/readme-before.jpg" width="1608" height="2136" alt="README pinned.png, before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open README pinned.png, after full size"><img src="img/readme-after.jpg" width="1608" height="2136" alt="README pinned.png, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
