@@ -588,3 +588,39 @@ test("the agent's state: Claude Code's reported status, else only what the trans
   expect(agentState({ reports: false, newest: null })).toBe(null);
   expect(agentState()).toBe(null);
 });
+
+test("o is the outline key, Enter and Space still open, and o stays a letter the quote key cannot take", async () => {
+  const { outlineText, outlineHeight, outlineNumW, TAKEN_LETTERS } = await import("../mods/agent-threads/ui.js");
+  expect(keyAction(key("o"))).toBe("outline");
+  expect(keyAction(key("enter"))).toBe("open");
+  expect(keyAction(key("space"))).toBe("open");
+  expect(keyAction(key("o"), true)).toBe(null); // the search field types it
+  expect(keyAction(key("o"), false, "o")).toBe("outline");
+  expect(TAKEN_LETTERS).toContain("o");
+  const list = keySheet("q").find(([g]) => g === "List")[1];
+  expect(list.find(([k]) => k.includes("o"))[1]).toBe("Outline: one row per turn");
+  expect(list.find(([k]) => k.includes("↵"))[0]).toEqual(["↵", "Space"]);
+  // The Pinned column has no outline, so its sheet leaves o out.
+  const column = keySheet("q", { outline: false }).find(([g]) => g === "List")[1];
+  expect(column.some(([k]) => k.includes("o"))).toBe(false);
+  expect(column.find(([k]) => k.includes("Esc"))[1]).not.toMatch(/outline/);
+  // The row's text: the prompt's first line of the person's own words.
+  expect(outlineText("Fix the login flake\nand the retry")).toBe("Fix the login flake");
+  expect(outlineText("\n\n  Spaced out  \nmore")).toBe("Spaced out");
+  expect(outlineText("> a quoted reply line\n> another\n\nWhat about the backoff?")).toBe("What about the backoff?");
+  expect(outlineText("> only a quote")).toBe("only a quote");
+  expect(outlineText("```ts\nconst x = 1\n```\nwhy is this slow")).toBe("why is this slow");
+  expect(outlineText("```\nonly code\n```")).toBe("only code");
+  expect(outlineText("> a\n```\ncode\n```")).toBe("a");
+  expect(outlineText("")).toBe("");
+  expect(outlineText(null)).toBe("");
+  expect(outlineText("x".repeat(500)).length).toBe(240);
+  // With a search, the text around the first match, on one line.
+  expect(outlineText("one two three four five six seven eight nine ten eleven twelve\nthe retry path", "retry")).toMatch(/^….*retry path$/);
+  expect(outlineText("retry first", "retry")).toBe("retry first");
+  expect(outlineHeight(14)).toBe(30);
+  expect(outlineHeight(18)).toBe(35);
+  expect(outlineHeight(12)).toBe(30);
+  expect(outlineNumW(9)).toBeLessThan(outlineNumW(10));
+  expect(outlineNumW(999)).toBe(Math.ceil(4 * 7.2) + 6);
+});

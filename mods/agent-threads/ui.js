@@ -6,7 +6,7 @@ import { harnessOf } from "./harness.js";
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
 const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
-  end: "latest", enter: "open", space: "open", o: "open", c: "copy", "/": "filter", escape: "escape",
+  end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys",
 };
@@ -27,14 +27,15 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
-// to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then.
-export function keySheet(quoteKey = "q") {
+// to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
+// column has no outline (outline false), so its sheet leaves o out.
+export function keySheet(quoteKey = "q", { outline = true } = {}) {
   const pin = (k) => quoteKey !== k;
   return [
     ["List", [
-      [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space", "o"], "Open or close a turn"],
-      [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
-      [["a"], "Show or hide agent messages"], [["Esc"], "Back out: search, Select view, settings, the open turn"],
+      [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
@@ -115,6 +116,33 @@ export function spans(text, q) {
   if (at < s.length || !out.length) out.push({ t: s.slice(at), hit: false });
   return out;
 }
+
+// ---- the outline (o) ----
+// One row per turn: its number, time, the first line of the prompt and a pin mark. The
+// first line is the person's own words: quote lines ("> ") and fenced code are passed over,
+// and a prompt that is only a quote or code shows its first line. With a search, the text around the
+// first match, as a collapsed row shows it.
+export function outlineText(prompt, q = "") {
+  const text = String(prompt ?? "");
+  if (q) return around(text.replace(/\s+/g, " ").trim(), q).slice(0, 240);
+  let fence = false;
+  let own = null;
+  let code = null;
+  for (const raw of text.split("\n")) {
+    const l = raw.trim();
+    if (/^(```|~~~)/.test(l)) { fence = !fence; continue; }
+    if (!l) continue;
+    if (fence) { code ??= l; continue; }
+    if (!l.startsWith(">")) { own = l; break; }
+    code ??= l.replace(/^(>\s?)+/, "");
+  }
+  return (own ?? code ?? "").slice(0, 240);
+}
+// An outline row's height: the reading line plus 8 px, at least 30 px.
+export function outlineHeight(size = TEXT_SIZE) { return Math.max(30, readType(size).line + 8); }
+// The turn number's column, so the times line up: "#" and the widest number at 7.2 px a
+// character (11.5 px tabular digits), and 6 px after it.
+export function outlineNumW(maxN) { return Math.ceil((String(Math.max(1, maxN | 0)).length + 1) * 7.2) + 6; }
 
 // One line of text that keeps the first match in view: the start is cut to "…" plus
 // `lead` characters before the match.

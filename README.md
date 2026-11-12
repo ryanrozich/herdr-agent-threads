@@ -100,7 +100,7 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="docs/screenshots/keys.png"><img src="docs/screenshots/keys.png" alt="The key sheet over the list, with every key in four groups"></a><br><code>?</code> shows every key in four groups. The footer keeps to the keys you use most.</td>
-<td width="50%" valign="top"></td>
+<td width="50%" valign="top"><a href="docs/screenshots/outline.png"><img src="docs/screenshots/outline.png" alt="The outline: one row per turn under a band for each day"></a><br><code>o</code> shows the outline: one row per turn, so four days of turns fit in one screen. <code>Enter</code> opens the selected turn in the list.</td>
 </tr>
 </table>
 
@@ -127,7 +127,8 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | Key | What it does |
 |---|---|
 | `↑` `↓` or `j` `k` | Move between turns |
-| `Enter`, `Space` or `o` | Open or close a turn |
+| `Enter` or `Space` | Open or close a turn |
+| `o` | Outline: one row per turn, to find an older turn fast |
 | `c` | Copy the reply |
 | `q` | Quote the reply into the terminal |
 | `s` | Select view: the reply's exact Markdown source, to highlight, `Cmd-C`, then `q` |
@@ -145,7 +146,9 @@ Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 | `w` | Fit Threads to the reading width (and the Pinned column to its width) |
 | `,` | Settings |
 | `?` | Every key, grouped (the footer shows only the most-used ones) |
-| `Esc` | Back out: search, Select view, settings, the open turn |
+| `Esc` | Back out: search, Select view, settings, the open turn, the outline |
+
+`o` folds the list into an outline, one row per turn: its number, time, the first line of your prompt and a pin mark when it is pinned. Day bands, the search and the agent messages toggle still apply. `↑` `↓` move in it, `Enter` or `Space` opens the turn in the list at its top, and `Esc` or `o` goes back to the list where you were.
 
 ## Pins
 

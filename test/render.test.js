@@ -642,7 +642,7 @@ test("the footer is one row of the most-used keys with q quote for a local termi
   const { v, cx } = await quotePane();
   const hints = () => v.footerHints().map(([k, l]) => `${k} ${l}`);
   v.width = 545; // the reading width
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "/ filter", "p pin", "? keys"]);
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "/ filter", "p pin", "o outline", "? keys"]);
   v.width = 380;
   expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "? keys"]);
   v.toggle(v.sel, cx);
@@ -3915,7 +3915,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 4 * 22 + 22 * 25 + 3 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 4 * 22 + 23 * 25 + 3 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -4063,4 +4063,173 @@ test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag 
     expect(v.textSel ?? null).toBe(null);
     expect(fillAndBar(frame(v, cx)).fill).toBeGreaterThan(0);
   } finally { herdrVersion = was; }
+});
+
+// ---- the outline (o) ---------------------------------------------------------------------
+
+test("o shows the outline: one row per turn under the same day bands, with the search and the agents toggle applied", async () => {
+  const { outlineHeight } = await import("../mods/agent-threads/ui.js");
+  // Six turns 12 hours apart from 1 Nov 09:12 UTC span three or four local days.
+  const { v, cx } = await pane(fixture("--only", "6", "--gap", "43200"));
+  draw(v, cx);
+  const turns = v.turnKeys(v.rows());
+  const daysBefore = v.rows().filter((r) => r.kind === "day").map((r) => r.key);
+  v.key(keyEv("o"), cx);
+  expect(v.outline).toBe(true);
+  draw(v, cx);
+  const rows = v.rows().filter((r) => r.kind !== "spacer");
+  expect(rows.filter((r) => r.kind === "line").map((r) => r.key)).toEqual(turns);
+  expect(rows.every((r) => r.kind === "line" || r.kind === "day")).toBe(true);
+  expect(rows.filter((r) => r.kind === "day").map((r) => r.key)).toEqual(daysBefore);
+  // Each row is one reading line high, and the list is given that height.
+  for (const r of rows.filter((x) => x.kind === "line")) expect(v.height(r)).toBe(outlineHeight(v.prefs.textSize));
+  expect(outlineHeight(14)).toBe(30);
+  expect(lastList.sizes.filter((h) => h === 30).length).toBe(turns.length);
+  const snap = state.shared["threads.debug"].t4;
+  expect(snap.outline).toBe(true);
+  expect(snap.rows.filter((x) => x.startsWith("line#")).length).toBe(turns.length);
+  expect(snap.detail.find((d) => d.startsWith("line#1 "))).toContain("| Add alt text to the product images");
+  // A search: only the matching turns, no day bands, the match marked.
+  v.query = "Playwright";
+  draw(v, cx);
+  expect(v.rows().filter((r) => r.kind === "line").map((r) => r.turn.n)).toEqual([2, 3]);
+  expect(v.rows().some((r) => r.kind === "day")).toBe(false);
+  v.query = "";
+  // Opening the outline again with o, and closing it with o.
+  v.key(keyEv("o"), cx);
+  expect(v.outline).toBe(false);
+  expect(v.rows().some((r) => r.kind === "line")).toBe(false);
+  // The agents toggle decides which turns show.
+  const { v: w, cx: wx } = await pane(fixture("--only", "2", "--agents"));
+  w.prefs = { ...w.prefs, agentTurns: false };
+  w.action("outline", wx);
+  const own = w.rows().filter((r) => r.kind === "line").length;
+  w.setAgents(true, wx);
+  const all = w.rows().filter((r) => r.kind === "line");
+  expect(all.length).toBeGreaterThan(own);
+  expect(all.some((r) => r.turn.agent)).toBe(true);
+  draw(w, wx);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.startsWith("line#") && d.includes(" agent:"))).toBe(true);
+});
+
+test("in the outline Enter, Space or a click opens that turn in the list at its head; Esc and o go back to where the list was", async () => {
+  const { v, cx } = await pane(fixture("--only", "8"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  // Reading turn 3, open, with the list's top in its reply.
+  v.sel = keys[2];
+  v.toggle(keys[2], cx);
+  v.topKey = v.rows().find((r) => r.kind === "md" && r.key.includes(`:${keys[2]}`))?.key ?? keys[2];
+  const top = v.topKey;
+  v.action("outline", cx);
+  expect(v.rows().some((r) => r.kind === "head")).toBe(false); // open cards fold into their rows
+  // Up, Down, j and k move in it.
+  v.key(keyEv("down"), cx);
+  v.key(keyEv("j"), cx);
+  expect(v.sel).toBe(keys[4]);
+  v.key(keyEv("k"), cx);
+  v.key(keyEv("up"), cx);
+  v.key(keyEv("up"), cx);
+  expect(v.sel).toBe(keys[1]);
+  // Esc: the list as it was, turn 3 selected and open, its reply at the top.
+  v.key(keyEv("escape"), cx);
+  expect(v.outline).toBe(false);
+  expect(v.sel).toBe(keys[2]);
+  expect(v.open.has(keys[2])).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: top, how: "land" });
+  // o leaves it the same way.
+  v.action("outline", cx);
+  v.action("next", cx);
+  v.key(keyEv("o"), cx);
+  expect([v.outline, v.sel]).toEqual([false, keys[2]]);
+  // Enter: turn 6 opens in the list, selected, with its head at the top.
+  v.action("outline", cx);
+  v.sel = keys[5];
+  v.key(keyEv("enter"), cx);
+  expect(v.outline).toBe(false);
+  expect(v.sel).toBe(keys[5]);
+  expect(v.open.has(keys[5])).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: keys[5], how: "head" });
+  expect(v.rows().find((r) => r.key === keys[5]).kind).toBe("head");
+  // Space does the same.
+  v.action("outline", cx);
+  v.sel = keys[0];
+  v.key(keyEv("space"), cx);
+  expect([v.outline, v.sel, v.open.has(keys[0])]).toEqual([false, keys[0], true]);
+  // A click on a row too.
+  v.action("outline", cx);
+  draw(v, cx);
+  v.pressMoved = 0; v.pressCount = 1;
+  v.click(keys[7], cx);
+  expect([v.outline, v.sel, v.open.has(keys[7])]).toEqual([false, keys[7], true]);
+  expect(v.scrollTo).toMatchObject({ key: keys[7], how: "head" });
+  // With nothing selected it opens on the newest turn, at the bottom; Esc while following
+  // the newest turn goes back to the bottom.
+  v.sel = null;
+  v.follow = true;
+  v.action("outline", cx);
+  expect(v.sel).toBe(keys[7]);
+  v.action("escape", cx);
+  expect([v.outline, v.follow, v.toBottom]).toEqual([false, true, true]);
+});
+
+test("the outline marks pins, keeps working narrow, has its own footer, gives way to a pin's return, and is not in the Pinned column", async () => {
+  const { v, cx } = await pinPane("--only", "6");
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  v.action("outline", cx);
+  v.sel = keys[3];
+  v.action("pin", cx);
+  draw(v, cx);
+  let detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.find((d) => d.startsWith("line#4 "))).toMatch(/ pin1 /);
+  expect(detail.find((d) => d.startsWith("line#3 "))).not.toMatch(/ pin/);
+  expect(v.outline).toBe(true); // pinning keeps the outline
+  // The footer: move, open, back to the list, filter and pin.
+  v.width = 545;
+  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).toEqual(["↑↓ move", "↵ open", "Esc list", "/ filter", "p unpin", "? keys"]);
+  // Under 300 px the time gives way, and every row still draws.
+  v.width = 240;
+  draw(v, cx);
+  detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.filter((d) => d.startsWith("line#")).every((d) => d.includes("(no time)"))).toBe(true);
+  expect(v.footerHints().at(-1)).toEqual(["?", "keys"]);
+  v.width = 380;
+  // 1 returns to the pin in the list, at its place: the outline gives way.
+  v.sel = keys[0];
+  v.action("go:1", cx);
+  expect(v.outline).toBe(false);
+  expect(v.sel).toBe(keys[3]);
+  expect(v.open.has(keys[3])).toBe(true);
+  // s opens Select view on the turn, in the list.
+  v.action("outline", cx);
+  v.sel = keys[1];
+  v.action("select", cx);
+  expect([v.outline, v.selecting]).toEqual([false, keys[1]]);
+  v.action("escape", cx);
+  // The Pinned view in the same pane: o shows all turns, as an outline.
+  v.setView("pinned");
+  expect(v.action("outline", cx)).toBe(true);
+  expect(v.view).toBe("all");
+  expect(v.rows().some((r) => r.kind === "line")).toBe(true);
+  v.action("outline", cx);
+  // The Pinned column has no outline: o does nothing there.
+  v.pinnedPane = true;
+  v.view = "pinned";
+  expect(v.action("outline", cx)).toBe(false);
+  expect(v.rows().some((r) => r.kind === "line")).toBe(false);
+  // Its ? sheet leaves o out, and Esc does not name the outline there.
+  v.action("keys", cx);
+  let texts = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("Show or hide agent messages");
+  expect(texts).not.toContain("Outline: one row per turn");
+  expect(texts).toContain("Back out: search, Select view, settings, the open turn");
+  v.action("keys", cx);
+  // The main pane's sheet still lists it.
+  v.pinnedPane = false;
+  v.view = "all";
+  v.action("keys", cx);
+  texts = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("Outline: one row per turn");
+  expect(texts).toContain("Back out: search, Select view, settings, the open turn, the outline");
 });

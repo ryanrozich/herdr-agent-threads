@@ -39,7 +39,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -549,6 +549,10 @@ export default class Threads extends View {
     // is on screen (then false) or not (then true, the latest button's dot).
     this.unseen = false;
     this.keysOpen = false; // the ? sheet
+    // o: the outline, one row per turn ("line" items). outlineBack is where the list was
+    // when it opened, for Esc. Not saved across restarts.
+    this.outline = false;
+    this.outlineBack = null;
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
     this.commands(cx);
@@ -588,6 +592,7 @@ export default class Threads extends View {
     const snap = {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
+      outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
@@ -660,6 +665,10 @@ export default class Threads extends View {
         return `copy${n} ${L.labels.copy} + ${b(L.labels.select, this.selecting === `${r.si}:${r.turn.n}` ? "Formatted" : "Select", "select")}${L.quote ? ` + ${b(L.labels.quote, "Quote", "quote")}` : ""}${L.terminal ? ` + ${b(L.labels.terminal, "Terminal", "terminal")}` : ""}`;
       }
       case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
+      case "line": {
+        const pin = this.pinNumber(r.turn);
+        return `line${n} ${r.running ? "now" : fmtTime(r.turn.ts)}${this.narrow() ? " (no time)" : ""}${pin != null ? ` pin${pin}` : this.isPinnedTurn(r.turn) ? " pin" : ""}${r.turn.agent ? ` agent:${r.turn.sender.kind}` : ""} h${this.height(r)} | ${r.text}`;
+      }
       case "pday": return `pday ${r.name}${r.date ? ` · ${r.date}` : ""}`;
       case "hidden": return `unmatched ${r.n}`;
       default: return null;
@@ -975,7 +984,7 @@ export default class Threads extends View {
   // at the top would move the place up on every return. So the place holds until the top of
   // the pane moves after the landing.
   trackPlace() {
-    if (!this.sel || !this.open.has(this.sel)) return;
+    if (!this.sel || !this.open.has(this.sel) || this.outlined()) return;
     if (this.placeHold != null) {
       if (Date.now() < this.placeHold) return;
       this.placeHold = null;
@@ -1432,7 +1441,7 @@ export default class Threads extends View {
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
-      this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()),
+      this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
       this.baseRows = this.buildRows(status);
@@ -1450,7 +1459,7 @@ export default class Threads extends View {
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
     const li = this.baseRows.length - 1;
     const lr = this.baseRows[li];
-    if (lr?.live) {
+    if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
       if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
     }
@@ -1493,6 +1502,10 @@ export default class Threads extends View {
   buildRows(status) {
     if (this.view === "pinned") return this.pinnedRows(status);
     const out = [];
+    const outline = this.outlined();
+    let maxN = 1;
+    if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
+    const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
     this.sessions.forEach((s, si) => {
@@ -1529,6 +1542,9 @@ export default class Threads extends View {
         }
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
         const live = this.isLive(s, si, ti, status);
+        // The outline: one row per turn, under the same day bands, the same search and the
+        // same agents toggle. It keeps the turn's key, so the selection carries over.
+        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); return; }
         const item = { kind: "turn", key, turn, s, si, last, live };
         if (live) this.liveRows(item, out);
         else if (this.open.has(key)) this.expanded(item, out);
@@ -1915,7 +1931,7 @@ export default class Threads extends View {
     return { lines: lines.length, rows, shown: Math.min(CODE_LINES, rows), caption: rows > CODE_LINES };
   }
 
-  turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow"].includes(r.kind)).map((r) => r.key); }
+  turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).map((r) => r.key); }
 
   // The hidden agent turn whose reply this turn shares: Claude answered the person's prompt
   // and an agent message that came while it was open in one reply, or a later one after this
@@ -1977,6 +1993,56 @@ export default class Threads extends View {
     const keys = this.turnKeys(this.rows());
     if ((select || !this.sel) && keys.length) this.sel = keys[keys.length - 1];
     this.toBottom = true;
+  }
+
+  // ---- the outline (o) ----
+  // The outline shows in the list's own view; the Pinned view keeps its cards.
+  outlined() { return this.outline && this.view !== "pinned"; }
+
+  // o: one row per turn. It opens on the selected turn (the newest when nothing is selected)
+  // and remembers where the list was, so Esc goes back there. In the Pinned view of the same
+  // pane it shows all turns first; the Pinned column has no outline.
+  setOutline(on) {
+    if (this.pinnedPane) return false;
+    if (on && this.outlined()) return true;
+    if (!on) { if (this.outlined()) return this.leaveOutline(null); this.outline = false; return true; }
+    if (this.view === "pinned") this.setView("all");
+    if (this.selecting) this.endSelect();
+    this.keysOpen = false;
+    this.settingsOpen = false;
+    this.outlineBack = { sel: this.sel, top: this.topKey, follow: Boolean(this.follow) };
+    this.outline = true;
+    this.pinResume = null;
+    const keys = this.turnKeys(this.rows());
+    if (!this.sel || !keys.includes(this.sel)) {
+      this.sel = keys[keys.length - 1] ?? null;
+      this.toBottom = Boolean(this.sel);
+    } else if (this.follow && this.sel === keys[keys.length - 1]) this.toBottom = true;
+    else this.scrollTo = { key: this.sel, how: "center" };
+    return true;
+  }
+
+  // Leaves the outline. With a turn (Enter, Space or a click on its row): the list with that
+  // turn selected, open and its head at the top of the pane. Without one (Esc, o): the list
+  // as it was when the outline opened.
+  leaveOutline(key) {
+    const back = this.outlineBack;
+    this.outline = false;
+    this.outlineBack = null;
+    this.toBottom = false;
+    if (key && this.findTurn(key)) {
+      if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
+      this.sel = key;
+      this.follow = false;
+      this.scrollTo = { key, how: "head", until: Date.now() + 400 };
+      return true;
+    }
+    if (back?.sel !== undefined) this.sel = back.sel;
+    if (back?.follow) { this.follow = true; this.toBottom = true; return true; }
+    this.follow = false;
+    const k = back?.top && back.top !== "spacer" ? back.top : this.sel;
+    if (k) this.scrollTo = { key: k, how: back?.top ? "land" : "center", or: this.sel ? [this.sel] : [], until: Date.now() + 400 };
+    return true;
   }
 
   toggle(key, cx) {
@@ -2551,6 +2617,7 @@ export default class Threads extends View {
     // stays, and its field gives up the keys.
     this.toList();
     if (/^\d+$/.test(kind)) {
+      if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
       if (this.open.has(key) && headPinHit(this.pressX, this.bodyW)) { this.pressX = null; this.togglePin(key, cx); return cx.notify(); }
       return this.toggle(key, cx);
     }
@@ -2714,6 +2781,8 @@ export default class Threads extends View {
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
         // A search: Enter also hands the keys to the list, so p and the digits work on a result.
         if (this.filtering && this.query) this.toList();
+        // In the outline: the list, with this turn open at its head.
+        if (this.outlined()) return this.leaveOutline(this.sel && keys.includes(this.sel) ? this.sel : null);
         // In the Pinned view a closed pin opens at its place, as its number key does.
         if (this.view === "pinned" && this.sel && !this.open.has(this.sel)) {
           const i = this.pinnedList().findIndex((p) => p.key === this.sel);
@@ -2730,6 +2799,9 @@ export default class Threads extends View {
         this.scrollTo = { key: k, how: "top" };
         return true;
       }
+      case "outline": return this.setOutline(!this.outlined());
+      case "outline:on": return this.setOutline(true);
+      case "outline:off": return this.setOutline(false);
       case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
       case "undoUnpin": return this.undoUnpin(cx);
       case "pinned": return this.openPinned(cx);
@@ -2742,6 +2814,7 @@ export default class Threads extends View {
         // In Select view, s returns to the formatted reply of the turn being selected, even
         // after the selection moved to another turn.
         if (this.selecting) { this.endSelect(); return true; }
+        if (this.outlined()) { this.outline = false; this.outlineBack = null; }
         if (this.sel && this.findTurn(this.sel)) this.toggleSelect(this.sel, cx);
         return true;
       }
@@ -2761,11 +2834,18 @@ export default class Threads extends View {
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
         if (this.filtering || this.query) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
+        if (this.outlined()) return this.leaveOutline(null);
         if (this.sel && this.open.has(this.sel)) { this.toggle(this.sel, cx); return true; }
         if (this.view === "pinned" && !this.pinnedPane) { this.setView("all"); return true; }
         return false;
     }
-    if (name.startsWith("go:")) { this.editorFocused = false; this.h.focus(); return this.goPin(Number(name.slice(3)) - 1, cx); }
+    if (name.startsWith("go:")) {
+      this.editorFocused = false;
+      this.h.focus();
+      // A pin opens in the list, at its place, so the outline gives way.
+      if (this.outlined() && this.pinnedList()[Number(name.slice(3)) - 1]?.turn) { this.outline = false; this.outlineBack = null; }
+      return this.goPin(Number(name.slice(3)) - 1, cx);
+    }
     if (name === "choose") {
       const list = this.res.choices ?? [];
       if (list.length < 2) return false;
@@ -4064,6 +4144,7 @@ export default class Threads extends View {
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + ROW.META : 0);
       case "wtop": return ROW.PAD_T + ROW.META + ROW.GAP + thumbSize(this.width, this.prefs.textSize);
       case "wake": return WAKE_H;
+      case "line": return outlineHeight(this.prefs.textSize);
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize);
       case "img": return 8 + 4 + 18 + this.imgBox(r).h;
@@ -4287,6 +4368,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "spacer": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
+      case "line": return this.lineItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "wtop": return this.workingTop(t, r, focusedPanel);
       case "wake": return this.wakeRow(t, r);
@@ -4554,6 +4636,31 @@ export default class Threads extends View {
         .child(st
           ? line([this.agentName(turn), st.label, clock].filter(Boolean).join(" · "), P.REPLY, P.REPLY_SIZE, st.color)
           : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)));
+  }
+
+  // An outline row: "#12  8:43 AM  First line of the prompt  📌 2", one line at the reading
+  // size, with the selected turn's fill and bar. An agent's message leads with its sender's
+  // icon and is muted; a stopped or failed turn leads with its icon; the running turn says
+  // "now". Under 300 px the time gives way to the prompt.
+  lineItem(t, r, focusedPanel) {
+    const { turn, key } = r;
+    const sel = this.sel === key;
+    const rt = this.rt();
+    const pinNo = this.pinNumber(turn);
+    const pinned = pinNo != null || this.isPinnedTurn(turn);
+    const icon = turn.agent ? svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))
+      : turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
+    return h_flex().w_full().h(outlineHeight(this.prefs.textSize)).relative().px(ROW.PAD_X).gap(8).items_center().min_w(0)
+      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .child(div().flex_none().w(r.numW).text_size(11.5).font_family(this.mono()).text_color(sel ? t.muted : t.dim).child(`#${turn.n}`))
+      .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
+      .when(Boolean(icon), (el) => el.child(icon))
+      .child(h_flex().flex_1().min_w(0).text_size(turn.agent ? rt.small : rt.size).when(!turn.agent, (el) => el.font_medium())
+        .child(this.hlLine(t, r.text || " ", turn.agent ? t.muted : t.foreground)))
+      .when(pinned, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_size(11.5).text_color(t.accent)
+        .child(svg(ICON("pin")).size(11))
+        .when(pinNo != null, (x) => x.child(String(pinNo)))));
   }
 
   // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
@@ -5011,9 +5118,13 @@ export default class Threads extends View {
       : [["drag", "select"], ["⌘C", "copy"], ...(this.quotable() ? [[this.quoteKey, "quote"]] : []), ["Esc", "back"]];
     const quote = this.quotable() ? [[this.quoteKey, "quote"]] : [];
     const pin = this.quoteKey !== "p";
+    const pinHint = pin ? [["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]] : [];
+    // The outline: move, open the turn, back to the list, then search and pin.
+    if (this.outlined()) return fitHints([["↑↓", "move"], ["↵", "open"], ["Esc", "list"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
+    // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
-      : [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ...quote, ["/", "filter"], ...(pin ? [["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]] : [])];
+      : [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ...quote, ["/", "filter"], ...pinHint, ["o", "outline"]];
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
@@ -5048,7 +5159,7 @@ export default class Threads extends View {
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
       .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
-    const groups = keySheet(this.quoteKey);
+    const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
       .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))

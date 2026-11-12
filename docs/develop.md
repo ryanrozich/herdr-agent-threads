@@ -57,6 +57,7 @@ git -C ~/code/acme-web remote add origin https://github.com/acme/acme-web.git
 bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-09T15:05:00Z        # one day, so no day band or day pill
 bun test/make-hero.js days.jsonl ~/code/acme-web 2026-11-07T15:05:00Z days   # three days: shoot two days after the start, for Today and Yesterday
 bun test/make-hero.js pair.jsonl ~/code/acme-web 2026-11-09T15:05:00Z pair   # two images on turn 5, for the viewer
+bun test/make-hero.js outline.jsonl ~/code/acme-web 2026-11-06T15:05:00Z days many   # 14 short turns first: 21 over four days, for the outline
 bun test/make-agents.js agents ~/code/acme-web 2026-11-09T15:10:00Z          # Codex, OpenCode, Pi, Cursor and Antigravity sessions
 cc -o stage-claude test/hero/screen.c
 herdr-app do space.new --name acme-web --folder ~/code/acme-web --tab acme-web \
@@ -84,6 +85,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1904 96 3512 2232` |
 | `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
 | `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
+| `outline.png` | 1460x1150, a `many` transcript started three days before the shot (`make-hero.js outline.jsonl … <three days ago>T15:05:00Z days many`), 21 turns over four days | `outline`, `search:#12`, `open` (in a `#N` search `open` leaves the field and keeps the turn selected) | `1808 96 2912 2232` |
 | `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
 | `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
