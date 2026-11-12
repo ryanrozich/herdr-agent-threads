@@ -8,6 +8,8 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
+import { pinRowHeight } from "../mods/agent-threads/ui.js";
+import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -2797,8 +2799,50 @@ test("Pinned column: five pins, one day apart, fit a 240 to 320 px column at a 1
     draw(v, cx);
     expect(lastList.sizes.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(PIN_LIST_H);
   }
-  // The longest rows (two prompt lines each) with a pill over each still fit.
-  expect(5 * 95 + 5 * 30).toBeLessThanOrEqual(PIN_LIST_H);
+  // The longest rows (two prompt lines each) with a pill over each still fit, from the
+  // heights the code states, not from numbers copied into the test.
+  const pday = v.rows().find((r) => r.kind === "pday");
+  expect(5 * pinRowHeight(2) + 5 * v.height(pday)).toBeLessThanOrEqual(PIN_LIST_H);
+  // And so do five pins whose prompts are long enough to wrap: every row is two lines.
+  const pinned = v.pinnedList();
+  for (const p of pinned) p.turn.prompt = `${p.turn.n} Make the checkout page remember the last shipping address and fill it in again next time. `.repeat(4);
+  // A pin is found by its prompt, so give each pin its turn's new id.
+  for (const p of pinned) p.pin.id = [...turnIds(p.s.turns)].find(([, t]) => t === p.turn)[0];
+  for (const s of v.sessions) s.version++;
+  v.pinVer++;
+  v.width = 240;
+  v.rowsKey = null;
+  const long = v.rows();
+  expect(compactPins(v).map((r) => r.shape.prompt.length)).toEqual([2, 2, 2, 2, 2]);
+  expect(compactPins(v).every((r) => v.height(r) === pinRowHeight(2))).toBe(true);
+  expect(long.reduce((sum, r) => sum + v.height(r), 0)).toBeLessThanOrEqual(PIN_LIST_H);
+  draw(v, cx);
+});
+
+test("a closed running pin keeps its clock ticking: the 1 s timer still sees a live turn shown", async () => {
+  const { v, cx } = await pinPane("--only", "0", "--agents", "--open");
+  state.terminals[0].status = "working";
+  const k = v.turnKeys(v.rows());
+  v.sel = k.at(-1);
+  v.action("pin", cx);
+  v.width = 400;
+  v.key(keyEv("v"), cx);
+  expect(v.view).toBe("pinned");
+  v.sel = null;
+  v.rowsKey = null;
+  const pin = compactPins(v).find((r) => r.running);
+  expect(pin?.compact).toBe(true);
+  expect(pin.live).toBe(false);
+  expect(v.liveShown).toBe(true);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.live).toMatch(/Working/);
+  // Needs you: the 5 s read stops, so only the 1 s timer moves the clock.
+  state.terminals[0].status = "blocked";
+  v.rowsKey = null;
+  v.rows();
+  expect(v.liveShown).toBe(true);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.live).toMatch(/Needs you/);
 });
 
 test("a compact pin opens as a card with Enter, a click or its digit, and closes back to its row", async () => {

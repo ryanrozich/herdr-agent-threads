@@ -1470,7 +1470,9 @@ export default class Threads extends View {
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
       this.fitKey = fit;
-      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake");
+      // A closed running pin in the Pinned view is a compact row with live off, but its
+      // reply line carries the clock, so it counts as shown too.
+      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake" || r.running);
     }
     return this.rowsMemo;
   }
