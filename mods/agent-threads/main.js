@@ -38,7 +38,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP,
+  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -583,7 +583,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
-      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -634,6 +634,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "turn": case "wrow": {
         const sh = r.shape;
+        if (r.compact) return `pin${n} ${r.pinNo} p${sh.p} h${sh.height}${r.fresh ? " new" : ""}${r.running ? " live" : ""} | ${sh.prompt.join(" ⏎ ")} | ${sh.reply}`;
         const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "c" ? l : `▎${l}`)) : sh.prompt;
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
@@ -1469,7 +1470,9 @@ export default class Threads extends View {
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
       this.fitKey = fit;
-      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake");
+      // A closed running pin in the Pinned view is a compact row with live off, but its
+      // reply line carries the clock, so it counts as shown too.
+      this.liveShown = Boolean(lr?.live) || rows.some((r) => r.kind === "wake" || r.running);
     }
     return this.rowsMemo;
   }
@@ -1543,9 +1546,10 @@ export default class Threads extends View {
     out.push({ ...item, kind: "wrow", split, shape: this.shape(item.turn, true) });
   }
 
-  // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 5), each
-  // closed or open like any turn, with its number on its meta line. A row shows only its
-  // time, so a day header goes above the first pin of each day.
+  // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 5). A closed
+  // pin is a compact row (pinRow: its digit, number, time, two lines of the prompt and one of
+  // the reply), so five fit in the column; an open one is the card, as in the list. A row
+  // shows only its time, so a day header goes above the first pin of each day.
   pinnedRows(status) {
     const L = this.pinnedList();
     if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];
@@ -1565,9 +1569,11 @@ export default class Threads extends View {
       const si = this.sessions.indexOf(p.s);
       const live = this.isLive(p.s, si, p.turn.n - 1, status);
       const item = { kind: "turn", key: p.key, turn: p.turn, s: p.s, si, last: false, live, pinNo: i + 1 };
-      if (live) this.liveRows(item, out);
-      else if (this.open.has(p.key)) this.expanded(item, out);
-      else out.push({ ...item, shape: this.shape(p.turn) });
+      // Opened, a pin is drawn as in the list: the card, or the running turn's rows.
+      if (this.open.has(p.key)) { if (live) this.liveRows(item, out); else this.expanded(item, out); }
+      // Closed, a running pin is compact too, with its live state on the reply line. live
+      // stays off on that item: rows() turns a live last item into the running turn's card.
+      else out.push({ ...item, live: false, running: live, fresh: p.state === "new", compact: true, shape: this.pinShape(p.turn, live) });
       if (this.waking(p.s, si, p.turn.n - 1, status)) out.push({ kind: "wake", key: `wk:${p.key}`, turn: p.turn, s: p.s });
     });
     return out;
@@ -1784,6 +1790,31 @@ export default class Threads extends View {
     }
     turn.shapeKey = key;
     turn.shapeMemo = sh;
+    return sh;
+  }
+
+  // A compact pin's lines (ui.js pinRowShape) at the pane width, kept on the turn like shape().
+  pinShape(turn, live = false) {
+    const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
+    const text = live ? "" : this.replyText(turn);
+    const key = `${Math.round(this.width)}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredIn}|${turn.errors.length}`;
+    if (turn.pinShapeKey === key) return turn.pinShapeMemo;
+    const cmd = commandParts(turn);
+    const prompt = cmd ? `${cmd.name} ${cmd.args}`.trim() : pinPromptText(turn.prompt.slice(0, PREVIEW_CHARS));
+    let reply = "";
+    let tone = "reply";
+    if (live) tone = "live";
+    else if (why) { reply = why; tone = "why"; }
+    else if (text) reply = flattenMd(text.slice(0, PREVIEW_CHARS * 2), PREVIEW_CHARS);
+    else if (turn.answeredIn) { reply = `Answered in #${turn.answeredIn}`; tone = "note"; }
+    else if (turn.errors.length) { reply = turn.errors[turn.errors.length - 1]; tone = "error"; }
+    else { reply = "No reply"; tone = "note"; }
+    const sh = pinRowShape({ prompt, reply, width: this.width });
+    sh.tone = tone;
+    sh.p = sh.prompt.length;
+    sh.r = 1;
+    turn.pinShapeKey = key;
+    turn.pinShapeMemo = sh;
     return sh;
   }
 
@@ -4444,6 +4475,7 @@ export default class Threads extends View {
 
   // A collapsed exchange: the meta line, the message, the start of the reply, the stats.
   rowItem(t, r, focusedPanel) {
+    if (r.compact) return this.pinRow(t, r, focusedPanel);
     const { turn, key } = r;
     const sel = this.sel === key;
     const sh = r.shape;
@@ -4463,6 +4495,47 @@ export default class Threads extends View {
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.statsLine(t, this.statsText(turn)),
     ]);
+  }
+
+  // A closed pin in the Pinned view (ui.js PIN_ROW): its digit in an accent badge, then
+  // "#7 · 9:12 AM" with a dot at the right while the turn has a reply not read yet, two lines
+  // of the prompt and one of the reply. Selected, it has the list's fill and bar.
+  pinRow(t, r, focusedPanel) {
+    const { turn, key } = r;
+    const sel = this.sel === key;
+    const sh = r.shape;
+    const P = PIN_ROW;
+    const st = r.running ? this.liveState(t) : null;
+    const color = sh.tone === "reply" ? t.muted : sh.tone === "why" || sh.tone === "error" ? t.blocked : t.dim;
+    const clock = r.running && turn.ts ? fmtClock(Date.now() - turn.ts) : "";
+    const ac = this.agentColor(t);
+    const line = (text, h, size, c) => h_flex().h(h).min_w(0).items_center().overflow_hidden()
+      .child(div().flex_1().min_w(0).truncate().text_size(size).text_color(c).child(text));
+    return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
+      .when(sel, (el) => el.bg(t.selected))
+      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
+        .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
+      .child(v_flex().flex_1().min_w(0).gap(P.GAP)
+        .child(h_flex().h(P.META).gap(5).items_center().min_w(0).text_size(11.5).text_color(t.dim)
+          .when(Boolean(st), (el) => el.child(this.liveIcon(st, 12)))
+          .when(!st && (turn.interrupted || this.failed(turn)), (el) => el.child(this.statusIcon(t, turn)))
+          .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
+          .child(div().flex_none().child("·"))
+          .when(turn.agent, (el) => el
+            .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
+            .child(div().flex_none().max_w(Math.floor(this.width * 0.4)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+              .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)))
+            .child(div().flex_none().child("·")))
+          .child(div().flex_1().min_w(0).truncate().child(st?.spin ? "now" : fmtTime(turn.ts)))
+          .when(turn.followups > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center().child(svg(ICON("bell")).size(10)).child(countLabel(turn.followups))))
+          .when(Boolean(r.fresh), (el) => el.child(div().id(`th-pin-new-${r.pinNo}`).flex_none().size(7).rounded(4).bg(t.accent))))
+        .child(v_flex().min_w(0).when(!turn.agent, (el) => el.font_medium())
+          .children(sh.prompt.map((l) => line(l, P.LINE, P.SIZE, turn.agent ? t.muted : t.foreground))))
+        .child(st
+          ? line([this.agentName(turn), st.label, clock].filter(Boolean).join(" · "), P.REPLY, P.REPLY_SIZE, st.color)
+          : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)));
   }
 
   // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
