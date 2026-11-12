@@ -236,10 +236,11 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
     expect(six.p).toBe(6);
     expect(six.r).toBe(8);
   }
-  // Padding 8, meta 16, gap 6, bubble 6 + lines + 6, gap 6, the agent's name 18, reply lines,
-  // gap 6, stats 16, padding 10. Lines are 21 px at the 14 px default.
-  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 21 + 6 + 18 + 21 + 6 + 16 + 10);
-  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 84 + 6 + 18 + 126 + 6 + 16 + 10);
+  // Padding 8, meta 16, gap 6, bubble 6 + lines + 6, gap 6, reply lines (straight under the
+  // message, no name over them), gap 6, stats 16, padding 10. Lines are 21 px at the 14 px default.
+  expect(rowHeight(1, 1)).toBe(8 + 16 + 6 + 12 + 21 + 6 + 21 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 16 + 6 + 12 + 84 + 6 + 126 + 6 + 16 + 10);
+  expect(ROW.NAME).toBeUndefined();
   expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
   expect(rowHeight(1, 1, 0, 24)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));

@@ -1781,8 +1781,8 @@ export default class Threads extends View {
       // While filtering, the row shows the text around the first match, as one run.
       quotes: !q, size: P.textSize,
     });
-    // A running turn draws its live line (18 px, a label) where the name and reply go.
-    if (live) sh.height += 18 - ROW.NAME - sh.r * this.rt().line;
+    // A running turn draws its live line (18 px, a label) where the reply goes.
+    if (live) sh.height += 18 - sh.r * this.rt().line;
     // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
     // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
     // and until then an estimate; mdBase is the row without it.
@@ -3310,8 +3310,10 @@ export default class Threads extends View {
       .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude"))));
   }
 
-  // "Reading t4 · session 7f3a1b2c · 1.2M tokens · cache 97.1%": which terminal and
-  // session the pane is bound to, so a wrong binding shows without a click.
+  // "Reading t4 · session 7f3a1b2c · agent shop-agent · 1.2M tokens · cache 97.1%": which
+  // terminal and session the pane is bound to, so a wrong binding shows without a click. The
+  // session's agent name (Claude Code's --name, a Codex subagent's nickname) is here since
+  // replies carry no name.
   badgeTip() {
     const st = this.compact() ? this.agentStateNow() : null;
     return st ? `${st.word}: ${this.stateTip(st)} · ${STATE_CLICK} · ${this.bindingTip()}` : this.bindingTip();
@@ -3325,7 +3327,7 @@ export default class Threads extends View {
     // The selected turn's own cache counts too (its chip in the card cannot carry a tooltip).
     const sel = this.sel ? this.findTurn(this.sel) : null;
     const st = sel ? stats(sel) : null;
-    return [`Reading ${this.terminal} · session ${s.id.slice(0, 8)}`, `${fmtTokens(input + cc + output)} tokens`,
+    return [`Reading ${this.terminal} · session ${s.id.slice(0, 8)}`, s.agentName ? `agent ${s.agentName}` : null, `${fmtTokens(input + cc + output)} tokens`,
       pct != null ? `cache ${fmtPct(pct)} (read ${fmtCount(cr)} · written ${fmtCount(cc)} · new input ${fmtCount(input)})` : null,
       st?.cachePct != null ? `turn #${sel.n}: cache ${fmtPct(st.cachePct)} (${cacheLine(st).replace(/^cache /, "")})` : null]
       .filter(Boolean).join(" · ");
@@ -4098,9 +4100,11 @@ export default class Threads extends View {
     return 6 + 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
   }
 
-  // The FINAL REPLY caption's parts: [icon, text].
+  // The caption over an open turn's reply: what the reply does not show, [icon, text]. The
+  // agent's name leads it only in a session where more than one agent replied (OpenCode
+  // records each turn's agent), since the reply sits straight under the person's message.
   captionParts(turn) {
-    const out = [["name", this.agentName(turn)]];
+    const out = this.mixedAgents(turn) ? [["name", this.agentName(turn)]] : [];
     if (turn.tools > 0) out.push(["wrench", `${plural(turn.tools, "tool call")} (not shown)`]);
     if (turn.followups > 0) out.push(["bell", plural(turn.followups, "background update")]);
     const by = this.borrowedFrom(turn);
@@ -4590,7 +4594,6 @@ export default class Threads extends View {
         ...(sh.pMore ? [this.moreLine(bt)] : []),
       ], sh.bubbleW),
       v_flex().min_w(0).max_w(this.prose())
-        .child(this.nameLine(t, turn))
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.statsLine(t, this.statsText(turn)),
@@ -4669,10 +4672,14 @@ export default class Threads extends View {
     return this.readBlock(div()).child(this.mdView(id, md, false));
   }
 
-  // The agent's name over its reply (ROW.NAME high).
-  nameLine(t, turn) {
-    return div().h(ROW.NAME).pb(2).flex().items_center().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.muted)
-      .child(this.agentName(turn));
+  // Whether the turn's session has replies from more than one named agent (turn.by), counting
+  // the person's own turns only: an agent message names its sender over its bubble.
+  mixedAgents(turn) {
+    if (turn.agent || !turn.by) return false;
+    const s = this.sessions.find((x) => x.turns.includes(turn));
+    if (!s) return false;
+    for (const x of s.turns) if (!x.agent && x.by && x.by !== turn.by) return true;
+    return false;
   }
 
   // Who replied: the name the harness records for the turn (OpenCode's agent) or the session
@@ -4939,8 +4946,9 @@ export default class Threads extends View {
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
       case "rhead":
-        // Under the message, before the reply: who replied, then what the reply does not
-        // show, wrapping ("Agent · 🔧 9 tool calls (not shown) · 🔔 144 background updates").
+        // Under the message, before the reply: what the reply does not show, wrapping
+        // ("🔧 9 tool calls (not shown) · 🔔 144 background updates"), led by who replied in a
+        // session with more than one agent. With nothing to say it is an 8 px gap.
         return h_flex().mt(8).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
           .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
             .when(i > 0, (el) => el.child(div().child("·")))
