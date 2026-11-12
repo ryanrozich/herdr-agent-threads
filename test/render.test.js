@@ -4303,8 +4303,9 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
     cx.timers = [];
-    // A scroll asked for now waits for the reshaping.
-    v.scrollTo = { key: before[5].key, how: "center" };
+    // A scroll asked for now waits for the reshaping, and a return's wait for the probe
+    // (until) starts after it.
+    v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
     draw(v, cx);
     let rows = shown();
     const first = rows.filter(fresh).length;
@@ -4314,6 +4315,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(v.shapeLeft).toBeGreaterThan(0);
     expect(cx.timers.some((x) => x.ms === 0)).toBe(true);
     expect(v.scrollTo?.key).toBe(before[5].key);
+    expect(v.scrollTo.until).toBeGreaterThan(Date.now());
     // The rows from the top of the pane down were among the first; rows further up wait.
     expect(rows.slice(-20).every(fresh)).toBe(true);
     expect(rows.slice(40, 80).some(fresh)).toBe(false);
@@ -4324,7 +4326,10 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(v.shapeLeft).toBe(0);
     rows = shown();
     expect(rows.every(fresh)).toBe(true);
-    // The scroll ran once every row had its shape.
+    // Then the return waits for the probe until its deadline, and runs.
+    draw(v, cx);
+    expect(v.scrollTo?.key).toBe(before[5].key);
+    v.scrollTo.until = Date.now() - 1;
     draw(v, cx);
     expect(v.scrollTo).toBe(null);
     // Agent messages on: rows never shaped before draw blank for a frame, then fill in.

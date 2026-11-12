@@ -3721,7 +3721,8 @@ export default class Threads extends View {
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
     if ((this.toBottom || this.scrollTo) && this.shapeLeft > 0) {
-      // waits
+      // A return's wait for the probe (until, below) starts once the rows are reshaped.
+      if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
