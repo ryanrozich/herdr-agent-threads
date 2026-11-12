@@ -88,6 +88,9 @@ const PDAY_H = 30; // a day header in the Pinned view
 const PANE_FRAME = 2;
 // The Pinned heading's width: a 14 px pin, 6 px, and "Pinned" at 13.5 px semibold (about 46 px).
 const PINNED_HEADING = 66;
+// The header's state chip: its padding a side (the hover fill), and what its tooltip adds.
+const STATE_PAD = 5;
+const STATE_CLICK = "click to go to the terminal (t)";
 const SELECT_CHARS = 60000; // of a reply in the Select text view
 const SELECT_CHAR = 7.5; // px per character of the terminal font at 12.5 px
 // Every agent Threads reads, for the notices that name them (one list, so a new agent is
@@ -3104,9 +3107,11 @@ export default class Threads extends View {
 
   // The header's buttons, left to right after the text, as data: [id, icon, tip, action, on,
   // count, label, dot]. A labelled button shows its label instead of an icon. Under 440 px the
-  // latest button gives way, and under 300 px the agents and pin buttons too (End, a and p
-  // still act), so the turn count keeps its room beside "Pinned 2". The Pinned pane keeps
-  // only its own two.
+  // latest button gives way, and under 300 px the agents button too (End and a still act), so
+  // the turn count keeps its room beside "Pinned 2". The list has no pin button: p and the
+  // pin on an open turn's top line pin, so the session's title keeps that room. A Pinned
+  // view (the Pinned pane, or Pinned in this pane) keeps its pin button, as Unpin for the
+  // selected pin: every row there is a pin, and a closed one has no pin of its own to click.
   headerButtons() {
     const c = this.counts();
     const pins = this.pinnedList().length;
@@ -3124,7 +3129,7 @@ export default class Threads extends View {
       out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
         countLabel(on ? c.agentAll : c.hiddenAll), null]);
     }
-    if (!narrow) out.push(pinBtn);
+    if (!narrow && this.view === "pinned") out.push(pinBtn);
     const label = `Pinned${pins ? ` ${pins}` : ""}`;
     const col = this.pinnedPaneOpen();
     out.push(this.view === "pinned" ? ["th-pinned", null, "Back to all turns (v)", "pinned", true, null, "All turns"]
@@ -3153,8 +3158,9 @@ export default class Threads extends View {
   headerLayout() {
     const list = this.headerButtons();
     const st = this.pinnedPane || this.compact() ? null : this.agentStateNow();
-    // The state: a 7 px dot, and its word at 12 px (6.6 px a character) after a 5 px gap.
-    const state = st ? 8 + 7 + 5 + Math.ceil(st.word.length * 6.6) : 0;
+    // The state: a 7 px dot, and its word at 12 px (6.6 px a character) after a 5 px gap,
+    // inside its padding a side.
+    const state = st ? 8 + STATE_PAD * 2 + 7 + 5 + Math.ceil(st.word.length * 6.6) : 0;
     const badge = (this.pinnedPane ? 0 : this.res.kind === "unsupported" || this.res.kind === "remote" ? 90 : this.compact() ? 28 : 28 + 5 + 38) + state;
     const room = list.reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
     // The Pinned heading: the pin, a 6 px gap and "Pinned" at 13.5 px semibold.
@@ -3181,17 +3187,29 @@ export default class Threads extends View {
   }
   // Under 440 px (where the badge drops its word too) the dot sits on the badge's corner
   // instead (stateDot), and the badge's tooltip says the word, so the header text keeps its room.
+  // A click on the state goes to the terminal, as t does: "Needs you" points there, so it is
+  // the way there. Under 440 px the badge takes that click, since the 8 px dot on its corner
+  // is too small to aim at and the badge already stands for the state there.
   stateChip(t) {
     const st = this.agentStateNow();
     const color = t[st.tone] ?? t.dim;
-    return h_flex().id("th-state").flex_none().gap(5).items_center().tooltip(this.stateTip(st))
+    return h_flex().id("th-state").flex_none().gap(5).h(24).px(STATE_PAD).items_center().rounded(5).cursor_pointer()
+      .on_click((_e, cx) => this.stateClick(cx))
+      .hover((s) => s.bg(t.hover))
+      .tooltip(`${this.stateTip(st)} · ${STATE_CLICK}`)
       .child(div().flex_none().size(7).rounded(4).bg(color))
       .child(div().flex_none().text_size(12).text_color(st.tone === "blocked" ? color : t.muted).child(st.word));
   }
   stateDot(t, el) {
     const st = this.compact() ? this.agentStateNow() : null;
-    return el.relative().when(Boolean(st), (b) => b.child(div().id("th-state-dot").absolute().top(-3).right(-3).size(8).rounded(4)
-      .bg(t[st?.tone] ?? t.dim).border_1().border_color(t.background)));
+    return el.relative().when(Boolean(st), (b) => b.cursor_pointer().on_click((_e, cx) => this.stateClick(cx)).hover((s) => s.bg(t.hover))
+      .child(div().id("th-state-dot").absolute().top(-3).right(-3).size(8).rounded(4)
+        .bg(t[st?.tone] ?? t.dim).border_1().border_color(t.background)));
+  }
+  stateClick(cx) {
+    cx.stop_propagation();
+    this.action("focus", cx);
+    cx.notify();
   }
 
   badge(t) {
@@ -3216,7 +3234,7 @@ export default class Threads extends View {
   // session the pane is bound to, so a wrong binding shows without a click.
   badgeTip() {
     const st = this.compact() ? this.agentStateNow() : null;
-    return st ? `${st.word}: ${this.stateTip(st)} · ${this.bindingTip()}` : this.bindingTip();
+    return st ? `${st.word}: ${this.stateTip(st)} · ${STATE_CLICK} · ${this.bindingTip()}` : this.bindingTip();
   }
   bindingTip() {
     const s = this.current();
