@@ -12,7 +12,9 @@
 #   locate.sh codex-open <pid>                       the session file a Codex process has open
 #   locate.sh codex-find <id>                        the session file for a Codex session id
 #   locate.sh codex-daemons                          the pids of Codex's app-server processes
-#   locate.sh codex-daemon                           the session files they hold, one JSON line each
+#   locate.sh codex-held                             the session files they hold
+#   locate.sh mtimes <file>...                       each file's last write, "<mtime> <path>"
+#   locate.sh codex-meta <file>...                   each one's folder, start and origin (JSON lines)
 #   locate.sh codex-peers <pid> <folder>             how many other codex terminals run there
 #   locate.sh claude-bg <sessions dir> <id|name>     the session id of a claude --bg session
 #   locate.sh pi-dir                                 the folder Pi keeps its sessions in
@@ -93,19 +95,26 @@ codex-daemons)
   # Plain codex runs its sessions in Codex's app-server daemon (codex app-server --listen
   # unix://); the ChatGPT app runs app servers too. Its pid-update loop holds no session.
   ps -axo pid=,args= 2>/dev/null | awk '/codex/ && / app-server/ && !/pid-update-loop/ { print $1 }' ;;
-codex-daemon)
-  # The session files the app servers hold open, each with its first line's folder and start
-  # time: {"path","mtime","cwd","ts","sub"}. THREADS_CODEX_DAEMONS (pids) replaces the search,
-  # for the tests.
+codex-held)
+  # The session files Codex's app servers hold open, one path a line. THREADS_CODEX_DAEMONS
+  # (pids) replaces the search, for the tests.
   pids=${THREADS_CODEX_DAEMONS:-$(sh "$0" codex-daemons)}
   [ -n "$pids" ] || exit 1
   # shellcheck disable=SC2086 # the pids are meant to split
   files=$(for p in $pids; do lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -E '/rollout-[^/]*\.jsonl$' || true; done | sort -u)
   [ -n "$files" ] || exit 1
-  printf '%s\n' "$files" | while IFS= read -r f; do
+  printf '%s\n' "$files" ;;
+mtimes)
+  # "<mtime> <path>" for each file that exists.
+  for f in "$@"; do [ -f "$f" ] && printf '%s %s\n' "$(date -r "$f" +%s)" "$f"; done
+  exit 0 ;;
+codex-meta)
+  # For each session file, its first line's folder, start, originator and subagent mark, and
+  # its last write: {"path","mtime","cwd","ts","origin","sub"}.
+  for f in "$@"; do
     [ -f "$f" ] || continue
     head -n 1 "$f" | jq -c --arg p "$f" --argjson m "$(date -r "$f" +%s)" '{path: $p, mtime: ($m * 1000), cwd: (.payload.cwd // null),
-      ts: (.payload.timestamp // .timestamp // null),
+      ts: (.payload.timestamp // .timestamp // null), origin: (.payload.originator // null),
       sub: ((((.payload.source | type) == "object") and (.payload.source | has("subagent"))) or (.payload.thread_source == "subagent"))}' 2>/dev/null || true
   done ;;
 codex-peers)
@@ -121,14 +130,22 @@ codex-peers)
   printf '%s\n' "$n" ;;
 claude-bg)
   # claude attach <id|name> writes no session record; the background session's own record
-  # (kind "bg") names it, by the start of its id or part of its name.
+  # (kind "bg", its process alive) names it: by the start of its id, else its name, else the
+  # one name that holds the words.
   [ -n "${2:-}" ] || exit 1
-  for f in "$1"/*.json; do
-    [ -f "$f" ] && jq -r --arg q "$2" 'select(.kind == "bg") | select((.sessionId // "") | startswith($q)) | .sessionId // empty' "$f" 2>/dev/null
-  done | head -n 1 | grep . && exit 0
-  for f in "$1"/*.json; do
-    [ -f "$f" ] && jq -r --arg q "$2" 'select(.kind == "bg") | select((.name // "") | ascii_downcase | contains($q | ascii_downcase)) | .sessionId // empty' "$f" 2>/dev/null
-  done | head -n 1 | grep . ;;
+  recs=$(for f in "$1"/*.json; do
+    [ -f "$f" ] || continue
+    jq -r 'select(.kind == "bg" and (.sessionId // "") != "") | [(.pid // 0 | tostring), .sessionId, (.name // "")] | @tsv' "$f" 2>/dev/null
+  done | while IFS="$(printf '\t')" read -r pid sid name; do
+    kill -0 "$pid" 2>/dev/null && printf '%s\t%s\n' "$sid" "$name"
+  done)
+  [ -n "$recs" ] || exit 1
+  q=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+  hit=$(printf '%s\n' "$recs" | awk -F '\t' -v q="$q" 'index($1, q) == 1 { print $1; exit }')
+  [ -n "$hit" ] || hit=$(printf '%s\n' "$recs" | awk -F '\t' -v q="$q" 'tolower($2) == q { print $1; exit }')
+  [ -n "$hit" ] || hit=$(printf '%s\n' "$recs" | awk -F '\t' -v q="$q" 'index(tolower($2), q) { n++; id = $1 } END { if (n == 1) print id }')
+  [ -n "$hit" ] || exit 1
+  printf '%s\n' "$hit" ;;
 codex-find)
   f=$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name "rollout-*-$1.jsonl" 2>/dev/null | head -n 1)
   [ -n "$f" ] || exit 1
@@ -211,6 +228,6 @@ agy-open)
 etime)
   ps -o etime= -p "$1" 2>/dev/null ;;
 *)
-  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|codex-daemons|codex-daemon|codex-peers|claude-bg|pi-dir|pi-peers|pi-label|cursor-dir|cursor-open|cursor-find|cursor-list|cursor-peers|cursor-label|agy-dir|agy-open|etime ..." >&2
+  echo "usage: locate.sh find|folder|list|names|held|codex-dir|codex-open|codex-find|codex-daemons|codex-held|codex-meta|mtimes|codex-peers|claude-bg|pi-dir|pi-peers|pi-label|cursor-dir|cursor-open|cursor-find|cursor-list|cursor-peers|cursor-label|agy-dir|agy-open|etime ..." >&2
   exit 2 ;;
 esac

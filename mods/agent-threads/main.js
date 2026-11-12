@@ -215,6 +215,20 @@ async function listFolder(dir) {
   });
 }
 
+// A Codex session file's first line never changes: its folder, start and origin, by path.
+const codexMeta = new Map();
+
+// The last write of each file, in ms, by path (locate.sh mtimes).
+async function listMtimes(files) {
+  const out = await locate("mtimes", ...files);
+  const m = new Map();
+  for (const l of (out ?? "").split("\n")) {
+    const at = l.indexOf(" ");
+    if (at > 0) m.set(l.slice(at + 1), Number(l.slice(0, at)) * 1000);
+  }
+  return m;
+}
+
 async function heldIds(root, pid) {
   const out = await locate("held", root, String(pid ?? ""));
   return new Set((out ?? "").split("\n").filter(Boolean));
@@ -253,7 +267,7 @@ async function resolve(address, claudeHome, current = null) {
   const cwds = [...new Set([fg.cwd, pane?.cwd, term.cwd, info.cwd].filter(Boolean)
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
   const harness = harnessOf(fg, pane);
-  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cwds, cmd });
+  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "cursor") return resolveCursor({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
@@ -317,7 +331,7 @@ async function resolve(address, claudeHome, current = null) {
 // Plain codex runs the session in Codex's app-server daemon, which holds the file instead
 // (pickCodexDaemon). Codex writes no file until the first prompt, so a process with none is
 // waiting for one.
-async function resolveCodex({ argv, pid, cwd, cwds, cmd }) {
+async function resolveCodex({ argv, pid, cwd, cwds, cmd }, current) {
   const who = { harness: "codex", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const open = pid ? await locate("codex-open", String(pid)) : null;
@@ -328,11 +342,23 @@ async function resolveCodex({ argv, pid, cwd, cwds, cmd }) {
     const file = await locate("codex-find", named);
     if (file) return { kind: "found", id: named, file, via: "argv", ...who, guess: false, tried: [program, openStep] };
   }
-  const held = ((await locate("codex-daemon")) ?? "").split("\n").filter(Boolean)
-    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  // The files Codex's app servers hold; each one's first line is read once (codexMeta).
+  const paths = ((await locate("codex-held")) ?? "").split("\n").filter(Boolean);
+  const fresh = paths.filter((p) => !codexMeta.has(p));
+  if (fresh.length) {
+    for (const l of ((await locate("codex-meta", ...fresh)) ?? "").split("\n")) {
+      try { const m = JSON.parse(l); codexMeta.set(m.path, m); } catch { /* not a line */ }
+    }
+    if (codexMeta.size > 500) for (const k of [...codexMeta.keys()].slice(0, 250)) codexMeta.delete(k);
+  }
+  const mtimes = paths.length ? await listMtimes(paths) : new Map();
+  const held = paths.map((p) => codexMeta.get(p)).filter(Boolean).map((m) => ({ ...m, mtime: mtimes.get(m.path) ?? m.mtime }));
   const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
-  const peers = held.length && pid && cwd ? Number(await locate("codex-peers", String(pid), cwd)) || 0 : 0;
-  const pick = pickCodexDaemon(held, cwds ?? [cwd].filter(Boolean), age == null ? null : Date.now() - age, peers);
+  const where = cwds ?? [cwd].filter(Boolean);
+  const resumed = (argv ?? []).includes("resume");
+  const near = held.some((f) => where.includes(f.cwd));
+  const peers = near && pid && cwd ? Number(await locate("codex-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickCodexDaemon(held, where, age == null ? null : Date.now() - age, { peers, current, resumed });
   const daemonStep = {
     what: "Session file the Codex daemon has open",
     detail: !pick.file ? "none yet" : `${idOf(pick.file).slice(0, 8)}${pick.choices.length ? ` · ${pick.choices.length} in this folder` : ""}${peers ? ` · ${plural(peers + 1, "Codex terminal")} here` : ""}`,

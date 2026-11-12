@@ -4,7 +4,7 @@
 // stand-in processes are sleep and bun, renamed with exec -a.
 import { test, expect } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, copyFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pickCodexDaemon, claudeAttach, opencodeAttach } from "../mods/agent-threads/harness.js";
@@ -30,41 +30,58 @@ function rollout(dir, id, cwd, ts, extra = {}) {
 
 // A process that holds the files open on fds 3, 4, ..., named argv0.
 function holder(files, argv0, cwd) {
-  const opens = files.map((f, i) => `exec ${i + 3}<"${f}"`).join("; ");
-  return spawn("bash", ["-c", `${opens}; exec -a "${argv0}" sleep 30`], { cwd, stdio: "ignore" });
+  const opens = files.map((f, i) => `exec ${i + 3}<"${f}"; `).join("");
+  return spawn("bash", ["-c", `${opens}exec -a "${argv0}" sleep 30`], { cwd, stdio: "ignore" });
 }
 
-test("pickCodexDaemon: the folder's main session that began after the process, newest written", () => {
+// A process whose name is codex (pgrep -x codex): a copy of sleep with that name.
+function namedCodex(cwd) {
+  const bin = join(tmp("threads-codex-bin-"), "codex");
+  copyFileSync(execFileSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).trim(), bin);
+  chmodSync(bin, 0o755);
+  return spawn(bin, ["30"], { cwd, stdio: "ignore" });
+}
+
+test("pickCodexDaemon: the folder's terminal session that began after the process, newest written", () => {
   const start = Date.parse("2026-11-12T15:25:00Z");
-  const f = (id, cwd, ts, mtime, sub = false) => ({ path: `/s/rollout-x-${id}.jsonl`, cwd, ts, mtime, sub });
+  const f = (id, cwd, ts, mtime, extra = {}) => ({ path: `/s/rollout-x-${id}.jsonl`, cwd, ts, mtime, sub: false, origin: "codex-tui", ...extra });
+  const shop = ["/home/dev/shop"];
   const mine = f(ID, "/home/dev/shop", "2026-11-12T15:25:46Z", 3000);
   const files = [
     mine,
-    f(SUB, "/home/dev/shop", "2026-11-12T15:26:00Z", 9000, true), // a subagent's thread
+    f(SUB, "/home/dev/shop", "2026-11-12T15:26:00Z", 9000, { sub: true }), // a subagent's thread
     f(ID2, "/home/dev/other", "2026-11-12T15:27:00Z", 8000), // another folder
     f("old", "/home/dev/shop", "2026-11-10T09:00:00Z", 7000), // began before the process
+    f("app", "/home/dev/shop", "2026-11-12T15:28:00Z", 9500, { origin: "Codex Desktop" }), // the ChatGPT app's
   ];
-  expect(pickCodexDaemon(files, ["/home/dev/shop"], start)).toEqual({ file: mine.path, guess: false, choices: [] });
+  expect(pickCodexDaemon(files, shop, start)).toEqual({ file: mine.path, guess: false, choices: [] });
   // The 5 s allowance for the clocks.
-  expect(pickCodexDaemon([mine], ["/home/dev/shop"], Date.parse("2026-11-12T15:25:50Z")).file).toBe(mine.path);
-  // After /new: the newer session, still exact while no other Codex runs in the folder.
+  expect(pickCodexDaemon([mine], shop, Date.parse("2026-11-12T15:25:50Z")).file).toBe(mine.path);
+  // After /new: the newer session, exact while no other Codex runs in the folder.
   const next = f(ID2, "/home/dev/shop", "2026-11-12T15:40:00Z", 5000);
-  expect(pickCodexDaemon([...files, next], ["/home/dev/shop"], start)).toEqual({ file: next.path, guess: false, choices: [] });
-  // A second Codex terminal in the folder: a guess, with both to choose from, newest first.
-  const two = pickCodexDaemon([...files, next], ["/home/dev/shop"], start, 1);
+  expect(pickCodexDaemon([...files, next], shop, start)).toEqual({ file: next.path, guess: false, choices: [] });
+  // Another Codex terminal in the folder: a guess even with one session (it can be the
+  // other terminal's), with the choices newest first.
+  expect(pickCodexDaemon(files, shop, start, { peers: 1 })).toEqual({ file: mine.path, guess: true, choices: [mine] });
+  const two = pickCodexDaemon([...files, next], shop, start, { peers: 1 });
   expect(two.guess).toBe(true);
   expect(two.file).toBe(next.path);
   expect(two.choices.map((c) => c.path)).toEqual([next.path, mine.path]);
-  // None began after the process (codex resume --last): the folder's newest written, a guess.
-  const resumed = pickCodexDaemon(files, ["/home/dev/shop"], Date.parse("2026-11-12T16:00:00Z"));
+  // ... and it stays on the session the pane shows while that one fits, whichever wrote last.
+  expect(pickCodexDaemon([...files, next], shop, start, { peers: 1, current: ID }).file).toBe(mine.path);
+  // A fresh Codex with no session yet waits: older sessions are not its own.
+  const later = Date.parse("2026-11-12T16:00:00Z");
+  expect(pickCodexDaemon(files, shop, later)).toEqual({ file: null, guess: false, choices: [] });
+  // codex resume (--last, or the picker): the folder's newest written, a guess.
+  const resumed = pickCodexDaemon(files, shop, later, { resumed: true });
   expect(resumed.guess).toBe(true);
   expect(resumed.file).toBe("/s/rollout-x-old.jsonl");
   expect(resumed.choices.map((c) => c.path)).toEqual(["/s/rollout-x-old.jsonl", mine.path]);
   // Nothing in the folder, or nothing held.
   expect(pickCodexDaemon(files, ["/home/dev/none"], start)).toEqual({ file: null, guess: false, choices: [] });
-  expect(pickCodexDaemon([], ["/home/dev/shop"], start).file).toBe(null);
-  // Either spelling of the folder (/tmp and /private/tmp on macOS).
-  expect(pickCodexDaemon([f(ID, "/private/tmp/shop", "2026-11-12T15:25:46Z", 1)], ["/tmp/shop", "/private/tmp/shop"], start).file).toBe(`/s/rollout-x-${ID}.jsonl`);
+  expect(pickCodexDaemon([], shop, start).file).toBe(null);
+  // Either spelling of the folder (/tmp and /private/tmp on macOS), and a file with no origin.
+  expect(pickCodexDaemon([f(ID, "/private/tmp/shop", "2026-11-12T15:25:46Z", 1, { origin: null })], ["/tmp/shop", "/private/tmp/shop"], start).file).toBe(`/s/rollout-x-${ID}.jsonl`);
 });
 
 test("claudeAttach and opencodeAttach read the command line", () => {
@@ -83,7 +100,7 @@ test("claudeAttach and opencodeAttach read the command line", () => {
 test("locate.sh finds a Codex session in either mode: held by the terminal's process or by the daemon", async () => {
   const sessions = tmp("threads-codex-held-");
   const cwd = "/home/dev/shop";
-  const mine = rollout(sessions, ID, cwd, "2026-11-12T15:25:46Z");
+  const mine = rollout(sessions, ID, cwd, "2026-11-12T15:25:46Z", { originator: "codex-tui" });
   const sub = rollout(sessions, SUB, cwd, "2026-11-12T15:26:00Z", { source: { subagent: { thread_spawn: {} } } });
   // codex --no-daemon: the terminal's own process holds the file (codex-open, as before).
   const own = holder([mine, sub], "codex --no-daemon", sessions);
@@ -91,8 +108,12 @@ test("locate.sh finds a Codex session in either mode: held by the terminal's pro
   const daemon = holder([mine, sub], "codex app-server --listen unix:// --managed-daemon", sessions);
   const loop = holder([], "codex app-server daemon pid-update-loop", sessions);
   const client = holder([], "codex", sessions);
+  // Two processes named codex in the folder, for codex-peers.
+  const peerA = namedCodex(sessions);
+  const peerB = namedCodex(sessions);
   try {
-    await wait(400);
+    await wait(500);
+    for (const p of [own, daemon, loop, client, peerA, peerB]) expect(p.exitCode).toBe(null);
     expect(run([locator, "codex-open", String(own.pid)])).toBe(mine);
     expect(run([locator, "codex-open", String(client.pid)])).toBeFalsy();
     // The daemons, found by their command line; the pid-update loop is not one.
@@ -100,31 +121,51 @@ test("locate.sh finds a Codex session in either mode: held by the terminal's pro
     expect(pids).toContain(String(daemon.pid));
     expect(pids).not.toContain(String(loop.pid));
     expect(pids).not.toContain(String(client.pid));
-    // The files the daemon holds, each with its folder and start (only this daemon here).
-    const lines = (run([locator, "codex-daemon"], { THREADS_CODEX_DAEMONS: String(daemon.pid) }) ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-    expect(lines.map((l) => [l.path, l.cwd, l.ts, l.sub]).sort()).toEqual([[mine, cwd, "2026-11-12T15:25:46Z", false], [sub, cwd, "2026-11-12T15:26:00Z", true]].sort());
+    // The files the daemon holds (only this daemon here), then each one's first line.
+    const env = { THREADS_CODEX_DAEMONS: String(daemon.pid) };
+    const paths = (run([locator, "codex-held"], env) ?? "").split("\n").filter(Boolean);
+    expect(paths.sort()).toEqual([mine, sub].sort());
+    const lines = (run([locator, "codex-meta", ...paths]) ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    expect(lines.map((l) => [l.path, l.cwd, l.ts, l.sub, l.origin]).sort()).toEqual([[mine, cwd, "2026-11-12T15:25:46Z", false, "codex-tui"], [sub, cwd, "2026-11-12T15:26:00Z", true, null]].sort());
     expect(lines.every((l) => l.mtime > 0)).toBe(true);
     expect(pickCodexDaemon(lines, [cwd], Date.parse("2026-11-12T15:25:00Z")).file).toBe(mine);
+    const mt = (run([locator, "mtimes", mine, join(sessions, "gone.jsonl")]) ?? "").split("\n");
+    expect(mt.length).toBe(1);
+    expect(mt[0].endsWith(` ${mine}`)).toBe(true);
     // A daemon that holds nothing.
-    expect(run([locator, "codex-daemon"], { THREADS_CODEX_DAEMONS: String(loop.pid) })).toBe(null);
-    // Peers: the other plain codex in the folder counts; the app servers do not.
-    expect(run([locator, "codex-peers", String(own.pid), sessions])).toBe("0");
+    expect(run([locator, "codex-held"], { THREADS_CODEX_DAEMONS: String(loop.pid) })).toBe(null);
+    // Peers: the other codex in the folder counts, not the asking one; elsewhere none.
+    expect(run([locator, "codex-peers", String(peerA.pid), sessions])).toBe("1");
+    expect(run([locator, "codex-peers", String(peerA.pid), "/home/dev/none"])).toBe("0");
   } finally {
-    for (const p of [own, daemon, loop, client]) p.kill();
+    for (const p of [own, daemon, loop, client, peerA, peerB]) p.kill();
   }
 });
 
-test("locate.sh claude-bg names the session of a claude --bg record, by id start or name", () => {
+test("locate.sh claude-bg names a live claude --bg session by id start, then name, then one name holding the words", () => {
   const dir = tmp("threads-claude-sessions-");
-  writeFileSync(join(dir, "41355.json"), JSON.stringify({ pid: 41355, kind: "bg", sessionId: ID, name: "Review the cart", cwd: "/home/dev/shop" }));
+  const live = process.pid;
   const OTHER = "00000000-0000-4000-8000-0000000000d4";
-  writeFileSync(join(dir, "41400.json"), JSON.stringify({ pid: 41400, kind: "interactive", sessionId: OTHER, name: "review" }));
+  const A = "00000000-0000-4000-8000-0000000000a1";
+  const B = "00000000-0000-4000-8000-0000000000b2";
+  const rec = (file, o) => writeFileSync(join(dir, file), JSON.stringify(o));
+  rec("1.json", { pid: live, kind: "bg", sessionId: ID, name: "Review the cart" });
+  rec("2.json", { pid: live, kind: "interactive", sessionId: OTHER, name: "review" });
+  rec("3.json", { pid: live, kind: "bg", sessionId: A, name: "Code review" });
+  // A stopped session's record left behind: its process is gone.
+  rec("4.json", { pid: 999999, kind: "bg", sessionId: B, name: "Deploy" });
   mkdirSync(join(dir, "sub"));
-  expect(run([locator, "claude-bg", dir, ID.slice(0, 8)])).toBe(ID);
+  expect(run([locator, "claude-bg", dir, ID.slice(0, 36)])).toBe(ID);
+  expect(run([locator, "claude-bg", dir, A.slice(0, 36)])).toBe(A);
+  // A whole name, case aside, before a part of one.
+  expect(run([locator, "claude-bg", dir, "code REVIEW"])).toBe(A);
   expect(run([locator, "claude-bg", dir, "cart"])).toBe(ID);
-  // Only background sessions: the interactive record's id does not count.
+  // Part of two names: nothing, rather than a pick.
+  expect(run([locator, "claude-bg", dir, "review"])).toBe(null);
+  // Only background sessions, and only live ones.
   expect(run([locator, "claude-bg", dir, OTHER])).toBe(null);
-  expect(run([locator, "claude-bg", dir, "nothing-like-it"])).toBe(null);
+  expect(run([locator, "claude-bg", dir, "deploy"])).toBe(null);
+  expect(run([locator, "claude-bg", dir, B])).toBe(null);
   expect(run([locator, "claude-bg", dir, ""])).toBe(null);
 });
 

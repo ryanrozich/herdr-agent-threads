@@ -3,8 +3,8 @@
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, mock } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
@@ -1935,6 +1935,70 @@ test("a resume in the other terminal does not move a pane to its session", async
   expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
   hcBy = {};
   recordFiles = {};
+});
+
+// claude attach <id|name> writes no session record: the background session's own record names
+// it, so the pane binds exactly, even from another folder.
+test("claude attach binds the claude --bg session its record names", async () => {
+  const f = sharedFolder();
+  // The background session's record: its process (this one, alive), kind "bg".
+  writeFileSync(join(f.home, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, kind: "bg", sessionId: SESSION_A, name: "Fix the cart", cwd: f.cwd }));
+  hcBy = { t3c: fg(5199, "/tmp/threads-elsewhere", ["claude", "attach", "cart"]) };
+  const c = sharedState(f, "t3c");
+  await looked(c.v);
+  expect(c.v.current().file).toEndWith(`${SESSION_A}.jsonl`);
+  expect(c.v.res.guess).toBe(false);
+  expect(c.v.res.via).toBe("attach");
+  expect(c.v.res.tried.some((x) => x.what === "Background session it attached to" && x.ok)).toBe(true);
+  // A name no live background session has: no exact bind.
+  hcBy = { t3c: fg(5199, f.cwd, ["claude", "attach", "nothing-like-it"]) };
+  const d = sharedState(f, "t3c");
+  await looked(d.v);
+  expect(d.v.res.via).not.toBe("attach");
+  expect(d.v.res.tried.some((x) => x.what === "Background session it attached to" && !x.ok)).toBe(true);
+  hcBy = {};
+  recordFiles = {};
+});
+
+// Plain codex with Codex's app-server daemon: the daemon holds the rollout, the terminal's
+// process holds none, and the pane binds through the daemon (THREADS_CODEX_DAEMONS points
+// locate.sh at the stand-in daemon only).
+test("plain codex binds the session Codex's daemon holds for its folder", async () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "threads-cx-cwd-")));
+  const sessions = realpathSync(mkdtempSync(join(tmpdir(), "threads-cx-sessions-")));
+  const id = "00000000-0000-4000-8000-0000000000c7";
+  const client = spawn("bash", ["-c", 'exec -a codex sleep 30'], { cwd, stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 1200));
+  const ts = new Date().toISOString();
+  const file = join(sessions, `rollout-2026-11-12T09-25-46-${id}.jsonl`);
+  writeFileSync(file, `${JSON.stringify({ timestamp: ts, type: "session_meta", payload: { id, timestamp: ts, cwd, originator: "codex-tui" } })}\n`);
+  const daemon = spawn("bash", ["-c", `exec 3<"${file}"; exec -a "codex app-server --listen unix:// --managed-daemon" sleep 30`], { stdio: "ignore" });
+  const keep = process.env.THREADS_CODEX_DAEMONS;
+  try {
+    await new Promise((r) => setTimeout(r, 400));
+    process.env.THREADS_CODEX_DAEMONS = String(daemon.pid);
+    hcBy = { t5: JSON.stringify({ foreground: { name: "codex", argv: ["codex"], pid: client.pid, cwd }, cwd }) };
+    state = {
+      terminals: [{ address: "t5", status: "idle", cwd }],
+      panes: [{ pane: "pt5", tab: "A", terminal: "t5", cwd }, { pane: "pm", tab: "A", terminal: null, mod: "agent-threads" }],
+      props: { terminal: "t5", debug: true }, shared: {},
+    };
+    const v = new Threads();
+    v.init(state.props, makeCx());
+    await looked(v);
+    expect(v.res.kind).toBe("found");
+    expect(v.res.via).toBe("daemon");
+    expect(v.res.guess).toBe(false);
+    expect(v.current().file).toBe(file);
+    const steps = v.res.tried.map((x) => [x.what, x.ok]);
+    expect(steps).toContainEqual(["Session file the process has open", false]);
+    expect(steps).toContainEqual(["Session file the Codex daemon has open", true]);
+  } finally {
+    if (keep === undefined) delete process.env.THREADS_CODEX_DAEMONS; else process.env.THREADS_CODEX_DAEMONS = keep;
+    client.kill();
+    daemon.kill();
+    hcBy = {};
+  }
 });
 
 // ---- a turn cut off, and answered on the next row ----------------------------------------

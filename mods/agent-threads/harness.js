@@ -233,24 +233,27 @@ export function codexArgvSession(argv) {
 }
 
 // Plain codex (no --no-daemon) runs its session in Codex's app-server daemon, so the daemon,
-// not the terminal's process, holds the session file open. Of the files the daemons hold
-// ({ path, mtime, cwd, ts, sub }, locate.sh codex-daemon), the terminal's is a main session
-// (not a subagent's) in its folder that began after the process started (startedAt, ms;
-// 5 s early is allowed for the clocks), the newest written: after /new that is the new one.
-// It is a guess, with the choices newest first, when another Codex terminal runs in the
-// folder (peers) and more than one session fits, or when none began after the process
-// started, as after "codex resume --last" (then the folder's sessions). { file, guess, choices }.
-export function pickCodexDaemon(files, cwds, startedAt, peers = 0) {
-  const here = (files ?? []).filter((f) => f && !f.sub && f.path && cwds.includes(f.cwd))
+// not the terminal's process, holds the session file open. Of the files Codex's app servers
+// hold ({ path, mtime, cwd, ts, sub, origin }, locate.sh codex-held and codex-meta), the
+// terminal's is a terminal session (originator codex-tui; the ChatGPT app's threads are
+// "Codex Desktop"), not a subagent's, in its folder, that began after the process started
+// (startedAt, ms; 5 s early is allowed for the clocks). Of those the newest written: after /new
+// that is the new one. Older sessions only when the command line resumes one (resumed).
+// With another Codex terminal in the folder (peers) any pick is a guess, with the choices
+// newest first, and the pane stays on the session it shows (current, an id) while it fits.
+// { file, guess, choices }.
+export function pickCodexDaemon(files, cwds, startedAt, { peers = 0, current = null, resumed = false } = {}) {
+  const here = (files ?? []).filter((f) => f && !f.sub && f.path && cwds.includes(f.cwd) && (f.origin == null || /tui/i.test(f.origin)))
     .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
   const since = startedAt == null ? here : here.filter((f) => {
     const t = Date.parse(f.ts ?? "");
     return Number.isFinite(t) && t >= startedAt - 5000;
   });
-  const pool = since.length ? since : here;
+  const pool = since.length ? since : resumed ? here : [];
   if (!pool.length) return { file: null, guess: false, choices: [] };
-  const guess = !since.length || (peers > 0 && pool.length > 1);
-  return { file: pool[0].path, guess, choices: guess && pool.length > 1 ? pool : [] };
+  const guess = peers > 0 || !since.length;
+  const stay = guess && current ? pool.find((f) => f.path.includes(current)) : null;
+  return { file: (stay ?? pool[0]).path, guess, choices: guess ? pool : [] };
 }
 
 // "claude attach <id|name>" opens a background session (claude --bg) in the terminal and
