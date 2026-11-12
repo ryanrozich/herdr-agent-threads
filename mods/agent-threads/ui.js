@@ -1305,6 +1305,38 @@ export function headPinHit(x, w) {
   return x != null && w != null && x >= w - 54 && x <= w - 33;
 }
 
+// A pin in the Pinned column and the narrow Pinned view is a compact row, so five fit in a
+// 240 to 320 px column at a 1150 px window: its digit in an accent badge on the left, then
+// the turn's number and time, two lines of the prompt and one of the reply. Every line has
+// a fixed height and is cut with an ellipsis where it runs long, so the drawn row is the
+// stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px.
+export const PIN_ROW = Object.freeze({
+  PAD_X: 12, PAD_T: 8, PAD_B: 9, BADGE: 20, GAP_X: 10, META: 16, GAP: 3, LINE: 19, REPLY: 18,
+  SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2,
+});
+export function pinRowHeight(p) {
+  return PIN_ROW.PAD_T + PIN_ROW.META + PIN_ROW.GAP + Math.max(1, Math.min(PIN_ROW.PROMPT_LINES, p)) * PIN_ROW.LINE
+    + PIN_ROW.GAP + PIN_ROW.REPLY + PIN_ROW.PAD_B;
+}
+// The prompt as a compact row shows it: the person's own words without the lines they
+// quoted (the quote's text when it is the whole prompt), on one run of text.
+export function pinPromptText(prompt) {
+  const lines = String(prompt ?? "").split("\n");
+  const quote = (l) => /^ {0,3}>/.test(l);
+  const own = lines.filter((l) => !quote(l) && l.trim());
+  const keep = own.length ? own : lines.map((l) => l.replace(/^ {0,3}>\s?/, ""));
+  return keep.join(" ").replace(/\s+/g, " ").trim();
+}
+// { prompt: 1 or 2 lines, reply: one line, height } for a compact row width px wide.
+export function pinRowShape({ prompt, reply, width }) {
+  const tw = Math.max(60, width - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X);
+  const k = PIN_ROW.SIZE / 13;
+  const p = rowLines(prompt || "(empty prompt)", PIN_ROW.PROMPT_LINES, tw / (ROW.PROMPT_CHAR * k));
+  const r = rowLines(reply || " ", 1, tw / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13)));
+  const lines = p.lines.length ? p.lines : [" "];
+  return { prompt: lines, reply: r.lines[0] ?? " ", height: pinRowHeight(lines.length) };
+}
+
 // - and = make the Pinned column 40 px narrower or wider. Herdr puts the terminal, Threads
 // and the column in one row, Threads and the column at fixed widths, and a drag on the
 // divider between those two resizes Threads alone (the terminal takes up the rest). So the

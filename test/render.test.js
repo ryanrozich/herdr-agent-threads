@@ -2735,6 +2735,97 @@ test("Pinned column: the same day headers as the narrow view, drawn as a compact
   draw(v, cx);
 });
 
+// ---- compact rows in the Pinned view ---------------------------------------------------
+
+// The Pinned column's list at a 1150 px window, measured on a test window (debug listH): the
+// pane is 1032 px, less the header, the footer and the day strip.
+const PIN_LIST_H = 926;
+const compactPins = (v) => v.rows().filter((r) => r.kind === "turn");
+const itemWords = (v, r) => { rec = []; v.item(theme, r, true, v.height(r)); const c = rec; rec = null; return c; };
+
+test("Pinned view: each closed pin is a compact row, its digit, number, time, two prompt lines and one reply line", async () => {
+  const { v, cx } = await pinsShown(["--extra", "6"], [7, 3, 5]);
+  const rows = compactPins(v);
+  expect(rows.map((r) => r.pinNo)).toEqual([1, 2, 3]);
+  for (const r of rows) {
+    expect(r.compact).toBe(true);
+    expect(r.shape.prompt.length).toBeGreaterThanOrEqual(1);
+    expect(r.shape.prompt.length).toBeLessThanOrEqual(2);
+    expect(typeof r.shape.reply).toBe("string");
+    // Every line has a fixed height, so the row is what it states: 95 px with two prompt lines.
+    expect(v.height(r)).toBe(r.shape.prompt.length === 2 ? 95 : 76);
+  }
+  const r = rows[1];
+  v.sel = rows[0].key;
+  const calls = itemWords(v, r);
+  const words = calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(words[0]).toBe("2"); // the digit leads
+  expect(words).toContain(`#${r.turn.n}`);
+  expect(words).toContain(fmtTimeForTest(r.turn.ts));
+  for (const l of r.shape.prompt) expect(words).toContain(l);
+  expect(words).toContain(r.shape.reply);
+  expect(words.join(" ")).not.toMatch(/tokens|tool call/); // no stats line
+  // The selected pin has the list's fill and its bar.
+  expect(calls.some((e) => e[0] === "bg" && e[1] === theme.selected)).toBe(false);
+  v.sel = r.key;
+  expect(itemWords(v, r).some((e) => e[0] === "bg" && e[1] === theme.selected)).toBe(true);
+  // A reply not read yet puts a dot on the row, and reading it takes the dot away.
+  expect(itemWords(v, r).some((e) => e[0] === "id" && e[1] === "th-pin-new-2")).toBe(false);
+  v.pinnedList()[1].turn.followups = 2;
+  v.pinVer++;
+  const fresh = compactPins(v)[1];
+  expect(fresh.fresh).toBe(true);
+  expect(itemWords(v, fresh).some((e) => e[0] === "id" && e[1] === "th-pin-new-2")).toBe(true);
+  v.goPin(1, cx);
+  v.action("escape", cx);
+  expect(compactPins(v)[1].fresh).toBe(false);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.detail.filter((x) => x.startsWith("pin#")).length).toBe(3);
+});
+
+test("Pinned column: five pins, one day apart, fit a 240 to 320 px column at a 1150 px window without scrolling", async () => {
+  const { v, cx } = await pinsShown(["--only", "5", "--gap", "86400"], [4, 2, 0, 3, 1]);
+  for (const width of [240, 280, 320, 400]) {
+    v.width = width;
+    v.rowsKey = null;
+    const rows = v.rows();
+    expect(rows.filter((r) => r.kind === "pday").length).toBe(5);
+    expect(compactPins(v).length).toBe(5);
+    expect(compactPins(v).every((r) => r.compact)).toBe(true);
+    const total = rows.reduce((sum, r) => sum + v.height(r), 0);
+    expect(total).toBeLessThanOrEqual(PIN_LIST_H);
+    draw(v, cx);
+    expect(lastList.sizes.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(PIN_LIST_H);
+  }
+  // The longest rows (two prompt lines each) with a pill over each still fit.
+  expect(5 * 95 + 5 * 30).toBeLessThanOrEqual(PIN_LIST_H);
+});
+
+test("a compact pin opens as a card with Enter, a click or its digit, and closes back to its row", async () => {
+  const { v, cx, k } = await pinsShown(["--extra", "6"], [2, 4]);
+  const kinds = (key) => v.rows().filter((r) => r.key === key || r.key?.endsWith?.(`:${key}`)).map((r) => (r.compact ? "pin" : r.kind));
+  v.sel = k[2];
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(k[2])).toBe(true);
+  expect(kinds(k[2])).toContain("head");
+  expect(kinds(k[2])).not.toContain("pin");
+  v.key(keyEv("escape"), cx);
+  expect(kinds(k[2])).toEqual(["pin"]);
+  v.click(k[4], cx);
+  expect(v.open.has(k[4])).toBe(true);
+  expect(kinds(k[4])).toContain("head");
+  v.click(k[4], cx);
+  expect(kinds(k[4])).toEqual(["pin"]);
+  v.goPin(0, cx);
+  expect(v.sel).toBe(k[2]);
+  expect(kinds(k[2])).toContain("head");
+  // A pin whose turn is gone keeps its line of text (its saved time puts it first).
+  v.pinnedList()[1].pin.id = "1|nothing|1";
+  v.pinVer++;
+  expect(v.rows().find((r) => r.kind === "note")?.text).toMatch(/^1 · #\d+ is no longer in this session\. Click to unpin it\.$/);
+  draw(v, cx);
+});
+
 test("the first pin opens the Pinned column when there is room and keeps the keyboard in Threads; a closed column stays closed", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const k = keys();
