@@ -2435,12 +2435,17 @@ test("the pins show in the Pinned view at every width; the header and footer say
   v.rootH = 900;
   v.width = 500;
   const btn = () => v.headerButtons().find((b) => b[0] === "th-pin");
+  // The list's header has no pin button (p and an open turn's pin do it); the Pinned view
+  // keeps one, as Unpin for the selected pin.
   v.sel = k[0];
+  expect(btn()).toBeUndefined();
+  v.setView("pinned");
   expect(btn()[2]).toMatch(/^Unpin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(true);
   v.sel = k[6];
   expect(btn()[2]).toMatch(/^Pin #\d+ \(p\)$/);
   expect(btn()[4]).toBe(false);
+  v.setView("all");
   const pinned = () => v.headerButtons().find((b) => b[0] === "th-pinned");
   expect(pinned().slice(1, 7)).toEqual([null, "Open the Pinned column beside Threads (v)", "pinned", false, null, "Pinned 5"]);
   expect(v.footerHints().map((x) => x[1])).toContain("pin");
@@ -2553,6 +2558,11 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   w.width = 240;
   expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
   expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
+  // From 300 px its pin button is back: Unpin for the selected pin, the one way to unpin a
+  // closed pin with the mouse (the list's header has none).
+  w.width = 320;
+  expect(w.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
+  w.width = 240;
   expect(w.headerLayout().badge).toBe(0);
   expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 5".length * 6.6));
   rec = []; w.header(theme); const wh = rec; rec = null;
@@ -2932,7 +2942,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   }
 });
 
-test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, under 440 px latest gives way, and under 300 px agents and pin too", async () => {
+test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, under 440 px latest gives way, and under 300 px agents too", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
   v.sel = keys()[0];
   v.action("pin", cx);
@@ -2941,7 +2951,7 @@ test("the header fits at the widths Threads has beside the column: the Pinned bu
     v.width = width;
     const ids = v.headerButtons().map((b) => b[0]);
     expect(ids.includes("th-agents")).toBe(width >= 300);
-    expect(ids.includes("th-pin")).toBe(width >= 300);
+    expect(ids.includes("th-pin")).toBe(false);
     expect(ids.includes("th-latest")).toBe(width >= 440);
     expect(v.headerButtons().find((b) => b[0] === "th-pinned")[6]).toBe("Pinned 1");
     expect(v.headerLayout().text).toBeGreaterThanOrEqual(text);
@@ -3629,7 +3639,7 @@ test("the header shows the agent's state beside the badge: Working, Needs you, D
   v.width = 380;
   expect(ids()).not.toContain("th-state");
   expect(ids()).toContain("th-state-dot");
-  expect(v.badgeTip()).toMatch(/^Done: Claude finished its newest turn · Reading t4/);
+  expect(v.badgeTip()).toMatch(/^Done: Claude finished its newest turn · click to go to the terminal \(t\) · Reading t4/);
   v.width = 545;
   expect(ids()).not.toContain("th-state-dot");
   expect(withState).toBeGreaterThan(100);
@@ -3648,6 +3658,94 @@ test("the header shows the agent's state beside the badge: Working, Needs you, D
   expect(word()).toBe(null);
   draw(v, cx);
   expect(JSON.parse(JSON.stringify(state.shared["threads.debug"].t4)).state).toBe(null);
+});
+
+test("a click on the header's state goes to the terminal as t does, and its tooltip says so; under 440 px the badge takes the click", async () => {
+  const { v, cx } = await pane(fixture("--only", "3"));
+  v.width = 545;
+  state.terminals[0].status = "blocked";
+  expect(v.agentStateNow().word).toBe("Needs you");
+  const head = () => { rec = []; v.header(theme); const c = rec; rec = null; return c; };
+  // The handler and tooltip a chain set after .id(id), before the next element's id.
+  const after = (calls, id, name) => {
+    const at = calls.findIndex((e) => e[0] === "id" && e[1] === id);
+    if (at < 0) return null;
+    const end = calls.findIndex((e, i) => i > at && e[0] === "id");
+    return calls.slice(at, end < 0 ? undefined : end).find((e) => e[0] === name)?.at(-1) ?? null;
+  };
+  // The tooltip and the click are set before the chip's children, so look between its id and its dot.
+  const chip = (calls, name) => {
+    const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-state");
+    return calls.slice(at, at + 14).find((e) => e[0] === name)?.at(-1) ?? null;
+  };
+  let h = head();
+  expect(chip(h, "tooltip")).toBe("Claude is waiting for you in the terminal · click to go to the terminal (t)");
+  expect(h.slice(h.findIndex((e) => e[0] === "id" && e[1] === "th-state")).slice(0, 14).some((e) => e[0] === "cursor_pointer")).toBe(true);
+  const click = chip(h, "on_click");
+  expect(typeof click).toBe("function");
+  log = [];
+  v.lastFocus = null;
+  click({}, cx);
+  expect(log.filter((e) => e[1] === "pane.focus")).toEqual([["run", "pane.focus", { pane: "p1" }]]);
+  expect(v.toast.text).toBe("Focused t4 · Claude Code");
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.lastFocus.args).toEqual({ pane: "p1" });
+  // The same call as the t key.
+  const byClick = { ...v.lastFocus, at: 0 };
+  v.key(keyEv("t"), cx);
+  expect({ ...v.lastFocus, at: 0 }).toEqual(byClick);
+  // Under 440 px the dot sits on the badge's corner; the badge takes the click and says so.
+  v.width = 380;
+  h = head();
+  expect(h.some((e) => e[0] === "id" && e[1] === "th-state")).toBe(false);
+  expect(h.some((e) => e[0] === "id" && e[1] === "th-state-dot")).toBe(true);
+  expect(v.badgeTip()).toMatch(/^Needs you: Claude is waiting for you in the terminal · click to go to the terminal \(t\) · Reading t4/);
+  const badgeClick = after(h, "th-badge", "on_click");
+  expect(typeof badgeClick).toBe("function");
+  log = [];
+  badgeClick({}, cx);
+  expect(log.filter((e) => e[1] === "pane.focus")).toEqual([["run", "pane.focus", { pane: "p1" }]]);
+  // With no state to show, the badge is only its tooltip.
+  v.agentStateNow = () => null;
+  expect(after(head(), "th-badge", "on_click")).toBe(null);
+  expect(v.badgeTip()).not.toContain("click to go to the terminal");
+});
+
+test("the list's header has no pin button, so the session's title gets its room; a Pinned view keeps it", async () => {
+  const { headerButtonWidth } = await import("../mods/agent-threads/ui.js");
+  const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  for (const width of [260, 300, 380, 440, 545, 640]) {
+    v.width = width;
+    expect(v.headerButtons().map((b) => b[0])).not.toContain("th-pin");
+    rec = []; v.header(theme); const h = rec; rec = null;
+    expect(h.some((e) => e[0] === "id" && e[1] === "th-pin")).toBe(false);
+    draw(v, cx);
+    expect(state.shared["threads.debug"].t4.headerButtons.some((b) => b.startsWith("th-pin|") || b.startsWith("th-pin:"))).toBe(false);
+  }
+  // The text's room: the pane less its padding, the badge (and state) and the buttons, with
+  // no 24 px pin button and its 8 px gap among them.
+  expect(headerButtonWidth(null) + 8).toBe(32);
+  const room = () => {
+    const L = v.headerLayout();
+    return L.width - 20 - (L.badge + 8) - v.headerButtons().reduce((sum, b) => sum + headerButtonWidth(b[6]) + 8, 0);
+  };
+  const texts = {};
+  for (const width of [380, 545]) {
+    v.width = width;
+    expect(v.headerLayout().text).toBe(room());
+    texts[width] = v.headerLayout().text;
+  }
+  // Before, with the pin button: 119 at 380 px and 162 at 545 (where the state chip, now
+  // 10 px wider for its hover fill, takes 10 of the 32 back).
+  expect(texts).toEqual({ 380: 119 + 32, 545: 162 + 22 });
+  // In a Pinned view every row is a pin, and a closed one has no pin of its own to click,
+  // so the header keeps its pin button there, as Unpin for the selected pin.
+  v.width = 380;
+  v.setView("pinned");
+  expect(v.headerButtons().find((b) => b[0] === "th-pin")?.[2]).toMatch(/^Unpin #\d+ \(p\)$/);
+  v.setView("all");
 });
 
 // A transcript cut before its third prompt, and the rest, to append as a live session would.
