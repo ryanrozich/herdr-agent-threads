@@ -3227,10 +3227,16 @@ export default class Threads extends View {
   }
   // The wheel or trackpad moved the reply: the panel's estimate of where the view is follows,
   // so j and k go on from there.
-  galleryWheel(e) {
+  // Each part listens, since the scroll area's own scrolling may stop the event before a
+  // listener on the area runs; the area listens too, for its padding. The same event reaching
+  // both counts once.
+  galleryWheel(e, from) {
     const g = this.gal;
     const dy = Number(e?.delta?.y) || 0;
     if (!g || !dy) return;
+    const key = `${e?.position?.x},${e?.position?.y},${dy},${e?.touch_phase}`;
+    if (from === "area" && g.wheelKey === key) return;
+    g.wheelKey = from === "part" ? key : null;
     const total = 4 + g.sizes.reduce((a, h) => a + h, 0) + 20;
     g.y = Math.max(0, Math.min(Math.max(0, total - g.viewH), g.y - dy));
   }
@@ -3361,7 +3367,7 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).truncate().text_right().child(head)))
       .child(pad(v_flex().id("th-gallery-scroll").flex_1().min_h(0).overflow_y_scrollbar().when(Boolean(this.galScroll), (el) => el.track_scroll(this.galScroll)).pt(4).pb(20))
         .on_size_change((size) => { g.viewH = size.height; })
-        .on_scroll_wheel((e) => this.galleryWheel(e))
+        .on_scroll_wheel((e) => this.galleryWheel(e, "area"))
         // The message, the caption, each reply block and the stats are the scroll area's own
         // children, as galleryParts counts them for j and k; each reports its height.
         .children([
@@ -3375,7 +3381,7 @@ export default class Threads extends View {
           v_flex().pt(6)
             .when(turn.left > 0, (el) => el.child(div().pb(6).text_size(11.5).italic().text_color(t.dim).child(`… ${turn.left.toLocaleString()} more characters not shown`)))
             .child(div().min_w(0).text_size(11.5).font_family(this.mono()).text_color(t.dim).child(turn.stats || " ")),
-        ].map((el, k) => el.id(`th-gallery-part-${k}`).on_size_change((size) => { g.sizes[k] = size.height; }))))
+        ].map((el, k) => el.id(`th-gallery-part-${k}`).on_size_change((size) => { g.sizes[k] = size.height; }).on_scroll_wheel((e) => this.galleryWheel(e, "part")))))
       .child(pad(h_flex().h(VIEWER.FOOT).flex_none().gap(8).items_center().border_t(1).border_color(t.border))
         .child(this.galleryButton(t, "th-gallery-copy", g.copied ? "check" : "copy", g.copied ? "Copied" : "Copy reply", "c", false, "Copy the reply as Markdown (c)", (cx) => this.galleryCopy(cx)))
         .child(div().flex_1())

@@ -3861,7 +3861,10 @@ test("the image viewer: j and k go by the measured parts and follow the wheel; t
   expect(press("k")).toEqual([3]);
   expect(g.gal.y).toBe(434);
   // The wheel: 200 px down, then k goes to the start of the part on screen, not the one above.
-  after("th-gallery-scroll", "on_scroll_wheel")({ delta: { x: 0, y: -200 } }, cx);
+  // Over a part, the part's listener and then the area's see the same event: it counts once.
+  const ev = { delta: { x: 0, y: -200 }, position: { x: 900, y: 400 }, touch_phase: "moved" };
+  after("th-gallery-part-3", "on_scroll_wheel")(ev, cx);
+  after("th-gallery-scroll", "on_scroll_wheel")({ ...ev }, cx);
   expect(g.gal.y).toBe(634);
   expect(press("k")).toEqual([3]);
   // Back to the top by wheel: j goes to the caption again, not further down.
