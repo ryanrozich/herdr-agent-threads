@@ -32,7 +32,7 @@ import {
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -253,7 +253,7 @@ async function resolve(address, claudeHome, current = null) {
   const cwds = [...new Set([fg.cwd, pane?.cwd, term.cwd, info.cwd].filter(Boolean)
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
   const harness = harnessOf(fg, pane);
-  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cmd });
+  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cwds, cmd });
   if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "cursor") return resolveCursor({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
@@ -277,7 +277,14 @@ async function resolve(address, claudeHome, current = null) {
     tried.record = { what: "Live session record", detail: "no claude process to look up", ok: false };
   }
   if (!id && fromArgv) { id = fromArgv; via = "argv"; }
-  const order = () => ["program", "argv", "record", "file", "newest"].map((k) => tried[k]).filter(Boolean);
+  // claude attach <id|name>: a background session (claude --bg), whose own record names it.
+  const attach = claudeAttach(argv);
+  if (!id && attach && cmd === "claude") {
+    const sid = await locate("claude-bg", P.sessions, attach);
+    tried.attach = { what: "Background session it attached to", detail: sid ? sid.slice(0, 8) : `no claude --bg session ${attach}`, ok: Boolean(sid) };
+    if (sid) { id = sid; via = "attach"; }
+  }
+  const order = () => ["program", "argv", "record", "attach", "file", "newest"].map((k) => tried[k]).filter(Boolean);
   if (id) {
     const file = await locate("find", P.root, id);
     if (file) return { kind: "found", id, file, via, ...who, guess: false, tried: order() };
@@ -306,21 +313,36 @@ async function resolve(address, claudeHome, current = null) {
   return { kind: "none", ...who, tried: order(), choices };
 }
 
-// A Codex process keeps its session file open, which names it exactly. Codex writes no file
-// until the first prompt, so a process with none is waiting for one.
-async function resolveCodex({ argv, pid, cwd, cmd }) {
+// A Codex process keeps its session file open, which names it exactly (codex --no-daemon).
+// Plain codex runs the session in Codex's app-server daemon, which holds the file instead
+// (pickCodexDaemon). Codex writes no file until the first prompt, so a process with none is
+// waiting for one.
+async function resolveCodex({ argv, pid, cwd, cwds, cmd }) {
   const who = { harness: "codex", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const open = pid ? await locate("codex-open", String(pid)) : null;
-  const openStep = { what: "Session file the process has open", detail: open ? idOf(open).slice(0, 8) : "none yet", ok: Boolean(open) };
+  const openStep = { what: "Session file the process has open", detail: open ? idOf(open).slice(0, 8) : "none", ok: Boolean(open) };
   if (open) return { kind: "found", id: idOf(open), file: open, via: "open file", ...who, guess: false, tried: [program, openStep] };
   const named = codexArgvSession(argv);
   if (named) {
     const file = await locate("codex-find", named);
     if (file) return { kind: "found", id: named, file, via: "argv", ...who, guess: false, tried: [program, openStep] };
   }
+  const held = ((await locate("codex-daemon")) ?? "").split("\n").filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const peers = held.length && pid && cwd ? Number(await locate("codex-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickCodexDaemon(held, cwds ?? [cwd].filter(Boolean), age == null ? null : Date.now() - age, peers);
+  const daemonStep = {
+    what: "Session file the Codex daemon has open",
+    detail: !pick.file ? "none yet" : `${idOf(pick.file).slice(0, 8)}${pick.choices.length ? ` · ${pick.choices.length} in this folder` : ""}${peers ? ` · ${plural(peers + 1, "Codex terminal")} here` : ""}`,
+    ok: Boolean(pick.file),
+  };
+  const tried = [program, openStep, daemonStep];
+  const choices = pick.choices.map((x) => ({ mtime: x.mtime, size: null, path: x.path }));
+  if (pick.file) return { kind: "found", id: idOf(pick.file), file: pick.file, via: "daemon", ...who, guess: pick.guess, choices, tried };
   const watch = await locate("codex-dir");
-  return { kind: "pending", id: null, via: null, ...who, tried: [program, openStep], watch };
+  return { kind: "pending", id: null, via: null, ...who, tried, watch };
 }
 
 // OpenCode records no process for a session, so the terminal title, its folder and its start time
@@ -334,6 +356,14 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
   };
   const db = await script("db");
   if (!db) return { kind: "none", ...who, tried: [program, { what: "OpenCode's database", detail: "not found", ok: false }], choices: [] };
+  // opencode attach <url>: the sessions are the server's, under --dir or the server's folder.
+  const attach = opencodeAttach(argv);
+  const tried = [program];
+  if (attach) {
+    const dir = attach.dir ?? (attach.local ? await script("server-dir", String(attach.port)) : null);
+    tried.push({ what: "Folder of the OpenCode server", detail: dir ? tilde(dir) : attach.local ? "server not found" : `${attach.url} is on another machine`, ok: Boolean(dir) });
+    if (dir) cwds = [dir, dir.replace(/^\/private(?=\/(tmp|var|etc)\/)/, ""), ...cwds];
+  }
   const lines = (await script("sessions", db, ...cwds)) ?? "";
   const list = lines.split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
@@ -346,8 +376,9 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
     ok: Boolean(pick.id),
   };
   const choices = pick.choices.map((x) => ({ mtime: x.updated, size: null, path: file(x.id), label: openCodeLabel(x) }));
-  if (!pick.id) return { kind: "pending", id: null, via: null, ...who, tried: [program, step], watch: dirname(db), choices };
-  return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
+  tried.push(step);
+  if (!pick.id) return { kind: "pending", id: null, via: null, ...who, tried, watch: dirname(db), choices };
+  return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried };
 }
 
 // Pi keeps no session file open and records no process, so its sessions folder for the working
