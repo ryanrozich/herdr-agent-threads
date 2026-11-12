@@ -70,11 +70,17 @@ Beside the agent's badge, the header says Working, Needs you, Done or Exited. Cl
 
 <a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own" width="400"></a>
 
-### See pasted images and agent messages
+### Check a reply against its screenshots
 
-Images you pasted show as tiles over your message. In an open turn, click one to see it larger. Press `a` to show messages other agents sent the session, such as a subagent's report.
+Images you pasted show as tiles over your message. In an open turn, click one to see it larger, and click it again to open the image viewer. The viewer fills the window with the image and puts your prompt and the reply beside it, so you can read the reply against each screenshot. `←` `→` step through the images, `j` `k` scroll the reply, `i` hides it and `Esc` closes the viewer.
 
-<a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it" width="400"></a> <a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
+<a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it" width="300"></a> <a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer: a screenshot on the left, the prompt and the reply in a panel on the right" width="500"></a>
+
+### See agent messages
+
+Press `a` to show messages other agents sent the session, such as a subagent's report.
+
+<a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
 
 ### Make it yours
 

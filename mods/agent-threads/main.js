@@ -23,6 +23,10 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
+// ScrollHandle (a plain scroll area's position, which j and k move in the image viewer's
+// panel) is new in Herdr 0.1.15. A named import of it stops the mod loading on 0.1.14, so it
+// is read from the module's namespace, and the viewer works without it.
+import * as gpuiBase from "gpui-base";
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -39,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, mix,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -102,6 +106,7 @@ const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
+const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
 // (measured against the same text drawn whole: 748 px and 748 px).
@@ -2948,10 +2953,11 @@ export default class Threads extends View {
     cx.notify();
   }
 
-  // ---- the image gallery ----
+  // ---- the image viewer ----
 
   // A message's images, full window: this mod again, as a dialog over the whole window, with
-  // the decoded files and the one to start at. Only images that have a file go in.
+  // the decoded files, the one to start at, and the turn for the reading panel beside the
+  // image (viewerTurn). Only images that have a file go in.
   openGallery(turn, i) {
     const list = (turn.images ?? []).map((im, j) => {
       const f = this.imgFile(turn, j);
@@ -2961,24 +2967,52 @@ export default class Threads extends View {
     const at = Math.max(0, list.findIndex((x) => x.j === i));
     this.galleryOpened = { turn: turn.n, at, count: list.length };
     openOverlay({ mod: MOD, kind: "dialog", frame: "none", width: 1, height: 1,
-      props: { gallery: { images: list.map(({ j: _j, ...x }) => x), at, title: `#${turn.n}` } } });
+      props: { gallery: { images: list.map(({ j: _j, ...x }) => x), at, title: `#${turn.n}`, panel: this.prefs.viewerReply !== false, turn: this.viewerTurn(turn) } } });
     return true;
+  }
+  // The turn as the viewer's panel shows it, a copy taken when the viewer opens (a turn still
+  // running keeps the reply it had then, and the panel says so): who sent it and when, the
+  // prompt, the caption's parts, the reply as Markdown with the link rules applied (and its
+  // source for Copy reply), the stats, and the bubble's colours.
+  viewerTurn(turn) {
+    const { style, theme: bt } = this.bubbleLook(theme(), turn.agent);
+    const text = this.replyText(turn) ?? "";
+    const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
+    const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
+    return {
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : this.prefs.youName,
+      when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
+      running: !turn.done, asOf: fmtTime(Date.now()),
+      cmd: commandParts(turn)?.name ?? null,
+      prompt: prompt.slice(0, VIEWER_PROMPT), promptCut: Math.max(0, prompt.length - VIEWER_PROMPT),
+      caption: this.captionParts(turn), md: this.linkOne(md).md, copy: text, left: text.length - md.length,
+      stats: this.statsFull(turn), size: this.prefs.textSize,
+      fill: style.fill, outline: Boolean(style.outline), ink: bt.foreground, sub: bt.muted,
+    };
   }
   initGallery(p, cx) {
     const g = p.gallery ?? {};
     const images = Array.isArray(g.images) ? g.images.filter((x) => x && typeof x.path === "string") : [];
-    this.gal = { overlay: p.overlay ?? null, images, i: Math.max(0, Math.min(images.length - 1, Math.round(Number(g.at) || 0))), title: String(g.title ?? "") };
+    const turn = g.turn && typeof g.turn === "object" ? g.turn : null;
+    this.gal = {
+      overlay: p.overlay ?? null, images, i: Math.max(0, Math.min(images.length - 1, Math.round(Number(g.at) || 0))), title: String(g.title ?? ""),
+      turn, panel: Boolean(turn) && g.panel !== false, top: 0, copied: 0,
+      blocks: turn ? replyBlocks(escapeDollars(String(turn.md ?? ""))) : [],
+    };
     this.galSize = null;
+    // Without a ScrollHandle (Herdr before 0.1.15) the reply scrolls with the wheel only, and
+    // j, k and Space step the images as before.
+    this.galScroll = gpuiBase.ScrollHandle?.new?.() ?? null;
     this.h = cx.focus_handle();
     cx.timer.after(0, () => this.h.focus());
-    // "agent-threads.galleryNext", galleryPrev and galleryClose (for key bindings, and for a
-    // window no keys reach). Other commands are the panes'.
+    // "agent-threads.galleryNext", galleryPrev, galleryClose, galleryReply (show or hide the
+    // panel), galleryCopy, galleryDown and galleryUp (for key bindings, and for a window no
+    // keys reach). Other commands are the panes'.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
-        if (c === "galleryNext") this.galleryStep(1, cx);
-        else if (c === "galleryPrev") this.galleryStep(-1, cx);
-        else if (c === "galleryClose") this.galleryClose();
+        const act = { galleryNext: "next", galleryPrev: "prev", galleryClose: "close", galleryReply: "panel", galleryCopy: "copy", galleryDown: "down", galleryUp: "up" }[c];
+        if (act) this.galleryAct(act, cx);
       }
     });
   }
@@ -2988,16 +3022,81 @@ export default class Threads extends View {
     this.gal.i = (this.gal.i + d + n) % n;
     cx.notify();
   }
+  galleryGo(i, cx) {
+    if (i < 0 || i >= this.gal.images.length) return;
+    this.gal.i = i;
+    cx.notify();
+  }
   galleryClose() { if (this.gal.overlay) closeOverlay(this.gal.overlay); }
   galleryKey(e, cx) {
-    const m = e?.modifiers ?? {};
-    if (m.platform || m.control || m.alt) return;
-    const k = e?.key ?? "";
-    if (["left", "up", "k", "h", "pageup"].includes(k)) this.galleryStep(-1, cx);
-    else if (["right", "down", "j", "l", "space", "pagedown"].includes(k)) this.galleryStep(1, cx);
-    else if (k === "home") { this.gal.i = 0; cx.notify(); }
-    else if (k === "end") { this.gal.i = this.gal.images.length - 1; cx.notify(); }
-    else if (k === "escape" || k === "q" || k === "enter") this.galleryClose();
+    const act = viewerKey(e, this.gal.panel && Boolean(this.galScroll));
+    if (act) this.galleryAct(act, cx);
+  }
+  galleryAct(act, cx) {
+    const g = this.gal;
+    if (act === "prev") this.galleryStep(-1, cx);
+    else if (act === "next") this.galleryStep(1, cx);
+    else if (act === "first") this.galleryGo(0, cx);
+    else if (act === "last") this.galleryGo(g.images.length - 1, cx);
+    else if (act.startsWith("go:")) this.galleryGo(Number(act.slice(3)), cx);
+    else if (act === "close") this.galleryClose();
+    else if (act === "panel") this.galleryPanel(!g.panel, cx);
+    else if (act === "copy") this.galleryCopy(cx);
+    else if (act === "down" || act === "up") {
+      if (!g.panel || !this.galScroll) this.galleryStep(act === "down" ? 1 : -1, cx);
+      else this.galleryScroll(act === "down" ? 1 : -1, cx);
+    }
+  }
+  // The panel's children, top to bottom: the message, the caption, the reply's blocks
+  // (ui.js replyBlocks) and the stats. j and k put the next or the one before at the top.
+  galleryParts() { return 2 + Math.max(1, this.gal.blocks.length) + 1; }
+  galleryScroll(d, cx) {
+    const g = this.gal;
+    const n = this.galleryParts();
+    const top = Math.max(0, Math.min(n - 1, g.top + d));
+    if (top === g.top && top > 0 && top < n - 1) return;
+    g.top = top;
+    // A scroll handle only reveals a child with the least scroll, so a part below the view
+    // would land at its bottom edge. Going down, the view goes to the end first, then back
+    // up to the part, which then lands at the top. Going up, the part is above the view.
+    if (d > 0 && top > 0) {
+      this.galScroll.scroll_to_item(n - 1);
+      cx.notify();
+      // A request is used once, after the next layout, so the second waits for a frame.
+      cx.timer.after(60, (cx) => { if (this.gal.top === top) { this.galScroll.scroll_to_item(top); cx.notify(); } });
+    } else {
+      this.galScroll.scroll_to_item(top);
+      cx.notify();
+    }
+  }
+  // i, the Reply button or galleryReply: the panel shows or hides, and settings.json keeps
+  // the choice (viewerReply) for the next viewer. The pane watches the file and takes it.
+  galleryPanel(on, cx) {
+    if (!this.gal.turn) return;
+    this.gal.panel = on;
+    cx.notify();
+    cx.spawn(async () => {
+      for (let tries = 0; tries < 3; tries++) {
+        const text = await readTextFile(settingsPath(appHome())).catch(() => null);
+        if (!writable(text)) return;
+        try { await saveSettings(appHome(), { ...parseSettings(text).values, viewerReply: on }, text); return; }
+        catch { /* another save got there first: read it again */ }
+      }
+    });
+  }
+  galleryCopy(cx) {
+    const text = String(this.gal.turn?.copy ?? "");
+    if (!text) return;
+    try { cx.write_to_clipboard(text); } catch (e) { console.log(`agent-threads: clipboard write failed: ${e?.message ?? e}`); return; }
+    const at = (this.gal.copied = (this.gal.copied | 0) + 1);
+    cx.notify();
+    cx.timer.after(1500, (cx) => { if (this.gal.copied === at) { this.gal.copied = 0; cx.notify(); } });
+  }
+  // The stage a shade off the pane colour (darker in a dark theme, a little darker in a light
+  // one), so a white screenshot keeps its edge; the image gets a thin ring too.
+  galleryLook(t) {
+    const dark = (contrast(t.background, "#000000") ?? 1) < (contrast(t.foreground, "#000000") ?? 21);
+    return { dark, stage: mix(t.background, "#000000", dark ? 0.25 : 0.055), ring: alpha(t.foreground, dark ? 0.08 : 0.14) };
   }
   galleryView() {
     const t = theme();
@@ -3007,7 +3106,9 @@ export default class Threads extends View {
     const z = this.zoom();
     const W = (this.galSize?.width ?? 1200) / z;
     const H = (this.galSize?.height ?? 800) / z;
-    const box = galleryBox(f, W - 2 * 64, H - 52 - 40);
+    const L = viewerLayout(W, H, g.panel);
+    const look = this.galleryLook(t);
+    const box = galleryBox(f, L.room.w, L.room.h);
     const btn = (id, icon, tip, on, act) => div().id(id).flex_none().size(40).rounded(20).flex().items_center().justify_center()
       .bg(alpha(t.foreground, 0.08)).text_color(on ? t.foreground : t.dim).when(!on, (el) => el.opacity(0.35))
       .when(on, (el) => el.cursor_pointer().hover((s) => s.bg(alpha(t.foreground, 0.16))))
@@ -3015,26 +3116,132 @@ export default class Threads extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); if (on) act(cx); })
       .child(svg(ICON(icon)).size(20));
     const label = f ? [`${g.title} · Image ${g.i + 1} of ${n}`, `[Image #${f.n}]`, f.w > 0 ? `${f.w}×${f.h}` : null].filter(Boolean).join(" · ") : "No image";
+    // The row and the column centre their children across, so the stage asks for the full
+    // height (beside the panel) or width (above it).
+    const stage = v_flex().flex_1().min_w(0).min_h(0).bg(look.stage).when(L.wide, (el) => el.h_full()).when(!L.wide, (el) => el.w_full())
+      .child(h_flex().flex_1().min_h(0).items_center().justify_between().px(12)
+        .child(btn("th-gallery-prev", "chevron-left", "Previous image (Left)", n > 1, (cx) => this.galleryStep(-1, cx)))
+        .child(h_flex().flex_1().min_w(0).h_full().items_center().justify_center()
+          .child(f ? div().w(box.w).h(box.h).flex_none().rounded(6).overflow_hidden().border_1().border_color(look.ring).child(image(f.path).size_full()) : div()))
+        .child(btn("th-gallery-next", "chevron-right", "Next image (Right)", n > 1, (cx) => this.galleryStep(1, cx))))
+      .child(this.galleryStrip(t, L, look));
     return v_flex().id("th-gallery").size_full().bg(t.background)
       .track_focus(this.h)
       .on_key_down((e, cx) => this.galleryKey(e, cx))
       .on_size_change((size, cx) => {
         if (Math.abs((this.galSize?.width ?? 0) - size.width) > 1 || Math.abs((this.galSize?.height ?? 0) - size.height) > 1) { this.galSize = size; cx.notify(); }
       })
-      .child(h_flex().h(52).flex_none().px(16).gap(10).items_center()
+      .child(h_flex().h(VIEWER.TOP).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border)
         .child(svg(ICON("image")).size(15).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(t.foreground).child(label))
-        .child(div().id("th-gallery-close").flex_none().h(28).px(10).rounded(6).flex().items_center().gap(6).cursor_pointer()
-          .border_1().border_color(t.border).text_size(12.5).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.galleryClose(); })
-          .child(svg(ICON("x")).size(13)).child("Close (Esc)")))
-      .child(h_flex().flex_1().min_h(0).items_center().justify_between().px(12)
-        .child(btn("th-gallery-prev", "chevron-left", "Previous image (Left)", n > 1, (cx) => this.galleryStep(-1, cx)))
-        .child(h_flex().flex_1().min_w(0).h_full().items_center().justify_center()
-          .child(f ? div().w(box.w).h(box.h).flex_none().rounded(6).overflow_hidden().child(image(f.path).size_full()) : div()))
-        .child(btn("th-gallery-next", "chevron-right", "Next image (Right)", n > 1, (cx) => this.galleryStep(1, cx))))
-      .child(h_flex().h(40).flex_none().justify_center().items_center().text_size(12).text_color(t.dim)
-        .child(n > 1 ? "Left and Right step through the message's images · Esc closes" : "Esc closes"));
+        .when(Boolean(g.turn), (el) => el.child(this.galleryButton(t, "th-gallery-reply", L.wide ? "panel-right" : "panel-bottom", "Reply", "i", g.panel,
+          g.panel ? "Hide the prompt and reply (i)" : "Show the prompt and reply (i)", (cx) => this.galleryPanel(!g.panel, cx))))
+        .child(this.galleryButton(t, "th-gallery-close", "x", "Close (Esc)", null, false, null, () => this.galleryClose())))
+      .child((L.wide ? h_flex() : v_flex()).flex_1().min_h(0).min_w(0)
+        .child(stage)
+        .when(g.panel, (el) => el.child(this.galleryPanelView(t, L))));
+  }
+  // A top-line or footer button: an icon, a label and its key.
+  galleryButton(t, id, icon, text, key, on, tip, act) {
+    return div().id(id).flex_none().h(28).px(10).rounded(6).flex().items_center().gap(6).cursor_pointer()
+      .border_1().border_color(t.border).text_size(12.5).text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.hover))
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .when(Boolean(tip), (el) => el.tooltip(tip))
+      .on_click((_e, cx) => { cx.stop_propagation(); act(cx); })
+      .child(svg(ICON(icon)).size(13).flex_none()).child(text)
+      .when(Boolean(key), (el) => el.child(div().px(4).rounded(4).border_1().border_color(t.border).text_size(10.5).font_family(this.mono()).text_color(t.dim).child(key)));
+  }
+  // Under the image, every image of the message as a thumbnail; a click goes to it.
+  galleryStrip(t, L, look) {
+    const g = this.gal;
+    return h_flex().id("th-gallery-strip").h(L.strip).flex_none().items_center().justify_center().gap(8).px(16).overflow_x_scroll()
+      .children(g.images.map((im, j) => {
+        const on = j === g.i;
+        const k = im.w > 0 && im.h > 0 ? im.w / im.h : 1.4;
+        const w = Math.round(L.thumb * Math.max(0.5, Math.min(2.4, k)));
+        return div().id(`th-gallery-thumb-${j}`).flex_none().p(2).rounded(7).border_2().border_color(on ? t.accent : alpha(t.accent, 0))
+          .cursor_pointer().tooltip(`[Image #${im.n}]${j < 9 ? ` (${j + 1})` : ""}`)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.galleryGo(j, cx); })
+          .child(div().w(w).h(L.thumb).rounded(5).overflow_hidden().border_1().border_color(look.ring).when(!on, (el) => el.opacity(0.55))
+            .hover((s) => s.opacity(on ? 1 : 0.85))
+            .child(image(im.path).size_full()));
+      }));
+  }
+  // The reading panel: the turn's number, sender and time, then a scroll area with the prompt
+  // in its bubble (the on-screen image's label marked, each label a way to its image), the
+  // caption, the reply as Markdown and the stats, then Copy reply.
+  galleryPanelView(t, L) {
+    const g = this.gal;
+    const turn = g.turn;
+    const rt = readType(turn.size);
+    const head = turn.running ? `Still running · the reply as of ${turn.asOf}` : turn.when;
+    const pad = (el) => el.pl(L.padX).pr(L.padX);
+    const reply = g.blocks.length
+      ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
+        .child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+      : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
+    return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
+      .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
+      .when(!L.wide, (el) => el.h(L.panelH).w_full().border_t(1).border_color(t.border))
+      .child(pad(h_flex().h(VIEWER.HEAD).flex_none().gap(8).items_center().text_size(12.5).text_color(t.dim))
+        .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
+        .child(div().flex_none().child("·"))
+        .child(div().flex_none().font_medium().text_color(t.muted).child(turn.who))
+        .child(div().flex_1().min_w(0).truncate().text_right().child(head)))
+      .child(pad(v_flex().id("th-gallery-scroll").flex_1().min_h(0).overflow_y_scrollbar().when(Boolean(this.galScroll), (el) => el.track_scroll(this.galScroll)).pt(4).pb(20))
+        // The message, the caption, each reply block and the stats are the scroll area's own
+        // children, as galleryParts counts them for j and k.
+        .children([
+          this.galleryPrompt(t, turn, rt, L),
+          h_flex().pb(8).gap_x(6).flex_wrap().items_center().text_size(12.5).text_color(t.dim)
+            .children(turn.caption?.length ? turn.caption.map(([icon, text], i) => h_flex().h(18).gap(5).items_center()
+              .when(i > 0, (el) => el.child(div().child("·")))
+              .when(icon === "name", (el) => el.child(div().font_semibold().text_color(t.muted).child(text)))
+              .when(icon !== "name", (el) => el.child(svg(ICON(icon)).size(13).flex_none()).child(text))) : [div().h(4)]),
+          ...reply,
+          v_flex().pt(6)
+            .when(turn.left > 0, (el) => el.child(div().pb(6).text_size(11.5).italic().text_color(t.dim).child(`… ${turn.left.toLocaleString()} more characters not shown`)))
+            .child(div().min_w(0).text_size(11.5).font_family(this.mono()).text_color(t.dim).child(turn.stats || " ")),
+        ]))
+      .child(pad(h_flex().h(VIEWER.FOOT).flex_none().gap(8).items_center().border_t(1).border_color(t.border))
+        .child(this.galleryButton(t, "th-gallery-copy", g.copied ? "check" : "copy", g.copied ? "Copied" : "Copy reply", "c", false, "Copy the reply as Markdown (c)", (cx) => this.galleryCopy(cx)))
+        .child(div().flex_1())
+        .child(div().flex_none().text_size(12).text_color(t.dim).child(this.galScroll ? "j / k scroll the reply · i hides it" : "i hides the reply")));
+  }
+  // The person's message in its bubble on the right (an agent's outlined, on the left), as
+  // plain text in the bubble's ink. A line with an [Image #N] label is drawn a word at a
+  // time, so the label can be marked (the image on screen) and clicked (goes to its image).
+  galleryPrompt(t, turn, rt, L) {
+    const g = this.gal;
+    const shown = g.images[g.i]?.n;
+    const lines = String(turn.prompt ?? "").split("\n").slice(0, 400);
+    const ink = turn.ink ?? t.foreground;
+    const tag = (p, li, k) => {
+      const j = g.images.findIndex((x) => x.n === p.n);
+      const on = p.n === shown;
+      return div().id(`th-gallery-tag-${li}-${k}`).flex_none().px(5).rounded(5).text_color(ink)
+        .when(on, (el) => el.bg(alpha(ink, 0.2)).border_1().border_color(alpha(ink, 0.35)))
+        .when(!on && j >= 0, (el) => el.cursor_pointer().hover((s) => s.bg(alpha(ink, 0.12))))
+        .when(j >= 0, (el) => el.on_click((_e, cx) => { cx.stop_propagation(); this.galleryGo(j, cx); }))
+        .child(p.t);
+    };
+    const line = (text, li) => {
+      const pieces = labelPieces(text);
+      if (!pieces.some((p) => p.n != null)) return div().min_h(rt.line).text_color(ink).child(text || " ");
+      return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
+        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
+    };
+    const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
+      .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
+      .children(lines.map(line))
+      .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
+    const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
+    return h_flex().w_full().pb(14).when(!turn.agent, (el) => el.justify_end())
+      .child(div().max_w(max).min_w(0).px(14).py(9).bg(turn.fill ?? alpha(t.foreground, 0.08))
+        .when(Boolean(turn.outline), (el) => el.border_1().border_color(t.border))
+        .when(!turn.agent, (el) => el.rounded_tl(16).rounded_tr(16).rounded_bl(16).rounded_br(4))
+        .when(Boolean(turn.agent), (el) => el.rounded_tl(4).rounded_tr(16).rounded_bl(16).rounded_br(16))
+        .child(body));
   }
 
   // ---- drawing ----

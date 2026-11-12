@@ -228,7 +228,38 @@ p = flags.includes("pair")
 tool("Read", { file_path: `${cwd}/src/components/FilterBar.tsx` }, "…", p);
 tool("Edit", { file_path: `${cwd}/src/components/FilterBar.tsx` }, "…", p);
 tool("Edit", { file_path: `${cwd}/src/styles/filters.css` }, "…", p);
-assistant([{ type: "text", text: "The chips had a fixed `min-width`, so at tablet widths two of them spilled onto a second line under the search box. Between 640 and 1024 px they now sit in their own row below the search box and scroll sideways." }], { out: 230, read: 52000, write: 2100 });
+// With "pair" the reply is longer, so the image viewer's reading panel has a list, code and a
+// table to scroll through beside the two images.
+const PAIR_REPLY = [
+  "The chips had a fixed `min-width`, so between 640 and 1024 px two of them spilled onto a second line under the search box. That is the wrap in [Image #2].",
+  "",
+  "What changed:",
+  "",
+  "- From 640 to 1024 px the chips sit in their own row below the search box and scroll sideways instead of wrapping",
+  "- Desktop keeps the chips to the right of the search box",
+  "- Phone, [Image #3], is untouched: it already used the scrolling row",
+  "",
+  "```css",
+  "@media (min-width: 640px) and (max-width: 1024px) {",
+  "  .filters { display: flex; flex-wrap: nowrap; overflow-x: auto; }",
+  "  .filters .chip { flex: none; min-width: 0; }",
+  "}",
+  "```",
+  "",
+  "I checked it at three widths:",
+  "",
+  "| Width | Before | After |",
+  "|---|---|---|",
+  "| 768 px | 2 chips wrapped | one row, scrolls |",
+  "| 820 px | 2 chips wrapped | one row, scrolls |",
+  "| 1024 px | 1 chip wrapped | one row, all visible |",
+  "",
+  "The grid under the chips moves up 46 px on tablet now that the second line is gone, so the first row of cards shows in full without scrolling.",
+  "",
+  "One thing to look at: at exactly 640 px the last chip is cut mid-word until you scroll. A fade on the right edge would hint that there is more. Say the word and I will add it to `filters.css`.",
+].join("\n");
+assistant([{ type: "text", text: flags.includes("pair") ? PAIR_REPLY
+  : "The chips had a fixed `min-width`, so at tablet widths two of them spilled onto a second line under the search box. Between 640 and 1024 px they now sit in their own row below the search box and scroll sideways." }], { out: 230, read: 52000, write: 2100 });
 end(58000);
 
 // Turn 6

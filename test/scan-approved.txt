@@ -3,18 +3,19 @@
 # the agent state, the one-row footer and the ? sheet, plus days, images, viewer and width for the
 # reading width and the image viewer; retaken 2026-11-12 with the Pinned time order, compact
 # pins, the outline, its footer hint, the header with no pin button and no agent name over a
-# reply, approved with the merge of PR 24). All show the staged acme-web session (test/make-hero.js,
+# reply, approved with the merge of PR 24; viewer and keys retaken 2026-11-12 with the image
+# viewer's reading panel, approved with the owner's go on the viewer design). All show the staged acme-web session (test/make-hero.js,
 # test/make-agents.js), and each passed the PNG check before it was pinned. The check skips a
 # pinned file only while its sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
 25368c7775af670da0e0d9fbd4e6243e8a21c4a53d450745589776c37c4c10f4 docs/screenshots/open-turn.png
-590a2e5f276a5a768d3e7aafe2b19a023a3947916b8724b0431380746308933b docs/screenshots/viewer.png
+a17426aa6eb83b0f7bf1fd43864547594c87aec3e8a37140e7e88be8689de6cd docs/screenshots/viewer.png
 75a752e9cef4be452b22460c8399fc938c060a0a4bd7bfdeab5af680f74a020a preview.png
 df9e3e0d740a68716e635d76547fab62547557265dfedfb16c00f71c3f61d39c docs/screenshots/agent-messages.png
 96bea0ed3f9218fec495a8ffc8642ad25566f62f392c6d44d0ab06219802d78b docs/screenshots/agents.png
 0b22feeea1e258e43e89602c25f9f784bb453931f1d794946f7004b26f318e33 docs/screenshots/days.png
 19fdd3c081f9648f107bf2791db459ea891919acdddafcbf9f88c0d634630d8d docs/screenshots/images.png
-6cef917a15c648ae2ff59a681d88352df16ec76919c3f46b4158dc665a60c309 docs/screenshots/keys.png
+7619abc6e959a3a5153b45fe8af148b4c757520609fdc5bbd1d4161098459dbe docs/screenshots/keys.png
 697d989da07d19806ec14e22878aaa6d157d0a308c5d77ddbf9302b5fbf2050b docs/screenshots/light.png
 145678b501ba3c089ffce154dad8840f87c628d421fadd238ea37bdb0467aea2 docs/screenshots/outline.png
 bcacbeb688182a4a8e603e9fa3984aa312fa433f43f5bdb65937df600ebc5d46 docs/screenshots/panel.png
