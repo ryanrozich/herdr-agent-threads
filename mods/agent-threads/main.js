@@ -98,7 +98,8 @@ const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
-const REPLY_BUDGET = 1600; // characters of prose shown before "Show full reply"
+const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
+const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
 // px above a paragraph drawn as its own list item, and above a heading, as inside one block
 // (measured against the same text drawn whole: 748 px and 748 px).
 const visitNote = (search) => (search ? "Pinned, not in this search" : "Pinned, hidden agent message");
@@ -125,7 +126,7 @@ const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legen
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "more", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -488,7 +489,7 @@ export default class Threads extends View {
     this.res = { kind: "resolving" };
     this.sel = null; // key of the selected turn
     this.open = new Set(); // keys of expanded turns
-    this.full = new Set(); // keys showing the whole prompt ("k") or reply ("r:k")
+    this.full = new Set(); // keys showing the whole prompt ("k"), an image ("i:k:n") or an update ("l:k")
     this.selecting = null; // the open turn whose reply shows as selectable source
     this.selEditor = null; // { key, st, text }
     this.code = new Map(); // `${key}:${i}` -> { st: EditorState, or false when it could not be made, text }
@@ -582,7 +583,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
-      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, whole: Boolean(p.pin.whole), text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -957,10 +958,9 @@ export default class Threads extends View {
   notePlace(pin, key) {
     const a = this.topKey && partOf(this.topKey, key);
     if (!a || NOT_A_PLACE.has(a[0])) return false;
-    const whole = this.full.has(`r:${key}`);
-    if (pin.anchor?.[0] === a[0] && pin.anchor?.[1] === a[1] && Boolean(pin.whole) === whole) return false;
+    if (pin.anchor?.[0] === a[0] && pin.anchor?.[1] === a[1]) return false;
     pin.anchor = a;
-    pin.whole = whole;
+    delete pin.whole; // a build before this one remembered whether the reply was cut
     return true;
   }
 
@@ -994,7 +994,6 @@ export default class Threads extends View {
     }
     const { key, turn, pin, s } = p;
     const wasSel = this.sel;
-    if (pin.whole) this.full.add(`r:${key}`);
     if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
@@ -1806,10 +1805,8 @@ export default class Threads extends View {
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
-    const whole = this.full.has(`r:${key}`);
     let used = 0;
-    let cut = false;
-    let long = false;
+    let left = 0;
     const segs = segments(text);
     // Editors cannot be made while drawing: note the turn, and flushCode() makes them
     // on the next tick.
@@ -1823,33 +1820,36 @@ export default class Threads extends View {
       const lines = wrappedLines(this.selEditor.text.slice(0, SELECT_CHARS), per);
       out.push({ ...item, kind: "seltext", key: `sx:${key}`, lines, boxH: Math.min(lines * 18 + 14, 2400) });
     }
+    // An open turn shows the whole reply, up to FULL_REPLY_CHARS.
     if (!selecting) segs.forEach((seg, i) => {
-      if (cut) return;
-      if (used > REPLY_BUDGET) { long = true; if (!whole) { cut = true; return; } }
+      if (used >= FULL_REPLY_CHARS) { left += seg.text.length; return; }
       if (seg.kind === "md") {
         let md = seg.text;
-        if (used + md.length > REPLY_BUDGET * 1.4) {
-          long = true;
-          if (!whole) {
-            md = cutMd(md, Math.max(200, REPLY_BUDGET - used));
-            cut = true;
-          }
+        if (used + md.length > FULL_REPLY_CHARS) {
+          md = cutMd(md, FULL_REPLY_CHARS - used);
+          left += Math.max(0, seg.text.length - md.length);
         }
         used += md.length;
-        // Link rules (settings.json links) on the text shown; heights use the text as written.
-        // A block is one list item however tall, so a drag can select across its paragraphs
-        // (it cannot cross list items). A return to a pin lands at the start of the block.
-        const lk = linked?.[i] && md === seg.text ? linked[i] : this.linkOne(md);
-        push({ ...item, kind: "md", key: `md:${key}:${i}`, md: lk.md, src: md, links: lk.links });
+        // Herdr draws nothing for a Markdown block over 4,096 characters, so a long run of
+        // prose (no code fence to split it) becomes several list items of at most MD_MAX,
+        // split at paragraphs (mdChunks): "md:<turn>:<segment>.<n>". Each is one Markdown view,
+        // so a drag can select across the paragraphs in one item but not across items, and
+        // the list draws only the items in view. Link rules run on the text shown; heights use
+        // the text as written. A return to a pin lands at the start of its item.
+        const parts = mdChunks(md);
+        parts.forEach((src, j) => {
+          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src);
+          const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
+          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}) });
+        });
       } else {
-        used += Math.min(seg.text.length, 400);
+        used += seg.text.length;
         push({ ...item, kind: "codehead", key: `cc:${key}:${i}`, seg, i });
         out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...this.codeShape(seg.text) });
       }
     });
-    if (selecting) { /* the source view scrolls; nothing more to show */ }
-    else if (cut) out.push({ ...item, kind: "more", key: `more:${key}`, words: text.split(/\s+/).length });
-    else if (whole && long) out.push({ ...item, kind: "more", key: `more:${key}`, less: true });
+    // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
+    if (!selecting && (text.length > LONG_REPLY || left)) out.push({ ...item, kind: "fold", key: `fold:${key}`, left });
     // What the agent said in its last background update, when that is not the reply.
     const late = (turn.latest ?? "").trim();
     if (late && late !== text) {
@@ -2488,7 +2488,7 @@ export default class Threads extends View {
     }
     // A drag that selected text, or a double or triple press, never opens, closes, expands
     // or collapses anything and never presses a button: the release lands on whatever item
-    // is under the pointer, often a card's head, Show less or an update's own toggle. The
+    // is under the pointer, often a card's head, Collapse or an update's own toggle. The
     // turn is still selected, so c, q and s act on it. Only a press that did not move clicks.
     if (this.selectGesture()) {
       this.toList();
@@ -2556,7 +2556,8 @@ export default class Threads extends View {
       return cx.notify();
     }
     if (kind === "you") { this.full.has(id) ? this.full.delete(id) : this.full.add(id); this.sel = id; return cx.notify(); }
-    if (kind === "more") { const k = `r:${id}`; this.full.has(k) ? this.full.delete(k) : this.full.add(k); this.sel = id; return cx.notify(); }
+    // Collapse closes the turn and lands on its row, as Esc does.
+    if (kind === "fold") { if (this.open.has(id)) this.toggle(id, cx); else this.sel = id; return cx.notify(); }
     if (kind === "lt") {
       if (!this.findTurn(id)) return;
       const k = `l:${id}`;
@@ -2773,8 +2774,6 @@ export default class Threads extends View {
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
     if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
-    // Tests only: the selected turn's whole reply, as "Show full reply" would.
-    if (this.debug && name === "debugWhole") { if (this.sel) this.full.add(`r:${this.sel}`); return true; }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
     if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land" }; return true; }
     // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
@@ -4038,7 +4037,7 @@ export default class Threads extends View {
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r) + (r.caption ? 24 : 0);
-      case "more": return 8 + 26;
+      case "fold": return 8 + 26 + (r.left ? 18 : 0);
       case "stats": {
         const line = this.countsLine(r.turn);
         const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
@@ -4816,10 +4815,13 @@ export default class Threads extends View {
           .when(r.caption, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
             .child(`${plural(r.rows, "row")} · scrolls inside`))));
       }
-      case "more":
-        return (h_flex().mt(8).h(26).px(9).gap(5).items_center().rounded(6).border_1().border_color(t.border).text_size(12).text_color(t.muted)
-          .child(svg(ICON(r.less ? "chevron-up" : "chevron-down")).size(12))
-          .child(r.less ? "Show less" : `Show full reply · ${r.words.toLocaleString()} words`));
+      case "fold":
+        // Quiet: no border or fill, so it reads as the end of the reply, not a button to find.
+        return v_flex().mt(8)
+          .when(r.left > 0, (el) => el.child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
+            .child(`${r.left.toLocaleString()} more characters are left out here. c copies the whole reply.`)))
+          .child(h_flex().h(26).gap(5).items_center().text_size(12).text_color(t.dim)
+            .child(svg(ICON("chevron-up")).size(12)).child("Collapse").child(div().text_size(11).font_family(mono).child("Esc")));
       case "stats": {
         // The stats under the reply, as on a closed exchange, with what only an open turn
         // shows after them: cache hit and a compaction. The info icon (or i, or a click on

@@ -2,12 +2,14 @@
 // storefront project, acme-web. Same line shapes as test/make-fixture.js. Nothing here
 // comes from a real session, and both pasted images are drawn below, with no text in them.
 // docs/develop.md has the steps that turn this into the screenshots.
-// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair]
+// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair] [long]
 // With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
 // With "wake", a background update follows the last turn: a task notification woke the agent
 // 95 s before the script ran and it is still working, so with the terminal reporting working the
 // last turn shows its "Updating" line. Its times are relative to now, so write it just before the shot.
 // With "pair", turn 5 has two pasted images, so the image viewer has one to step to.
+// With "long", turn 7's reply goes on after the code block with a write-up of about 6,000
+// characters and no code fence, longer than Herdr draws as one Markdown block.
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
@@ -208,6 +210,49 @@ tool("Bash", { command: "bun run e2e --grep checkout" }, "…", p, 40);
 assistant([{ type: "text", text: "17 of 18 checkout tests pass in Chromium and WebKit. The one failure is `order total matches cart`: a three-item cart with tax comes out one cent higher than the cart page shows." }], { out: 190, read: 61000, write: 1900 });
 end(97000);
 
+// The write-up "long" adds to turn 7: prose, a list and a table, with no code fence.
+const LONG_NOTES = [
+  "",
+  "## What went wrong",
+  "",
+  "The cart page and the checkout service each worked out the total on their own. The cart page added up the line prices and applied tax once, at the end, to the subtotal. The checkout service applied tax to each line as it was added, rounded that line's tax to a cent, and then added the lines up. For most carts the two agree, because the rounding on each line is as likely to go up as down and the errors cancel. For a cart with several taxed items whose tax lands near half a cent, they all round the same way, and the checkout total ends up a cent higher than the cart page showed. That is the cart in ACME-123: three items at 8.25% tax, each with a tax of x.xx5 before rounding.",
+  "",
+  "Nothing about this was new. The per-line rounding has been in the checkout service since the first version of `totals.ts`, and the cart page has always rounded once. What changed last week was the tax rate in the test region, from 8% to 8.25%, which moved more carts onto the half-cent boundary. The e2e test `order total matches cart` was written for exactly this, and it started failing on the first run after the rate change.",
+  "",
+  "## What the fix does",
+  "",
+  "The checkout service now works in whole cents from start to finish. Each line's price is turned into cents once, when the line is added, and every sum after that is a sum of integers. Tax is worked out once, on the subtotal in cents, and rounded once, half away from zero, which is what the cart page and the payment provider both do. Shipping is added after tax, because shipping is not taxed in any region we sell to today. If that changes, the order of these steps is the one place to look.",
+  "",
+  "The rounding helper is shared now. The cart page imports it from the same module as the checkout service, so the two cannot drift apart again without a test noticing. The helper has its own tests for the boundary cases: a tax of exactly half a cent, a negative line from a discount code, and a cart of one item at zero tax.",
+  "",
+  "## Why not round each line the other way",
+  "",
+  "Rounding each line down, or to even, would have made this cart agree, but another cart would then come out a cent low. The only way the two totals always agree is for both to do the same sum in the same order, so the fix moves the checkout service to the cart page's order rather than nudging the rounding. The payment provider rounds once on the total as well, so this also matches what the customer's bank statement shows.",
+  "",
+  "## What I checked",
+  "",
+  "- The six new cases in `totals.test.ts` pass, and so do the 41 cases that were already there",
+  "- All 18 checkout e2e tests pass in Chromium and WebKit, three runs in a row",
+  "- The cart from ACME-123 now totals the same on the cart page, at checkout and on the receipt",
+  "- A cart with a discount code that takes a line below zero still totals correctly",
+  "",
+  "| Cart | Cart page | Checkout before | Checkout now |",
+  "|---|---|---|---|",
+  "| ACME-123, three items | 64.93 | 64.94 | 64.93 |",
+  "| One item, no tax | 12.00 | 12.00 | 12.00 |",
+  "| Five items, discount code | 88.41 | 88.42 | 88.41 |",
+  "",
+  "## What I did not change",
+  "",
+  "Orders placed before the fix keep the total they were charged. A few of them were charged a cent more than the cart page showed; the support team can refund those from the orders page if anyone asks, and the query in the PR description lists them. I did not touch the receipt template, which already reads the total from the order and so shows whatever the checkout service charged.",
+  "",
+  "The currency formatting on the cart page still uses the browser's locale, while the receipt uses the store's. They show the same digits for every store we have today, but a store with a different decimal mark would see them differ. That is a separate change, and I left a note on ACME-131 about it rather than fold it into this fix.",
+  "",
+  "## What to watch after the deploy",
+  "",
+  "The checkout service logs a warning when the total it charges differs from the total the cart page sent with the order. Before the fix that warning fired a few times a day in the test region. After the deploy it should not fire at all. If it does, the log line has the cart id and both totals, which is enough to replay the cart in the totals tests and see which step disagrees.",
+];
+
 // Turn 7: the open card
 p = prompt("Fix that one-cent checkout bug, it's ACME-123", 180);
 tool("Read", { file_path: `${cwd}/src/cart/totals.ts` }, "…", p);
@@ -229,6 +274,7 @@ assistant([{ type: "text", text: [
   "```",
   "",
   "All 18 checkout tests pass now. The fix is up for review in #42.",
+  ...(flags.includes("long") ? LONG_NOTES : []),
 ].join("\n") }], { out: 420, read: 88000, write: 3600 });
 end(151000);
 
