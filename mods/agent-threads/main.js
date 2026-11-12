@@ -3055,7 +3055,7 @@ export default class Threads extends View {
     const n = this.galleryParts();
     // With every part measured: replyScroll's places, from the panel's own estimate of where
     // the view is (g.y), so a wheel scroll in between is taken into account.
-    const sized = g.sizes.length === n && g.sizes.every((h) => h > 0) && g.viewH > 0;
+    const sized = g.sizes.length === n && g.sizes.every((h) => h >= 0) && g.viewH > 0;
     let steps;
     if (sized) {
       const r = replyScroll(g.sizes, g.viewH, g.y, d);
