@@ -384,6 +384,14 @@ export function replyBlocks(md) {
   return blocks.flatMap((b) => mdChunks(b));
 }
 
+// A reply block (replyBlocks) that is one fenced code block and nothing else: its language
+// and its code, for the viewer's code box. Anything else, or a fence left open, is null.
+export function fencedBlock(block) {
+  const m = String(block ?? "").match(/^ {0,3}(`{3,}|~{3,})[ \t]*([^\n`]*)\n([\s\S]*?)\n {0,3}(`{3,}|~{3,})[ \t]*$/);
+  if (!m || m[4][0] !== m[1][0] || m[4].length < m[1].length) return null;
+  return { lang: m[2].trim().split(/\s+/)[0] || "", text: m[3] };
+}
+
 export function codeRows(text, per) {
   const p = Math.max(8, Math.floor(per));
   let rows = 0;

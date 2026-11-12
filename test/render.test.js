@@ -3832,6 +3832,30 @@ test("the image viewer: j and k go by the measured parts and follow the wheel; t
   expect(text()).not.toContain("more lines not shown");
 });
 
+// From the side by side with the mock: a code block in the reply has the open turn's head
+// (language and Copy) and a highlighting editor, not plain Markdown.
+test("the image viewer: a fenced code block in the reply gets the language, a Copy button and a highlighting editor", () => {
+  editors.length = 0;
+  const md = "The fix:\n\n```css\n.filters { display: flex; }\n```\n\nDone.";
+  const { g, cx, calls, text, size } = viewer({ turn: { ...VIEW_TURN, md } });
+  size(1600, 1000);
+  expect(g.gal.blocks).toHaveLength(3);
+  expect(g.gal.code.map((c) => c?.lang ?? null)).toEqual([null, "css", null]);
+  expect(editors.at(-1).opts.value).toBe(".filters { display: flex; }");
+  expect(editors.at(-1).opts.readonly).toBe(true);
+  const all = calls();
+  // Only the prose blocks go to Markdown views.
+  expect(all.filter((e) => e[0] === "TextView" && String(e[1]).startsWith("th-gallery-md-")).map((e) => e[1])).toEqual(["th-gallery-md-0", "th-gallery-md-2"]);
+  expect(text()).toContain("css");
+  afterId(all, "th-gallery-code-copy-1").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(cx.clip).toBe(".filters { display: flex; }");
+  expect(text()).toContain("Copied");
+  cx.flush(2000);
+  expect(text()).not.toContain("Copied");
+  // Still one scroll part per block, so j and k count it.
+  expect(g.galleryParts()).toBe(6);
+});
+
 test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {
   const off = viewer({ panel: false });
   off.size(1600, 1000);

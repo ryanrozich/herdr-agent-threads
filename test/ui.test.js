@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, MD_MAX,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
 
@@ -711,4 +711,15 @@ test("replyScroll: j and k places from the measured parts, the view's height and
   expect(replyScroll([100, 100], 400, 0, 1)).toBe(null);
   expect(replyScroll([], 400, 0, 1)).toBe(null);
   expect(replyScroll(sizes, 0, 0, 1)).toBe(null);
+});
+
+test("fencedBlock: a reply block that is one fenced code block, with its language", () => {
+  expect(fencedBlock("```css\n.a { b: c; }\n.d {}\n```")).toEqual({ lang: "css", text: ".a { b: c; }\n.d {}" });
+  expect(fencedBlock("~~~\nplain\n~~~")).toEqual({ lang: "", text: "plain" });
+  expect(fencedBlock("````js title=x\na\n\nb\n````")).toEqual({ lang: "js", text: "a\n\nb" });
+  // Not a code block alone: text before it, a fence left open, or a closing fence of the other kind.
+  expect(fencedBlock("Here:\n```\na\n```")).toBe(null);
+  expect(fencedBlock("```\na")).toBe(null);
+  expect(fencedBlock("```\na\n~~~")).toBe(null);
+  expect(fencedBlock("The chips had a fixed width.")).toBe(null);
 });

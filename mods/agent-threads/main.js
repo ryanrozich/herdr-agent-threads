@@ -43,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, mix,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -3000,6 +3000,27 @@ export default class Threads extends View {
       blocks: turn ? replyBlocks(escapeDollars(String(turn.md ?? ""))) : [],
     };
     this.galSize = null;
+    // A reply block that is one fenced code block gets the pane's code box: its language, a
+    // Copy button and a read-only editor that highlights it (plain text if that fails).
+    const t = theme();
+    this.gal.code = this.gal.blocks.map((b) => {
+      const c = fencedBlock(b);
+      if (!c) return null;
+      let st = false;
+      try {
+        st = EditorState.new({
+          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
+          font_family: settings().font_family, font_size: 12,
+          syntax: {
+            keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
+            constant: t.ansi6, boolean: t.ansi1, operator: t.muted, punctuation: t.dim, variable: t.foreground, "string.escape": t.ansi6,
+          },
+        });
+      } catch (e) {
+        console.log(`agent-threads: no editor for ${c.lang || "plain"}: ${e?.message ?? e}`);
+      }
+      return { ...c, st };
+    });
     // Without a ScrollHandle (Herdr before 0.1.15) the reply scrolls with the wheel only, and
     // j, k and Space step the images as before.
     this.galScroll = gpuiBase.ScrollHandle?.new?.() ?? null;
@@ -3205,9 +3226,10 @@ export default class Threads extends View {
     const rt = readType(turn.size);
     const head = turn.running ? `Still running · the reply as of ${turn.asOf}` : turn.when;
     const pad = (el) => el.pl(L.padX).pr(L.padX);
+    const textW = L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k, textW) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -3238,6 +3260,39 @@ export default class Threads extends View {
         .child(this.galleryButton(t, "th-gallery-copy", g.copied ? "check" : "copy", g.copied ? "Copied" : "Copy reply", "c", false, "Copy the reply as Markdown (c)", (cx) => this.galleryCopy(cx)))
         .child(div().flex_1())
         .child(div().flex_none().text_size(12).text_color(t.dim).child(this.galScroll ? "j / k scroll the reply · i hides it" : "i hides the reply")));
+  }
+  // A fenced code block in the panel, as the open turn draws one: the language and Copy on a
+  // head, then the highlighted code, up to CODE_LINES wrapped rows (a taller one scrolls
+  // inside, and says so).
+  galleryCode(t, c, k, textW) {
+    const mono = this.mono();
+    const copied = this.gal.codeCopied === k;
+    const rows = codeRows(c.text, (textW - CODE_PAD) / 7.3);
+    const shown = Math.min(CODE_LINES, rows);
+    return v_flex().w_full()
+      .child(h_flex().h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
+        .child(div().flex_1().text_size(11.5).font_family(mono).text_color(t.dim).child(c.lang))
+        .child(h_flex().id(`th-gallery-code-copy-${k}`).h(22).px(7).gap(5).items_center().rounded(5).cursor_pointer().text_size(11.5)
+          .text_color(copied ? t.ansi2 : t.muted).when(copied, (el) => el.bg(alpha(t.ansi2, 0.13)))
+          .when(!copied, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
+          .tooltip("Copy this code")
+          .on_click((_e, cx) => { cx.stop_propagation(); this.galleryCopyCode(k, cx); })
+          .child(svg(ICON(copied ? "check" : "copy")).size(12)).child(copied ? "Copied" : "Copy")))
+      .child(div().w_full().h(shown * CODE_LINE + 16).rounded_b(7).overflow_hidden().border_1().border_t(0).border_color(t.border).bg(t.background)
+        .text_size(12).line_height(`${CODE_LINE}px`)
+        .child(c.st ? Editor.new(c.st).size_full().py(6) : div().p(8).font_family(mono).text_color(t.muted).child(c.text)))
+      .when(rows > CODE_LINES, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
+        .child(`${plural(rows, "row")} · scrolls inside`)));
+  }
+  galleryCopyCode(k, cx) {
+    const g = this.gal;
+    const text = g.code?.[k]?.text;
+    if (text == null) return;
+    try { cx.write_to_clipboard(text); } catch (e) { console.log(`agent-threads: clipboard write failed: ${e?.message ?? e}`); return; }
+    const at = (g.codeAt = (g.codeAt | 0) + 1);
+    g.codeCopied = k;
+    cx.notify();
+    cx.timer.after(1500, (cx) => { if (this.gal === g && g.codeAt === at) { g.codeCopied = null; cx.notify(); } });
   }
   // The person's message in its bubble on the right (an agent's outlined, on the left), as
   // plain text in the bubble's ink. A line with an [Image #N] label is drawn a word at a
