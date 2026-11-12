@@ -45,6 +45,10 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
       ...(pin("u") ? [[["u"], "Undo the last unpin"]] : []), [["v"], "Open or go to the Pinned column"],
     ]],
+    ["Image viewer", [
+      [["←", "→", "h", "l"], "Previous or next image"], [["j", "k", "Space"], "Scroll the reply"], [["i"], "Show or hide the prompt and reply"],
+      [["c"], "Copy the reply"], [["1-9"], "Go to that image"], [["Esc", "q"], "Close"],
+    ]],
     ["View", [
       [["w"], "Fit to the reading width"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
@@ -264,6 +268,128 @@ export function galleryBox(img, roomW, roomH) {
   if (!(w > 0 && h > 0)) return { w: W, h: H };
   const k = Math.min(1, W / w, H / h);
   return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
+}
+
+// The viewer's reading panel: the turn that carried the images, beside the image from
+// VIEWER.WIDE design px (VIEWER.PANEL_W wide, about 68 characters a line at 14 px), else
+// docked under it (VIEWER.PANEL_H tall, at most 45% of the window, its text at most
+// VIEWER.MEASURE wide). The thumbnail strip under the image is shorter when narrow.
+export const VIEWER = Object.freeze({
+  TOP: 52, WIDE: 1100, PANEL_W: 500, PANEL_H: 300, MEASURE: 560, STRIP: 64, STRIP_NARROW: 52,
+  THUMB: 40, THUMB_NARROW: 32, SIDE: 64, HEAD: 40, FOOT: 48, PAD: 24,
+});
+// The viewer's parts for a window W by H (design px), with the panel shown or not: whether
+// it is wide, the panel's size, the strip and thumbnail heights, and the room the image has
+// (galleryBox), between the round buttons and above the strip.
+export function viewerLayout(W, H, panel = true) {
+  const w = Math.max(200, Number(W) || 0);
+  const h = Math.max(200, Number(H) || 0);
+  const wide = w >= VIEWER.WIDE;
+  const strip = wide ? VIEWER.STRIP : VIEWER.STRIP_NARROW;
+  const thumb = wide ? VIEWER.THUMB : VIEWER.THUMB_NARROW;
+  const panelW = panel && wide ? VIEWER.PANEL_W : 0;
+  const panelH = panel && !wide ? Math.min(VIEWER.PANEL_H, Math.round(h * 0.45)) : 0;
+  const stageW = w - (panelW ? panelW + 1 : 0);
+  const stageH = h - VIEWER.TOP - 1 - (panelH ? panelH + 1 : 0);
+  return {
+    wide, panel: Boolean(panel), panelW, panelH, strip, thumb, stageW, stageH,
+    room: { w: Math.max(40, stageW - 2 * VIEWER.SIDE), h: Math.max(40, stageH - strip - 16) },
+    // A narrow panel's text column and its side padding, centred under the image.
+    padX: panelH ? Math.max(VIEWER.PAD, Math.floor((w - VIEWER.MEASURE) / 2)) : VIEWER.PAD,
+  };
+}
+// A key in the viewer: the action, or null. Arrows and h, l step the images and wrap; with
+// the panel shown j, k and Space scroll the reply a block, else they step as before.
+export function viewerKey(e, panel = true) {
+  const m = e?.modifiers ?? {};
+  if (m.platform || m.control || m.alt || m.function) return null;
+  const k = e?.key ?? "";
+  if (["left", "up", "h", "pageup"].includes(k)) return "prev";
+  if (["right", "down", "l", "pagedown"].includes(k)) return "next";
+  if (k === "j" || k === "space") return panel ? "down" : "next";
+  if (k === "k") return panel ? "up" : "prev";
+  if (k === "i") return "panel";
+  if (k === "c") return "copy";
+  if (k === "home") return "first";
+  if (k === "end") return "last";
+  if (k === "escape" || k === "q" || k === "enter") return "close";
+  if (/^[1-9]$/.test(k)) return `go:${Number(k) - 1}`;
+  return null;
+}
+// One line of a prompt as pieces: plain text, and each pasted-image label ([Image #3]) with
+// its number. A label inside an inline code span stays text.
+export function labelPieces(line) {
+  const out = [];
+  for (const tok of inlineTokens(String(line ?? ""), { markdown: false })) {
+    const m = tok.kind === "label" ? /^\[Image #(\d+)\]$/.exec(tok.t) : null;
+    if (m) out.push({ t: tok.t, n: Number(m[1]) });
+    else if (out.length && out.at(-1).n == null) out.at(-1).t += tok.t;
+    else out.push({ t: tok.t });
+  }
+  return out;
+}
+// j and k in the viewer's reading panel. A scroll handle only reveals a child with the least
+// scroll, and cannot say where the view is, so the panel keeps its own estimate (y, from these
+// moves and the wheel) and the parts' measured heights (sizes; pt and pb are the scroll area's
+// padding). The places a press can go: the top, the start of each part that can reach the
+// top of the view, and the end. d 1 goes to the next place below y, -1 to the one above.
+// Returns { y, steps } (the parts to reveal in turn), or null when there is nowhere to go.
+// Going down, the first step reveals the first part whose bottom then puts the view at or
+// past the place (overshooting by less than that part), and the second brings the place's
+// part back to the top edge.
+export function replyScroll(sizes, viewH, y, d, pt = 4, pb = 20) {
+  const n = sizes.length;
+  if (!n || !(viewH > 0)) return null;
+  const start = [];
+  let at = pt;
+  for (const h of sizes) { start.push(at); at += Math.max(0, h); }
+  const maxY = Math.max(0, at + pb - viewH);
+  if (maxY < 1) return null;
+  const places = [0];
+  for (let k = 1; k < n; k++) if (start[k] < maxY - 1) places.push(start[k]);
+  places.push(maxY);
+  const to = d > 0 ? places.find((p) => p > y + 1) : places.filter((p) => p < y - 1).pop();
+  if (to == null) return null;
+  if (to === maxY) return { y: to, steps: [n - 1] };
+  const part = to === 0 ? 0 : start.indexOf(to);
+  if (to < y) return { y: to, steps: [part] };
+  let m = part;
+  while (m < n - 1 && start[m] + sizes[m] - viewH < to - 1) m++;
+  const lands = start[m] + sizes[m] - viewH;
+  return { y: to, steps: Math.abs(lands - to) <= 1 ? [m] : [m, part] };
+}
+
+// A reply as blocks for the reading panel, so j and k move a paragraph at a time: split at
+// blank lines outside fenced code, a block that starts indented (a list item's next
+// paragraph, which alone would read as code) kept with the one before, and each block
+// longer than Herdr draws split again (mdChunks).
+export function replyBlocks(md) {
+  const blocks = [];
+  let cur = [];
+  let fence = null;
+  const flush = () => {
+    if (!cur.length) return;
+    const b = cur.join("\n");
+    if (blocks.length && /^[ \t]/.test(cur[0])) blocks[blocks.length - 1] += `\n\n${b}`;
+    else blocks.push(b);
+    cur = [];
+  };
+  for (const line of String(md ?? "").split("\n")) {
+    const f = line.match(FENCE);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    else if (!fence && !line.trim()) { flush(); continue; }
+    cur.push(line);
+  }
+  flush();
+  return blocks.flatMap((b) => mdChunks(b));
+}
+
+// A reply block (replyBlocks) that is one fenced code block and nothing else: its language
+// and its code, for the viewer's code box. Anything else, or a fence left open, is null.
+export function fencedBlock(block) {
+  const m = String(block ?? "").match(/^ {0,3}(`{3,}|~{3,})[ \t]*([^\n`]*)\n([\s\S]*?)\n {0,3}(`{3,}|~{3,})[ \t]*$/);
+  if (!m || m[4][0] !== m[1][0] || m[4].length < m[1].length) return null;
+  return { lang: m[2].trim().split(/\s+/)[0] || "", text: m[3] };
 }
 
 export function codeRows(text, per) {

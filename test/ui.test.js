@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
 
@@ -556,7 +556,7 @@ test("the key sheet lists every key the panel takes, and a pin key gives way to 
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
-  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "View"]);
+  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "View"]);
   expect(shown("p").has("p")).toBe(true); // as the quote key
   expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
   expect(keySheet("u").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "u")).toBe(false);
@@ -624,4 +624,102 @@ test("o is the outline key, Enter and Space still open, and o stays a letter the
   expect(outlineHeight(12)).toBe(30);
   expect(outlineNumW(9)).toBeLessThan(outlineNumW(10));
   expect(outlineNumW(999)).toBe(Math.ceil(4 * 7.2) + 6);
+});
+
+test("viewerLayout: from 1100 px the reading panel sits beside the image, 500 px wide; narrower, it docks under it", () => {
+  const wide = viewerLayout(1600, 1000, true);
+  expect(wide).toMatchObject({ wide: true, panelW: 500, panelH: 0, strip: 64, thumb: 40, padX: 24 });
+  // The image's room: the stage less the round buttons, and above the strip.
+  expect(wide.room).toEqual({ w: 1600 - 501 - 128, h: 1000 - 53 - 64 - 16 });
+  // Hidden, the image has the whole width back.
+  expect(viewerLayout(1600, 1000, false)).toMatchObject({ panelW: 0, room: { w: 1600 - 128, h: 1000 - 53 - 64 - 16 } });
+  const narrow = viewerLayout(900, 800, true);
+  expect(narrow).toMatchObject({ wide: false, panelW: 0, panelH: 300, strip: 52, thumb: 32 });
+  expect(narrow.room).toEqual({ w: 900 - 128, h: 800 - 53 - 301 - 52 - 16 });
+  // The narrow panel's text is at most 560 px wide, centred.
+  expect(narrow.padX).toBe((900 - 560) / 2);
+  expect(viewerLayout(500, 900, true).padX).toBe(24);
+  // A short window keeps room for the image: the panel takes at most 45% of it.
+  expect(viewerLayout(900, 500, true).panelH).toBe(225);
+  expect(viewerLayout(VIEWER.WIDE - 1, 900).wide).toBe(false);
+  expect(viewerLayout(VIEWER.WIDE, 900).wide).toBe(true);
+});
+
+test("viewerKey: arrows and h, l step; j, k and Space scroll the reply with the panel shown and step without it", () => {
+  for (const k of ["left", "up", "h", "pageup"]) expect(viewerKey(key(k), true)).toBe("prev");
+  for (const k of ["right", "down", "l", "pagedown"]) expect(viewerKey(key(k), true)).toBe("next");
+  expect(viewerKey(key("j"), true)).toBe("down");
+  expect(viewerKey(key("space"), true)).toBe("down");
+  expect(viewerKey(key("k"), true)).toBe("up");
+  expect(viewerKey(key("j"), false)).toBe("next");
+  expect(viewerKey(key("space"), false)).toBe("next");
+  expect(viewerKey(key("k"), false)).toBe("prev");
+  expect(viewerKey(key("i"))).toBe("panel");
+  expect(viewerKey(key("c"))).toBe("copy");
+  expect(viewerKey(key("home"))).toBe("first");
+  expect(viewerKey(key("end"))).toBe("last");
+  for (const k of ["escape", "q", "enter"]) expect(viewerKey(key(k))).toBe("close");
+  expect(viewerKey(key("1"))).toBe("go:0");
+  expect(viewerKey(key("9"))).toBe("go:8");
+  expect(viewerKey(key("0"))).toBe(null);
+  // Chords belong to Herdr and the system: Cmd-C copies nothing here.
+  expect(viewerKey(key("c", { platform: true }))).toBe(null);
+  expect(viewerKey(key("x"))).toBe(null);
+});
+
+test("labelPieces: a prompt line as text and pasted-image labels, a label in code staying text", () => {
+  expect(labelPieces("[Image #1] [Image #2] Compare the two")).toEqual([
+    { t: "[Image #1]", n: 1 }, { t: " " }, { t: "[Image #2]", n: 2 }, { t: " Compare the two" },
+  ]);
+  expect(labelPieces("see `[Image #3]` and [Image #4].")).toEqual([{ t: "see `[Image #3]` and " }, { t: "[Image #4]", n: 4 }, { t: "." }]);
+  expect(labelPieces("no labels here")).toEqual([{ t: "no labels here" }]);
+  expect(labelPieces("")).toEqual([]);
+});
+
+test("replyBlocks: a reply split at paragraphs for j and k, code kept whole, a list item's next paragraph kept with it", () => {
+  const md = "First paragraph.\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\n- one\n- two\n\n  more about two\n\n## Heading\n\nLast.";
+  expect(replyBlocks(md)).toEqual([
+    "First paragraph.", "```js\nconst a = 1;\n\nconst b = 2;\n```", "- one\n- two\n\n  more about two", "## Heading", "Last.",
+  ]);
+  expect(replyBlocks("")).toEqual([]);
+  // A paragraph longer than Herdr draws is split again.
+  const long = Array.from({ length: 900 }, (_, i) => `word${i}`).join(" ");
+  const parts = replyBlocks(`${long}\n\nend`);
+  expect(parts.length).toBeGreaterThan(2);
+  expect(parts.every((p) => p.length <= MD_MAX)).toBe(true);
+  expect(parts.at(-1)).toBe("end");
+});
+
+test("replyScroll: j and k places from the measured parts, the view's height and where it is", () => {
+  // Parts of 100, 30, 300, 300, 300 and 20 px (they start at 4, 104, 134, 434, 734, 1034)
+  // in a 400 px view, so the view goes down to 674.
+  const sizes = [100, 30, 300, 300, 300, 20];
+  expect(replyScroll(sizes, 400, 0, 1)).toEqual({ y: 104, steps: [3, 1] });
+  expect(replyScroll(sizes, 400, 104, 1)).toEqual({ y: 134, steps: [3, 2] });
+  expect(replyScroll(sizes, 400, 434, 1)).toEqual({ y: 674, steps: [5] });
+  // At the end, down goes nowhere; up from the end comes to the last part that can be at the top.
+  expect(replyScroll(sizes, 400, 674, 1)).toBe(null);
+  expect(replyScroll(sizes, 400, 674, -1)).toEqual({ y: 434, steps: [3] });
+  // From the middle of a part (a wheel scroll): up goes to its start, down to the next.
+  expect(replyScroll(sizes, 400, 300, -1)).toEqual({ y: 134, steps: [2] });
+  expect(replyScroll(sizes, 400, 300, 1)).toEqual({ y: 434, steps: [4, 3] });
+  expect(replyScroll(sizes, 400, 104, -1)).toEqual({ y: 0, steps: [0] });
+  expect(replyScroll(sizes, 400, 0, -1)).toBe(null);
+  // A part whose bottom lands the view exactly at the place needs one step.
+  expect(replyScroll([100, 400, 100], 400, 0, 1)).toEqual({ y: 104, steps: [1] });
+  // Everything fits, or nothing is measured: nothing to do.
+  expect(replyScroll([100, 100], 400, 0, 1)).toBe(null);
+  expect(replyScroll([], 400, 0, 1)).toBe(null);
+  expect(replyScroll(sizes, 0, 0, 1)).toBe(null);
+});
+
+test("fencedBlock: a reply block that is one fenced code block, with its language", () => {
+  expect(fencedBlock("```css\n.a { b: c; }\n.d {}\n```")).toEqual({ lang: "css", text: ".a { b: c; }\n.d {}" });
+  expect(fencedBlock("~~~\nplain\n~~~")).toEqual({ lang: "", text: "plain" });
+  expect(fencedBlock("````js title=x\na\n\nb\n````")).toEqual({ lang: "js", text: "a\n\nb" });
+  // Not a code block alone: text before it, a fence left open, or a closing fence of the other kind.
+  expect(fencedBlock("Here:\n```\na\n```")).toBe(null);
+  expect(fencedBlock("```\na")).toBe(null);
+  expect(fencedBlock("```\na\n~~~")).toBe(null);
+  expect(fencedBlock("The chips had a fixed width.")).toBe(null);
 });

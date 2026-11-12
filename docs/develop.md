@@ -56,7 +56,7 @@ mkdir -p ~/code/acme-web && git -C ~/code/acme-web init -q
 git -C ~/code/acme-web remote add origin https://github.com/acme/acme-web.git
 bun test/make-hero.js hero.jsonl ~/code/acme-web 2026-11-09T15:05:00Z        # one day, so no day band or day pill
 bun test/make-hero.js days.jsonl ~/code/acme-web 2026-11-07T15:05:00Z days   # three days: shoot two days after the start, for Today and Yesterday
-bun test/make-hero.js pair.jsonl ~/code/acme-web 2026-11-09T15:05:00Z pair   # two images on turn 5, for the viewer
+bun test/make-hero.js pair.jsonl ~/code/acme-web 2026-11-09T15:05:00Z pair   # two images and a longer reply on turn 5, for the viewer
 bun test/make-hero.js outline.jsonl ~/code/acme-web 2026-11-06T15:05:00Z days many   # 14 short turns first: 21 over four days, for the outline
 bun test/make-agents.js agents ~/code/acme-web 2026-11-09T15:10:00Z          # Codex, OpenCode, Pi, Cursor and Antigravity sessions
 cc -o stage-claude test/hero/screen.c
@@ -79,7 +79,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `days.png` | 1460x1150, `days.jsonl` | `search:#3`, `open`, `open`, so the list scrolls into the first day and its pill sits in the strip | `1808 96 2912 2232` |
 | `search.png` | 1460x700 | `search:tests` | `1808 96 2912 1332` |
 | `images.png` | 1460x1150, `"debug": true` | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5` | `1808 242 2912 2232`, below the header, which shows timings in debug |
-| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5) | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5`, `debugClick:300:img:0:5:0` | none, the whole window |
+| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5 and a reply with a list, code and a table for the reading panel) | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5`, `debugClick:300:img:0:5:0` | none, the whole window |
 | `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open`, `open`, then `agents:off` after the shot | `1808 96 2912 2232` |
 | `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
 | `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1904 96 3512 2232` |

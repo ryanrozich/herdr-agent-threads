@@ -59,6 +59,8 @@ function viewEl(calls) {
   return p;
 }
 const editors = [];
+// Plain scroll handles made (the image viewer's panel), with the children each was asked to reveal.
+const scrollHandles = [];
 let focusCalls = 0;
 const never = () => new Promise(() => {});
 // What the last v_virtual_list was given: its sizes and item keys.
@@ -73,6 +75,7 @@ mock.module("gpui-base", () => ({
   InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
+  ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
     lastList = { sizes: [...sizes], keys: [], draw };
     for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
@@ -96,6 +99,8 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
+// What the pane wrote to settings.json (the viewer keeps its panel choice there).
+const settingsWrites = [];
 function execReal(cmd, args) {
     try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
     catch (e) { return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
@@ -105,6 +110,7 @@ function herdrRest() { return {
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
+    if (p.endsWith("settings.json")) settingsWrites.push(text);
     if (!p.endsWith("pins.json")) return null;
     if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
     recordFiles[p] = text;
@@ -1733,6 +1739,18 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   expect(overlays).toHaveLength(1);
   expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", width: 1, height: 1, props: { gallery: { at: 1, title: `#${two.n}` } } });
   expect(overlays[0].props.gallery.images.map((x) => [x.path, x.w, x.h])).toEqual([[f.path, 300, 600], [v.imgFile(two, 1).path, 400, 400]]);
+  // The reading panel's copy of the turn: its prompt with the labels, the reply, the stats
+  // and the bubble's colours, and the panel shown (settings.json viewerReply).
+  const vt = overlays[0].props.gallery.turn;
+  expect(overlays[0].props.gallery.panel).toBe(true);
+  expect(vt).toMatchObject({ n: two.n, agent: false, who: "You", running: false, md: v.replyText(two), copy: v.replyText(two), stats: v.statsFull(two), caption: v.captionParts(two), size: 14 });
+  expect(vt.prompt).toContain("[Image #2] [Image #3]");
+  expect(vt.fill).toBe(v.bubbleLook(theme, false).style.fill);
+  v.prefs = { ...v.prefs, viewerReply: false };
+  overlays.length = 0;
+  v.click(big.key, cx);
+  expect(overlays[0].props.gallery.panel).toBe(false);
+  v.prefs = { ...v.prefs, viewerReply: true };
   expect(v.rows().some((r) => r.kind === "img")).toBe(true);
   v.pressX = 380 - ROW.PAD_X - 10;
   v.click(`imgs:${key}`, cx);
@@ -3659,20 +3677,41 @@ test("an Amp terminal: Amp isn't supported, why in one line, and a button to the
   expect(UNREAD.amp.url).toMatch(/#why-amp-isnt-supported$/);
 });
 
-test("the image gallery: every image of the message full window, Left and Right step and wrap, Esc closes", async () => {
-  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", gallery: { title: "#4", at: 1, images: [
+// The calls after an element's id, up to the next id, so a test can find its click handler
+// or a size set on it.
+function afterId(calls, id) {
+  const i = calls.findIndex((e) => e[0] === "id" && e[1] === id);
+  if (i < 0) return null;
+  const j = calls.findIndex((e, k) => k > i && e[0] === "id");
+  return calls.slice(i + 1, j < 0 ? undefined : j);
+}
+const VIEW_TURN = {
+  n: 4, agent: false, who: "You", when: "9:25 AM · 58s", running: false, asOf: "9:30 AM", cmd: null,
+  prompt: "[Image #41] [Image #42] The chips wrap on tablet.\nSee [Image #43] for the phone.", promptCut: 0,
+  caption: [["wrench", "3 tool calls (not shown)"]],
+  md: "The chips had a fixed width.\n\n- tablet scrolls\n- desktop stays\n\nCosts $5 to $9 a month.", copy: "The chips had a fixed width. (source)", left: 0,
+  stats: "58s · 7.9k tokens · opus 5.5 · 3 tool calls", size: 14, fill: "#47648F", outline: false, ink: "#ffffff", sub: "#dce3ee",
+};
+function viewer(over = {}) {
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", gallery: { title: "#4", at: 1, panel: true, turn: VIEW_TURN, images: [
     { path: "data/agent-threads/images/f/a-0.png", w: 2000, h: 1247, n: 41 },
     { path: "data/agent-threads/images/f/a-1.png", w: 300, h: 600, n: 42 },
     { path: "data/agent-threads/images/f/a-2.png", w: 0, h: 0, n: 43 },
-  ] } } };
+  ], ...over } } };
   const g = new Threads();
   const cx = makeCx();
   g.init(state.props, cx);
+  const calls = () => { rec = []; g.render(cx); const r = rec; rec = null; return r; };
+  const text = () => calls().filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" | ");
+  return { g, cx, calls, text, size: (width, height) => handlerAfterId(calls(), "th-gallery", "on_size_change")({ width, height }, cx) };
+}
+
+test("the image gallery: every image of the message full window, Left and Right step and wrap, Esc closes", async () => {
+  const { g, cx, text, size } = viewer({ panel: false });
   // Not the launcher, and nothing of the pane starts (no reads, no commands).
   expect(g.launcher).toBeFalsy();
   expect(g.gal.i).toBe(1);
-  const text = () => { rec = []; g.render(cx); const r = rec; rec = null; return r.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" | "); };
-  handlerAfterId((() => { rec = []; g.render(cx); const r = rec; rec = null; return r; })(), "th-gallery", "on_size_change")({ width: 1600, height: 1000 }, cx);
+  size(1600, 1000);
   expect(text()).toContain("#4 · Image 2 of 3 · [Image #42] · 300×600");
   g.galleryKey(keyEv("right"), cx);
   expect(text()).toContain("Image 3 of 3 · [Image #43]");
@@ -3680,9 +3719,237 @@ test("the image gallery: every image of the message full window, Left and Right 
   expect(g.gal.i).toBe(0);
   g.galleryKey(keyEv("left"), cx);
   expect(g.gal.i).toBe(2);
+  // With the panel hidden j, k and Space step as before.
+  g.galleryKey(keyEv("j"), cx);
+  expect(g.gal.i).toBe(0);
+  g.galleryKey(keyEv("k"), cx);
+  expect(g.gal.i).toBe(2);
   g.galleryKey(keyEv("escape"), cx);
   expect(closed).toContain("ov7");
   expect(() => g.close()).not.toThrow();
+});
+
+test("the image viewer shows the turn's prompt and reply beside the image, 500 px wide, and under it when narrow", () => {
+  const { g, calls, text, size } = viewer();
+  size(1600, 1000);
+  let c = calls();
+  // Beside the image: the panel is 500 px wide with a hairline on its left.
+  expect(afterId(c, "th-gallery-panel")).toContainEqual(["w", 500]);
+  expect(afterId(c, "th-gallery-panel")).toContainEqual(["border_l", 1]);
+  const t = text();
+  // The head, the caption, the stats and Copy reply; the Reply button is on the top line.
+  expect(t).toContain("#4 | · | You | 9:25 AM · 58s");
+  expect(t).toContain("3 tool calls (not shown)");
+  expect(t).toContain("58s · 7.9k tokens · opus 5.5 · 3 tool calls");
+  expect(t).toContain("Copy reply");
+  expect(t).toContain("Reply");
+  expect(t).not.toContain("Left and Right step through");
+  // The reply as Markdown, a block per paragraph, dollar signs escaped as in the open card.
+  const md = views.filter((x) => x.id.startsWith("th-gallery-md-")).slice(-3).map((x) => x.md);
+  expect(md).toEqual(["The chips had a fixed width.", "- tablet scrolls\n- desktop stays", "Costs \\$5 to \\$9 a month."]);
+  // Each label in the bubble is its own piece, the one on screen marked.
+  const tag = (k) => afterId(c, k) ?? [];
+  expect(tag("th-gallery-tag-0-2")).toContainEqual(["child", "[Image #42]"]);
+  expect(tag("th-gallery-tag-0-2").some((e) => e[0] === "border_1")).toBe(true);
+  expect(tag("th-gallery-tag-0-0").some((e) => e[0] === "border_1")).toBe(false);
+  expect(tag("th-gallery-tag-1-1")).toContainEqual(["child", "[Image #43]"]);
+  // A thumbnail per image under it, the one on screen ringed.
+  for (const j of [0, 1, 2]) expect(afterId(c, `th-gallery-thumb-${j}`)).not.toBe(null);
+  // Narrow: the panel docks under the image, 300 px tall, its text at most 560 px wide.
+  size(900, 800);
+  c = calls();
+  expect(afterId(c, "th-gallery-panel")).toContainEqual(["h", 300]);
+  expect(afterId(c, "th-gallery-panel")).toContainEqual(["border_t", 1]);
+  expect(c).toContainEqual(["pl", 170]);
+  expect(g.gal.panel).toBe(true);
+});
+
+test("the image viewer: a label or a thumbnail goes to its image, 1 to 9 jump, j and k scroll the reply a block, c copies, i hides and is kept", async () => {
+  settingsWrites.length = 0;
+  const { g, cx, calls, text, size } = viewer();
+  size(1600, 1000);
+  const click = (id) => afterId(calls(), id).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  click("th-gallery-tag-1-1");
+  expect(g.gal.i).toBe(2);
+  click("th-gallery-tag-0-0");
+  expect(g.gal.i).toBe(0);
+  click("th-gallery-thumb-1");
+  expect(g.gal.i).toBe(1);
+  g.galleryKey(keyEv("3"), cx);
+  expect(g.gal.i).toBe(2);
+  g.galleryKey(keyEv("9"), cx); // no ninth image
+  expect(g.gal.i).toBe(2);
+  g.galleryKey(keyEv("home"), cx);
+  expect(g.gal.i).toBe(0);
+  g.galleryKey(keyEv("end"), cx);
+  expect(g.gal.i).toBe(2);
+  // j: the message, the caption, three reply blocks and the stats are the panel's six
+  // children. Down goes to the end, then back up to the next part, so it lands at the top.
+  const h = g.galScroll;
+  // The scroll area's own children are the six parts j and k count.
+  // (Its children are built first, so its own .children call is the last before the footer.)
+  const all = calls();
+  const foot = all.findIndex((e) => e[0] === "id" && e[1] === "th-gallery-copy");
+  const own = all.slice(all.findIndex((e) => e[0] === "id" && e[1] === "th-gallery-scroll"), foot).filter((e) => e[0] === "children").at(-1);
+  expect(own[1]).toHaveLength(g.galleryParts());
+  expect(g.galleryParts()).toBe(6);
+  g.galleryKey(keyEv("j"), cx);
+  expect(g.gal.i).toBe(2); // the image stays
+  expect(h.asked).toEqual([5]);
+  cx.flush(100);
+  expect(h.asked).toEqual([5, 1]);
+  g.galleryKey(keyEv("space"), cx);
+  cx.flush(100);
+  expect(h.asked.slice(-1)).toEqual([2]);
+  g.galleryKey(keyEv("k"), cx);
+  expect(h.asked.slice(-1)).toEqual([1]);
+  // Stepping images leaves the reply where it is.
+  g.galleryKey(keyEv("right"), cx);
+  expect(g.gal.top).toBe(1);
+  // c copies the reply's Markdown source, and the button says so for a moment.
+  g.galleryKey(keyEv("c"), cx);
+  expect(cx.clip).toBe(VIEW_TURN.copy);
+  expect(text()).toContain("Copied");
+  cx.flush(2000);
+  expect(text()).toContain("Copy reply");
+  // i hides the panel and writes the choice for the next viewer; i shows it again.
+  g.galleryKey(keyEv("i"), cx);
+  expect(g.gal.panel).toBe(false);
+  expect(afterId(calls(), "th-gallery-panel")).toBe(null);
+  await cx.pending.at(-1);
+  expect(JSON.parse(settingsWrites.at(-1)).viewerReply).toBe(false);
+  g.galleryKey(keyEv("i"), cx);
+  await cx.pending.at(-1);
+  expect(g.gal.panel).toBe(true);
+  expect(JSON.parse(settingsWrites.at(-1)).viewerReply).toBe(true);
+  // The Reply button on the top line does the same.
+  click("th-gallery-reply");
+  expect(g.gal.panel).toBe(false);
+  // The mod commands.
+  g.galleryAct("panel", cx);
+  expect(g.gal.panel).toBe(true);
+});
+
+// From the review: j and k kept a count of their own, so after a wheel scroll they moved the
+// reply the wrong way, and held at the end they did nothing on the way back. Now the panel
+// measures its parts and the view, follows the wheel, and goes by replyScroll's places.
+test("the image viewer: j and k go by the measured parts and follow the wheel; the strip starts at the left; a quick i i saves the last state; a long prompt says how many lines are left out", async () => {
+  settingsWrites.length = 0;
+  const { g, cx, calls, text, size } = viewer();
+  size(1600, 1000);
+  const all = calls();
+  const after = (id, name) => {
+    const i = all.findIndex((e) => e[0] === "id" && e[1] === id);
+    for (let j = i + 1; j < all.length && all[j][0] !== "id"; j++) if (all[j][0] === name) return all[j].at(-1);
+    return null;
+  };
+  // Six parts of 100, 30, 300, 300, 300 and 20 px in a 400 px view: they start at 4, 104,
+  // 134, 434, 734 and 1034, and the view can go down to 674.
+  [100, 30, 300, 300, 300, 20].forEach((height, k) => after(`th-gallery-part-${k}`, "on_size_change")({ width: 400, height }, cx));
+  after("th-gallery-scroll", "on_size_change")({ width: 400, height: 400 }, cx);
+  const h = g.galScroll;
+  const press = (k) => { h.asked.length = 0; g.galleryKey(keyEv(k), cx); cx.flush(200); return [...h.asked]; };
+  // Down to the caption: by way of the first part that reaches past it (not the end), then back.
+  expect(press("j")).toEqual([3, 1]);
+  expect(g.gal.y).toBe(104);
+  expect(press("j")).toEqual([3, 2]);
+  expect(press("j")).toEqual([4, 3]);
+  // Then the end, and nothing further: j at the end does not run on.
+  expect(press("j")).toEqual([5]);
+  expect(press("j")).toEqual([]);
+  // k comes straight back a part at a time.
+  expect(press("k")).toEqual([3]);
+  expect(g.gal.y).toBe(434);
+  // The wheel: 200 px down, then k goes to the start of the part on screen, not the one above.
+  // Over a part, the part's listener and then the area's see the same event: it counts once.
+  const ev = { delta: { x: 0, y: -200 }, position: { x: 900, y: 400 }, touch_phase: "moved" };
+  after("th-gallery-part-3", "on_scroll_wheel")(ev, cx);
+  after("th-gallery-scroll", "on_scroll_wheel")({ ...ev }, cx);
+  expect(g.gal.y).toBe(634);
+  expect(press("k")).toEqual([3]);
+  // Back to the top by wheel: j goes to the caption again, not further down.
+  after("th-gallery-scroll", "on_scroll_wheel")({ delta: { x: 0, y: 5000 } }, cx);
+  expect(g.gal.y).toBe(0);
+  expect(press("j")).toEqual([3, 1]);
+  // The second step waits for a frame drawn after the first.
+  h.asked.length = 0;
+  g.galleryKey(keyEv("j"), cx);
+  const drawn = g.gal.paints;
+  cx.flush(40, 3); // three waits of 30 ms with no frame drawn: still waiting
+  expect(h.asked).toEqual([3]);
+  calls();
+  expect(g.gal.paints).toBe(drawn + 1);
+  cx.flush(40);
+  expect(h.asked).toEqual([3, 2]);
+  // The strip: centred by an auto margin inside the scroll area, so an overflow starts at the left.
+  const strip = all.findIndex((e) => e[0] === "id" && e[1] === "th-gallery-strip");
+  expect(all.slice(strip, strip + 10).some((e) => e[0] === "justify_center")).toBe(false);
+  expect(all.some((e) => e[0] === "mx_auto")).toBe(true);
+  // i twice before either save lands: both saves write the state the panel ends in.
+  g.galleryKey(keyEv("i"), cx);
+  g.galleryKey(keyEv("i"), cx);
+  await Promise.all(cx.pending.slice(-2));
+  expect(g.gal.panel).toBe(true);
+  expect(settingsWrites.length).toBeGreaterThan(0);
+  expect(settingsWrites.every((w) => JSON.parse(w).viewerReply === true)).toBe(true);
+  // A prompt of 450 lines shows 400 and says how many are left out.
+  const long = viewer({ turn: { ...VIEW_TURN, prompt: Array.from({ length: 450 }, (_, i) => `line ${i + 1}`).join("\n") } });
+  long.size(1600, 1000);
+  expect(long.text()).toContain("50 more lines not shown");
+  expect(text()).not.toContain("more lines not shown");
+});
+
+// From the side by side with the mock: a code block in the reply has the open turn's head
+// (language and Copy) and a highlighting editor, not plain Markdown.
+test("the image viewer: a fenced code block in the reply gets the language, a Copy button and a highlighting editor", () => {
+  editors.length = 0;
+  const md = "The fix:\n\n```css\n.filters { display: flex; }\n```\n\nDone.";
+  const { g, cx, calls, text, size } = viewer({ turn: { ...VIEW_TURN, md } });
+  size(1600, 1000);
+  expect(g.gal.blocks).toHaveLength(3);
+  expect(g.gal.code.map((c) => c?.lang ?? null)).toEqual([null, "css", null]);
+  expect(editors.at(-1).opts.value).toBe(".filters { display: flex; }");
+  expect(editors.at(-1).opts.readonly).toBe(true);
+  const all = calls();
+  // Only the prose blocks go to Markdown views.
+  expect(all.filter((e) => e[0] === "TextView" && String(e[1]).startsWith("th-gallery-md-")).map((e) => e[1])).toEqual(["th-gallery-md-0", "th-gallery-md-2"]);
+  expect(text()).toContain("css");
+  afterId(all, "th-gallery-code-copy-1").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(cx.clip).toBe(".filters { display: flex; }");
+  expect(text()).toContain("Copied");
+  cx.flush(2000);
+  expect(text()).not.toContain("Copied");
+  // Still one scroll part per block, so j and k count it.
+  expect(g.galleryParts()).toBe(6);
+});
+
+test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {
+  const off = viewer({ panel: false });
+  off.size(1600, 1000);
+  expect(afterId(off.calls(), "th-gallery-panel")).toBe(null);
+  const run = viewer({ turn: { ...VIEW_TURN, running: true, md: "", copy: "" } });
+  run.size(1600, 1000);
+  const t = run.text();
+  expect(t).toContain("Still running · the reply as of 9:30 AM");
+  expect(t).toContain("No reply yet.");
+  // Nothing to copy: c does nothing.
+  run.g.galleryKey(keyEv("c"), run.cx);
+  expect(run.cx.clip).toBe(null);
+  // Herdr before 0.1.15 has no ScrollHandle: the reply scrolls with the wheel, and j, k and
+  // Space step the images as before.
+  const old = viewer();
+  old.g.galScroll = null;
+  old.size(1600, 1000);
+  expect(old.text()).toContain("i hides the reply");
+  old.g.galleryKey(keyEv("j"), old.cx);
+  expect(old.g.gal.i).toBe(2);
+  old.g.galleryAct("down", old.cx);
+  expect(old.g.gal.i).toBe(0);
+  // No turn (an older pane's props): no panel and no Reply button, as before.
+  const none = viewer({ turn: undefined, panel: true });
+  none.size(1600, 1000);
+  expect(none.g.gal.panel).toBe(false);
+  expect(afterId(none.calls(), "th-gallery-reply")).toBe(null);
 });
 
 test("the day while scrolling has a strip of its own above the list, never over a row", async () => {
@@ -4024,7 +4291,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 4 * 22 + 23 * 25 + 3 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 29 * 25 + 4 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
