@@ -6,7 +6,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 
 ## What you can do
 
-- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a slate-blue bubble on the right under "You", the start of the reply sits under it with the agent's name, the turn's number and time are above, and its tokens, time and model are below.
+- **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a slate-blue bubble on the right under "You", the start of the reply sits straight under it, the turn's number and time are above, and its tokens, time and model are below.
 - **Read the whole reply.** Press `Enter` on a row to open it: the whole reply shows, with nothing cut, and `Esc` closes it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
@@ -72,7 +72,7 @@ To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across th
 
 <table>
 <tr>
-<td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats"></a><br>An open turn: your prompt in its bubble, then the formatted reply under the agent's name, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
+<td width="50%" valign="top"><a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats"></a><br>An open turn: your prompt in its bubble, then the formatted reply straight under it, a copy button on the code block, ACME-123 and #42 as links, and the turn's tokens, time and model.</td>
 <td width="50%" valign="top"><a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests"></a><br>Typing "tests" after <code>/</code> narrows six turns to three.</td>
 </tr>
 <tr>

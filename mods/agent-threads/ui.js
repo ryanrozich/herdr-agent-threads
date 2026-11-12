@@ -533,7 +533,7 @@ export function middle(text, max) {
 // padding each side and 6 px above and below. The *_CHAR widths are measured at 13 px;
 // readType scales them to the reading size.
 export const ROW = Object.freeze({
-  META: 16, NAME: 18, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
+  META: 16, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
   BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
 });
 
@@ -603,10 +603,10 @@ export function tileRow(dims, width, text = TEXT_SIZE) {
 }
 
 // Height of a collapsed exchange with p prompt lines and r reply lines of `line` px, and
-// `more` Show more lines (one under a cut message, one under a cut reply). The reply has its
-// agent's name over it.
+// `more` Show more lines (one under a cut message, one under a cut reply). The reply starts
+// straight under the message, with no name over it.
 export function rowHeight(p, r, more = 0, line = readType().line) {
-  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + ROW.NAME + line * r
+  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + line * r
     + ROW.GAP + ROW.STATS + ROW.PAD_B + ROW.MORE * more;
 }
 

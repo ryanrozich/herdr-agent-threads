@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
-import { pinRowHeight } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -3161,13 +3161,27 @@ test("turn header: #n then the name at the left, the time last, for the person's
   expect(strings(() => v.metaLine(theme, turn))[0]).toBe(`#${turn.n}`);
 });
 
-test("names: yours over your message, the agent's over its reply, Agent when the session records none", async () => {
+test("names: yours over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
-  expect(drawn(row)).toEqual(expect.arrayContaining(["You", "shop-agent"]));
-  expect(v.captionParts(row.turn)[0]).toEqual(["name", "shop-agent"]);
+  // The reply starts straight under the message: no agent's name over it, closed or open.
+  expect(drawn(row)).toContain("You");
+  expect(drawn(row)).not.toContain("shop-agent");
+  expect(v.captionParts(row.turn).some(([icon]) => icon === "name")).toBe(false);
+  // A session where more than one agent replied (OpenCode records each turn's agent): the
+  // open turn's caption leads with who replied, the closed row still has no name.
+  const own = v.current().turns.filter((x) => !x.agent);
+  own[0].by = "build";
+  own[1].by = "plan";
+  expect(v.captionParts(own[0])[0]).toEqual(["name", "build"]);
+  expect(v.captionParts(own[1])[0]).toEqual(["name", "plan"]);
+  expect(drawn(v.rows().find((r) => r.kind === "turn" && r.turn === own[0]))).not.toContain("build");
+  own[1].by = "build";
+  expect(v.captionParts(own[0]).some(([icon]) => icon === "name")).toBe(false);
+  delete own[0].by;
+  delete own[1].by;
   // A name the reply itself records (OpenCode's agent) wins; with neither, "Agent".
   expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
   v.current().agentName = null;
@@ -3200,6 +3214,22 @@ test("names: yours over your message, the agent's over its reply, Agent when the
   await new Promise((r) => setTimeout(r, 20));
 });
 
+
+test("an agent message keeps its sender's name over the bubble, and a reply row is the height its parts draw without a name line", async () => {
+  const { v, cx } = await pane(fixture("--only", "2", "--agents"));
+  v.setAgents(true, cx);
+  draw(v, cx);
+  const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
+  const msgs = v.rows().filter((r) => r.kind === "turn" && r.turn.agent && r.turn.sender?.name);
+  expect(msgs.length).toBeGreaterThan(0);
+  for (const r of msgs) expect(drawn(r).some((s) => s.includes(senderLabel(r.turn.sender, v.width)) || s === r.turn.sender.name)).toBe(true);
+  // A plain reply row: its stated height is rowHeight's, which has no name line in it.
+  const own = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md == null && r.shape.tone !== "reply");
+  if (own) expect(own.shape.height).toBe(rowHeight(own.shape.p, own.shape.r, (own.shape.pMore ? 1 : 0) + (own.shape.rMore ? 1 : 0)));
+  const md = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md != null);
+  expect(md.shape.mdBase).toBe(rowHeight(md.shape.p, 0, (md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
+  expect(md.shape.mdBase).toBe(8 + 16 + 6 + 12 + md.shape.p * 21 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
+});
 
 test("reading type: message and reply text at the Text size on 1.5 lines, a reading line wide at 960 px, labels unchanged", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
