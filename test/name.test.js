@@ -7,7 +7,12 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..");
 // settings.js imports herdr, the host's module: a stand-in, so this file runs on its own
 // and in any order with the others.
-mock.module("herdr", () => ({ writeTextFile: async () => null }));
+const stub = () => null;
+mock.module("herdr", () => ({
+  writeTextFile: async () => null,
+  ...Object.fromEntries(["exec", "hc", "home", "appHome", "readTextFile", "watchFolder", "theme", "themes", "settings", "panes", "terminals",
+    "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
+}));
 
 test("the mod's folder, name.js and the keys.json chord name the same mod", async () => {
   const dirs = readdirSync(join(root, "mods"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
