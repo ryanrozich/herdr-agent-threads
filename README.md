@@ -160,7 +160,7 @@ Partway through a long reply and a newer one needs you? Press `p`. The turn gets
 - Search leaves the pins alone. Press `Enter` or click a result to give the keys back to the list, so `p` and the digits work with the search kept. Returning to a turn the search hides shows that one turn.
 - Pins belong to one session and survive closing the pane, restarting Herdr and resuming. A forked session starts with none. A pinned turn that no longer exists shows in the Pinned view as "no longer in this session", and a click unpins it.
 
-If your `quoteKey` is `p` or `u`, quote keeps the letter. The buttons still pin. `v` is taken, so a `quoteKey` of `v` falls back to `q` with a note in the settings panel.
+If your `quoteKey` is `p` or `u`, quote keeps the letter. To pin a turn then, open it and click the pin on its top line. To unpin, click that pin again, or select the pin in the Pinned view and click its header's pin button. `v` is taken, so a `quoteKey` of `v` falls back to `q` with a note in the settings panel.
 
 Pins are saved in `~/.config/herdr-app/data/agent-threads/pins.json`: the session id, a fingerprint of the turn, your place and the first 80 characters of the prompt. Sessions untouched for 90 days are dropped. It stays on your machine, and you can delete it at any time.
 

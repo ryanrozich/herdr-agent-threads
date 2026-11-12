@@ -2400,6 +2400,38 @@ test("a click on the open card's pin pins it, and a click elsewhere on the head 
   expect(v.isPinned(a)).toBe(true);
 });
 
+test("with a quote key of p, an open turn's pin pins and the Pinned view's header button unpins (the README's fallback)", async () => {
+  const { keyAction } = await import("../mods/agent-threads/ui.js");
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.quoteKey = "p";
+  expect(keyAction(keyEv("p"), false, "p")).toBe("quote");
+  expect(keyAction(keyEv("u"), false, "u")).toBe("quote");
+  const a = keys()[0];
+  v.sel = a;
+  v.width = 500;
+  // The list's header has no pin button to fall back on.
+  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-pin");
+  // An open turn's top line pin pins it.
+  v.toggle(a, cx);
+  v.bodyW = 500;
+  v.pressX = 500 - 42;
+  v.click(a, cx);
+  expect(v.isPinned(a)).toBe(true);
+  // In the Pinned view the header's pin button unpins the selected pin with the mouse.
+  v.setView("pinned");
+  v.sel = a;
+  rec = []; v.header(theme); const h = rec; rec = null;
+  const at = h.findIndex((e) => e[0] === "id" && e[1] === "th-pin");
+  expect(at).toBeGreaterThanOrEqual(0);
+  const end = h.findIndex((e, i) => i > at && e[0] === "id");
+  const click = h.slice(at, end < 0 ? undefined : end).find((e) => e[0] === "on_click")?.at(-1);
+  expect(typeof click).toBe("function");
+  click({}, cx);
+  expect(v.isPinned(a)).toBe(false);
+  v.setView("all");
+  v.quoteKey = "q";
+});
+
 test("a click in the list gives the search field's keys back to the panel", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.action("search:the", cx);

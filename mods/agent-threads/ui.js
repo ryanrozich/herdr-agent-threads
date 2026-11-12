@@ -10,8 +10,9 @@ const KEYS = {
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys",
 };
-// Pin keys give way to the quote key, so a quote key of p or u keeps working: the person who
-// chose it still has the header's pin button.
+// Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
+// chose it pins with the pin on an open turn's top line, and unpins with that pin or the
+// Pinned view's header button (the list's header has no pin button).
 const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
