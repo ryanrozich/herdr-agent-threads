@@ -4252,29 +4252,46 @@ function runningFixture() {
   return { file, rest: `${lines.slice(cut).join("\n")}\n` };
 }
 
+// A frame with the person's scroll before it: the same rows, the top row moved.
+function scrolled(v, start, end) { drawRange(v, start, end); }
+function atBottom(v, cx) {
+  draw(v, cx);
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  v.stickStep = null;
+  v.upAt = 0;
+  v.downAt = 0;
+}
+
 test("stick to the bottom: at the bottom a growing reply keeps the view pinned to the end", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = runningFixture();
   const { v, cx } = await pane(file);
   expect(v.current().turns.length).toBe(3);
   expect(v.follow).toBe(true);
-  draw(v, cx); // every row on screen: at the bottom
+  atBottom(v, cx); // every row on screen: at the bottom
   expect(v.rows().at(-1).kind).toBe("tail");
-  v.toBottom = false;
   appendFileSync(file, rest);
   v.read(cx);
   await settle(v);
   expect(v.current().turns.length).toBe(3); // the same turn, its reply grown
   expect(v.toBottom).toBe(true);
-  // Rows that grew some other way (a part measured taller) with the end off screen: back down.
-  v.toBottom = false;
-  v.pinningUntil = 0;
-  draw(v, cx);
+  // Rows that grew some other way (a part measured taller) with the end off screen: back down,
+  // and a later frame with the same rows (the terminal beside it drawing) does not undo that.
+  atBottom(v, cx);
   v.sizesVer = (v.sizesVer ?? 0) + 1;
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.stickStep).toBe("repin");
   drawRange(v, 0, v.rows().length - 1);
   expect(v.stickStep).toBe("repin");
   v.applyStick();
   expect(v.toBottom).toBe(true);
+  expect(v.follow).toBe(true);
+  // The same rows with the end off screen and no scroll of the person's (the list got shorter
+  // for a frame, or the pane's own scroll): following stays on.
+  atBottom(v, cx);
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.stickStep ?? null).toBe(null);
   expect(v.follow).toBe(true);
 });
 
@@ -4282,12 +4299,12 @@ test("stick to the bottom: scrolled up nothing moves, and scrolling back down fo
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
   const { v, cx } = await pane(file);
-  draw(v, cx);
-  v.toBottom = false;
-  v.pinningUntil = 0;
+  atBottom(v, cx);
   const sel = v.sel;
-  // The person scrolls up: the same rows, the end off screen. Following stops.
-  drawRange(v, 0, v.rows().length - 1);
+  const n = () => v.rows().length;
+  // The person scrolls up: the top row moves, the rows are the same. Following stops.
+  drawRange(v, 1);
+  scrolled(v, 0, n() - 1);
   expect(v.stickStep).toBe("unstick");
   expect(v.stickyDue).toBe(true);
   v.applyStick();
@@ -4300,12 +4317,18 @@ test("stick to the bottom: scrolled up nothing moves, and scrolling back down fo
   expect(v.toBottom).toBe(false);
   expect(v.sel).toBe(sel);
   expect(v.unseen).toBe("pending");
-  drawRange(v, 0, v.rows().length - 1);
+  drawRange(v, 0, n() - 1);
   expect(v.unseen).toBe(true);
-  expect(v.stickStep).toBe(null);
+  expect(v.stickStep ?? null).toBe(null);
+  // The list gets taller with no scroll (a closed search field): the end shows, but nothing
+  // follows and the selection stays.
+  drawRange(v, 0);
+  expect(v.stickStep ?? null).toBe(null);
+  drawRange(v, 0, n() - 1);
   // Scrolling back down until the end shows: following starts again, on the newest turn,
   // with no scroll of the pane's own.
-  drawRange(v, 0);
+  scrolled(v, 1, n() - 1);
+  scrolled(v, 2);
   expect(v.stickStep).toBe("restick");
   v.applyStick();
   expect(v.follow).toBe(true);
@@ -4314,17 +4337,18 @@ test("stick to the bottom: scrolled up nothing moves, and scrolling back down fo
   expect(v.unseen).toBe(false);
   // While a reply streams in the rows change on most frames: a scroll up still stops
   // following, and a scroll back down that reaches the end on a frame with new rows follows.
-  draw(v, cx);
-  v.toBottom = false;
-  v.pinningUntil = 0;
-  drawRange(v, 0);
-  drawRange(v, 1); // the person scrolls: the top row moves, the rows are the same
+  atBottom(v, cx);
+  drawRange(v, 2);
+  scrolled(v, 1); // the person scrolls: the top row moves, the rows are the same
   v.sizesVer = (v.sizesVer ?? 0) + 1; // a read grew the reply
-  drawRange(v, 1, v.rows().length - 1);
+  drawRange(v, 1, n() - 1);
   expect(v.stickStep).toBe("unstick");
+  // A read before the step is applied asked for the bottom: dropped with it.
+  v.toBottom = true;
   v.applyStick();
   expect(v.follow).toBe(false);
-  drawRange(v, 2, v.rows().length - 1); // scrolling back down
+  expect(v.toBottom).toBe(false);
+  scrolled(v, 2, n() - 1); // scrolling back down
   v.sizesVer += 1;
   drawRange(v, 2);
   expect(v.stickStep).toBe("restick");
@@ -4334,9 +4358,8 @@ test("stick to the bottom: scrolled up nothing moves, and scrolling back down fo
 
 test("stick to the bottom: arrows, opening a turn and a scroll of the pane's own are not fought", async () => {
   const { v, cx } = await pane(fixture("--only", "3"));
-  draw(v, cx);
-  v.toBottom = false;
-  v.pinningUntil = 0;
+  atBottom(v, cx);
+  const n = () => v.rows().length;
   // A step up at the bottom: the move stops following, and the end still on screen does not undo it.
   v.action("prev", cx);
   expect(v.follow).toBe(false);
@@ -4345,28 +4368,54 @@ test("stick to the bottom: arrows, opening a turn and a scroll of the pane's own
   // Opening the newest turn: following stops, and the card growing below does not pull down.
   v.action("next", cx);
   expect(v.follow).toBe(true);
-  draw(v, cx);
-  v.toBottom = false;
-  v.pinningUntil = 0;
+  atBottom(v, cx);
   v.toggle(v.sel, cx);
   expect(v.follow).toBe(false);
-  drawRange(v, 0, v.rows().length - 1);
-  drawRange(v, 0);
-  // The end went off screen and came back while the pane's own scroll to the card was pending:
-  // no restick.
+  // The pane's own scroll to the card is pending, then lands: the top row moves, the end comes
+  // back on screen, and none of it counts as the person's.
+  drawRange(v, 0, n() - 1);
+  drawRange(v, 1);
   expect(v.stickStep ?? null).toBe(null);
   v.scrollTo = null;
+  v.scrollBusyUntil = Date.now() + 500;
+  drawRange(v, 0, n() - 1);
+  drawRange(v, 1);
+  expect(v.stickStep ?? null).toBe(null);
+  // A key after a frame drops that frame's step: End wins over a scroll seen just before it.
+  v.stickStep = "unstick";
+  v.action("latest", cx);
+  expect(v.stickStep).toBe(null);
+  expect(v.follow).toBe(true);
   // A wheel scroll up while following stops it at once; a scroll down does not.
-  v.follow = true;
   v.listWheel({ delta: { x: 0, y: -30 } });
   expect(v.follow).toBe(true);
   v.listWheel({ delta: { x: 0, y: 30 } });
   expect(v.follow).toBe(false);
-  // A scroll of the pane's own (a search, a pin return) that lands at the end does not restick.
-  v.scrollBusyUntil = Date.now() + 500;
-  drawRange(v, 0, v.rows().length - 1);
-  drawRange(v, 0);
-  expect(v.stickStep ?? null).toBe(null);
+});
+
+test("stick to the bottom: a list that fits, the Pinned view and the outline do not follow a growing reply", async () => {
+  const { appendFileSync } = await import("node:fs");
+  // A wheel over a list that fits the pane scrolls nothing, so it does not stop following.
+  const { v, cx } = await pane(fixture("--only", "2"));
+  v.listH = 2000;
+  draw(v, cx);
+  expect(v.rows()[0].kind).toBe("spacer");
+  v.listWheel({ delta: { x: 0, y: 30 } });
+  expect(v.follow).toBe(true);
+  // A growing read pins the list, but not the Pinned view or the outline.
+  for (const where of ["pinned", "outline"]) {
+    const { file, rest } = runningFixture();
+    const { v, cx } = await pane(file);
+    draw(v, cx);
+    if (where === "pinned") v.view = "pinned";
+    else v.outline = true;
+    v.follow = true;
+    v.toBottom = false;
+    appendFileSync(file, rest);
+    v.read(cx);
+    await settle(v);
+    expect(v.toBottom).toBe(false);
+  }
 });
 
 test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it, and the footer's ? keys opens it", async () => {

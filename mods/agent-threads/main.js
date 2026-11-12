@@ -1337,7 +1337,7 @@ export default class Threads extends View {
           // Following, a read that grew the running reply keeps the view at the bottom too
           // (newestSig does not change while a reply grows; see stickCheck).
           if ((s.turns.length !== count || !this.sel) && this.follow) this.jumpLatest(true);
-          else if (this.follow && wasLoaded && grew) this.toBottom = true;
+          else if (this.follow && wasLoaded && grew && this.view !== "pinned" && !this.outlined()) this.toBottom = true;
           else if (wasLoaded) this.noteNew(before);
         } while (this.readAgain && live());
       } catch (e) {
@@ -2124,11 +2124,15 @@ export default class Threads extends View {
   // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
   // so it leaves a step for render and asks the 120 ms timer for a frame). The list's end
   // (the tail row) on screen is the bottom. The person scrolled when the top row moved with
-  // the rows unchanged, outside the pane's own scrolls, or when a wheel event came (movedAt).
-  // - Following, the end off screen: after a scroll of theirs following stops; otherwise the
-  //   content grew below, so the view goes back down.
-  // - Not following, the end coming on screen just after a scroll of theirs: following starts
-  //   again. A reply growing meanwhile does not matter; the pane's own scrolls never count.
+  // the rows unchanged, outside the pane's own scrolls, or when a wheel event came (upAt and
+  // downAt, by direction).
+  // - Following, the end off screen: after a scroll up of theirs following stops; with new rows
+  //   (content grew below, or the list was rebuilt for a new height) the view goes back down.
+  //   The same rows with no scroll of theirs change nothing: the list got shorter for a frame,
+  //   or the pane's own scroll put the end off screen.
+  // - Not following, the end coming on screen just after a scroll down of theirs: following starts
+  //   again. A reply growing meanwhile does not matter; the pane's own scrolls and a taller list
+  //   never count.
   stickCheck(rows, prevShown, start) {
     const same = rows === this.stickRows;
     const prevStart = this.stickStart;
@@ -2141,11 +2145,12 @@ export default class Threads extends View {
       return;
     }
     const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
-    if (same && start !== prevStart && !busy) this.movedAt = now;
-    const moved = now - (this.movedAt ?? 0) < 1000;
+    if (same && prevStart != null && start !== prevStart && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
+    const up = now - (this.upAt ?? 0) < 1000;
+    const down = now - (this.downAt ?? 0) < 1000;
     let step = null;
-    if (this.follow && !this.bottomShown) step = same || moved ? "unstick" : "repin";
-    else if (!this.follow && this.bottomShown && prevShown === false && !busy && (same || moved)) step = "restick";
+    if (this.follow && !this.bottomShown) step = up ? "unstick" : same ? null : "repin";
+    else if (!this.follow && this.bottomShown && prevShown === false && !busy && down) step = "restick";
     if (step) { this.stickStep = step; this.stickyDue = true; }
   }
   // A wheel or trackpad scroll up stops following at once, so a reply that comes in during the
@@ -2154,14 +2159,22 @@ export default class Threads extends View {
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
     if (!dy || this.view === "pinned") return;
-    this.movedAt = Date.now();
+    // A list that fits the pane (the spacer above it) does not scroll at all.
+    if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    this.scrolledBy(dy, Date.now());
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
+  }
+  // The person's latest scroll, by direction (dy > 0 is up); the other direction is forgotten.
+  scrolledBy(dy, now) {
+    this.upAt = dy > 0 ? now : 0;
+    this.downAt = dy > 0 ? 0 : now;
   }
   applyStick() {
     const step = this.stickStep;
     this.stickStep = null;
     if (!step || this.view === "pinned" || this.outlined()) return;
-    if (step === "unstick") this.follow = false;
+    // A read that came in before this frame may have asked for the bottom: dropped too.
+    if (step === "unstick") { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
     else if (step === "repin" && this.follow) this.toBottom = true;
     else if (step === "restick" && !this.follow) {
       // Back at the bottom by scrolling: follow again, with the newest turn selected; the view
@@ -2175,6 +2188,7 @@ export default class Threads extends View {
 
   jumpLatest(select = true) {
     this.follow = true;
+    this.stickStep = null;
     this.unseen = false;
     const keys = this.turnKeys(this.rows());
     if ((select || !this.sel) && keys.length) this.sel = keys[keys.length - 1];
@@ -2947,6 +2961,7 @@ export default class Threads extends View {
 
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
+    this.stickStep = null; // a key decides, not a frame drawn before it
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
@@ -4147,7 +4162,8 @@ export default class Threads extends View {
       this.toBottom = false;
       this.scrollTo = null;
       this.pinningUntil = Date.now() + 1000;
-      this.movedAt = 0;
+      this.upAt = 0;
+      this.downAt = 0;
       cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
       // A return waits for the card's parts to be measured: estimates can be off by 100 px,
@@ -4157,8 +4173,8 @@ export default class Threads extends View {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
-      if (st.person) this.movedAt = Date.now() + 600;
-      else { this.scrollBusyUntil = Date.now() + 500; this.movedAt = 0; }
+      if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
+      else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
       let how = st.how;
       let i = -1;
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
