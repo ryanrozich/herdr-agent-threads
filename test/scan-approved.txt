@@ -2,24 +2,24 @@
 # 2026-11-09 with the chat look, pins and six agents; retaken and approved again 2026-11-11 with
 # the agent state, the one-row footer and the ? sheet, plus days, images, viewer and width for the
 # reading width and the image viewer; retaken 2026-11-12 with the Pinned time order, compact
-# pins, the outline, its footer hint and the header with no pin button, pinned here for the owner
-# to approve with the merge). All show the staged acme-web session (test/make-hero.js,
+# pins, the outline, its footer hint, the header with no pin button and no agent name over a
+# reply, approved with the merge of PR 24). All show the staged acme-web session (test/make-hero.js,
 # test/make-agents.js), and each passed the PNG check before it was pinned. The check skips a
 # pinned file only while its sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
-e9cbd8ecaf45974d7f6e3c8a704252353627950a128a7da706732f72e0449746 docs/screenshots/open-turn.png
-2f4e4ba2e0abc5e6c01e672b5d636bf606451d525055115ca78c9d840ef506d2 docs/screenshots/viewer.png
-a636bb1f579a2ec23f050884383541b9a7b5eb4ceb51b5b2cd26684f2802aa28 preview.png
-d2de7c1e9b113489c4326a90a2f114fe8423b4a5629f00c133a659259992faf7 docs/screenshots/agent-messages.png
-b7fdeccb4eab23f27d2e138ec0dcb63c5b945aef51ae3c8b5f9d8aa64a9e200d docs/screenshots/agents.png
-3ce07232e7031c380e4b488720a1ca3dd9926050f0a84313120423967016fecd docs/screenshots/days.png
-de9b1dd6c22698f5a0b28fe3298917f555deea976bf85ba9ff195c40a0395f14 docs/screenshots/images.png
-1d7ec1a69c882b95a0b6b4cb39fda67276b419a24d983867154e6fd5e99d7abb docs/screenshots/keys.png
-c1cbd43de7b3b6b32cb00e4af8f9a425ac7b1dcb5e95fd4537957bd531c1ac04 docs/screenshots/light.png
+25368c7775af670da0e0d9fbd4e6243e8a21c4a53d450745589776c37c4c10f4 docs/screenshots/open-turn.png
+590a2e5f276a5a768d3e7aafe2b19a023a3947916b8724b0431380746308933b docs/screenshots/viewer.png
+75a752e9cef4be452b22460c8399fc938c060a0a4bd7bfdeab5af680f74a020a preview.png
+df9e3e0d740a68716e635d76547fab62547557265dfedfb16c00f71c3f61d39c docs/screenshots/agent-messages.png
+96bea0ed3f9218fec495a8ffc8642ad25566f62f392c6d44d0ab06219802d78b docs/screenshots/agents.png
+0b22feeea1e258e43e89602c25f9f784bb453931f1d794946f7004b26f318e33 docs/screenshots/days.png
+19fdd3c081f9648f107bf2791db459ea891919acdddafcbf9f88c0d634630d8d docs/screenshots/images.png
+6cef917a15c648ae2ff59a681d88352df16ec76919c3f46b4158dc665a60c309 docs/screenshots/keys.png
+697d989da07d19806ec14e22878aaa6d157d0a308c5d77ddbf9302b5fbf2050b docs/screenshots/light.png
 145678b501ba3c089ffce154dad8840f87c628d421fadd238ea37bdb0467aea2 docs/screenshots/outline.png
-56adf347a434713488f25cb0391d203d651b01b6269b68d2dad8a5e6fd684d4c docs/screenshots/panel.png
-0f7fcd2e123a6aab86fd6a7054add2f72a4e1da5c7207301e60e0d2f71e97cc2 docs/screenshots/pinned.png
-67e084ba2f35a6f445eb36ba9b5b7a6792edbf2e426c2b21a06d698eb1997870 docs/screenshots/quote.png
-ae259b6d59158844042ec69e3c9b1709607cea6e6961e98630b082ed8245d0fd docs/screenshots/search.png
-c56e4c37ab4a6de728f10851d1f27e17af15a0b7751d8846845e3cee9c760817 docs/screenshots/updating.png
-5990d2e8404322998669762eda1ca49f20912006fb49803011c0b9a90dcc897b docs/screenshots/width.png
+bcacbeb688182a4a8e603e9fa3984aa312fa433f43f5bdb65937df600ebc5d46 docs/screenshots/panel.png
+165d1362357acc4933c25047fc8484391829257f8b71f367128c469d3e4ec4a2 docs/screenshots/pinned.png
+43727631841ad193c162f6c4bab6fe646189153556aeb2dcec66a37377758a7c docs/screenshots/quote.png
+1f469e4ccf84724069567b281fa774c2e01e20dbcfa5b3bb7529642c06e2a161 docs/screenshots/search.png
+fdfba33e2e34457591509e60473d613ddcbaefd77624066e6561c2c660abaabd docs/screenshots/updating.png
+5889d34308a4cf5f7918705dbe1bec497f6dd5a3fca3a4ddec6e0dc04bb9cccf docs/screenshots/width.png
