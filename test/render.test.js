@@ -3181,8 +3181,13 @@ test("names: yours over your message, none over a reply (one agent), who replied
   own[1].by = "build";
   expect(v.captionParts(own[0]).some(([icon]) => icon === "name")).toBe(false);
   // An agent message never makes the session mixed, and its own caption names no one.
+  // (It sits in the session, with another agent's name, so the old check would have named it.)
   const msg = { ...own[1], agent: true, by: "plan" };
+  own[0].by = "build";
+  v.current().turns.push(msg);
   expect(v.mixedAgents(msg)).toBe(false);
+  expect(v.mixedAgents(own[0])).toBe(false);
+  v.current().turns.pop();
   delete own[0].by;
   delete own[1].by;
   // The session's agent name moved to the badge's tooltip.

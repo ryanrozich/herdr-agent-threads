@@ -40,4 +40,4 @@ Some behaviour differs by agent:
 
 ## Why Amp isn't supported
 
-Amp keeps its conversations on its own servers, not on disk. Reading them would mean calling Amp over the network every time the pane refreshes, and Agent Threads only reads local files. In an Amp terminal the pane says so and links here.
+Amp keeps its conversations on its own servers, not on disk. Reading them would mean calling Amp over the network every time the pane refreshes, and Agent Threads only reads local files. In an Amp terminal the pane says so and links to the same section in the [README](../README.md#why-amp-isnt-supported).

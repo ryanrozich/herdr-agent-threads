@@ -66,13 +66,13 @@ Press `q`. The reply goes into your prompt as a `>` quote, with a blank line und
 
 ### Know what the agent is doing
 
-Beside the agent's badge, the header says Working, Needs you, Done or Exited. Click it to go to the terminal. When something new arrives below where you are reading, the jump-to-latest button gets a dot.
+Beside the agent's badge, the header says Working, Needs you, Done or Exited. Click it to go to the terminal. Only Claude Code reports its state live; for the other agents the header shows only Done or Exited, and nothing while a turn runs. When something new arrives below where you are reading, the jump-to-latest button gets a dot.
 
 <a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own" width="400"></a>
 
 ### See pasted images and agent messages
 
-Images you pasted show as tiles over your message. Click one to see it larger. Press `a` to show messages other agents sent the session, such as a subagent's report.
+Images you pasted show as tiles over your message. In an open turn, click one to see it larger. Press `a` to show messages other agents sent the session, such as a subagent's report.
 
 <a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it" width="400"></a> <a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
 
@@ -108,13 +108,13 @@ Every agent gets prompts, replies, search, copy, quote and links. Some agents do
 
 ### Why Amp isn't supported
 
-Amp keeps its conversations on its own servers, not on your computer. Reading them would mean calling Amp over the network every time the pane refreshes, and Agent Threads only reads local files.
+Amp keeps its conversations on its own servers, not on your computer. Reading them would mean calling Amp over the network every time the pane refreshes, and Agent Threads only reads local files. In an Amp terminal the pane says so and links here.
 
 ## More
 
 - [Using Agent Threads](docs/usage.md): every behaviour and setting in detail.
 - [Which agents it reads](docs/agents.md): what each agent records, and how the pane finds its session.
-- [All screenshots](docs/screenshots/)
+- [More screenshots](docs/usage.md#more-screenshots)
 - [Developing](docs/develop.md): tests, fixtures and trying it in a separate Herdr window.
 - [RECIPE.md](RECIPE.md): what the pane draws and how it is built.
 - [Listing](docs/listing.md): what the herdr.dev/mods listing reads.
