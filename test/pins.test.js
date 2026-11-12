@@ -1,6 +1,6 @@
 // bun test: pins as data. Everything here is made up.
 import { test, expect, describe } from "bun:test";
-import { turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, placeAtTop, placeItem, NOT_A_PLACE } from "../mods/agent-threads/pins.js";
+import { turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, placeAtTop, placeItem, NOT_A_PLACE, pinTime, byTime } from "../mods/agent-threads/pins.js";
 import { keyAction, TAKEN_LETTERS, headPinHit } from "../mods/agent-threads/ui.js";
 
 const DAY = 86400000;
@@ -168,4 +168,22 @@ describe("keys", () => {
     expect(headPinHit(100, w)).toBe(false);
     expect(headPinHit(null, w)).toBe(false);
   });
+});
+
+test("pinTime and byTime: pins sort oldest first, a pin whose turn is not read yet by its fingerprint's time", () => {
+  const t = (n, ts) => ({ n, ts });
+  const pin = (sec) => ({ id: `${sec}|abc|1` });
+  expect(pinTime(pin(100), t(1, 5000))).toBe(5000);
+  expect(pinTime(pin(100), null)).toBe(100000);
+  expect(pinTime({ id: "-|abc|1" }, null)).toBe(Number.POSITIVE_INFINITY);
+  const L = [
+    { pin: pin(30), turn: t(3, 30000), si: 0 },
+    { pin: pin(10), turn: null, si: 0 }, // still loading: placed by its fingerprint
+    { pin: pin(20), turn: t(2, 20000), si: 0 },
+    { pin: { id: "-|x|1" }, turn: null, si: 0 }, // no time at all: last
+  ];
+  expect([...L].sort(byTime).map((p) => p.pin.id)).toEqual(["10|abc|1", "20|abc|1", "30|abc|1", "-|x|1"]);
+  // The same time: the earlier session, then the lower turn number.
+  const same = [{ pin: pin(1), turn: t(4, 1000), si: 1 }, { pin: pin(1), turn: t(9, 1000), si: 0 }, { pin: pin(1), turn: t(2, 1000), si: 0 }];
+  expect([...same].sort(byTime).map((p) => `${p.si}:${p.turn.n}`)).toEqual(["0:2", "0:9", "1:4"]);
 });
