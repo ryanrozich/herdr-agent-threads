@@ -2,7 +2,7 @@
 // storefront project, acme-web. Same line shapes as test/make-fixture.js. Nothing here
 // comes from a real session, and both pasted images are drawn below, with no text in them.
 // docs/develop.md has the steps that turn this into the screenshots.
-// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair] [long]
+// Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair] [long] [many]
 // With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
 // With "wake", a background update follows the last turn: a task notification woke the agent
 // 95 s before the script ran and it is still working, so with the terminal reporting working the
@@ -10,6 +10,8 @@
 // With "pair", turn 5 has two pasted images, so the image viewer has one to step to.
 // With "long", turn 7's reply goes on after the code block with a write-up of about 6,000
 // characters and no code fence, longer than Herdr draws as one Markdown block.
+// With "many", fourteen short turns come first, 25 minutes apart from startISO, and turn 1
+// (then #15) starts the next day: a long session for the outline (o).
 import { writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
@@ -155,8 +157,33 @@ const phone = phonePng(390, 760);
 
 push({ type: "mode", mode: "normal", sessionId });
 
+const EARLY = [
+  ["Set up the acme-web repo with Vite and TypeScript", "Set it up with Vite, strict TypeScript and a src/ layout. `bun run dev` serves it on port 5173.", 4],
+  ["Add ESLint and Prettier", "Added both with the recommended rules and a lint script. The codebase passes with no changes.", 3],
+  ["Create the product card component", "Added ProductCard with the image, name, price and an Add to cart button, and a story for it.", 5],
+  ["Why is the price showing NaN for sale items?", "Sale items have no listPrice, so the discount divided by undefined. It now falls back to the price.", 3],
+  ["Add a cart drawer that slides in from the right", "The drawer opens from the cart icon, traps focus, and closes on Esc or a click outside.", 6],
+  ["Store the cart in localStorage", "The cart now survives a reload. It is read once at start and written on every change.", 2],
+  ["Write tests for the cart reducer", "Added 12 tests for add, remove, quantity and clear. All pass.", 3],
+  ["The search box loses focus after each keystroke", "The results list remounted the header on every render. Moving the key fixed it.", 4],
+  ["Add sorting by price and by newest to the catalog", "Added a sort menu; the choice is kept in the URL, so a shared link sorts the same way.", 4],
+  ["Make the product images lazy-load", "Images below the fold now load lazily with a fixed aspect ratio, so the grid no longer jumps.", 2],
+  ["Add a 404 page", "Added a 404 page with a search box and a link back to the catalog.", 2],
+  ["Set up the staging deploy", "Staging now deploys from main on every merge, with a preview link on each pull request.", 5],
+  ["Is the checkout page accessible with a keyboard?", "Mostly. The quantity stepper skipped its buttons; they are in the tab order now.", 3],
+  ["Add order confirmation emails", "Orders now send a confirmation email with the items, total and a link to the order page.", 5],
+];
+if (flags.includes("many")) {
+  EARLY.forEach(([q, a, tools], i) => {
+    const ep = prompt(q, i ? 1500 : 0);
+    for (let k = 0; k < tools; k++) tool(["Read", "Edit", "Bash", "Grep"][k % 4], {}, "…", ep);
+    assistant([{ type: "text", text: a }], { out: 90 + tools * 30, read: 24000 + tools * 4000, write: 900 });
+    end(9000 + tools * 8000);
+  });
+}
+
 // Turn 1
-let p = prompt("Make the header sticky on mobile", 0);
+let p = prompt("Make the header sticky on mobile", flags.includes("many") ? 86400 - EARLY.length * 1500 : 0);
 tool("Read", { file_path: `${cwd}/src/components/SiteHeader.tsx` }, "…", p);
 tool("Edit", { file_path: `${cwd}/src/components/SiteHeader.tsx` }, "…", p);
 tool("Bash", { command: "bun run test src/components" }, "…", p);
