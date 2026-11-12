@@ -49,7 +49,7 @@ To act out `/clear`, write a second fixture made with `--clear` into the same pr
 
 `preview.png` and `docs/screenshots/` show a staged session on a made-up project, with no retouching. `test/make-hero.js` writes the transcript, `test/hero/screen.c` is a stand-in for Claude Code in the left terminal (it builds on macOS), and `test/hero/render.py` draws what that terminal shows. A quote really pastes: the stand-in turns on bracketed paste and logs what it receives, and the renderer redraws the prompt from that log.
 
-In a separate Herdr window on a Retina display, at zoom 1, with the default row lines and the two link rules from the README:
+In a separate Herdr window on a Retina display, at zoom 1, with the default row lines and the two link rules from [Link rules in detail](usage.md#link-rules-in-detail):
 
 ```sh
 mkdir -p ~/code/acme-web && git -C ~/code/acme-web init -q
