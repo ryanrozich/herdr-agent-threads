@@ -65,6 +65,14 @@ const IMG_FULL_H = 1600;
 // percentage moves, and each call's parse and apply run in slices (read()).
 const CHUNK = 2 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
+// Reshaping collapsed rows (shape) in one draw: a change of Reply lines, Prompt lines, text
+// size, the width or the search reshapes every row, and in a long session that ran past
+// Herdr's time for a draw ("This view could not be re-rendered", interrupted). Past this
+// many ms a row keeps the shape it had, and the next frame goes on (rows, render).
+const SHAPE_MS = 12;
+// Rows reshaped first, from the one at the top of the pane down, so what is on screen
+// changes in the first frame.
+const SHAPE_FIRST = 40;
 // A read with no heartbeat for this long was interrupted (watchRead). Every step between
 // heartbeats is a slice of at most a few tens of ms, so 4 s is far past any real step.
 const READ_STALL = 4000;
@@ -1444,6 +1452,9 @@ export default class Threads extends View {
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
+      this.shapeSpent = 0;
+      this.shapeLeft = 0;
+      this.shapeInView(status);
       this.baseRows = this.buildRows(status);
       this.baseSizes = this.baseRows.map((r) => this.height(r));
       this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
@@ -1753,6 +1764,49 @@ export default class Threads extends View {
     const text = this.replyText(turn);
     const key = `${Math.round(this.width)}|${P.textSize}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
+    // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
+    // messages are turned on, a blank one-line row), and the next frame reshapes it.
+    if ((this.shapeSpent ?? 0) > SHAPE_MS) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    const t0 = now();
+    const sh = this.reshape(turn, live, q, P, why, text);
+    turn.shapeKey = key;
+    turn.shapeMemo = sh;
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return sh;
+  }
+  // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
+  // reply at the pane's width and text size.
+  blankShape() {
+    const k = `${Math.round(this.width)}|${this.prefs.textSize}`;
+    if (this.blankMemo?.k !== k) {
+      const sh = rowShape({ prompt: " ", reply: " ", width: this.width, promptLines: 1, replyLines: 1, size: this.prefs.textSize });
+      this.blankMemo = { k, sh: { ...sh, tone: "reply", cmd: null, blank: true } };
+    }
+    return { ...this.blankMemo.sh };
+  }
+  // The turns from the one at the top of the pane down (the newest when the pane has not
+  // drawn yet), reshaped before the rest, so the rows on screen are the first to change.
+  shapeInView(status) {
+    const m = /(\d+):(\d+)/.exec(this.topKey ?? "");
+    const si = m ? Number(m[1]) : this.sessions.length - 1;
+    const s = this.sessions[si];
+    if (!s?.turns.length) return;
+    // Only turns the list shows count (hidden agent messages are skipped).
+    const agents = Boolean(this.prefs.agentTurns);
+    const shows = (ti) => {
+      const live = this.isLive(s, si, ti, status);
+      return !live && isShown(s.turns[ti], { agentTurns: agents, live }) && !this.open.has(`${si}:${s.turns[ti].n}`);
+    };
+    // From the top row's turn, or (no turn there yet) the newest turns the list shows.
+    let from = m ? s.turns.findIndex((t) => t.n >= Number(m[2])) : -1;
+    if (from < 0) { from = s.turns.length; for (let k = 0; from > 0 && k < SHAPE_FIRST;) if (shows(--from)) k++; }
+    for (let ti = from, k = 0; ti < s.turns.length && k < SHAPE_FIRST; ti++) {
+      if (!shows(ti)) continue;
+      k++;
+      this.shape(s.turns[ti]);
+    }
+  }
+  reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
     let preview;
@@ -1807,8 +1861,6 @@ export default class Threads extends View {
       sh.height += th;
       if (sh.mdBase != null) sh.mdBase += th;
     }
-    turn.shapeKey = key;
-    turn.shapeMemo = sh;
     return sh;
   }
 
@@ -3050,6 +3102,12 @@ export default class Threads extends View {
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
+    this.rows();
+    // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
+    if (this.shapeLeft > 0 && !this.shapeNext) {
+      this.shapeNext = true;
+      cx.timer.after(0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
+    }
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
     if (this.debug) this.measure();

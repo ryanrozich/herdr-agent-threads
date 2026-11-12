@@ -4278,3 +4278,55 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
   expect(texts).toContain("Outline: one row per turn");
   expect(texts).toContain("Back out: search, Select view, settings, the open turn, the outline");
 });
+
+// The owner's report: Reply lines minus in a long session showed "This view could not be
+// re-rendered" (interrupted in shape): every collapsed row was reshaped in one draw. Now a
+// draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
+test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
+  const { v, cx } = await paneWith(busy(), null, 1000);
+  v.width = 545;
+  draw(v, cx);
+  const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
+  expect(shown().length).toBeGreaterThan(100);
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  // Each reading of the clock moves it 1 ms, so a reshape costs about 2 ms.
+  performance.now = () => (fake += 1);
+  try {
+    // The pane shows the turns from 20 rows above the end.
+    const before = shown();
+    v.topKey = before[before.length - 20].key;
+    v.action("replyLines:2", cx);
+    cx.timers = [];
+    draw(v, cx);
+    let rows = shown();
+    const fresh = (r) => r.shape.r <= 2 && !r.shape.blank;
+    const first = rows.filter(fresh).length;
+    // Some rows, not all, in the first frame, and a frame queued to go on.
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(rows.length);
+    expect(v.shapeLeft).toBeGreaterThan(0);
+    expect(cx.timers.some((x) => x.ms === 0)).toBe(true);
+    // The rows from the top of the pane down were among the first.
+    expect(rows.slice(-20).every(fresh)).toBe(true);
+    expect(rows.slice(0, 20).every(fresh)).toBe(false);
+    for (let k = 0; k < 200 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
+    expect(v.shapeLeft).toBe(0);
+    rows = shown();
+    expect(rows.every(fresh)).toBe(true);
+    // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
+    v.action("agents", cx);
+    cx.timers = [];
+    draw(v, cx);
+    expect(shown().some((r) => r.shape.blank)).toBe(true);
+    for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
+    expect(v.shapeLeft).toBe(0);
+    expect(shown().some((r) => r.shape.blank)).toBe(false);
+  } finally { performance.now = realPerf; }
+  // The shapes match a reshape done in one go.
+  const keep = shown().map((r) => r.shape.height);
+  for (const t of v.current().turns) t.shapeKey = null;
+  v.rowsKey = null;
+  v.shapeSpent = -Infinity;
+  expect(shown().map((r) => r.shape.height)).toEqual(keep);
+});
