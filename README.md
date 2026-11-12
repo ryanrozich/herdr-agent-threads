@@ -7,7 +7,7 @@ Long agent sessions are hard to look back through. The answer you got an hour ag
 ## What you can do
 
 - **Find an answer fast.** Scroll the list or press `/` to search. The list reads like a chat: your prompt sits in a slate-blue bubble on the right under "You", the start of the reply sits under it with the agent's name, the turn's number and time are above, and its tokens, time and model are below.
-- **Read the whole reply.** Press `Enter` on a row to open it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
+- **Read the whole reply.** Press `Enter` on a row to open it: the whole reply shows, with nothing cut, and `Esc` closes it. Code, lists and quotes show as formatted Markdown, along with the turn's tokens, time and model. On Herdr 0.1.13 or newer you can drag across the formatted reply, press `Cmd-C`, then `q` to quote just that part.
 - **Copy it.** `c` copies the reply. Each code block has its own copy button.
 - **Quote it back.** `q` pastes the reply into your prompt as a `>` quote with a blank line under it, ready for your comment. To quote one part, press `s`, highlight the text, press `Cmd-C`, then `q`. Agent Threads never presses Enter for you.
 - **Show or hide agent messages.** `a` shows or hides the messages other agents sent the session, such as a subagent's report or another session's message. OpenCode, Pi, Cursor and Antigravity have none, see [Which agents it reads](#which-agents-it-reads).
@@ -68,7 +68,7 @@ Amp keeps its conversations on its own servers, not on disk. Reading them would 
 
 Select an image to open it full size. The session in these shots is made up.
 
-To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. A drag can cross paragraphs, but not into a code block, which is a separate part of the turn. Letting go of a drag never closes the turn or collapses the text, even on **Show less**. `s` selects across everything.
+To quote part of a reply on Herdr 0.1.13 or newer, open the turn, drag across the words you want in the formatted reply and press `Cmd-C`. The pane says how many words you copied, and `q` quotes only those. A drag can cross paragraphs, but not into a code block, which is a separate part of the turn. Letting go of a drag never closes the turn, even on **Collapse**. `s` selects across everything.
 
 <table>
 <tr>

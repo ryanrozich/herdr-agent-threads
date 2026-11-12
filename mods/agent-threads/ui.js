@@ -206,7 +206,7 @@ export function escapeDollars(md) {
   }).join("\n");
 }
 
-// The start of a long Markdown block, for an open turn before "Show full reply": it ends at
+// The start of a Markdown block, for an open reply past its 200,000-character cap: it ends at
 // a paragraph when one ends in the last third, else at a word. It never ends on a bare list
 // marker or a table row cut short, closes a bold left open, then adds "…".
 export function cutMd(md, n) {

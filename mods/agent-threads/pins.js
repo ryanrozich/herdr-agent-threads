@@ -4,7 +4,7 @@
 //
 //   { "version": 1, "sessions": { "claude:<session id>": { "at": 1794000000000, "pins": [
 //     { "id": "1794000000|abc|1", "n": 7, "text": "first 80 characters of the prompt", "at": 1794000000000,
-//       "seen": { "len": 1200, "fu": 0 }, "anchor": ["md", "0.2"], "whole": true } ] } } }
+//       "seen": { "len": 1200, "fu": 0 }, "anchor": ["md", "0.2"] } ] } } }
 //
 // A turn's number can change when the way rows are built changes, so a pin keeps a
 // fingerprint: the prompt's time in seconds, a hash of its text, and a count for repeats.
@@ -114,10 +114,10 @@ export function partOf(itemKey, turnKey) {
 }
 
 // Parts of an open turn that are not a reading place: the stats, their legend, the action
-// bar, Show full reply, and the line a return puts above a place. Scrolling down past a turn
+// bar, the Collapse row, and the line a return puts above a place. Scrolling down past a turn
 // leaves one of these at the top of the pane last, and a return there would show only the
 // end of the reply, with the prompt out of view.
-export const NOT_A_PLACE = new Set(["st", "lg", "cp", "more", "resume"]);
+export const NOT_A_PLACE = new Set(["st", "lg", "cp", "fold", "more", "resume"]);
 
 // Whether a return to this place starts at the turn's head: a place in the head, the
 // message, an image, the caption or the reply's first block, a place a build before this one

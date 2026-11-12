@@ -186,7 +186,7 @@ test("every state draws at 240 and 380 px, agents on and off, every card open", 
       // every turn open at once, with the whole prompt, reply and latest update
       v.open = new Set(s.turns.map((t) => `0:${t.n}`));
       draw(v, cx);
-      v.full = new Set(s.turns.flatMap((t) => [`0:${t.n}`, `r:0:${t.n}`, `l:0:${t.n}`]));
+      v.full = new Set(s.turns.flatMap((t) => [`0:${t.n}`, `l:0:${t.n}`]));
       draw(v, cx);
       v.open.clear(); v.full.clear();
       v.settingsOpen = true; draw(v, cx); v.settingsOpen = false;
@@ -2216,7 +2216,7 @@ test("a place an earlier build saved on a turn's stats or action bar returns to 
   v.sel = a;
   v.toggle(a, cx);
   v.action("pin", cx);
-  for (const anchor of [["st", null], ["cp", null], ["lg", null], ["more", null]]) {
+  for (const anchor of [["st", null], ["cp", null], ["lg", null], ["fold", null]]) {
     v.pinnedList()[0].pin.anchor = anchor;
     v.goPin(0, cx);
     expect(v.scrollTo).toMatchObject({ key: a, how: "head" });
@@ -2224,16 +2224,15 @@ test("a place an earlier build saved on a turn's stats or action bar returns to 
   }
 });
 
-test("a whole reply comes back whole, after a restart too", async () => {
+test("a pin an older build saved with the reply shown whole returns to the open turn, with the whole reply, after a restart too", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = keys().find((k) => v.findTurn(k) && reply(v.findTurn(k)).length > 3000) ?? keys()[0];
   v.sel = a;
   v.toggle(a, cx);
-  v.full.add(`r:${a}`);
   v.rows();
   v.topKey = `rhead:${a}`;
   v.action("pin", cx);
-  expect(v.pinnedList()[0].pin.whole).toBe(true);
+  v.pinnedList()[0].pin.whole = true; // what an older build saved beside a place
   await saved();
   // A new pane reads the same file.
   const file = state.props.transcript;
@@ -2245,10 +2244,13 @@ test("a whole reply comes back whole, after a restart too", async () => {
   expect(v2.current().file).toBe(file);
   expect(v2.pinnedList().length).toBe(1);
   v2.goPin(0, cx2);
-  expect(v2.full.has(`r:${a}`)).toBe(true);
   expect(v2.open.has(a)).toBe(true);
+  const prose = (t) => t.replace(/\s+/g, " ").trim();
+  const shown = v2.rows().filter((r) => r.kind === "md" && r.key.startsWith(`md:${a}:`)).map((r) => r.src).join(" ");
+  const wanted = segments(reply(v2.findTurn(a))).filter((g) => g.kind === "md").map((g) => g.text).join(" ");
+  expect(prose(shown)).toBe(prose(wanted));
+  expect([...v2.full].some((k) => k.startsWith("r:"))).toBe(false);
 });
-
 test("a turn that is gone stays dim with its saved text, clicking says so, and unpinning clears it", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.sel = keys()[0];
@@ -2790,7 +2792,7 @@ test("a reply block is one list item however tall, so a drag can cross its parag
   v.width = 500;
   v.rootH = 300; // a short pane, so the long reply's prose is taller than it
   v.listH = 200;
-  for (const k of keys()) { v.toggle(k, cx); v.full.add(`r:${k}`); }
+  for (const k of keys()) v.toggle(k, cx);
   const md = v.rows().filter((r) => r.kind === "md");
   const tall = md.find((r) => r.src.includes("Paragraph 1:"));
   expect(v.mdHeight(tall.src)).toBeGreaterThan(v.rootH);
@@ -2804,7 +2806,6 @@ test("a pin left on a paragraph by the earlier build: a second press returns to 
   const { v, cx, keys } = await pinPane("--extra", "6", "--long");
   const a = twoBlocks(keys);
   v.toggle(a, cx);
-  v.full.add(`r:${a}`);
   v.action("pin", cx);
   const pin = v.pinnedList()[0].pin;
   pin.anchor = ["md", "2.1"]; // a paragraph item, which no longer exists
@@ -2832,7 +2833,6 @@ test("adding a pin does not change the list items of a reply", async () => {
   v.listH = 400;
   const a = keys()[0];
   v.toggle(a, cx);
-  v.full.add(`r:${a}`);
   const items = () => v.rows().filter((r) => r.kind === "md").map((r) => r.key).join(",");
   const before = items();
   v.action("pin", cx);
@@ -3178,7 +3178,7 @@ test("a done turn during a background wake-up keeps its reply, with an Updating 
   expect(v.rows().some((r) => r.kind === "wake")).toBe(false);
 });
 
-test("a reply longer than Herdr draws in one Markdown view: stacked blocks, escaped prices, a clean preview cut, and plain text if a block draws nothing", async () => {
+test("a reply longer than Herdr draws in one Markdown view opens whole: list items within the limit, escaped prices, and plain text if one draws nothing", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const turn = v.sessions.at(-1).turns.at(-1);
   // A made-up reply with the shape of the one that vanished: over 4,096 characters, a table of
@@ -3189,41 +3189,133 @@ test("a reply longer than Herdr draws in one Markdown view: stacked blocks, esca
   v.open = new Set([key]);
   v.sel = key;
   v.rowsKey = null;
-  // The preview stops at a paragraph, never on an empty list item.
-  let md = v.rows().filter((r) => r.kind === "md");
-  expect(md.length).toBe(1);
-  expect(md[0].md).toMatch(/without it the 210 waiting orders stay unrouted\. …$/);
-  expect(md[0].md).not.toMatch(/\n\s*(?:\d+[.)]|[-*+])\s*(?:\*\*)?\s*…$/);
-  expect(v.rows().some((r) => r.kind === "more" && !r.less)).toBe(true);
-  // Show full reply: one list item, drawn as several Markdown views, each within the limit.
-  v.full.add(`r:${key}`);
-  v.rowsKey = null;
-  md = v.rows().filter((r) => r.kind === "md");
-  expect(md.length).toBe(1);
-  expect(Buffer.byteLength(md[0].src)).toBeGreaterThan(4096);
+  // The whole reply, as several list items split at paragraphs, each one Markdown view
+  // within the limit. Nothing is cut and there is no Show full reply.
+  const md = v.rows().filter((r) => r.kind === "md");
+  expect(md.length).toBeGreaterThan(1);
+  expect(md.map((r) => r.key)).toEqual(md.map((_, j) => `md:${key}:0.${j}`));
+  expect(md.every((r) => Buffer.byteLength(r.src) <= MD_MAX)).toBe(true);
+  expect(md.map((r) => r.src).join("\n\n")).toBe(reply(turn));
+  expect(v.rows().some((r) => r.kind === "more")).toBe(false);
+  expect(v.rows().find((r) => r.kind === "fold")).toMatchObject({ key: `fold:${key}`, left: 0 });
   mdSources.length = 0;
-  v.partContent(theme, md[0], false);
-  const parts = mdSources.filter(([id]) => id.startsWith(`th-md-${md[0].key}-`)).map(([, m]) => m);
-  expect(parts.length).toBeGreaterThan(1);
-  expect(parts.every((m) => Buffer.byteLength(m) <= MD_MAX)).toBe(true);
+  for (const r of md) v.partContent(theme, r, false);
+  expect(mdSources.map(([id]) => id)).toEqual(md.map((r) => `th-md-${r.key}`));
   // Dollar signs are escaped, so the bold between two prices is bold, not math.
-  const all = parts.join("\n\n");
+  const all = mdSources.map(([, m]) => m).join("\n\n");
   expect(all).toContain("**4,180 map look-ups at \\$0.009 each**");
-  expect(all.replace(/\\\$/g, "$")).toBe(md[0].src);
+  expect(all.replace(/\\\$/g, "$")).toBe(reply(turn));
   // Herdr drew a block at no height: it shows as plain text with a note instead of vanishing.
-  const sig = v.partSig(md[0]);
-  v.probed(md[0].key, sig, { height: 6 * v.zoom() }, cx);
-  expect(v.mdBroken.has(md[0].key)).toBe(true);
-  expect(v.rowDetail(md[0])).toMatch(/ plain /);
+  const last = md.at(-1);
+  v.probed(last.key, v.partSig(last), { height: 6 * v.zoom() }, cx);
+  expect(v.mdBroken.has(last.key)).toBe(true);
+  expect(v.rowDetail(last)).toMatch(/ plain /);
   mdSources.length = 0;
-  rec = []; v.partContent(theme, md[0], false); const plain = rec; rec = null;
-  expect(mdSources.some(([id]) => id.startsWith(`th-md-${md[0].key}`))).toBe(false);
+  rec = []; v.partContent(theme, last, false); const plain = rec; rec = null;
+  expect(mdSources.length).toBe(0);
   const text = plain.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
   expect(text).toContain("Herdr could not draw this part as Markdown, so it shows as plain text.");
   expect(text).toContain("the morning van.");
   draw(v, cx);
 });
 
+// A synthetic reply of about 10,000 words in prose, lists and a table, with no code fence.
+function longProse(words) {
+  const out = [];
+  let n = 0;
+  for (let p = 1; n < words; p++) {
+    if (p % 9 === 0) { out.push(`- Step ${p}a: check the route table\n- Step ${p}b: replay the queue\n- Step ${p}c: compare the totals`); n += 21; continue; }
+    if (p % 13 === 0) { out.push(`| Stop | Orders |\n|---|---|\n| Depot ${p} | ${p * 3} |\n| Market ${p} | ${p * 2} |`); n += 12; continue; }
+    const s = Array.from({ length: 60 }, (_, i) => `word${p}x${i}`).join(" ");
+    out.push(`Paragraph ${p}: ${s}.`);
+    n += 62;
+  }
+  out.push("The end of the long reply.");
+  return out.join("\n\n");
+}
+
+test("a 10,000-word reply with no code fence opens whole as Markdown, lands on its head, Esc collapses it, and the next turn is one down-arrow away", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  const keys = v.turnKeys(v.rows());
+  const key = keys.at(-3);
+  const next = keys.at(-2);
+  const turn = v.findTurn(key);
+  const long = longProse(10000);
+  expect(long.split(/\s+/).length).toBeGreaterThanOrEqual(10000);
+  expect(long).not.toContain("```");
+  turn.after = [long];
+  turn.shapeKey = null;
+  v.rowsKey = null;
+  const calls = [];
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { calls.push([i, how]); } };
+  v.render(cx);
+  cx.flush();
+  v.sel = key;
+  calls.length = 0;
+  v.key(keyEv("enter"), cx);
+  v.render(cx);
+  cx.flush();
+  expect(v.open.has(key)).toBe(true);
+  const rows = v.rows();
+  const md = rows.filter((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`));
+  // Every word is there, as Markdown, in list items Herdr can draw.
+  expect(md.length).toBeGreaterThan(15);
+  expect(md.every((r) => Buffer.byteLength(r.src) <= MD_MAX)).toBe(true);
+  expect(md.map((r) => r.src).join("\n\n")).toBe(long);
+  expect(md.at(-1).src).toMatch(/The end of the long reply\.$/);
+  mdSources.length = 0;
+  for (const r of md) v.partContent(theme, r, false);
+  expect(mdSources.length).toBe(md.length);
+  expect(rows.some((r) => r.kind === "more")).toBe(false);
+  // It ends in a quiet Collapse (Esc) row, with nothing left out.
+  const fold = rows.find((r) => r.kind === "fold");
+  expect(fold).toMatchObject({ key: `fold:${key}`, left: 0 });
+  rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  expect(ft).toEqual(["Collapse", "Esc"]);
+  // Opening lands on the turn's head: the card's end first, then its head at the top.
+  const head = rows.findIndex((r) => r.key === key);
+  expect(rows[head].kind).toBe("head");
+  expect(calls.at(-1)).toEqual([head, "top"]);
+  // Esc closes it and keeps its row in view, selected.
+  calls.length = 0;
+  v.key(keyEv("escape"), cx);
+  v.render(cx);
+  cx.flush();
+  expect(v.open.has(key)).toBe(false);
+  expect(v.sel).toBe(key);
+  expect(calls).toEqual([[v.rows().findIndex((r) => r.key === key), "top"]]);
+  // The next turn is one down-arrow away.
+  v.key(keyEv("down"), cx);
+  expect(v.sel).toBe(next);
+  draw(v, cx);
+});
+
+test("an open reply past 200,000 characters stops there and says how much is left out; a short one has no Collapse row", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  const keys = v.turnKeys(v.rows());
+  const key = keys.at(-2);
+  const turn = v.findTurn(key);
+  turn.after = [longProse(36000)];
+  turn.shapeKey = null;
+  v.sel = key;
+  v.toggle(key, cx);
+  const rows = v.rows();
+  const shown = rows.filter((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`)).reduce((n, r) => n + r.src.length, 0);
+  expect(shown).toBeLessThanOrEqual(200005);
+  expect(shown).toBeGreaterThan(199000);
+  const fold = rows.find((r) => r.kind === "fold");
+  // What the cap leaves out: the reply past 200,000 characters, give or take the cut at a word.
+  expect(Math.abs(fold.left - (reply(turn).length - 200000))).toBeLessThan(400);
+  rec = []; v.partContent(theme, fold, false); const ft = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  expect(ft[0]).toBe(`${fold.left.toLocaleString()} more characters are left out here. c copies the whole reply.`);
+  expect(v.height(fold)).toBe(8 + 26 + 18);
+  // A short reply: nothing after it but the stats.
+  const short = keys.at(-1);
+  v.toggle(short, cx);
+  expect(reply(v.findTurn(short)).length).toBeLessThan(1600);
+  expect(v.rows().some((r) => r.kind === "fold" && r.key === `fold:${short}`)).toBe(false);
+  draw(v, cx);
+});
 test("an Amp terminal: Amp isn't supported, why in one line, and a button to the README section", async () => {
   const { UNREAD } = await import("../mods/agent-threads/harness.js");
   hcOut = JSON.stringify({ foreground: { name: "amp", argv: ["amp"], pid: 77 } });
@@ -3590,30 +3682,30 @@ test("a drag that selects text never closes or collapses anything; a click that 
   expect(v.open.has(key)).toBe(true);
 });
 
-test("a drag ending on Show less under a whole reply or on the action bar does nothing", async () => {
+test("a drag ending on Collapse under a long reply or on the action bar does nothing; a click on Collapse closes the turn", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const turn = v.sessions.at(-1).turns.at(-1);
   turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
   turn.shapeKey = null;
   const key = `${v.sessions.length - 1}:${turn.n}`;
   v.open = new Set([key]);
-  v.full.add(`r:${key}`);
   v.rowsKey = null;
-  const less = v.rows().find((r) => r.kind === "more" && r.less);
-  expect(less.key).toBe(`more:${key}`);
-  gesture(v, cx, less.key, { from: { x: 150, y: 300 }, to: { x: 260, y: 700 } });
-  expect(v.full.has(`r:${key}`)).toBe(true);
+  const fold = v.rows().find((r) => r.kind === "fold");
+  expect(fold.key).toBe(`fold:${key}`);
+  gesture(v, cx, fold.key, { from: { x: 150, y: 300 }, to: { x: 260, y: 700 } });
+  expect(v.open.has(key)).toBe(true);
   // The action bar: a drag that ends on Copy reply copies nothing.
   const copies = [];
   v.copyReply = (id) => copies.push(id);
   v.pressX = v.barGeom(v.width, turn).copy[0] + 4;
   gesture(v, cx, `cp:${key}`, { from: { x: 150, y: 300 }, to: { x: 160, y: 720 } });
   expect(copies).toEqual([]);
-  // Without the drag the same release on Show less shows the cut reply again.
-  gesture(v, cx, less.key);
-  expect(v.full.has(`r:${key}`)).toBe(false);
+  // Without the drag the same release on Collapse closes the turn, which stays selected.
+  gesture(v, cx, fold.key);
+  expect(v.open.has(key)).toBe(false);
+  expect(v.sel).toBe(key);
+  expect(v.scrollTo).toMatchObject({ key, how: "top" });
 });
-
 // The selected turn's fill and its bar, as drawn this frame.
 function fillAndBar(calls) {
   return { fill: calls.filter(([n, x]) => n === "bg" && x === theme.selected).length, bar: calls.filter(([n, x]) => n === "w" && x === 2).length };

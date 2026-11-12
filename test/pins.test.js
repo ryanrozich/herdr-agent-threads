@@ -133,7 +133,7 @@ describe("the reading place", () => {
     expect(placeItem(["code", "1"])).toEqual(["cc", "1"]);
     expect(placeItem(["lt", null])).toEqual(["lh", null]);
     expect(placeItem(["md", "2"])).toEqual(["md", "2"]);
-    for (const k of ["st", "cp", "lg", "more", "resume"]) expect(NOT_A_PLACE.has(k)).toBe(true);
+    for (const k of ["st", "cp", "lg", "fold", "more", "resume"]) expect(NOT_A_PLACE.has(k)).toBe(true);
     for (const k of ["md", "cc", "code", "lh", "lt", "you", "rhead"]) expect(NOT_A_PLACE.has(k)).toBe(false);
   });
 });
