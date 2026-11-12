@@ -34,12 +34,15 @@ function holder(files, argv0, cwd) {
   return spawn("bash", ["-c", `${opens}exec -a "${argv0}" sleep 30`], { cwd, stdio: "ignore" });
 }
 
-// A process whose name is codex (pgrep -x codex): a copy of sleep with that name.
+// A process whose name is codex (pgrep -x codex): a copy of bash with that name, waiting on
+// a sleep (the trailing ":" keeps bash from exec'ing sleep, which would rename it). A copy
+// of sleep will not do: on Linux it can be coreutils' one binary for every tool, which
+// goes by its name and fails as "codex".
 function namedCodex(cwd) {
   const bin = join(tmp("threads-codex-bin-"), "codex");
-  copyFileSync(execFileSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).trim(), bin);
+  copyFileSync(execFileSync("sh", ["-c", "command -v bash"], { encoding: "utf8" }).trim(), bin);
   chmodSync(bin, 0o755);
-  return spawn(bin, ["30"], { cwd, stdio: "ignore" });
+  return spawn(bin, ["-c", "sleep 30; :"], { cwd, stdio: "ignore" });
 }
 
 test("pickCodexDaemon: the folder's terminal session that began after the process, newest written", () => {
@@ -107,7 +110,9 @@ test("locate.sh finds a Codex session in either mode: held by the terminal's pro
   // Plain codex: the daemon holds it, and the terminal's process holds none.
   const daemon = holder([mine, sub], "codex app-server --listen unix:// --managed-daemon", sessions);
   const loop = holder([], "codex app-server daemon pid-update-loop", sessions);
-  const client = holder([], "codex", sessions);
+  // The plain codex client, in another folder: on macOS exec -a renames the process too,
+  // so here it would count as a peer.
+  const client = holder([], "codex", tmp("threads-codex-client-"));
   // Two processes named codex in the folder, for codex-peers.
   const peerA = namedCodex(sessions);
   const peerB = namedCodex(sessions);

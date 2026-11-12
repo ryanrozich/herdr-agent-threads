@@ -1,10 +1,13 @@
 // The mod's name lives in one line (name.js) and must match its folder and the keys.json
 // chord, so that sh rename.sh, an install and herdr.dev/mods all agree.
-import { test, expect } from "bun:test";
+import { test, expect, mock } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
+// settings.js imports herdr, the host's module: a stand-in, so this file runs on its own
+// and in any order with the others.
+mock.module("herdr", () => ({ writeTextFile: async () => null }));
 
 test("the mod's folder, name.js and the keys.json chord name the same mod", async () => {
   const dirs = readdirSync(join(root, "mods"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
