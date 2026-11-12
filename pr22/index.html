@@ -1,0 +1,79 @@
+<title>Compact Pinned Rows</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of before/after pairs, each pair side by side, stacking on phones. */
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); }
+code { font: 13px var(--mono); }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.steps { display: grid; gap: 14px; }
+.steps ol { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 75ch; }
+.group { display: grid; gap: 28px; }
+.pair, .single { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 75ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.single figure { max-width: 520px; }
+.duo.col { grid-template-columns: repeat(2, minmax(0, 260px)); }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · draft PR</div>
+  <h1>Compact Pinned rows</h1>
+  <p class="lede">Each pin in the Pinned column and the narrow Pinned view is now a compact row, so five pins fit in a 240 to 320 px column at a 1150 px window. Shots are of the synthetic acme-web session in an isolated test window. Before is PR 19 at 2f9afe5 (pins in time order); after is this branch. Click any shot to open it full size; arrow keys step through them and Esc closes.</p>
+</header>
+<section class="steps"><h2>What to test</h2><ol><li><strong>Install.</strong> <code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout pin-compact &amp;&amp; git pull &amp;&amp; ./install.sh</code>. This branch stacks on PR 19 (pins in time order), so it has that change too.</li><li><strong>Five pins.</strong> Pin five turns with <kbd>p</kbd>, from more than one day if you have a long session. In the Pinned column each is a compact row, and all five show without scrolling.</li><li><strong>Open one.</strong> In the column, select a pin and press <kbd>Enter</kbd>, click it, or press its digit. It opens as the full card, as before. <kbd>Esc</kbd> or a second click closes it back to its row.</li><li><strong>Selection and new replies.</strong> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> move between pins with the usual fill and bar. A pinned turn that gets a reply you have not read shows a small dot at the right of its top line until you open it.</li><li><strong>Narrow pane.</strong> Make Threads narrower than 480 px and press <kbd>v</kbd>. The pins show in the same pane with the same compact rows.</li><li><strong>Day pills.</strong> The day pills from PR 18 stay, one per day, oldest day first.</li></ol></section>
+<section class="group"><h2>Before and after</h2><section class="pair"><h3>Three pins in the Pinned column</h3><p class="note">The pinned.png recipe: pins on turns 3, 7 and 5 of the synthetic acme-web session, across two days. Before, each pin was the full turn row, and the third one ran off the bottom. After, each is a compact row: its digit, the turn number and time, two lines of the message and one of the reply.</p><div class="duo"><figure><button class="shot" aria-label="Open Three pins in the Pinned column, before full size"><img src="img/column-before.jpg" width="1608" height="2136" alt="Three pins in the Pinned column, before" loading="lazy"></button><figcaption>Before (PR 19, pin-time-order)</figcaption></figure><figure><button class="shot" aria-label="Open Three pins in the Pinned column, after full size"><img src="img/column-after.jpg" width="1608" height="2136" alt="Three pins in the Pinned column, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="pair"><h3>Five pins</h3><p class="note">Turns 2, 3, 5, 6 and 7, across three days, so three day pills. Before, the column shows two and a half pins. After, all five fit with room to spare. The debug timings show in the header of these two shots.</p><div class="duo col"><figure><button class="shot" aria-label="Open Five pins, before full size"><img src="img/five-before.jpg" width="512" height="2136" alt="Five pins, before" loading="lazy"></button><figcaption>Before (PR 19, pin-time-order)</figcaption></figure><figure><button class="shot" aria-label="Open Five pins, after full size"><img src="img/five-after.jpg" width="512" height="2136" alt="Five pins, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="pair"><h3>The narrow Pinned view</h3><p class="note">Threads at 400 px has no room for the column, so v shows the pins in the same pane. It uses the same compact rows. The selected pin keeps the list&#x27;s fill and bar.</p><div class="duo col"><figure><button class="shot" aria-label="Open The narrow Pinned view, before full size"><img src="img/narrow-before.jpg" width="812" height="2136" alt="The narrow Pinned view, before" loading="lazy"></button><figcaption>Before (PR 19, pin-time-order)</figcaption></figure><figure><button class="shot" aria-label="Open The narrow Pinned view, after full size"><img src="img/narrow-after.jpg" width="812" height="2136" alt="The narrow Pinned view, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="single"><h3>Three pins, light theme</h3><p class="note">The same three pins in a light theme.</p><figure><button class="shot" aria-label="Open Three pins, light theme full size"><img src="img/column-light.jpg" width="1608" height="2136" alt="Three pins, light theme" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
