@@ -4286,34 +4286,47 @@ test("a settings change in a long session reshapes rows over several frames, the
   const { v, cx } = await paneWith(busy(), null, 1000);
   v.width = 545;
   draw(v, cx);
+  // Without the debug report, whose timing pass rebuilds the rows once more each draw.
+  v.debug = false;
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
   expect(shown().length).toBeGreaterThan(100);
+  // Reshaped for Reply lines 2: the turn's shape key has the new count, and the row draws it.
+  const fresh = (r) => r.turn.shapeKey?.split("|")[3] === "2" && r.shape === r.turn.shapeMemo && !r.shape.blank;
   const realPerf = performance.now.bind(performance);
   let fake = 0;
-  // Each reading of the clock moves it 1 ms, so a reshape costs about 2 ms.
-  performance.now = () => (fake += 1);
+  // Each reading of the clock moves it 0.25 ms, so a reshape costs about 0.5 ms and a frame
+  // reshapes about 24 rows.
+  performance.now = () => (fake += 0.25);
   try {
     // The pane shows the turns from 20 rows above the end.
     const before = shown();
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
     cx.timers = [];
+    // A scroll asked for now waits for the reshaping.
+    v.scrollTo = { key: before[5].key, how: "center" };
     draw(v, cx);
     let rows = shown();
-    const fresh = (r) => r.shape.r <= 2 && !r.shape.blank;
     const first = rows.filter(fresh).length;
     // Some rows, not all, in the first frame, and a frame queued to go on.
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(rows.length);
     expect(v.shapeLeft).toBeGreaterThan(0);
     expect(cx.timers.some((x) => x.ms === 0)).toBe(true);
-    // The rows from the top of the pane down were among the first.
+    expect(v.scrollTo?.key).toBe(before[5].key);
+    // The rows from the top of the pane down were among the first; rows further up wait.
     expect(rows.slice(-20).every(fresh)).toBe(true);
-    expect(rows.slice(0, 20).every(fresh)).toBe(false);
-    for (let k = 0; k < 200 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
+    expect(rows.slice(40, 80).some(fresh)).toBe(false);
+    // Only the queued frames go on with it (cx.flush runs the timer, which drops the rows).
+    let frames = 0;
+    for (; frames < 200 && v.shapeLeft > 0; frames++) { cx.flush(0); draw(v, cx); }
+    expect(frames).toBeGreaterThan(1);
     expect(v.shapeLeft).toBe(0);
     rows = shown();
     expect(rows.every(fresh)).toBe(true);
+    // The scroll ran once every row had its shape.
+    draw(v, cx);
+    expect(v.scrollTo).toBe(null);
     // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
     v.action("agents", cx);
     cx.timers = [];
@@ -4321,12 +4334,13 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(shown().some((r) => r.shape.blank)).toBe(true);
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
-    expect(shown().some((r) => r.shape.blank)).toBe(false);
+    expect(shown().some((r) => r.shape.blank || r.shape !== r.turn.shapeMemo)).toBe(false);
   } finally { performance.now = realPerf; }
-  // The shapes match a reshape done in one go.
+  // The heights match a reshape done in one go, with no budget.
   const keep = shown().map((r) => r.shape.height);
-  for (const t of v.current().turns) t.shapeKey = null;
+  for (const t of v.current().turns) { t.shapeKey = null; t.shapeMemo = null; }
   v.rowsKey = null;
-  v.shapeSpent = -Infinity;
+  v.shapeBudget = Infinity;
   expect(shown().map((r) => r.shape.height)).toEqual(keep);
+  expect(v.shapeLeft).toBe(0);
 });

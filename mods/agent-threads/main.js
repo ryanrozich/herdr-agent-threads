@@ -1766,7 +1766,7 @@ export default class Threads extends View {
     if (turn.shapeKey === key) return turn.shapeMemo;
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > SHAPE_MS) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
@@ -1784,11 +1784,24 @@ export default class Threads extends View {
     }
     return { ...this.blankMemo.sh };
   }
-  // The turns from the one at the top of the pane down (the newest when the pane has not
-  // drawn yet), reshaped before the rest, so the rows on screen are the first to change.
+  // Reshaped before the rest, so the rows on screen are the first to change: the running
+  // turn (its row is on screen while the pane follows), then up to SHAPE_FIRST shown turns
+  // from the one at the top of the pane down (the newest when the pane has not drawn yet).
   shapeInView(status) {
-    const m = /(\d+):(\d+)/.exec(this.topKey ?? "");
-    const si = m ? Number(m[1]) : this.sessions.length - 1;
+    this.sessions.forEach((s, si) => {
+      const ti = s.turns.length - 1;
+      if (ti >= 0 && this.isLive(s, si, ti, status)) this.shape(s.turns[ti], true);
+    });
+    // The top row's turn, from the rows drawn last (a day band or a hidden-turns note at the
+    // top: the first turn under it).
+    let si = this.sessions.length - 1;
+    let from = -1;
+    const at = this.topKey != null ? this.baseIndex?.get(this.topKey) : undefined;
+    if (at != null) {
+      let r = null;
+      for (let i = at; i < this.baseRows.length && !r; i++) if (this.baseRows[i].turn && this.baseRows[i].si != null) r = this.baseRows[i];
+      if (r && this.sessions[r.si]) { si = r.si; from = this.sessions[si].turns.indexOf(r.turn); }
+    }
     const s = this.sessions[si];
     if (!s?.turns.length) return;
     // Only turns the list shows count (hidden agent messages are skipped).
@@ -1797,8 +1810,6 @@ export default class Threads extends View {
       const live = this.isLive(s, si, ti, status);
       return !live && isShown(s.turns[ti], { agentTurns: agents, live }) && !this.open.has(`${si}:${s.turns[ti].n}`);
     };
-    // From the top row's turn, or (no turn there yet) the newest turns the list shows.
-    let from = m ? s.turns.findIndex((t) => t.n >= Number(m[2])) : -1;
     if (from < 0) { from = s.turns.length; for (let k = 0; from > 0 && k < SHAPE_FIRST;) if (shows(--from)) k++; }
     for (let ti = from, k = 0; ti < s.turns.length && k < SHAPE_FIRST; ti++) {
       if (!shows(ti)) continue;
@@ -3705,8 +3716,13 @@ export default class Threads extends View {
     const due = this.probeDue();
     this.flushCode(cx);
     this.flushImages(cx);
-    // Scrolls wait until this frame has laid the list out with its new rows.
-    if (this.toBottom && rows.length) {
+    // Scrolls wait until this frame has laid the list out with its new rows, and until every
+    // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
+    // from old heights lands away from its row once the rows above it are reshaped. The next
+    // frame is already asked for (render).
+    if ((this.toBottom || this.scrollTo) && this.shapeLeft > 0) {
+      // waits
+    } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
       cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
