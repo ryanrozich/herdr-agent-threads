@@ -3310,8 +3310,10 @@ export default class Threads extends View {
       .when(!this.compact(), (el) => el.child(div().text_size(12).text_color(t.foreground).child("Claude"))));
   }
 
-  // "Reading t4 · session 7f3a1b2c · 1.2M tokens · cache 97.1%": which terminal and
-  // session the pane is bound to, so a wrong binding shows without a click.
+  // "Reading t4 · session 7f3a1b2c · agent shop-agent · 1.2M tokens · cache 97.1%": which
+  // terminal and session the pane is bound to, so a wrong binding shows without a click. The
+  // session's agent name (Claude Code's --name, a Codex subagent's nickname) is here since
+  // replies carry no name.
   badgeTip() {
     const st = this.compact() ? this.agentStateNow() : null;
     return st ? `${st.word}: ${this.stateTip(st)} · ${STATE_CLICK} · ${this.bindingTip()}` : this.bindingTip();
@@ -3325,7 +3327,7 @@ export default class Threads extends View {
     // The selected turn's own cache counts too (its chip in the card cannot carry a tooltip).
     const sel = this.sel ? this.findTurn(this.sel) : null;
     const st = sel ? stats(sel) : null;
-    return [`Reading ${this.terminal} · session ${s.id.slice(0, 8)}`, `${fmtTokens(input + cc + output)} tokens`,
+    return [`Reading ${this.terminal} · session ${s.id.slice(0, 8)}`, s.agentName ? `agent ${s.agentName}` : null, `${fmtTokens(input + cc + output)} tokens`,
       pct != null ? `cache ${fmtPct(pct)} (read ${fmtCount(cr)} · written ${fmtCount(cc)} · new input ${fmtCount(input)})` : null,
       st?.cachePct != null ? `turn #${sel.n}: cache ${fmtPct(st.cachePct)} (${cacheLine(st).replace(/^cache /, "")})` : null]
       .filter(Boolean).join(" · ");
@@ -4670,10 +4672,12 @@ export default class Threads extends View {
     return this.readBlock(div()).child(this.mdView(id, md, false));
   }
 
-  // Whether the turn's session has replies from more than one named agent (turn.by).
+  // Whether the turn's session has replies from more than one named agent (turn.by), counting
+  // the person's own turns only: an agent message names its sender over its bubble.
   mixedAgents(turn) {
+    if (turn.agent || !turn.by) return false;
     const s = this.sessions.find((x) => x.turns.includes(turn));
-    if (!s || !turn.by) return false;
+    if (!s) return false;
     for (const x of s.turns) if (!x.agent && x.by && x.by !== turn.by) return true;
     return false;
   }

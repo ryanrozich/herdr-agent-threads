@@ -3180,8 +3180,13 @@ test("names: yours over your message, none over a reply (one agent), who replied
   expect(drawn(v.rows().find((r) => r.kind === "turn" && r.turn === own[0]))).not.toContain("build");
   own[1].by = "build";
   expect(v.captionParts(own[0]).some(([icon]) => icon === "name")).toBe(false);
+  // An agent message never makes the session mixed, and its own caption names no one.
+  const msg = { ...own[1], agent: true, by: "plan" };
+  expect(v.mixedAgents(msg)).toBe(false);
   delete own[0].by;
   delete own[1].by;
+  // The session's agent name moved to the badge's tooltip.
+  expect(v.bindingTip()).toContain("agent shop-agent");
   // A name the reply itself records (OpenCode's agent) wins; with neither, "Agent".
   expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
   v.current().agentName = null;
@@ -3223,9 +3228,14 @@ test("an agent message keeps its sender's name over the bubble, and a reply row 
   const msgs = v.rows().filter((r) => r.kind === "turn" && r.turn.agent && r.turn.sender?.name);
   expect(msgs.length).toBeGreaterThan(0);
   for (const r of msgs) expect(drawn(r).some((s) => s.includes(senderLabel(r.turn.sender, v.width)) || s === r.turn.sender.name)).toBe(true);
-  // A plain reply row: its stated height is rowHeight's, which has no name line in it.
-  const own = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md == null && r.shape.tone !== "reply");
-  if (own) expect(own.shape.height).toBe(rowHeight(own.shape.p, own.shape.r, (own.shape.pMore ? 1 : 0) + (own.shape.rMore ? 1 : 0)));
+  // A turn with nothing the reply leaves out: its open caption is an 8 px gap, no name.
+  const quiet = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && !r.turn.tools && !r.turn.followups && !v.borrowedFrom(r.turn));
+  expect(quiet).toBeTruthy();
+  v.toggle(quiet.key, cx);
+  const cap = v.rows().find((r) => r.kind === "rhead" && r.turn === quiet.turn);
+  expect(v.captionParts(cap.turn)).toEqual([]);
+  expect(v.estimate(cap)).toBe(8);
+  v.toggle(quiet.key, cx);
   const md = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md != null);
   expect(md.shape.mdBase).toBe(rowHeight(md.shape.p, 0, (md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
   expect(md.shape.mdBase).toBe(8 + 16 + 6 + 12 + md.shape.p * 21 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
