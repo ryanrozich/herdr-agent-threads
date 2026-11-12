@@ -36,7 +36,7 @@ import {
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
-import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
+import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
@@ -69,6 +69,14 @@ const IMG_FULL_H = 1600;
 // percentage moves, and each call's parse and apply run in slices (read()).
 const CHUNK = 2 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
+// Reshaping collapsed rows (shape) in one draw: a change of Reply lines, Prompt lines, text
+// size, the width or the search reshapes every row, and in a long session that ran past
+// Herdr's time for a draw ("This view could not be re-rendered", interrupted). Past this
+// many ms a row keeps the shape it had, and the next frame goes on (rows, render).
+const SHAPE_MS = 12;
+// Rows reshaped first, from the one at the top of the pane down, so what is on screen
+// changes in the first frame.
+const SHAPE_FIRST = 40;
 // A read with no heartbeat for this long was interrupted (watchRead). Every step between
 // heartbeats is a slice of at most a few tens of ms, so 4 s is far past any real step.
 const READ_STALL = 4000;
@@ -220,6 +228,20 @@ async function listFolder(dir) {
   });
 }
 
+// A Codex session file's first line never changes: its folder, start and origin, by path.
+const codexMeta = new Map();
+
+// The last write of each file, in ms, by path (locate.sh mtimes).
+async function listMtimes(files) {
+  const out = await locate("mtimes", ...files);
+  const m = new Map();
+  for (const l of (out ?? "").split("\n")) {
+    const at = l.indexOf(" ");
+    if (at > 0) m.set(l.slice(at + 1), Number(l.slice(0, at)) * 1000);
+  }
+  return m;
+}
+
 async function heldIds(root, pid) {
   const out = await locate("held", root, String(pid ?? ""));
   return new Set((out ?? "").split("\n").filter(Boolean));
@@ -258,7 +280,7 @@ async function resolve(address, claudeHome, current = null) {
   const cwds = [...new Set([fg.cwd, pane?.cwd, term.cwd, info.cwd].filter(Boolean)
     .flatMap((c) => [c, c.replace(/^\/private(?=\/(tmp|var|etc)\/)/, "")]))];
   const harness = harnessOf(fg, pane);
-  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cmd });
+  if (harness === "codex") return resolveCodex({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "pi") return resolvePi({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "cursor") return resolveCursor({ argv, pid, cwd, cwds, cmd }, current);
   if (harness === "opencode") return resolveOpenCode({ argv, pid, cwd, cwds, cmd, title: info.title ?? pane?.title ?? term.title }, current);
@@ -282,7 +304,14 @@ async function resolve(address, claudeHome, current = null) {
     tried.record = { what: "Live session record", detail: "no claude process to look up", ok: false };
   }
   if (!id && fromArgv) { id = fromArgv; via = "argv"; }
-  const order = () => ["program", "argv", "record", "file", "newest"].map((k) => tried[k]).filter(Boolean);
+  // claude attach <id|name>: a background session (claude --bg), whose own record names it.
+  const attach = claudeAttach(argv);
+  if (!id && attach && cmd === "claude") {
+    const sid = await locate("claude-bg", P.sessions, attach);
+    tried.attach = { what: "Background session it attached to", detail: sid ? sid.slice(0, 8) : `no claude --bg session ${attach}`, ok: Boolean(sid) };
+    if (sid) { id = sid; via = "attach"; }
+  }
+  const order = () => ["program", "argv", "record", "attach", "file", "newest"].map((k) => tried[k]).filter(Boolean);
   if (id) {
     const file = await locate("find", P.root, id);
     if (file) return { kind: "found", id, file, via, ...who, guess: false, tried: order() };
@@ -311,21 +340,48 @@ async function resolve(address, claudeHome, current = null) {
   return { kind: "none", ...who, tried: order(), choices };
 }
 
-// A Codex process keeps its session file open, which names it exactly. Codex writes no file
-// until the first prompt, so a process with none is waiting for one.
-async function resolveCodex({ argv, pid, cwd, cmd }) {
+// A Codex process keeps its session file open, which names it exactly (codex --no-daemon).
+// Plain codex runs the session in Codex's app-server daemon, which holds the file instead
+// (pickCodexDaemon). Codex writes no file until the first prompt, so a process with none is
+// waiting for one.
+async function resolveCodex({ argv, pid, cwd, cwds, cmd }, current) {
   const who = { harness: "codex", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const open = pid ? await locate("codex-open", String(pid)) : null;
-  const openStep = { what: "Session file the process has open", detail: open ? idOf(open).slice(0, 8) : "none yet", ok: Boolean(open) };
+  const openStep = { what: "Session file the process has open", detail: open ? idOf(open).slice(0, 8) : "none", ok: Boolean(open) };
   if (open) return { kind: "found", id: idOf(open), file: open, via: "open file", ...who, guess: false, tried: [program, openStep] };
   const named = codexArgvSession(argv);
   if (named) {
     const file = await locate("codex-find", named);
     if (file) return { kind: "found", id: named, file, via: "argv", ...who, guess: false, tried: [program, openStep] };
   }
+  // The files Codex's app servers hold; each one's first line is read once (codexMeta).
+  const paths = ((await locate("codex-held")) ?? "").split("\n").filter(Boolean);
+  const fresh = paths.filter((p) => !codexMeta.has(p));
+  if (fresh.length) {
+    for (const l of ((await locate("codex-meta", ...fresh)) ?? "").split("\n")) {
+      try { const m = JSON.parse(l); codexMeta.set(m.path, m); } catch { /* not a line */ }
+    }
+    if (codexMeta.size > 500) for (const k of [...codexMeta.keys()].slice(0, 250)) codexMeta.delete(k);
+  }
+  const mtimes = paths.length ? await listMtimes(paths) : new Map();
+  const held = paths.map((p) => codexMeta.get(p)).filter(Boolean).map((m) => ({ ...m, mtime: mtimes.get(m.path) ?? m.mtime }));
+  const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
+  const where = cwds ?? [cwd].filter(Boolean);
+  const resumed = (argv ?? []).includes("resume");
+  const near = held.some((f) => where.includes(f.cwd));
+  const peers = near && pid && cwd ? Number(await locate("codex-peers", String(pid), cwd)) || 0 : 0;
+  const pick = pickCodexDaemon(held, where, age == null ? null : Date.now() - age, { peers, current, resumed });
+  const daemonStep = {
+    what: "Session file the Codex daemon has open",
+    detail: !pick.file ? "none yet" : `${idOf(pick.file).slice(0, 8)}${pick.choices.length ? ` · ${pick.choices.length} in this folder` : ""}${peers ? ` · ${plural(peers + 1, "Codex terminal")} here` : ""}`,
+    ok: Boolean(pick.file),
+  };
+  const tried = [program, openStep, daemonStep];
+  const choices = pick.choices.map((x) => ({ mtime: x.mtime, size: null, path: x.path }));
+  if (pick.file) return { kind: "found", id: idOf(pick.file), file: pick.file, via: "daemon", ...who, guess: pick.guess, choices, tried };
   const watch = await locate("codex-dir");
-  return { kind: "pending", id: null, via: null, ...who, tried: [program, openStep], watch };
+  return { kind: "pending", id: null, via: null, ...who, tried, watch };
 }
 
 // OpenCode records no process for a session, so the terminal title, its folder and its start time
@@ -339,6 +395,14 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
   };
   const db = await script("db");
   if (!db) return { kind: "none", ...who, tried: [program, { what: "OpenCode's database", detail: "not found", ok: false }], choices: [] };
+  // opencode attach <url>: the sessions are the server's, under --dir or the server's folder.
+  const attach = opencodeAttach(argv);
+  const tried = [program];
+  if (attach) {
+    const dir = attach.dir ?? (attach.local ? await script("server-dir", String(attach.port)) : null);
+    tried.push({ what: "Folder of the OpenCode server", detail: dir ? tilde(dir) : attach.local ? "server not found" : `${attach.url} is on another machine`, ok: Boolean(dir) });
+    if (dir) cwds = [dir, dir.replace(/^\/private(?=\/(tmp|var|etc)\/)/, ""), ...cwds];
+  }
   const lines = (await script("sessions", db, ...cwds)) ?? "";
   const list = lines.split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const age = pid ? etimeMs(await locate("etime", String(pid))) : null;
@@ -351,8 +415,9 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
     ok: Boolean(pick.id),
   };
   const choices = pick.choices.map((x) => ({ mtime: x.updated, size: null, path: file(x.id), label: openCodeLabel(x) }));
-  if (!pick.id) return { kind: "pending", id: null, via: null, ...who, tried: [program, step], watch: dirname(db), choices };
-  return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried: [program, step] };
+  tried.push(step);
+  if (!pick.id) return { kind: "pending", id: null, via: null, ...who, tried, watch: dirname(db), choices };
+  return { kind: "found", id: pick.id, file: file(pick.id), via: pick.via, ...who, guess: pick.guess, choices, tried };
 }
 
 // Pi keeps no session file open and records no process, so its sessions folder for the working
@@ -1449,6 +1514,9 @@ export default class Threads extends View {
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
+      this.shapeSpent = 0;
+      this.shapeLeft = 0;
+      this.shapeInView(status);
       this.baseRows = this.buildRows(status);
       this.baseSizes = this.baseRows.map((r) => this.height(r));
       this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
@@ -1758,6 +1826,60 @@ export default class Threads extends View {
     const text = this.replyText(turn);
     const key = `${Math.round(this.width)}|${P.textSize}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
+    // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
+    // messages are turned on, a blank one-line row), and the next frame reshapes it.
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    const t0 = now();
+    const sh = this.reshape(turn, live, q, P, why, text);
+    turn.shapeKey = key;
+    turn.shapeMemo = sh;
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return sh;
+  }
+  // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
+  // reply at the pane's width and text size.
+  blankShape() {
+    const k = `${Math.round(this.width)}|${this.prefs.textSize}`;
+    if (this.blankMemo?.k !== k) {
+      const sh = rowShape({ prompt: " ", reply: " ", width: this.width, promptLines: 1, replyLines: 1, size: this.prefs.textSize });
+      this.blankMemo = { k, sh: { ...sh, tone: "reply", cmd: null, blank: true } };
+    }
+    return { ...this.blankMemo.sh };
+  }
+  // Reshaped before the rest, so the rows on screen are the first to change: the running
+  // turn (its row is on screen while the pane follows), then up to SHAPE_FIRST shown turns
+  // from the one at the top of the pane down (the newest when the pane has not drawn yet).
+  shapeInView(status) {
+    this.sessions.forEach((s, si) => {
+      const ti = s.turns.length - 1;
+      if (ti >= 0 && this.isLive(s, si, ti, status)) this.shape(s.turns[ti], true);
+    });
+    // The top row's turn, from the rows drawn last (a day band or a hidden-turns note at the
+    // top: the first turn under it).
+    let si = this.sessions.length - 1;
+    let from = -1;
+    const at = this.topKey != null ? this.baseIndex?.get(this.topKey) : undefined;
+    if (at != null) {
+      let r = null;
+      for (let i = at; i < this.baseRows.length && !r; i++) if (this.baseRows[i].turn && this.baseRows[i].si != null) r = this.baseRows[i];
+      if (r && this.sessions[r.si]) { si = r.si; from = this.sessions[si].turns.indexOf(r.turn); }
+    }
+    const s = this.sessions[si];
+    if (!s?.turns.length) return;
+    // Only turns the list shows count (hidden agent messages are skipped).
+    const agents = Boolean(this.prefs.agentTurns);
+    const shows = (ti) => {
+      const live = this.isLive(s, si, ti, status);
+      return !live && isShown(s.turns[ti], { agentTurns: agents, live }) && !this.open.has(`${si}:${s.turns[ti].n}`);
+    };
+    if (from < 0) { from = s.turns.length; for (let k = 0; from > 0 && k < SHAPE_FIRST;) if (shows(--from)) k++; }
+    for (let ti = from, k = 0; ti < s.turns.length && k < SHAPE_FIRST; ti++) {
+      if (!shows(ti)) continue;
+      k++;
+      this.shape(s.turns[ti]);
+    }
+  }
+  reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
     const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
     let preview;
@@ -1812,8 +1934,6 @@ export default class Threads extends View {
       sh.height += th;
       if (sh.mdBase != null) sh.mdBase += th;
     }
-    turn.shapeKey = key;
-    turn.shapeMemo = sh;
     return sh;
   }
 
@@ -3345,6 +3465,12 @@ export default class Threads extends View {
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
+    this.rows();
+    // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
+    if (this.shapeLeft > 0 && !this.shapeNext) {
+      this.shapeNext = true;
+      cx.timer.after(0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
+    }
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
     if (this.debug) this.measure();
@@ -3942,8 +4068,14 @@ export default class Threads extends View {
     const due = this.probeDue();
     this.flushCode(cx);
     this.flushImages(cx);
-    // Scrolls wait until this frame has laid the list out with its new rows.
-    if (this.toBottom && rows.length) {
+    // Scrolls wait until this frame has laid the list out with its new rows, and until every
+    // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
+    // from old heights lands away from its row once the rows above it are reshaped. The next
+    // frame is already asked for (render).
+    if ((this.toBottom || this.scrollTo) && this.shapeLeft > 0) {
+      // A return's wait for the probe (until, below) starts once the rows are reshaped.
+      if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
+    } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
       cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });

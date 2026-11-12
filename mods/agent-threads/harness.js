@@ -232,6 +232,66 @@ export function codexArgvSession(argv) {
   return args.slice(at + 1).find((a) => CODEX_ID.test(a)) ?? null;
 }
 
+// Plain codex (no --no-daemon) runs its session in Codex's app-server daemon, so the daemon,
+// not the terminal's process, holds the session file open. Of the files Codex's app servers
+// hold ({ path, mtime, cwd, ts, sub, origin }, locate.sh codex-held and codex-meta), the
+// terminal's is a terminal session (originator codex-tui; the ChatGPT app's threads are
+// "Codex Desktop"), not a subagent's, in its folder, that began after the process started
+// (startedAt, ms; 5 s early is allowed for the clocks). Of those the newest written: after /new
+// that is the new one. Older sessions only when the command line resumes one (resumed).
+// With another Codex terminal in the folder (peers) any pick is a guess, with the choices
+// newest first, and the pane stays on the session it shows (current, an id) while it fits.
+// { file, guess, choices }.
+export function pickCodexDaemon(files, cwds, startedAt, { peers = 0, current = null, resumed = false } = {}) {
+  const here = (files ?? []).filter((f) => f && !f.sub && f.path && cwds.includes(f.cwd) && (f.origin == null || /tui/i.test(f.origin)))
+    .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
+  const since = startedAt == null ? here : here.filter((f) => {
+    const t = Date.parse(f.ts ?? "");
+    return Number.isFinite(t) && t >= startedAt - 5000;
+  });
+  const pool = since.length ? since : resumed ? here : [];
+  if (!pool.length) return { file: null, guess: false, choices: [] };
+  const guess = peers > 0 || !since.length;
+  const stay = guess && current ? pool.find((f) => f.path.includes(current)) : null;
+  return { file: (stay ?? pool[0]).path, guess, choices: guess ? pool : [] };
+}
+
+// "claude attach <id|name>" opens a background session (claude --bg) in the terminal and
+// writes no session record of its own: the short id or part of the name, or null.
+export function claudeAttach(argv) {
+  const args = argv ?? [];
+  const at = args.indexOf("attach");
+  if (at < 0 || at > 2) return null;
+  const q = args[at + 1];
+  return q && !q.startsWith("-") ? q : null;
+}
+
+// "opencode attach <url> [--dir <folder>]": the server's URL and the folder named, or null.
+// The sessions are the server's, kept under --dir when given, else under the folder the server
+// runs in.
+export function opencodeAttach(argv) {
+  const args = argv ?? [];
+  const at = args.indexOf("attach");
+  if (at < 0) return null;
+  let url = null;
+  let dir = null;
+  for (let i = at + 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--dir") dir = args[++i] ?? null;
+    else if (a.startsWith("--dir=")) dir = a.slice(6);
+    else if (!url && /^https?:\/\//.test(a)) url = a;
+  }
+  if (!url) return null;
+  let port = null;
+  let local = false;
+  try {
+    const u = new URL(url);
+    port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+    local = ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"].includes(u.hostname);
+  } catch { /* not a URL */ }
+  return { url, dir, port, local };
+}
+
 // The session named on an OpenCode command line: { id, cont }. --fork writes a new session
 // from the named one, so the id is dropped. cont is --continue, the folder's newest session.
 export function opencodeArgv(argv) {

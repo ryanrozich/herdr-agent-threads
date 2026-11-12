@@ -64,7 +64,8 @@ OpenCode folds a paste of three lines or more, or over 150 characters, into "[Pa
 
 [Which agents it reads](agents.md) has the table of what works on each. A few details:
 
-- **Codex** has no session file until the first prompt, so the pane says it is waiting. After `/new` it follows the new rollout and draws a "New session" divider, and turns from the earlier session stay above it. A subagent's messages appear under `a`.
+- **Codex** has no session file until the first prompt, so the pane says it is waiting. After `/new` it follows the new rollout and draws a "New session" divider, and turns from the earlier session stay above it. A subagent's messages appear under `a`. Both ways of running Codex work: `codex --no-daemon` keeps the session in the terminal's process, and plain `codex` can run it in Codex's shared app-server daemon, where the pane finds it by the terminal's folder and start time. With a second Codex in the same folder that is a guess with **Choose**.
+- **Background and attached sessions.** `claude attach <id>` (a `claude --bg` session) and `opencode attach <url>` (a running `opencode serve`) work: the pane finds the background session's record, or the server's folder or `--dir`. It cannot read an OpenCode server on another computer, or an Antigravity session run with `--remote-agent`, since neither keeps its transcript on this computer.
 - **OpenCode** sessions come from the terminal title `OC | <title>`, then `-s <id>` on the command line, then the folder. A new OpenCode in a folder waits for its first prompt rather than showing an older session. With a second OpenCode in the folder and no title to match, the header says "guessed" and **Choose** lists sessions by title or first prompt. A pick stays until you close the pane.
 - OpenCode's own terminal title can be cut with "…"; the pane matches on the part it can see, and refuses a title that fits two sessions.
 

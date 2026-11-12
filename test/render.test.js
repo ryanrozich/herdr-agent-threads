@@ -3,8 +3,8 @@
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, mock } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
@@ -1953,6 +1953,70 @@ test("a resume in the other terminal does not move a pane to its session", async
   expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
   hcBy = {};
   recordFiles = {};
+});
+
+// claude attach <id|name> writes no session record: the background session's own record names
+// it, so the pane binds exactly, even from another folder.
+test("claude attach binds the claude --bg session its record names", async () => {
+  const f = sharedFolder();
+  // The background session's record: its process (this one, alive), kind "bg".
+  writeFileSync(join(f.home, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, kind: "bg", sessionId: SESSION_A, name: "Fix the cart", cwd: f.cwd }));
+  hcBy = { t3c: fg(5199, "/tmp/threads-elsewhere", ["claude", "attach", "cart"]) };
+  const c = sharedState(f, "t3c");
+  await looked(c.v);
+  expect(c.v.current().file).toEndWith(`${SESSION_A}.jsonl`);
+  expect(c.v.res.guess).toBe(false);
+  expect(c.v.res.via).toBe("attach");
+  expect(c.v.res.tried.some((x) => x.what === "Background session it attached to" && x.ok)).toBe(true);
+  // A name no live background session has: no exact bind.
+  hcBy = { t3c: fg(5199, f.cwd, ["claude", "attach", "nothing-like-it"]) };
+  const d = sharedState(f, "t3c");
+  await looked(d.v);
+  expect(d.v.res.via).not.toBe("attach");
+  expect(d.v.res.tried.some((x) => x.what === "Background session it attached to" && !x.ok)).toBe(true);
+  hcBy = {};
+  recordFiles = {};
+});
+
+// Plain codex with Codex's app-server daemon: the daemon holds the rollout, the terminal's
+// process holds none, and the pane binds through the daemon (THREADS_CODEX_DAEMONS points
+// locate.sh at the stand-in daemon only).
+test("plain codex binds the session Codex's daemon holds for its folder", async () => {
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "threads-cx-cwd-")));
+  const sessions = realpathSync(mkdtempSync(join(tmpdir(), "threads-cx-sessions-")));
+  const id = "00000000-0000-4000-8000-0000000000c7";
+  const client = spawn("bash", ["-c", 'exec -a codex sleep 30'], { cwd, stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 1200));
+  const ts = new Date().toISOString();
+  const file = join(sessions, `rollout-2026-11-12T09-25-46-${id}.jsonl`);
+  writeFileSync(file, `${JSON.stringify({ timestamp: ts, type: "session_meta", payload: { id, timestamp: ts, cwd, originator: "codex-tui" } })}\n`);
+  const daemon = spawn("bash", ["-c", `exec 3<"${file}"; exec -a "codex app-server --listen unix:// --managed-daemon" sleep 30`], { stdio: "ignore" });
+  const keep = process.env.THREADS_CODEX_DAEMONS;
+  try {
+    await new Promise((r) => setTimeout(r, 400));
+    process.env.THREADS_CODEX_DAEMONS = String(daemon.pid);
+    hcBy = { t5: JSON.stringify({ foreground: { name: "codex", argv: ["codex"], pid: client.pid, cwd }, cwd }) };
+    state = {
+      terminals: [{ address: "t5", status: "idle", cwd }],
+      panes: [{ pane: "pt5", tab: "A", terminal: "t5", cwd }, { pane: "pm", tab: "A", terminal: null, mod: "agent-threads" }],
+      props: { terminal: "t5", debug: true }, shared: {},
+    };
+    const v = new Threads();
+    v.init(state.props, makeCx());
+    await looked(v);
+    expect(v.res.kind).toBe("found");
+    expect(v.res.via).toBe("daemon");
+    expect(v.res.guess).toBe(false);
+    expect(v.current().file).toBe(file);
+    const steps = v.res.tried.map((x) => [x.what, x.ok]);
+    expect(steps).toContainEqual(["Session file the process has open", false]);
+    expect(steps).toContainEqual(["Session file the Codex daemon has open", true]);
+  } finally {
+    if (keep === undefined) delete process.env.THREADS_CODEX_DAEMONS; else process.env.THREADS_CODEX_DAEMONS = keep;
+    client.kill();
+    daemon.kill();
+    hcBy = {};
+  }
 });
 
 // ---- a turn cut off, and answered on the next row ----------------------------------------
@@ -4541,4 +4605,75 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
   texts = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(texts).toContain("Outline: one row per turn");
   expect(texts).toContain("Back out: search, Select view, settings, the open turn, the outline");
+});
+
+// The owner's report: Reply lines minus in a long session showed "This view could not be
+// re-rendered" (interrupted in shape): every collapsed row was reshaped in one draw. Now a
+// draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
+test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
+  const { v, cx } = await paneWith(busy(), null, 1000);
+  v.width = 545;
+  draw(v, cx);
+  // Without the debug report, whose timing pass rebuilds the rows once more each draw.
+  v.debug = false;
+  const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
+  expect(shown().length).toBeGreaterThan(100);
+  // Reshaped for Reply lines 2: the turn's shape key has the new count, and the row draws it.
+  const fresh = (r) => r.turn.shapeKey?.split("|")[3] === "2" && r.shape === r.turn.shapeMemo && !r.shape.blank;
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  // Each reading of the clock moves it 0.25 ms, so a reshape costs about 0.5 ms and a frame
+  // reshapes about 24 rows.
+  performance.now = () => (fake += 0.25);
+  try {
+    // The pane shows the turns from 20 rows above the end.
+    const before = shown();
+    v.topKey = before[before.length - 20].key;
+    v.action("replyLines:2", cx);
+    cx.timers = [];
+    // A scroll asked for now waits for the reshaping, and a return's wait for the probe
+    // (until) starts after it.
+    v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
+    draw(v, cx);
+    let rows = shown();
+    const first = rows.filter(fresh).length;
+    // Some rows, not all, in the first frame, and a frame queued to go on.
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(rows.length);
+    expect(v.shapeLeft).toBeGreaterThan(0);
+    expect(cx.timers.some((x) => x.ms === 0)).toBe(true);
+    expect(v.scrollTo?.key).toBe(before[5].key);
+    expect(v.scrollTo.until).toBeGreaterThan(Date.now());
+    // The rows from the top of the pane down were among the first; rows further up wait.
+    expect(rows.slice(-20).every(fresh)).toBe(true);
+    expect(rows.slice(40, 80).some(fresh)).toBe(false);
+    // Only the queued frames go on with it (cx.flush runs the timer, which drops the rows).
+    let frames = 0;
+    for (; frames < 200 && v.shapeLeft > 0; frames++) { cx.flush(0); draw(v, cx); }
+    expect(frames).toBeGreaterThan(1);
+    expect(v.shapeLeft).toBe(0);
+    rows = shown();
+    expect(rows.every(fresh)).toBe(true);
+    // Then the return waits for the probe until its deadline, and runs.
+    draw(v, cx);
+    expect(v.scrollTo?.key).toBe(before[5].key);
+    v.scrollTo.until = Date.now() - 1;
+    draw(v, cx);
+    expect(v.scrollTo).toBe(null);
+    // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
+    v.action("agents", cx);
+    cx.timers = [];
+    draw(v, cx);
+    expect(shown().some((r) => r.shape.blank)).toBe(true);
+    for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
+    expect(v.shapeLeft).toBe(0);
+    expect(shown().some((r) => r.shape.blank || r.shape !== r.turn.shapeMemo)).toBe(false);
+  } finally { performance.now = realPerf; }
+  // The heights match a reshape done in one go, with no budget.
+  const keep = shown().map((r) => r.shape.height);
+  for (const t of v.current().turns) { t.shapeKey = null; t.shapeMemo = null; }
+  v.rowsKey = null;
+  v.shapeBudget = Infinity;
+  expect(shown().map((r) => r.shape.height)).toEqual(keep);
+  expect(v.shapeLeft).toBe(0);
 });

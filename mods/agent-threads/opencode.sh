@@ -4,6 +4,7 @@
 #   opencode.sh sessions <db> <folder>...           a folder's root sessions, newest update first:
 #                                                   {"id","created","updated","title","first"}, 20 at most
 #                                                   2.x rows also carry "busy", when its last turn began
+#   opencode.sh server-dir <port>                   the folder a local opencode server on that port runs in
 #   opencode.sh peers <pid> <folder>                how many other opencode terminals run there
 #   opencode.sh read <db> <session> <turn> <max>    extractor events, as extract.sh prints them
 # OpenCode 2.x keeps sessions in session_v2 and session_message, and 1.x in session, message and
@@ -48,6 +49,16 @@ sessions)
           and coalesce(json_extract(p.data,'\$.synthetic'), 0) = 0 order by m.time_created, p.id limit 1))
     from session where directory in ($dirs) and parent_id is null and time_archived is null
     order by time_updated desc limit 20;" ;;
+server-dir)
+  # The folder an OpenCode server on this machine runs in, from the port it listens on:
+  # opencode attach <url> keeps its sessions there unless --dir names another.
+  case ${1:-} in "" | *[!0-9]*) exit 1 ;; esac
+  for p in $(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null); do
+    case " $(ps -o args= -p "$p" 2>/dev/null) " in *opencode*) ;; *) continue ;; esac
+    d=$(lsof -a -d cwd -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+    [ -n "$d" ] && { printf '%s\n' "$d"; exit 0; }
+  done
+  exit 1 ;;
 peers)
   n=0
   for p in $(pgrep -x opencode 2>/dev/null || true); do
