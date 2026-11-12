@@ -328,6 +328,37 @@ export function labelPieces(line) {
   }
   return out;
 }
+// j and k in the viewer's reading panel. A scroll handle only reveals a child with the least
+// scroll, and cannot say where the view is, so the panel keeps its own estimate (y, from these
+// moves and the wheel) and the parts' measured heights (sizes; pt and pb are the scroll area's
+// padding). The places a press can go: the top, the start of each part that can reach the
+// top of the view, and the end. d 1 goes to the next place below y, -1 to the one above.
+// Returns { y, steps } (the parts to reveal in turn), or null when there is nowhere to go.
+// Going down, the first step reveals the first part whose bottom then puts the view at or
+// past the place (overshooting by less than that part), and the second brings the place's
+// part back to the top edge.
+export function replyScroll(sizes, viewH, y, d, pt = 4, pb = 20) {
+  const n = sizes.length;
+  if (!n || !(viewH > 0)) return null;
+  const start = [];
+  let at = pt;
+  for (const h of sizes) { start.push(at); at += Math.max(0, h); }
+  const maxY = Math.max(0, at + pb - viewH);
+  if (maxY < 1) return null;
+  const places = [0];
+  for (let k = 1; k < n; k++) if (start[k] < maxY - 1) places.push(start[k]);
+  places.push(maxY);
+  const to = d > 0 ? places.find((p) => p > y + 1) : places.filter((p) => p < y - 1).pop();
+  if (to == null) return null;
+  if (to === maxY) return { y: to, steps: [n - 1] };
+  const part = to === 0 ? 0 : start.indexOf(to);
+  if (to < y) return { y: to, steps: [part] };
+  let m = part;
+  while (m < n - 1 && start[m] + sizes[m] - viewH < to - 1) m++;
+  const lands = start[m] + sizes[m] - viewH;
+  return { y: to, steps: Math.abs(lands - to) <= 1 ? [m] : [m, part] };
+}
+
 // A reply as blocks for the reading panel, so j and k move a paragraph at a time: split at
 // blank lines outside fenced code, a block that starts indented (a list item's next
 // paragraph, which alone would read as code) kept with the one before, and each block

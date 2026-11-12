@@ -3766,6 +3766,72 @@ test("the image viewer: a label or a thumbnail goes to its image, 1 to 9 jump, j
   expect(g.gal.panel).toBe(true);
 });
 
+// From the review: j and k kept a count of their own, so after a wheel scroll they moved the
+// reply the wrong way, and held at the end they did nothing on the way back. Now the panel
+// measures its parts and the view, follows the wheel, and goes by replyScroll's places.
+test("the image viewer: j and k go by the measured parts and follow the wheel; the strip starts at the left; a quick i i saves the last state; a long prompt says how many lines are left out", async () => {
+  settingsWrites.length = 0;
+  const { g, cx, calls, text, size } = viewer();
+  size(1600, 1000);
+  const all = calls();
+  const after = (id, name) => {
+    const i = all.findIndex((e) => e[0] === "id" && e[1] === id);
+    for (let j = i + 1; j < all.length && all[j][0] !== "id"; j++) if (all[j][0] === name) return all[j].at(-1);
+    return null;
+  };
+  // Six parts of 100, 30, 300, 300, 300 and 20 px in a 400 px view: they start at 4, 104,
+  // 134, 434, 734 and 1034, and the view can go down to 674.
+  [100, 30, 300, 300, 300, 20].forEach((height, k) => after(`th-gallery-part-${k}`, "on_size_change")({ width: 400, height }, cx));
+  after("th-gallery-scroll", "on_size_change")({ width: 400, height: 400 }, cx);
+  const h = g.galScroll;
+  const press = (k) => { h.asked.length = 0; g.galleryKey(keyEv(k), cx); cx.flush(200); return [...h.asked]; };
+  // Down to the caption: by way of the first part that reaches past it (not the end), then back.
+  expect(press("j")).toEqual([3, 1]);
+  expect(g.gal.y).toBe(104);
+  expect(press("j")).toEqual([3, 2]);
+  expect(press("j")).toEqual([4, 3]);
+  // Then the end, and nothing further: j at the end does not run on.
+  expect(press("j")).toEqual([5]);
+  expect(press("j")).toEqual([]);
+  // k comes straight back a part at a time.
+  expect(press("k")).toEqual([3]);
+  expect(g.gal.y).toBe(434);
+  // The wheel: 200 px down, then k goes to the start of the part on screen, not the one above.
+  after("th-gallery-scroll", "on_scroll_wheel")({ delta: { x: 0, y: -200 } }, cx);
+  expect(g.gal.y).toBe(634);
+  expect(press("k")).toEqual([3]);
+  // Back to the top by wheel: j goes to the caption again, not further down.
+  after("th-gallery-scroll", "on_scroll_wheel")({ delta: { x: 0, y: 5000 } }, cx);
+  expect(g.gal.y).toBe(0);
+  expect(press("j")).toEqual([3, 1]);
+  // The second step waits for a frame drawn after the first.
+  h.asked.length = 0;
+  g.galleryKey(keyEv("j"), cx);
+  const drawn = g.gal.paints;
+  cx.flush(40, 3); // three waits of 30 ms with no frame drawn: still waiting
+  expect(h.asked).toEqual([3]);
+  calls();
+  expect(g.gal.paints).toBe(drawn + 1);
+  cx.flush(40);
+  expect(h.asked).toEqual([3, 2]);
+  // The strip: centred by an auto margin inside the scroll area, so an overflow starts at the left.
+  const strip = all.findIndex((e) => e[0] === "id" && e[1] === "th-gallery-strip");
+  expect(all.slice(strip, strip + 10).some((e) => e[0] === "justify_center")).toBe(false);
+  expect(all.some((e) => e[0] === "mx_auto")).toBe(true);
+  // i twice before either save lands: both saves write the state the panel ends in.
+  g.galleryKey(keyEv("i"), cx);
+  g.galleryKey(keyEv("i"), cx);
+  await Promise.all(cx.pending.slice(-2));
+  expect(g.gal.panel).toBe(true);
+  expect(settingsWrites.length).toBeGreaterThan(0);
+  expect(settingsWrites.every((w) => JSON.parse(w).viewerReply === true)).toBe(true);
+  // A prompt of 450 lines shows 400 and says how many are left out.
+  const long = viewer({ turn: { ...VIEW_TURN, prompt: Array.from({ length: 450 }, (_, i) => `line ${i + 1}`).join("\n") } });
+  long.size(1600, 1000);
+  expect(long.text()).toContain("50 more lines not shown");
+  expect(text()).not.toContain("more lines not shown");
+});
+
 test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {
   const off = viewer({ panel: false });
   off.size(1600, 1000);

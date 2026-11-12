@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, MD_MAX,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
 
@@ -688,4 +688,27 @@ test("replyBlocks: a reply split at paragraphs for j and k, code kept whole, a l
   expect(parts.length).toBeGreaterThan(2);
   expect(parts.every((p) => p.length <= MD_MAX)).toBe(true);
   expect(parts.at(-1)).toBe("end");
+});
+
+test("replyScroll: j and k places from the measured parts, the view's height and where it is", () => {
+  // Parts of 100, 30, 300, 300, 300 and 20 px (they start at 4, 104, 134, 434, 734, 1034)
+  // in a 400 px view, so the view goes down to 674.
+  const sizes = [100, 30, 300, 300, 300, 20];
+  expect(replyScroll(sizes, 400, 0, 1)).toEqual({ y: 104, steps: [3, 1] });
+  expect(replyScroll(sizes, 400, 104, 1)).toEqual({ y: 134, steps: [3, 2] });
+  expect(replyScroll(sizes, 400, 434, 1)).toEqual({ y: 674, steps: [5] });
+  // At the end, down goes nowhere; up from the end comes to the last part that can be at the top.
+  expect(replyScroll(sizes, 400, 674, 1)).toBe(null);
+  expect(replyScroll(sizes, 400, 674, -1)).toEqual({ y: 434, steps: [3] });
+  // From the middle of a part (a wheel scroll): up goes to its start, down to the next.
+  expect(replyScroll(sizes, 400, 300, -1)).toEqual({ y: 134, steps: [2] });
+  expect(replyScroll(sizes, 400, 300, 1)).toEqual({ y: 434, steps: [4, 3] });
+  expect(replyScroll(sizes, 400, 104, -1)).toEqual({ y: 0, steps: [0] });
+  expect(replyScroll(sizes, 400, 0, -1)).toBe(null);
+  // A part whose bottom lands the view exactly at the place needs one step.
+  expect(replyScroll([100, 400, 100], 400, 0, 1)).toEqual({ y: 104, steps: [1] });
+  // Everything fits, or nothing is measured: nothing to do.
+  expect(replyScroll([100, 100], 400, 0, 1)).toBe(null);
+  expect(replyScroll([], 400, 0, 1)).toBe(null);
+  expect(replyScroll(sizes, 0, 0, 1)).toBe(null);
 });

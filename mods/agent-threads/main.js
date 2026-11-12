@@ -43,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, mix,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, mix,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -2996,7 +2996,7 @@ export default class Threads extends View {
     const turn = g.turn && typeof g.turn === "object" ? g.turn : null;
     this.gal = {
       overlay: p.overlay ?? null, images, i: Math.max(0, Math.min(images.length - 1, Math.round(Number(g.at) || 0))), title: String(g.title ?? ""),
-      turn, panel: Boolean(turn) && g.panel !== false, top: 0, copied: 0,
+      turn, panel: Boolean(turn) && g.panel !== false, top: 0, y: 0, sizes: [], viewH: 0, paints: 0, copied: 0,
       blocks: turn ? replyBlocks(escapeDollars(String(turn.md ?? ""))) : [],
     };
     this.galSize = null;
@@ -3053,21 +3053,45 @@ export default class Threads extends View {
   galleryScroll(d, cx) {
     const g = this.gal;
     const n = this.galleryParts();
-    const top = Math.max(0, Math.min(n - 1, g.top + d));
-    if (top === g.top && top > 0 && top < n - 1) return;
-    g.top = top;
-    // A scroll handle only reveals a child with the least scroll, so a part below the view
-    // would land at its bottom edge. Going down, the view goes to the end first, then back
-    // up to the part, which then lands at the top. Going up, the part is above the view.
-    if (d > 0 && top > 0) {
-      this.galScroll.scroll_to_item(n - 1);
-      cx.notify();
-      // A request is used once, after the next layout, so the second waits for a frame.
-      cx.timer.after(60, (cx) => { if (this.gal.top === top) { this.galScroll.scroll_to_item(top); cx.notify(); } });
+    // With every part measured: replyScroll's places, from the panel's own estimate of where
+    // the view is (g.y), so a wheel scroll in between is taken into account.
+    const sized = g.sizes.length === n && g.sizes.every((h) => h > 0) && g.viewH > 0;
+    let steps;
+    if (sized) {
+      const r = replyScroll(g.sizes, g.viewH, g.y, d);
+      if (!r) return;
+      g.y = r.y;
+      steps = r.steps;
     } else {
-      this.galScroll.scroll_to_item(top);
-      cx.notify();
+      // Not measured yet (the first frame): part by part, going down by way of the end.
+      const top = Math.max(0, Math.min(n - 1, g.top + d));
+      if (top === g.top) return;
+      g.top = top;
+      steps = d > 0 && top > 0 ? [n - 1, top] : [top];
     }
+    const ask = (g.asks = (g.asks | 0) + 1);
+    this.galScroll.scroll_to_item(steps[0]);
+    cx.notify();
+    if (steps.length < 2) return;
+    // A request is used once, after a layout: the second waits until a frame has been drawn
+    // since the first (g.paints), and a newer press replaces it.
+    const paints = g.paints;
+    const second = (tries) => (cx) => {
+      if (this.gal !== g || g.asks !== ask) return;
+      if (g.paints === paints && tries < 6) { cx.timer.after(30, second(tries + 1)); return; }
+      this.galScroll.scroll_to_item(steps[1]);
+      cx.notify();
+    };
+    cx.timer.after(30, second(0));
+  }
+  // The wheel or trackpad moved the reply: the panel's estimate of where the view is follows,
+  // so j and k go on from there.
+  galleryWheel(e) {
+    const g = this.gal;
+    const dy = Number(e?.delta?.y) || 0;
+    if (!g || !dy) return;
+    const total = 4 + g.sizes.reduce((a, h) => a + h, 0) + 20;
+    g.y = Math.max(0, Math.min(Math.max(0, total - g.viewH), g.y - dy));
   }
   // i, the Reply button or galleryReply: the panel shows or hides, and settings.json keeps
   // the choice (viewerReply) for the next viewer. The pane watches the file and takes it.
@@ -3079,7 +3103,9 @@ export default class Threads extends View {
       for (let tries = 0; tries < 3; tries++) {
         const text = await readTextFile(settingsPath(appHome())).catch(() => null);
         if (!writable(text)) return;
-        try { await saveSettings(appHome(), { ...parseSettings(text).values, viewerReply: on }, text); return; }
+        // The panel's state when this save runs: a later press may have changed it.
+        const now = this.gal ? this.gal.panel : on;
+        try { await saveSettings(appHome(), { ...parseSettings(text).values, viewerReply: now }, text); return; }
         catch { /* another save got there first: read it again */ }
       }
     });
@@ -3101,6 +3127,7 @@ export default class Threads extends View {
   galleryView() {
     const t = theme();
     const g = this.gal;
+    g.paints = (g.paints | 0) + 1;
     const n = g.images.length;
     const f = g.images[g.i];
     const z = this.zoom();
@@ -3154,8 +3181,10 @@ export default class Threads extends View {
   // Under the image, every image of the message as a thumbnail; a click goes to it.
   galleryStrip(t, L, look) {
     const g = this.gal;
-    return h_flex().id("th-gallery-strip").h(L.strip).flex_none().items_center().justify_center().gap(8).px(16).overflow_x_scroll()
-      .children(g.images.map((im, j) => {
+    // Centred while it fits; wider than the stage it starts at the left edge and scrolls, so
+    // the first thumbnails are never pushed out of reach.
+    return h_flex().id("th-gallery-strip").h(L.strip).flex_none().items_center().overflow_x_scroll()
+      .child(h_flex().flex_none().mx_auto().h_full().items_center().gap(8).px(16).children(g.images.map((im, j) => {
         const on = j === g.i;
         const k = im.w > 0 && im.h > 0 ? im.w / im.h : 1.4;
         const w = Math.round(L.thumb * Math.max(0.5, Math.min(2.4, k)));
@@ -3165,7 +3194,7 @@ export default class Threads extends View {
           .child(div().w(w).h(L.thumb).rounded(5).overflow_hidden().border_1().border_color(look.ring).when(!on, (el) => el.opacity(0.55))
             .hover((s) => s.opacity(on ? 1 : 0.85))
             .child(image(im.path).size_full()));
-      }));
+      })));
   }
   // The reading panel: the turn's number, sender and time, then a scroll area with the prompt
   // in its bubble (the on-screen image's label marked, each label a way to its image), the
@@ -3189,8 +3218,10 @@ export default class Threads extends View {
         .child(div().flex_none().font_medium().text_color(t.muted).child(turn.who))
         .child(div().flex_1().min_w(0).truncate().text_right().child(head)))
       .child(pad(v_flex().id("th-gallery-scroll").flex_1().min_h(0).overflow_y_scrollbar().when(Boolean(this.galScroll), (el) => el.track_scroll(this.galScroll)).pt(4).pb(20))
+        .on_size_change((size) => { g.viewH = size.height; })
+        .on_scroll_wheel((e) => this.galleryWheel(e))
         // The message, the caption, each reply block and the stats are the scroll area's own
-        // children, as galleryParts counts them for j and k.
+        // children, as galleryParts counts them for j and k; each reports its height.
         .children([
           this.galleryPrompt(t, turn, rt, L),
           h_flex().pb(8).gap_x(6).flex_wrap().items_center().text_size(12.5).text_color(t.dim)
@@ -3202,7 +3233,7 @@ export default class Threads extends View {
           v_flex().pt(6)
             .when(turn.left > 0, (el) => el.child(div().pb(6).text_size(11.5).italic().text_color(t.dim).child(`… ${turn.left.toLocaleString()} more characters not shown`)))
             .child(div().min_w(0).text_size(11.5).font_family(this.mono()).text_color(t.dim).child(turn.stats || " ")),
-        ]))
+        ].map((el, k) => el.id(`th-gallery-part-${k}`).on_size_change((size) => { g.sizes[k] = size.height; }))))
       .child(pad(h_flex().h(VIEWER.FOOT).flex_none().gap(8).items_center().border_t(1).border_color(t.border))
         .child(this.galleryButton(t, "th-gallery-copy", g.copied ? "check" : "copy", g.copied ? "Copied" : "Copy reply", "c", false, "Copy the reply as Markdown (c)", (cx) => this.galleryCopy(cx)))
         .child(div().flex_1())
@@ -3214,7 +3245,8 @@ export default class Threads extends View {
   galleryPrompt(t, turn, rt, L) {
     const g = this.gal;
     const shown = g.images[g.i]?.n;
-    const lines = String(turn.prompt ?? "").split("\n").slice(0, 400);
+    const all = String(turn.prompt ?? "").split("\n");
+    const lines = all.slice(0, 400);
     const ink = turn.ink ?? t.foreground;
     const tag = (p, li, k) => {
       const j = g.images.findIndex((x) => x.n === p.n);
@@ -3234,6 +3266,7 @@ export default class Threads extends View {
     const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(lines.map(line))
+      .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
       .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
     const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
     return h_flex().w_full().pb(14).when(!turn.agent, (el) => el.justify_end())
