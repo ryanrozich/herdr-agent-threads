@@ -27,14 +27,15 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
-// to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then.
-export function keySheet(quoteKey = "q") {
+// to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
+// column has no outline (outline false), so its sheet leaves o out.
+export function keySheet(quoteKey = "q", { outline = true } = {}) {
   const pin = (k) => quoteKey !== k;
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
-      [["o"], "Outline: one row per turn"], [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
-      [["a"], "Show or hide agent messages"], [["Esc"], "Back out: search, Select view, settings, the open turn, the outline"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],

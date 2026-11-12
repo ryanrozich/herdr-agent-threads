@@ -4218,4 +4218,18 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
   v.view = "pinned";
   expect(v.action("outline", cx)).toBe(false);
   expect(v.rows().some((r) => r.kind === "line")).toBe(false);
+  // Its ? sheet leaves o out, and Esc does not name the outline there.
+  v.action("keys", cx);
+  let texts = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("Show or hide agent messages");
+  expect(texts).not.toContain("Outline: one row per turn");
+  expect(texts).toContain("Back out: search, Select view, settings, the open turn");
+  v.action("keys", cx);
+  // The main pane's sheet still lists it.
+  v.pinnedPane = false;
+  v.view = "all";
+  v.action("keys", cx);
+  texts = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("Outline: one row per turn");
+  expect(texts).toContain("Back out: search, Select view, settings, the open turn, the outline");
 });
