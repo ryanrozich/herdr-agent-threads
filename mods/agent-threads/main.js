@@ -77,6 +77,9 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
+// content then keeps it pinned there, as a chat does (stickToBottom).
+const TAIL = 24;
 // A read with no heartbeat for this long was interrupted (watchRead). Every step between
 // heartbeats is a slice of at most a few tens of ms, so 4 s is far past any real step.
 const READ_STALL = 4000;
@@ -663,7 +666,7 @@ export default class Threads extends View {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
-      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, range: this.lastRange ?? null, keysOpen: this.keysOpen,
+      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
@@ -1275,6 +1278,7 @@ export default class Threads extends View {
           const count = s.turns.length;
           const wasLoaded = s.loaded;
           const before = this.newestSig();
+          let grew = false;
           while (chunk && live()) {
             let c;
             try {
@@ -1314,6 +1318,7 @@ export default class Threads extends View {
               for (const e of c.events) if (e.k === "p" || e.k === "d" || e.k === "i") e.at = at;
             }
             if (!(await sliced(c.events, (e) => apply(s, e), cx))) return;
+            if (c.events.length) grew = true;
             s.offset += c.used;
             s.partial = false;
             chunk = nextChunk(s, c.used, chunk, CHUNK);
@@ -1329,7 +1334,10 @@ export default class Threads extends View {
           s.error = null;
           this.readStalls = 0;
           // Following the newest turn (nothing moved the selection away): keep it on the newest.
+          // Following, a read that grew the running reply keeps the view at the bottom too
+          // (newestSig does not change while a reply grows; see stickCheck).
           if ((s.turns.length !== count || !this.sel) && this.follow) this.jumpLatest(true);
+          else if (this.follow && wasLoaded && grew) this.toBottom = true;
           else if (wasLoaded) this.noteNew(before);
         } while (this.readAgain && live());
       } catch (e) {
@@ -1541,6 +1549,7 @@ export default class Threads extends View {
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
+      if (this.view !== "pinned" && !this.outlined() && rows.length) { rows = [...rows, { kind: "tail", key: "tail", h: TAIL }]; sizes = [...sizes, TAIL]; }
       // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
       // reads from the top: pin 1 first.
       const total = sizes.reduce((x, y) => x + y, 0);
@@ -2110,6 +2119,58 @@ export default class Threads extends View {
   // list decides: with the list's end off screen the latest button gets a dot until it shows.
   noteNew(before) {
     if (this.view !== "pinned" && this.newestSig() !== before) this.unseen = "pending";
+  }
+
+  // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
+  // so it leaves a step for render and asks the 120 ms timer for a frame). The list's end
+  // (the tail row) on screen is the bottom. The person scrolled when the top row moved with
+  // the rows unchanged, outside the pane's own scrolls, or when a wheel event came (movedAt).
+  // - Following, the end off screen: after a scroll of theirs following stops; otherwise the
+  //   content grew below, so the view goes back down.
+  // - Not following, the end coming on screen just after a scroll of theirs: following starts
+  //   again. A reply growing meanwhile does not matter; the pane's own scrolls never count.
+  stickCheck(rows, prevShown, start) {
+    const same = rows === this.stickRows;
+    const prevStart = this.stickStart;
+    this.stickRows = rows;
+    this.stickStart = start;
+    if (this.view === "pinned" || this.outlined() || !rows.length) return;
+    const now = Date.now();
+    if (this.toBottom || now < (this.pinningUntil ?? 0)) {
+      if (this.bottomShown && !this.toBottom) this.pinningUntil = 0;
+      return;
+    }
+    const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
+    if (same && start !== prevStart && !busy) this.movedAt = now;
+    const moved = now - (this.movedAt ?? 0) < 1000;
+    let step = null;
+    if (this.follow && !this.bottomShown) step = same || moved ? "unstick" : "repin";
+    else if (!this.follow && this.bottomShown && prevShown === false && !busy && (same || moved)) step = "restick";
+    if (step) { this.stickStep = step; this.stickyDue = true; }
+  }
+  // A wheel or trackpad scroll up stops following at once, so a reply that comes in during the
+  // scroll does not pull the view back down. The frames catch it too (stickCheck), in case the
+  // list keeps the event to itself.
+  listWheel(e) {
+    const dy = Number(e?.delta?.y) || 0;
+    if (!dy || this.view === "pinned") return;
+    this.movedAt = Date.now();
+    if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
+  }
+  applyStick() {
+    const step = this.stickStep;
+    this.stickStep = null;
+    if (!step || this.view === "pinned" || this.outlined()) return;
+    if (step === "unstick") this.follow = false;
+    else if (step === "repin" && this.follow) this.toBottom = true;
+    else if (step === "restick" && !this.follow) {
+      // Back at the bottom by scrolling: follow again, with the newest turn selected; the view
+      // is already there.
+      this.follow = true;
+      this.unseen = false;
+      const keys = this.turnKeys(this.rows());
+      if (keys.length) this.sel = keys[keys.length - 1];
+    }
   }
 
   jumpLatest(select = true) {
@@ -3015,7 +3076,7 @@ export default class Threads extends View {
     // Tests only: the selected turn as it looks while you select text in it.
     if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
-    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land" }; return true; }
+    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land", person: true }; return true; }
     // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
     if (this.debug && /^debugClick:\d+:/.test(name)) {
       const [, x, ...k] = name.split(":");
@@ -3464,6 +3525,7 @@ export default class Threads extends View {
     if (this.gal) return this.galleryView();
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
+    if (this.stickStep) this.applyStick();
     this.fitColumn();
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
@@ -4084,6 +4146,8 @@ export default class Threads extends View {
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
+      this.pinningUntil = Date.now() + 1000;
+      this.movedAt = 0;
       cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
       // A return waits for the card's parts to be measured: estimates can be off by 100 px,
@@ -4092,6 +4156,9 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
+      // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
+      if (st.person) this.movedAt = Date.now() + 600;
+      else { this.scrollBusyUntil = Date.now() + 500; this.movedAt = 0; }
       let how = st.how;
       let i = -1;
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
@@ -4165,6 +4232,7 @@ export default class Threads extends View {
         .when(Boolean(sticky), (el) => el.child(div().id("th-sticky-day").child(this.dayPill(t, sticky))))))
       .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
+        .on_scroll_wheel((e) => this.listWheel(e))
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
           .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
@@ -4577,6 +4645,7 @@ export default class Threads extends View {
     const w = this.inner();
     switch (r.kind) {
       case "spacer": return r.h;
+      case "tail": return r.h;
       case "turn": return r.shape.height;
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + ROW.META : 0);
       case "wtop": return ROW.PAD_T + ROW.META + ROW.GAP + thumbSize(this.width, this.prefs.textSize);
@@ -4758,8 +4827,10 @@ export default class Threads extends View {
       // The end of the list on screen clears the latest button's dot; a new turn or reply
       // with the end off screen sets it (the 120 ms timer redraws the header, since the
       // drawing pass may not).
+      const prevShown = this.bottomShown;
       this.bottomShown = range.end >= rows.length;
       this.lastRange = `${range.start}-${range.end}/${rows.length}`;
+      try { this.stickCheck(rows, prevShown, range.start); } catch (e) { this.drawFailed(e, null); }
       if (this.unseen && this.bottomShown) { if (this.unseen === true) this.stickyDue = true; this.unseen = false; }
       else if (this.unseen === "pending") { this.unseen = true; this.stickyDue = true; }
     }
@@ -4804,6 +4875,7 @@ export default class Threads extends View {
   item(t, r, focusedPanel, size) {
     switch (r.kind) {
       case "spacer": return div();
+      case "tail": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);

@@ -4241,6 +4241,134 @@ test("no dot when the new end of the list draws on screen, or when the list foll
   expect(v.unseen).toBe("pending"); // nothing new since: unchanged
 });
 
+// Stick to the bottom, as a chat does: at the bottom the view stays pinned while a reply
+// grows; scrolled up nothing moves; scrolling back down follows again.
+function runningFixture() {
+  const file = fixture("--only", "3");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  const prompts = lines.map((l, i) => [JSON.parse(l), i]).filter(([j]) => j.type === "user" && !j.isMeta && (typeof j.message?.content === "string" || j.message?.content?.some?.((c) => c.type === "text"))).map(([, i]) => i);
+  const cut = prompts[2] + 2; // the third prompt and the start of its reply
+  writeFileSync(file, `${lines.slice(0, cut).join("\n")}\n`);
+  return { file, rest: `${lines.slice(cut).join("\n")}\n` };
+}
+
+test("stick to the bottom: at the bottom a growing reply keeps the view pinned to the end", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, rest } = runningFixture();
+  const { v, cx } = await pane(file);
+  expect(v.current().turns.length).toBe(3);
+  expect(v.follow).toBe(true);
+  draw(v, cx); // every row on screen: at the bottom
+  expect(v.rows().at(-1).kind).toBe("tail");
+  v.toBottom = false;
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.length).toBe(3); // the same turn, its reply grown
+  expect(v.toBottom).toBe(true);
+  // Rows that grew some other way (a part measured taller) with the end off screen: back down.
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  draw(v, cx);
+  v.sizesVer = (v.sizesVer ?? 0) + 1;
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.stickStep).toBe("repin");
+  v.applyStick();
+  expect(v.toBottom).toBe(true);
+  expect(v.follow).toBe(true);
+});
+
+test("stick to the bottom: scrolled up nothing moves, and scrolling back down follows again", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, rest } = grownFixture();
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  const sel = v.sel;
+  // The person scrolls up: the same rows, the end off screen. Following stops.
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.stickStep).toBe("unstick");
+  expect(v.stickyDue).toBe(true);
+  v.applyStick();
+  expect(v.follow).toBe(false);
+  // A new turn comes in: nothing moves, the selection stays, and the latest button gets its dot.
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.length).toBe(3);
+  expect(v.toBottom).toBe(false);
+  expect(v.sel).toBe(sel);
+  expect(v.unseen).toBe("pending");
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.unseen).toBe(true);
+  expect(v.stickStep).toBe(null);
+  // Scrolling back down until the end shows: following starts again, on the newest turn,
+  // with no scroll of the pane's own.
+  drawRange(v, 0);
+  expect(v.stickStep).toBe("restick");
+  v.applyStick();
+  expect(v.follow).toBe(true);
+  expect(v.sel).toBe(v.turnKeys(v.rows()).at(-1));
+  expect(v.toBottom).toBe(false);
+  expect(v.unseen).toBe(false);
+  // While a reply streams in the rows change on most frames: a scroll up still stops
+  // following, and a scroll back down that reaches the end on a frame with new rows follows.
+  draw(v, cx);
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  drawRange(v, 0);
+  drawRange(v, 1); // the person scrolls: the top row moves, the rows are the same
+  v.sizesVer = (v.sizesVer ?? 0) + 1; // a read grew the reply
+  drawRange(v, 1, v.rows().length - 1);
+  expect(v.stickStep).toBe("unstick");
+  v.applyStick();
+  expect(v.follow).toBe(false);
+  drawRange(v, 2, v.rows().length - 1); // scrolling back down
+  v.sizesVer += 1;
+  drawRange(v, 2);
+  expect(v.stickStep).toBe("restick");
+  v.applyStick();
+  expect(v.follow).toBe(true);
+});
+
+test("stick to the bottom: arrows, opening a turn and a scroll of the pane's own are not fought", async () => {
+  const { v, cx } = await pane(fixture("--only", "3"));
+  draw(v, cx);
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  // A step up at the bottom: the move stops following, and the end still on screen does not undo it.
+  v.action("prev", cx);
+  expect(v.follow).toBe(false);
+  drawRange(v, 0);
+  expect(v.stickStep ?? null).toBe(null);
+  // Opening the newest turn: following stops, and the card growing below does not pull down.
+  v.action("next", cx);
+  expect(v.follow).toBe(true);
+  draw(v, cx);
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  v.toggle(v.sel, cx);
+  expect(v.follow).toBe(false);
+  drawRange(v, 0, v.rows().length - 1);
+  drawRange(v, 0);
+  // The end went off screen and came back while the pane's own scroll to the card was pending:
+  // no restick.
+  expect(v.stickStep ?? null).toBe(null);
+  v.scrollTo = null;
+  // A wheel scroll up while following stops it at once; a scroll down does not.
+  v.follow = true;
+  v.listWheel({ delta: { x: 0, y: -30 } });
+  expect(v.follow).toBe(true);
+  v.listWheel({ delta: { x: 0, y: 30 } });
+  expect(v.follow).toBe(false);
+  // A scroll of the pane's own (a search, a pin return) that lands at the end does not restick.
+  v.scrollBusyUntil = Date.now() + 500;
+  drawRange(v, 0, v.rows().length - 1);
+  drawRange(v, 0);
+  expect(v.stickStep ?? null).toBe(null);
+});
+
 test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it, and the footer's ? keys opens it", async () => {
   const { keySheet } = await import("../mods/agent-threads/ui.js");
   const { v, cx } = await quotePane();
@@ -4414,7 +4542,7 @@ test("while you select text in a turn its fill lifts so Herdr's highlight shows,
   calls = frame(v, cx);
   handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 600 }), button: "left", click_count: 2 }, cx);
   expect(v.textSel).toBe(key);
-  v.action("up", cx);
+  v.action("prev", cx);
   expect(v.textSel).toBe(null);
   // A drag that ends in another open turn leaves that turn selected without a fill.
   const other = v.current().turns.find((x) => x.n !== t.n && v.replyText(x));
