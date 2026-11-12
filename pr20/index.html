@@ -1,0 +1,78 @@
+<title>Whole Reply Open</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of before/after pairs, each pair side by side, stacking on phones. */
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); }
+code { font: 13px var(--mono); }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.steps { display: grid; gap: 14px; }
+.steps ol { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 75ch; }
+.group { display: grid; gap: 28px; }
+.pair, .single { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 75ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.single figure { max-width: 520px; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · draft PR</div>
+  <h1>An open turn shows the whole reply</h1>
+  <p class="lede">No more Show full reply: an open turn shows all of its reply, and a long one ends in a quiet Collapse (Esc) row. Shots are of the synthetic acme-web session in an isolated test window, with the debug timings on in the header (needed to scroll the window to the end). Before is main at a67b7dd; after is this branch. Click any shot to open it full size; arrow keys step through them and Esc closes.</p>
+</header>
+<section class="steps"><h2>What to test</h2><ol><li><strong>Install.</strong> <code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout open-whole-reply &amp;&amp; git pull &amp;&amp; ./install.sh</code>. This branch starts from main, so it does not have the Pinned time order (PR 19) until one of the two merges.</li><li><strong>A long reply.</strong> Open a turn with a long answer (<kbd>Enter</kbd>). The whole reply shows, with no Show full reply row, and the top of the pane is the turn's head.</li><li><strong>The end.</strong> Scroll to the end of the reply. A quiet <strong>Collapse</strong> row with <kbd>Esc</kbd> beside it sits under the last paragraph. A short reply has no such row.</li><li><strong>Collapse.</strong> Press <kbd>Esc</kbd>, or click Collapse. The turn closes and its row stays selected and in view; <kbd>&darr;</kbd> goes to the next turn.</li><li><strong>Long prose.</strong> On a reply with a long run of prose and no code block, nothing shows as plain text and nothing is missing. A drag selects across paragraphs, but stops where the reply is split into blocks, about every 3,500 characters.</li><li><strong>Pins.</strong> A pin you return to opens its turn with the whole reply, at the place you left it, as before.</li></ol></section>
+<section class="group"><h2>Before and after</h2><section class="pair"><h3>Opening a long reply</h3><p class="note">Turn 7 of the synthetic acme-web session, with a write-up of about 4,600 characters (895 words) after its code block. Before, the reply stopped mid-paragraph at about 1,600 characters, behind a Show full reply row. After, it opens whole.</p><div class="duo"><figure><button class="shot" aria-label="Open Opening a long reply, before full size"><img src="img/open-before.jpg" width="1418" height="2136" alt="Opening a long reply, before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open Opening a long reply, after full size"><img src="img/open-after.jpg" width="1418" height="2136" alt="Opening a long reply, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="single"><h3>The end of the reply</h3><p class="note">Scrolled to the end: the last paragraph, then a quiet Collapse row with Esc beside it, then the stats and the action bar. The prose after the code block is over 4,096 characters, more than Herdr draws as one Markdown block, so it is two list items split at a paragraph, and both draw as Markdown.</p><figure><button class="shot" aria-label="Open The end of the reply full size"><img src="img/end.jpg" width="1418" height="2136" alt="The end of the reply" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>The end, in a light theme</h3><p class="note">The same in a light theme.</p><figure><button class="shot" aria-label="Open The end, in a light theme full size"><img src="img/end-light.jpg" width="1418" height="2136" alt="The end, in a light theme" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>After Esc</h3><p class="note">Esc, or a click on Collapse, closes the turn and leaves its row selected at the bottom of the pane, so the next turn is one down-arrow away.</p><figure><button class="shot" aria-label="Open After Esc full size"><img src="img/esc.jpg" width="1418" height="2136" alt="After Esc" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
