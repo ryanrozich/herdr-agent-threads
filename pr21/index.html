@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Outline View Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.steps { display: grid; gap: 14px; }
+.steps ol { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 75ch; }
+.group { display: grid; gap: 28px; }
+.pair, .single { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 75ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.single figure { max-width: 520px; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · draft PR</div>
+  <h1>Outline view: one row per turn</h1>
+  <p class="lede">o folds the list into an outline, so finding an older turn is a few key presses instead of a long scroll. Shots are of the synthetic acme-web session in an isolated test window. Before is main at 3e2f836; after is the outline-view branch. Click any shot to open it full size; the arrow keys step through them and Esc closes.</p>
+</header>
+<section class="steps"><h2>What to test</h2><ol><li><strong>Install.</strong> <code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout outline-view &amp;&amp; git pull &amp;&amp; ./install.sh</code></li><li><strong>Open the outline.</strong> In a session with many turns, press <kbd>o</kbd>. Each turn is one row: its number, time, the first line of your prompt, and a pin with its number if it is pinned. A session over several days keeps its day bands, and the day strip shows while you scroll.</li><li><strong>Move.</strong> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> or <kbd>j</kbd> <kbd>k</kbd> move one row. <kbd>[</kbd> <kbd>]</kbd> go by day, <kbd>Home</kbd> and <kbd>End</kbd> to the first and newest turn.</li><li><strong>Open a turn.</strong> Press <kbd>Enter</kbd> or <kbd>Space</kbd>, or click a row. The outline closes and that turn is open in the list, selected, with its head at the top of the pane.</li><li><strong>Go back.</strong> Press <kbd>o</kbd>, move a few rows, then <kbd>Esc</kbd> (or <kbd>o</kbd> again). The list comes back as it was before, with the same turn selected and the same place on screen.</li><li><strong>Search, agents and pins.</strong> In the outline, <kbd>/</kbd> and a word leave only the matching turns, with the match marked; the first <kbd>Esc</kbd> clears the search, the next leaves the outline. <kbd>a</kbd> shows or hides agent messages. <kbd>p</kbd> pins the selected turn and its row gets a pin; <kbd>1</kbd> returns to that pin in the list.</li><li><strong>Narrow and keys.</strong> Make Threads narrow (under 300 px the time gives way). Press <kbd>?</kbd>: the sheet lists <kbd>o</kbd>. <kbd>o</kbd> no longer opens a turn; <kbd>Enter</kbd> and <kbd>Space</kbd> do. A <code>quoteKey</code> of <code>o</code> is still refused.</li></ol></section>
+<section class="group"><h2>Before and after</h2><section class="pair"><h3>A long session, turn 12 selected</h3><p class="note">The synthetic acme-web session with 21 turns over four days, at the reading width (545 px). Before, the list fits about three turns a screen, so finding an older answer is mostly scrolling. After, o shows the outline: one row per turn with its number, time and the first line of the prompt, under the same day bands, and the whole session fits in one screen.</p><div class="duo"><figure><button class="shot" aria-label="Open A long session, turn 12 selected, before full size"><img src="img/long-before.jpg" width="1104" height="2136" alt="A long session, turn 12 selected, before" loading="lazy"></button><figcaption>Before (main)</figcaption></figure><figure><button class="shot" aria-label="Open A long session, turn 12 selected, after full size"><img src="img/long-after.jpg" width="1104" height="2136" alt="A long session, turn 12 selected, after" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></div></section><section class="single"><h3>Moving in the outline</h3><p class="note">Down twice from turn 12: the selection moves one row at a time. The footer reads move, open, Esc list, filter, pin and ? keys.</p><figure><button class="shot" aria-label="Open Moving in the outline full size"><img src="img/moved.jpg" width="1104" height="2136" alt="Moving in the outline" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>Enter opens the turn in the list</h3><p class="note">Enter on turn 14: the outline closes, and turn 14 is selected and open, with its head at the top of the pane.</p><figure><button class="shot" aria-label="Open Enter opens the turn in the list full size"><img src="img/enter.jpg" width="1104" height="2136" alt="Enter opens the turn in the list" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>Esc goes back to where the list was</h3><p class="note">From the list as Enter left it, o then Esc: the list comes back as it was, turn 14 still open at the top.</p><figure><button class="shot" aria-label="Open Esc goes back to where the list was full size"><img src="img/esc.jpg" width="1104" height="2136" alt="Esc goes back to where the list was" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>The outline in a light theme</h3><p class="note">The same outline in Herdr&#x27;s light theme.</p><figure><button class="shot" aria-label="Open The outline in a light theme full size"><img src="img/light.jpg" width="1104" height="2136" alt="The outline in a light theme" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>A narrow pane, 400 px, with a pin</h3><p class="note">Threads at 400 px, with turn 16 pinned: its row ends in a pin and its pin number. Under 480 px there is no Pinned column, and the outline works the same.</p><figure><button class="shot" aria-label="Open A narrow pane, 400 px, with a pin full size"><img src="img/narrow.jpg" width="814" height="2136" alt="A narrow pane, 400 px, with a pin" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>Under 300 px</h3><p class="note">Threads at 280 px: the time gives way, so the prompt keeps its room. The footer keeps what fits.</p><figure><button class="shot" aria-label="Open Under 300 px full size"><img src="img/narrow-280.jpg" width="574" height="2136" alt="Under 300 px" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>The key sheet</h3><p class="note">? lists o as Outline in the List group. Enter and Space still open or close a turn; o no longer does.</p><figure><button class="shot" aria-label="Open The key sheet full size"><img src="img/keys.jpg" width="1104" height="2136" alt="The key sheet" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section><section class="single"><h3>The list with this change</h3><p class="note">The list itself is unchanged, apart from the footer: at 545 px it now ends in o outline before ? keys. In a narrower pane that hint gives way first.</p><figure><button class="shot" aria-label="Open The list with this change full size"><img src="img/list-after.jpg" width="1104" height="2136" alt="The list with this change" loading="lazy"></button><figcaption>After (this PR)</figcaption></figure></section></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
+</body>
+</html>
