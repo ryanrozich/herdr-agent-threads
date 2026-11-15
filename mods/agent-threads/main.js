@@ -182,6 +182,9 @@ const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block 
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
+// The line limit of a collapsed row's prompt and reply when long messages are not shortened
+// (truncate off, the default): no message reaches it, so nothing is cut.
+const NO_CUT = 100000;
 const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -1591,7 +1594,7 @@ export default class Threads extends View {
       [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
       [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -2118,7 +2121,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const text = this.replyText(turn);
-    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.promptLines}|${P.replyLines}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
+    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
     if (turn.shapeKey === key) return turn.shapeMemo;
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
@@ -2175,19 +2178,25 @@ export default class Threads extends View {
   }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
-    const src = (t) => (q ? around(t.replace(/\s+/g, " "), q) : t).slice(0, PREVIEW_CHARS);
+    // Long messages shortened (truncate) or, by default, shown whole. A search still shows the
+    // text around the first match.
+    const cut = Boolean(P.truncate);
+    const promptLines = cut ? P.promptLines : NO_CUT;
+    const replyLines = cut ? P.replyLines : NO_CUT;
+    const src = (t) => (q ? around(t.replace(/\s+/g, " "), q).slice(0, PREVIEW_CHARS) : cut ? t.slice(0, PREVIEW_CHARS) : t);
     let preview;
     let md = null;
     let tone = "reply";
     // A reply, with no search on, starts as Markdown (mdPreview): whole source lines.
     if (!live && !why && text && !q) {
-      md = mdPreview(text, P.replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply);
+      md = cut ? mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply)
+        : mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply, text.length);
       if (!md.md.trim()) md = null;
     }
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
     else if (md) preview = " ";
-    else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))));
+    else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : cut ? flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))) : flattenMd(text));
     else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
     else if (turn.answeredBy) {
@@ -2198,7 +2207,7 @@ export default class Threads extends View {
     const sh = rowShape({
       prompt: src(turn.prompt), reply: preview || " ", width: this.width, agent: turn.agent,
       cmd: cmd && { name: cmd.name, args: src(cmd.args) },
-      promptLines: P.promptLines, replyLines: tone === "reply" ? P.replyLines : 1,
+      promptLines, replyLines: tone === "reply" ? replyLines : 1,
       // While filtering, the row shows the text around the first match, as one run.
       quotes: !q, size: P.textSize, chars: this.chars(),
     });
@@ -2269,7 +2278,9 @@ export default class Threads extends View {
     out.push({ ...item, kind: "head", part: "top" });
     // Pasted images: their tiles over the message. A tile opens the review.
     if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
-    out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
+    // full: the whole message, by the reader's Show all or because long messages are not
+    // shortened; less: Show less, only after a Show all.
+    out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) || !this.prefs.truncate, less: this.full.has(key) && Boolean(this.prefs.truncate) });
     out.push({ ...item, kind: "ustrip", key: `us:${key}` });
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
@@ -3353,6 +3364,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
+      case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -3385,7 +3397,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate }, cx); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -4470,9 +4482,16 @@ export default class Threads extends View {
         .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
         .child(label("Keep the pane at this width"))
         .child(toggle(P.readingWidth !== false)))
-      .child(stepper("promptLines", "Prompt lines"))
-      .child(stepper("replyLines", "Reply lines"))
-      .child(div().text_size(11.5).text_color(t.dim).child("Collapsed rows only. Changes apply now."))
+      .child(v_flex().gap(2)
+        .child(h_flex().id("th-set-truncate").gap(6).items_center().cursor_pointer()
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action("truncate", cx); cx.notify(); })
+          .child(svg(ICON("scissors")).size(13).flex_none().text_color(t.muted))
+          .child(label("Shorten long messages"))
+          .child(toggle(Boolean(P.truncate))))
+        .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.truncate ? "A closed turn shows the first lines of each message, with Show more." : "Every message and reply shows in full.")))
+      .when(Boolean(P.truncate), (el) => el
+        .child(stepper("promptLines", "Prompt lines"))
+        .child(stepper("replyLines", "Reply lines")))
       .child(stepper("textSize", "Text size"))
       .child(h_flex().gap(6).items_center()
         .child(label("Your name"))
@@ -5181,7 +5200,7 @@ export default class Threads extends View {
   youHeight(r) {
     const y = this.youMd(r);
     const clipped = !r.full && y.more > 0;
-    const canLess = r.full && this.youClip(r.turn).more > 0;
+    const canLess = r.less && this.youClip(r.turn).more > 0;
     const chip = r.turn.cmd ? this.rt().line + 4 : 0;
     const label = r.turn.agent ? 16 + 4 : 0;
     // 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
@@ -5391,10 +5410,10 @@ export default class Threads extends View {
     const m = this.measured(r);
     const { line } = this.rt();
     const full = m ?? Math.max(1, r.estLines ?? 1) * line;
-    return Math.min(full, LATEST_LINES * line);
+    return this.prefs.truncate ? Math.min(full, LATEST_LINES * line) : full;
   }
   latestCut(r) {
-    if (r.md) return false;
+    if (r.md || !this.prefs.truncate) return false;
     const m = this.measured(r);
     return m != null ? m > LATEST_LINES * this.rt().line + 1 : (r.estLines ?? 0) > LATEST_LINES;
   }
@@ -6099,7 +6118,7 @@ export default class Threads extends View {
         const y = this.youMd(r);
         const { style, theme: bt } = this.bubbleLook(t, turn.agent);
         const c = { text: y.text, more: y.more };
-        const canLess = r.full && this.youClip(turn).more > 0;
+        const canLess = r.less && this.youClip(turn).more > 0;
         // A prompt taller than YOU_MAX scrolls inside a box of that height; any other is
         // drawn at its own height (measured), so nothing in it is cut.
         const scroll = y.capped && !probe;

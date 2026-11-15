@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false };
+const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -121,6 +121,14 @@ test("the quiet look: slate in a file from before it was the old default and rea
   expect(parseSettings(t).values.bubbleColor).toBe("slate");
   // The agent's bubble keeps its default.
   expect(v({}).agentBubbleColor).toBe("plum");
+});
+
+test("truncate is a boolean, false by default: long messages show in full", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values.truncate;
+  expect(v({})).toBe(false);
+  expect(v({ truncate: true })).toBe(true);
+  expect(v({ truncate: "yes" })).toBe(false);
+  expect(DEFAULTS.truncate).toBe(false);
 });
 
 test("alwaysShowTime is a boolean, false by default", () => {

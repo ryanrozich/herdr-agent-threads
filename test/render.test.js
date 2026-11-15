@@ -827,9 +827,48 @@ test("the command name is quiet: no fill, muted, foreground when bare, tinted on
   expect(v.cmdColor(low)).toBe(theme.muted);
 });
 
+test("long messages show in full by default: no Show more anywhere, and Shorten long messages brings the cuts back", async () => {
+  const { v, cx } = await pane(fixture());
+  v.width = 380;
+  expect(v.prefs.truncate).toBe(false);
+  const long = v.current().turns.find((x) => v.replyText(x).length > 400 && x.done);
+  expect(long).toBeTruthy();
+  long.prompt = "Please look at this. ".repeat(60);
+  long.shapeKey = null;
+  draw(v, cx);
+  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const row = () => v.rows().find((r) => r.turn === long && r.kind === "turn");
+  // Off: the whole reply as Markdown and the whole prompt, and no Show more.
+  let sh = v.shape(long);
+  expect(sh.rMore).toBe(false);
+  expect(sh.pMore).toBe(false);
+  expect(sh.md.length).toBeGreaterThanOrEqual(v.replyText(long).length - 10);
+  expect(strings(() => v.rowItem(theme, row(), false))).not.toContain("Show more");
+  // The panel: the switch, and no line steppers while it is off.
+  v.settingsOpen = true;
+  let panel = strings(() => v.render(cx));
+  expect(panel).toContain("Shorten long messages");
+  expect(panel).toContain("Every message and reply shows in full.");
+  expect(panel).not.toContain("Reply lines");
+  // On: the row is cut to its line limits with Show more, and the steppers show.
+  v.action("truncate", cx);
+  expect(v.prefs.truncate).toBe(true);
+  panel = strings(() => v.render(cx));
+  expect(panel).toContain("Reply lines");
+  v.settingsOpen = false;
+  draw(v, cx);
+  sh = v.shape(long);
+  expect(sh.rMore || sh.pMore).toBe(true);
+  expect(strings(() => v.rowItem(theme, row(), false))).toContain("Show more");
+  // Reset to defaults turns it off again.
+  v.action("resetSettings", cx);
+  expect(v.prefs.truncate).toBe(false);
+});
+
 test("prompt quotes: rows draw a bar line within the budget, the card draws Markdown", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
-  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
+  // Markdown in the message: the plain look. Rows cut to their line limits (Shorten long messages).
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain", truncate: true };
   v.width = 380;
   draw(v, cx);
   const snap = () => state.shared["threads.debug"].t4;
@@ -1474,6 +1513,7 @@ test("C3: the open card's reply starts with the first block after the last tool 
 
 test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show all only past 6 lines", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  v.prefs = { ...v.prefs, truncate: true }; // Shorten long messages
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   const key = `0:${t.n}`;
   v.open = new Set([key]);
@@ -5210,6 +5250,7 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
   const { v, cx } = await paneWith(busy(), null, 1000);
   v.width = 545;
+  v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;
