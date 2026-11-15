@@ -3081,7 +3081,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   }
 });
 
-test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, under 440 px latest gives way, and under 300 px agents too", async () => {
+test("the header fits at the widths Threads has beside the column: the Pinned button is labelled, Jump to latest is a pill below, and under 300 px agents give way", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6", "--agents");
   v.sel = keys()[0];
   v.action("pin", cx);
@@ -3091,7 +3091,7 @@ test("the header fits at the widths Threads has beside the column: the Pinned bu
     const ids = v.headerButtons().map((b) => b[0]);
     expect(ids.includes("th-agents")).toBe(width >= 300);
     expect(ids.includes("th-pin")).toBe(false);
-    expect(ids.includes("th-latest")).toBe(width >= 440);
+    expect(ids.includes("th-latest")).toBe(false);
     expect(v.headerButtons().find((b) => b[0] === "th-pinned")[6]).toBe("Pinned 1");
     expect(v.headerLayout().text).toBeGreaterThanOrEqual(text);
     draw(v, cx);
@@ -4213,8 +4213,9 @@ test("the list's header has no pin button, so the session's title gets its room;
     texts[width] = v.headerLayout().text;
   }
   // Before, with the pin button: 119 at 380 px and 162 at 545 (where the state chip, now
-  // 10 px wider for its hover fill, takes 10 of the 32 back).
-  expect(texts).toEqual({ 380: 119 + 32, 545: 162 + 22 });
+  // 10 px wider for its hover fill, takes 10 of the 32 back). At 545 px the Jump to latest
+  // button, now a pill below the list, gives its 24 px and 8 px gap to the text too.
+  expect(texts).toEqual({ 380: 119 + 32, 545: 162 + 22 + 32 });
   // In a Pinned view every row is a pin, and a closed one has no pin of its own to click,
   // so the header keeps its pin button there, as Unpin for the selected pin.
   v.width = 380;
@@ -4239,40 +4240,65 @@ function drawRange(v, start, end) {
   v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
 }
 
-test("a turn that comes in below the screen puts a dot on the latest button until the end of the list shows", async () => {
+test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
   const { v, cx } = await pane(file);
   expect(v.current().turns.length).toBe(2);
-  v.width = 380; // the latest button is hidden under 440 px until there is something new
-  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
-  // Reading the first turn, with the old last row still in view (as on the rig).
+  v.width = 380;
+  const pillIds = () => { rec = []; v.pillView(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null; return ids; };
+  // Reading the first turn, with the old last row still in view (as on the rig): no pill.
   v.sel = v.turnKeys(v.rows())[0];
   v.follow = false;
   drawRange(v, 0);
+  expect(v.pillShown()).toBe(false);
   appendFileSync(file, rest);
   v.read(cx);
   await settle(v);
   expect(v.current().turns.length).toBe(3);
   // The next draw decides; the new row is off screen.
   expect(v.unseen).toBe("pending");
-  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
   v.stickyDue = false;
   drawRange(v, 0, v.rows().length - 1);
   expect(v.unseen).toBe(true);
   expect(v.stickyDue).toBe(true);
-  const latest = v.headerButtons().find((b) => b[0] === "th-latest");
-  expect(latest[7]).toBe(true);
-  expect(latest[2]).toBe("New below · jump to latest (End)");
-  rec = []; v.header(theme); const hids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
-  expect(hids).toContain("th-latest-dot");
+  // The end is off screen: the pill shows, with its dot, and the toast sits above it.
+  expect(v.pillShown()).toBe(true);
+  expect(pillIds()).toEqual(expect.arrayContaining(["th-latest-pill", "th-latest-pill-dot"]));
+  rec = []; v.pillView(theme); const tip = rec.find((e) => e[0] === "tooltip")?.[1]; rec = null;
+  expect(tip).toBe("New below · jump to latest (End)");
+  // Left to right: the dot, a down arrow, then the label.
+  rec = []; v.pillView(theme); const order = rec; rec = null;
+  const at = (f) => order.findIndex(f);
+  const dotAt = at((e) => e[0] === "id" && e[1] === "th-latest-pill-dot");
+  const arrowAt = at((e) => e[0] === "svg" && String(e[1]).endsWith("/arrow-down.svg"));
+  const labelAt = at((e) => e[0] === "child" && e[1] === "Jump to latest");
+  expect(dotAt).toBeGreaterThan(-1);
+  expect(arrowAt).toBeGreaterThan(dotAt);
+  expect(labelAt).toBeGreaterThan(arrowAt);
+  v.toast = { text: "x", at: 1 };
+  rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  v.footerH = 38;
+  rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  expect(tb2).toBe(38 + 6 + 28 + 10);
+  expect(tb).toBeGreaterThan(38);
+  v.toast = null;
+  // Not in the outline or the Pinned view, and never in the header.
+  v.outline = true;
+  expect(v.pillShown()).toBe(false);
+  v.outline = false;
+  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
   expect(v.sel).toBe(v.turnKeys(v.rows())[0]); // the selection stays where the reader is
   // A draw that reaches the end of the list clears it, and asks the timer to redraw.
   v.stickyDue = false;
   draw(v, cx);
   expect(v.unseen).toBe(false);
   expect(v.stickyDue).toBe(true);
-  expect(v.headerButtons().some((b) => b[0] === "th-latest")).toBe(false);
+  expect(v.pillShown()).toBe(false);
+  // Off screen again with nothing new: the pill, no dot.
+  drawRange(v, 0, v.rows().length - 1);
+  expect(v.pillShown()).toBe(true);
+  expect(pillIds()).not.toContain("th-latest-pill-dot");
   // End clears it too.
   v.unseen = true;
   v.action("latest", cx);

@@ -52,6 +52,9 @@ import { MOD } from "./name.js";
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
+// The Jump to latest pill's height and its gap over the footer.
+const PILL_H = 28;
+const PILL_GAP = 10;
 const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
 // An agent's mark on its tile (MARKS in harness.js), size px square, or null for an agent
 // with none. A one-colour mark is drawn white; a full-colour one as it is.
@@ -668,7 +671,7 @@ export default class Threads extends View {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
-      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
+      header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
@@ -3599,6 +3602,7 @@ export default class Threads extends View {
       .children(this.banners(t))
       .child(this.body(t, focusedPanel, cx))
       .child(this.footer(t))
+      .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -3743,9 +3747,6 @@ export default class Threads extends View {
       : ["th-pinned", null, col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
         : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`, "pinned", Boolean(col), null, label]);
     if (this.tooWide()) out.push(["th-fit", "fold-horizontal", `Fit to the reading width, ${this.readingPx()} px (w)`, "fit", false, null, null]);
-    // With something new below the screen it stays at every width, with a dot.
-    const dot = this.unseen === true;
-    if (!this.compact() || dot) out.push(["th-latest", "chevrons-down", dot ? "New below · jump to latest (End)" : "Jump to latest (End)", "latest", false, null, null, dot]);
     out.push(["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null, null]);
     return out;
   }
@@ -4875,6 +4876,8 @@ export default class Threads extends View {
       // drawing pass may not).
       const prevShown = this.bottomShown;
       this.bottomShown = range.end >= rows.length;
+      // The Jump to latest pill comes and goes with the end of the list.
+      if (prevShown !== this.bottomShown) this.stickyDue = true;
       this.lastRange = `${range.start}-${range.end}/${rows.length}`;
       try { this.stickCheck(rows, prevShown, range.start); } catch (e) { this.drawFailed(e, null); }
       if (this.unseen && this.bottomShown) { if (this.unseen === true) this.stickyDue = true; this.unseen = false; }
@@ -5731,9 +5734,29 @@ export default class Threads extends View {
     return false;
   }
 
+  // The Jump to latest pill: it floats at the bottom centre of the list while the end of the
+  // list is off screen, in the list's own view (not the outline or the Pinned view). A down
+  // arrow leads its label, and a dot leads both while something new came in below the screen.
+  pillShown() {
+    return this.bottomShown === false && this.view !== "pinned" && !this.pinnedPane && !this.outlined();
+  }
+  pillView(t) {
+    const dot = this.unseen === true;
+    return h_flex().absolute().bottom((this.footerH ?? 38) + PILL_GAP).left(0).right(0).justify_center()
+      .child(h_flex().id("th-latest-pill").flex_none().h(PILL_H).px(12).gap(6).items_center().rounded(PILL_H / 2)
+        .bg(t.popover).border_1().border_color(t.border).shadow_md().cursor_pointer()
+        .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
+        .tooltip(dot ? "New below · jump to latest (End)" : "Jump to latest (End)")
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action("latest", cx); cx.notify(); })
+        .when(dot, (el) => el.child(div().id("th-latest-pill-dot").flex_none().size(6).rounded(3).bg(t.accent)))
+        .child(svg(ICON("arrow-down")).size(12).flex_none().text_color(t.muted))
+        .child(div().flex_none().child("Jump to latest")));
+  }
+
   toastView(t) {
-    // Just above the footer, whose hints can wrap to two lines.
-    return h_flex().absolute().bottom((this.footerH ?? 38) + 6).left(0).right(0).justify_center()
+    // Just above the footer, whose hints can wrap to two lines, and above the pill.
+    const pill = this.pillShown() ? PILL_H + PILL_GAP : 0;
+    return h_flex().absolute().bottom((this.footerH ?? 38) + 6 + pill).left(0).right(0).justify_center()
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
