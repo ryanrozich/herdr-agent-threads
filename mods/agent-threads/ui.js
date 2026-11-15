@@ -1442,14 +1442,15 @@ export function focusTarget(panes, terminal, myTab) {
 export const ICON_BOX = 22;
 export const STRIP_CHAR = 6.6;
 
-// The strip under an open turn's reply: copy, quote, select and terminal from the left, the
-// first glyph on the reply's left edge (16 px). Quote shows when a pane shows a terminal on
-// this computer and the turn has a reply; terminal when a pane shows the terminal. Returns
+// The strip under an open turn's reply: copy and quote from the left, the first glyph on the
+// reply's left edge (16 px). Quote shows when a pane shows a terminal on this computer and
+// the turn has a reply. Select shows after them only where the formatted reply cannot be
+// selected (Herdr before 0.1.13), as the one way there by mouse; s works everywhere. Returns
 // each icon's [start, end], or null when it is not shown.
-export function actsLayout({ quote = true, terminal = true } = {}) {
-  const out = { copy: null, quote: null, select: null, terminal: null };
+export function actsLayout({ quote = true, select = false } = {}) {
+  const out = { copy: null, quote: null, select: null };
   let x = ROW.PAD_X - 4;
-  for (const [name, on] of [["copy", true], ["quote", quote], ["select", true], ["terminal", terminal]]) {
+  for (const [name, on] of [["copy", true], ["quote", quote], ["select", select]]) {
     if (!on) continue;
     out[name] = [x, x + ICON_BOX];
     x += ICON_BOX + 4;
