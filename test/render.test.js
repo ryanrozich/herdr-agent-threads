@@ -1075,9 +1075,16 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
   const keys = view.turnKeys(view.rows());
   view.toggle(keys.at(-2), r.cx);
+  // The list draws the rows of one screen at its end, as Herdr does (the stub otherwise draws
+  // all 1,305, and each row's own cost, its hover card and its whole reply, adds up past
+  // anything Herdr draws). allFrame is the same open frame with every row drawn, for the log.
+  listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
   const openFrame = time(() => view.render(r.cx));
   const nextFrame = time(() => view.render(r.cx));
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame }));
+  listWindow = null;
+  view.toggle(keys.at(-3), r.cx);
+  const allFrame = time(() => view.render(r.cx));
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
 test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", () => {
@@ -1103,7 +1110,7 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   expect(r.toggleOff).toBeLessThan(25 * slow);
   expect(r.openFrame).toBeLessThan(50 * slow);
   const f = (x) => x.toFixed(1);
-  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms`);
+  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms; with every row drawn ${f(r.allFrame)} ms`);
 }, 130000);
 
 test("S1: before the first chunk the header says Reading… with no percentage, and the bar is indeterminate", async () => {
@@ -1762,6 +1769,9 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
 
 test("Turn card: i opens it beside the selected turn's line, brings that line on screen first, and opens upward when the line sits low", async () => {
   const { v, cx } = await pane(fixture());
+  // Short closed rows (Shorten long messages), so the made-up 120 px row sizes below match
+  // the rows' shapes.
+  v.prefs = { ...v.prefs, truncate: true };
   const turns = v.current().turns.filter((x) => x.done);
   const t = turns[turns.length - 2];
   const key = `0:${t.n}`;
