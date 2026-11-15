@@ -1,0 +1,79 @@
+<title>Chat Look Batch 2</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 75ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.list { display: grid; gap: 14px; }
+.list ol, .list ul { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; }
+.group { display: grid; gap: 28px; }
+.pair { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 80ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.one { display: grid; grid-template-columns: minmax(0, 560px); }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · chat look · batch 2 · PR 33</div>
+  <h1>Level 2: steps and groups in order, and the arrow keys</h1>
+  <p class="lede">Level 1 (PR 32) beside level 2 (PR 33). All shots come from Herdr 0.1.15 in an isolated test window on the mini, running each branch&#x27;s mod on a synthetic acme-web session (made-up prompts, replies and tool output). The session&#x27;s last turn is running. The panel is 560 px wide and the shots are cropped to it. Click any shot to open it full size; the arrow keys step through them and Esc closes.</p>
+</header>
+<section class="list"><h2>What to try</h2><ol><li><strong>Install.</strong> <code>cd ~/herdr-agent-threads-try &amp;&amp; git fetch &amp;&amp; git checkout level-2 &amp;&amp; ./install.sh</code> (PR 33, which holds 29 to 32 too).</li><li><strong>Go deeper with <kbd>→</kbd>.</strong> On a selected turn, <kbd>→</kbd> opens the turn and its &quot;Worked for&quot; line, then every group under it. <kbd>←</kbd> closes them again, one level at a time, then the line, then the turn.</li><li><strong>Read the steps.</strong> An open line lists what the agent did in order: a group of tool calls, anything it said in between, the next group. A group&#x27;s line says what it did (&quot;Read 4 files and edited 2 files&quot;), and opened it names each call.</li><li><strong>The running turn.</strong> Its line is open by default. The group still going says so (&quot;Searching 1 time, reading 2 files and running 1 command&quot;) with a spinner, and a &quot;Working…&quot; line ends the turn.</li></ol></section>
+<section class="group"><h2>Turn 7: one group</h2><section class="pair"><h3>The line opened</h3><p class="note">Level 1 opens the line to the calls by kind and the numbers. Level 2 opens it to the steps: here one group, &quot;Read 1 file, searched 1 time, edited 2 files and ran 2 commands&quot;, then the numbers.</p><div class="duo"><figure><button class="shot" aria-label="Open The line opened, Level 1 (PR 32), line clicked full size"><img src="img/l1click-level-1-1.png" width="1096" height="1466" alt="The line opened, Level 1 (PR 32), line clicked" loading="lazy"></button><figcaption>Level 1 (PR 32), line clicked</figcaption></figure><figure><button class="shot" aria-label="Open The line opened, Level 2 (PR 33), → once full size"><img src="img/t7-level-2-1.png" width="1096" height="1466" alt="The line opened, Level 2 (PR 33), → once" loading="lazy"></button><figcaption>Level 2 (PR 33), → once</figcaption></figure></div></section><section class="pair"><h3>→ and ← on turn 7</h3><p class="note">From the closed turn: → opens the turn and its line, → opens the group to its calls, → again does nothing more at level 2. Then ← closes the group, ← closes the line, ← closes the turn.</p><div class="strip"><figure><button class="shot" aria-label="Open → and ← on turn 7, Closed full size"><img src="img/t7-level-2-0.png" width="1096" height="1466" alt="→ and ← on turn 7, Closed" loading="lazy"></button><figcaption>Closed</figcaption></figure><figure><button class="shot" aria-label="Open → and ← on turn 7, → line full size"><img src="img/t7-level-2-1.png" width="1096" height="1466" alt="→ and ← on turn 7, → line" loading="lazy"></button><figcaption>→ line</figcaption></figure><figure><button class="shot" aria-label="Open → and ← on turn 7, → group full size"><img src="img/t7-level-2-2.png" width="1096" height="1466" alt="→ and ← on turn 7, → group" loading="lazy"></button><figcaption>→ group</figcaption></figure><figure><button class="shot" aria-label="Open → and ← on turn 7, ← group closed full size"><img src="img/t7-level-2-4.png" width="1096" height="1466" alt="→ and ← on turn 7, ← group closed" loading="lazy"></button><figcaption>← group closed</figcaption></figure><figure><button class="shot" aria-label="Open → and ← on turn 7, ← line closed full size"><img src="img/t7-level-2-5.png" width="1096" height="1466" alt="→ and ← on turn 7, ← line closed" loading="lazy"></button><figcaption>← line closed</figcaption></figure><figure><button class="shot" aria-label="Open → and ← on turn 7, ← turn closed full size"><img src="img/t7-level-2-6.png" width="1096" height="1466" alt="→ and ← on turn 7, ← turn closed" loading="lazy"></button><figcaption>← turn closed</figcaption></figure></div></section></section><section class="group"><h2>Turn 10: steps in order</h2><section class="pair"><h3>Two groups with a note between them</h3><p class="note">Turn 10 said something between its calls. Level 1 sums the turn up by kind. Level 2 keeps the order: the reads and edits, the note (&quot;The ledger rounds again when it posts…&quot;), then the reads, searches and test runs.</p><div class="duo"><figure><button class="shot" aria-label="Open Two groups with a note between them, Level 1 (PR 32), line clicked full size"><img src="img/l1t10-level-1-1.png" width="1096" height="1466" alt="Two groups with a note between them, Level 1 (PR 32), line clicked" loading="lazy"></button><figcaption>Level 1 (PR 32), line clicked</figcaption></figure><figure><button class="shot" aria-label="Open Two groups with a note between them, Level 2 (PR 33), → once full size"><img src="img/t10-level-2-1.png" width="1096" height="1466" alt="Two groups with a note between them, Level 2 (PR 33), → once" loading="lazy"></button><figcaption>Level 2 (PR 33), → once</figcaption></figure></div></section><section class="pair"><h3>Both groups opened</h3><p class="note">→ again opens every group, each naming its calls in order.</p><div class="one"><figure><button class="shot" aria-label="Open Both groups opened, Level 2, → twice full size"><img src="img/t10-level-2-2.png" width="1096" height="1466" alt="Both groups opened, Level 2, → twice" loading="lazy"></button><figcaption>Level 2, → twice</figcaption></figure></div></section></section><section class="group"><h2>The running turn</h2><section class="pair"><h3>Open by default</h3><p class="note">Level 1 shows &quot;Working for 0:54&quot; and the counts. Level 2 opens the running turn&#x27;s line without a key: the group still going has a spinner and says what it is doing, and &quot;Working…&quot; ends the turn.</p><div class="duo"><figure><button class="shot" aria-label="Open Open by default, Level 1 (PR 32) full size"><img src="img/run-level-1-0.png" width="1096" height="1466" alt="Open by default, Level 1 (PR 32)" loading="lazy"></button><figcaption>Level 1 (PR 32)</figcaption></figure><figure><button class="shot" aria-label="Open Open by default, Level 2 (PR 33) full size"><img src="img/run-level-2-0.png" width="1096" height="1466" alt="Open by default, Level 2 (PR 33)" loading="lazy"></button><figcaption>Level 2 (PR 33)</figcaption></figure></div></section><section class="pair"><h3>The running group opened</h3><p class="note">→ on the running turn opens its group: Grep, Read, Read and the Bash call still running.</p><div class="one"><figure><button class="shot" aria-label="Open The running group opened, Level 2, → twice full size"><img src="img/run-level-2-2.png" width="1096" height="1466" alt="The running group opened, Level 2, → twice" loading="lazy"></button><figcaption>Level 2, → twice</figcaption></figure></div></section></section>
+<section class="list"><h2>Notes on the shots</h2><ul><li>Level 2 names each call by its tool only (Read, Edit, Bash). The file, command and output of each call come with level 3, in the next batch.</li><li>The keys come from the panel&#x27;s own commands (the same ones <kbd>→</kbd> and <kbd>←</kbd> run), sent to the test window. Clicks on the line use the panel&#x27;s test-only click command.</li><li>The panel&#x27;s test-only timing chip is hidden in these shots so the header looks as it does for you. Nothing else in the mod was changed.</li><li>Nothing is merged. A go for this batch merges PR 33 after PRs 29 to 32.</li></ul></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
