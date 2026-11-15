@@ -3,7 +3,7 @@
 import { test, expect } from "bun:test";
 import {
   promptParts, quoteRows, rowShape, clipYou, promptMd, escapeMd, quoteText, inReply, atLeast, canQuote, foreground,
-  commandColor, contrast, barLayout, keyAction, TAKEN_LETTERS, rowTextWidth, rowHeight,
+  commandColor, contrast, actsLayout, keyAction, TAKEN_LETTERS, rowTextWidth, rowHeight,
 } from "../mods/agent-threads/ui.js";
 
 const runs = (t) => promptParts(t).map((r) => [r.quote ? "q" : "c", r.lines]);
@@ -287,19 +287,17 @@ test("commandColor: muted where it reads at 4.5:1 on the row's background, else 
   expect(commandColor({ background: "#fff", muted: "nope", foreground: "#000" })).toBe("#000");
 });
 
-test("barLayout: four buttons that never overlap, labels dropping as the pane narrows", () => {
-  for (let w = 200; w <= 700; w += 10) {
-    for (const quote of [true, false]) for (const terminal of [true, false]) {
-      const L = barLayout(w, { quote, terminal });
-      const boxes = [L.copy, L.select, L.quote, L.terminal].filter(Boolean);
-      for (let i = 1; i < boxes.length; i++) if (w >= 240) expect(boxes[i][0] - boxes[i - 1][1], `${w}`).toBeGreaterThanOrEqual(6);
-      expect(Boolean(L.quote)).toBe(quote);
-    }
+test("actsLayout: copy, quote, select and terminal from the reply's left edge, never overlapping", () => {
+  for (const quote of [true, false]) for (const terminal of [true, false]) {
+    const L = actsLayout({ quote, terminal });
+    const boxes = [L.copy, L.quote, L.select, L.terminal].filter(Boolean);
+    for (let i = 1; i < boxes.length; i++) expect(boxes[i][0] - boxes[i - 1][1]).toBe(4);
+    expect(Boolean(L.quote)).toBe(quote);
+    expect(Boolean(L.terminal)).toBe(terminal);
   }
-  expect(barLayout(700).labels).toEqual({ copy: "Copy reply", select: true, quote: true, terminal: true });
-  expect(barLayout(380).labels).toEqual({ copy: "Copy reply", select: true, quote: false, terminal: true });
-  expect(barLayout(300).labels).toEqual({ copy: "Copy", select: false, quote: false, terminal: true });
-  expect(barLayout(240).labels).toEqual({ copy: "Copy", select: false, quote: false, terminal: false });
-  // No Quote button (no pane): the bar keeps the layout it had before.
-  expect(barLayout(240, { quote: false, terminal: false }).labels.copy).toBe("Copy reply");
+  const all = actsLayout();
+  // The first 13 px glyph, centred in its 22 px box, sits on the reply's 16 px edge.
+  expect(all.copy[0] + (22 - 13) / 2).toBeCloseTo(16.5, 0);
+  expect(all.terminal).toEqual([12 + 3 * 26, 12 + 3 * 26 + 22]);
 });
+

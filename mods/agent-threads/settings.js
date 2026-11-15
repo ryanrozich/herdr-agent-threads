@@ -3,7 +3,7 @@
 // reinstall, which replaces mods/agent-threads/, leaves it alone). A person can edit it by
 // hand; the pane watches it and applies a change at once.
 //
-//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "slate",
+//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "plain",
 //     "agentBubbleColor": "plum", "youName": "You", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
@@ -11,7 +11,10 @@
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
 // bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
-// bubbles, a preset name (ui.js BUBBLES; "plain" is the theme's own look) or "#rrggbb".
+// bubbles, a preset name (ui.js BUBBLES; "plain", the default for the person's, is the
+// theme's own look) or "#rrggbb".
+// alwaysShowTime: keep each message's time under its bubble (false, the default: the time
+// shows under the selected turn's bubble only).
 // youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
 // readingWidth: keep the Threads pane at the reading width (true, the default): a pane that
 // opens or is dragged wider is resized back, and the terminal gets the room.
@@ -27,13 +30,16 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true, alwaysShowTime: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
 // Builds before it wrote every value on any change, so a file without the mark that holds
 // exactly their defaults (2 and 3) reads as the new defaults; the next save adds the mark.
-export const LOOK = 2;
+// "look": 3 marks a file written since the quiet look, whose bubble default is plain. Builds
+// before it wrote the old default, slate, on any change, so a file without the mark that
+// holds slate reads as plain; any other colour in it was the person's choice and is kept.
+export const LOOK = 3;
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }
 export function settingsPath(appHome) { return `${settingsDir(appHome)}/${FILE}`; }
@@ -60,17 +66,20 @@ export function parseSettings(text) {
   try { raw = JSON.parse(text); } catch { return { values: { ...DEFAULTS }, error: "settings.json is not valid JSON; using defaults" }; }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { values: { ...DEFAULTS }, error: "settings.json is not a JSON object; using defaults" };
   const old = raw.look == null && raw.promptLines === 2 && raw.replyLines === 3;
+  const bubble = bubbleValue(raw.bubbleColor);
+  const slate = bubble === "slate" && !(Number(raw.look) >= 3);
   return {
     values: {
       textSize: clampInt(raw.textSize, RANGES.textSize, DEFAULTS.textSize),
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
-      bubbleColor: bubbleValue(raw.bubbleColor) ?? DEFAULTS.bubbleColor,
+      bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       youName: nameValue(raw.youName) ?? DEFAULTS.youName,
       readingWidth: typeof raw.readingWidth === "boolean" ? raw.readingWidth : DEFAULTS.readingWidth,
       viewerReply: typeof raw.viewerReply === "boolean" ? raw.viewerReply : DEFAULTS.viewerReply,
+      alwaysShowTime: typeof raw.alwaysShowTime === "boolean" ? raw.alwaysShowTime : DEFAULTS.alwaysShowTime,
     },
     error: null,
   };

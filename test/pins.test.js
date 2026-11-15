@@ -1,7 +1,7 @@
 // bun test: pins as data. Everything here is made up.
 import { test, expect, describe } from "bun:test";
 import { turnIds, turnId, parsePins, pinsText, mergeDirty, newPin, pinState, partOf, partKeys, placeAtTop, placeItem, NOT_A_PLACE, pinTime, byTime } from "../mods/agent-threads/pins.js";
-import { keyAction, TAKEN_LETTERS, headPinHit } from "../mods/agent-threads/ui.js";
+import { keyAction, TAKEN_LETTERS, stripLayout, boxHit } from "../mods/agent-threads/ui.js";
 
 const DAY = 86400000;
 const T0 = new Date(2026, 10, 6, 15, 30).getTime();
@@ -161,12 +161,20 @@ describe("keys", () => {
     expect(TAKEN_LETTERS).not.toContain("u");
   });
 
-  test("the head's pin zone is left of the chevron and does not touch it", () => {
+  test("the strip under a bubble: copy, then the pin, then the number and time, ending at the bubble's right edge", () => {
     const w = 500;
-    expect(headPinHit(w - 42, w)).toBe(true); // the pin's middle
-    expect(headPinHit(w - 23, w)).toBe(false); // the chevron's middle
-    expect(headPinHit(100, w)).toBe(false);
-    expect(headPinHit(null, w)).toBe(false);
+    const L = stripLayout(w, "#7 · 9:12 AM");
+    expect(L.text[1]).toBe(w - 16);
+    expect(L.pin[1]).toBeLessThan(L.text[0]);
+    expect(L.copy[1]).toBeLessThan(L.pin[0]);
+    expect(boxHit(L, (L.pin[0] + L.pin[1]) / 2, ["copy", "pin"])).toBe("pin");
+    expect(boxHit(L, (L.copy[0] + L.copy[1]) / 2, ["copy", "pin"])).toBe("copy");
+    expect(boxHit(L, (L.text[0] + L.text[1]) / 2, ["copy", "pin"])).toBe(null);
+    expect(boxHit(L, null, ["copy", "pin"])).toBe(null);
+    // An agent's strip starts at the left, under its bubble.
+    const A = stripLayout(w, "#7 · 9:12 AM", false);
+    expect(A.copy[0]).toBe(12);
+    expect(A.pin[0]).toBeGreaterThan(A.copy[1]);
   });
 });
 
