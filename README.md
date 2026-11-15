@@ -36,7 +36,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 ### Read a long session as a chat
 
-Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Point at a message for its time, and select a turn for the copy, pin, quote and terminal icons. In an open turn, click the grey line to see its tool calls by kind, tokens and model. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
+Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Point at a message for its time, and select a turn for the copy, pin, quote and terminal icons. In an open turn, click the grey line to see the work before the reply: what the agent said along the way, each run of tool calls, then tokens and model. `→` and `←` open and close it a level at a time. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
@@ -97,6 +97,7 @@ Press `,` for settings: text size, how many lines a row shows, bubble colours, y
 | `c` | Copy the reply |
 | `q` | Quote the reply into the terminal |
 | `s` | Select text in the reply |
+| `→` `←` | Open or close a turn's work, a level at a time |
 | `p` | Pin or unpin |
 | `1` to `5` | Go to a pin |
 | `v` | Show the Pinned column |

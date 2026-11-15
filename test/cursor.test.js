@@ -87,6 +87,7 @@ test("builds turns from a Cursor transcript", () => {
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.tools).toBe(1);
   expect(plain.toolNames).toEqual({ Shell: 1 });
+  expect(plain.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["Shell"], count: 1 }]);
   expect(plain.done).toBe(true);
   // Cursor writes no turn times, tokens or model.
   expect(plain.durationMs).toBe(0);

@@ -43,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKindsText,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -52,8 +52,11 @@ import { MOD } from "./name.js";
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
 const rowTurnKey = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
-// The height of level 1's tool calls by kind.
-const KINDS_H = 18;
+// The height of a step group's line and the gap above it, and of a call's row in an open
+// group.
+const GROUP_H = 22;
+const STEP_GAP = 4;
+const CALL_H = 20;
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -86,6 +89,11 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
+// the pane first. Opening the work of a turn with hundreds of steps put every interim text
+// in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
+// interrupted). The rest are measured over the next frames.
+const PROBE_MAX = 16;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -150,11 +158,11 @@ const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.
 const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
-const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
+const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "kinds", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "itext", "grp", "call", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -580,8 +588,12 @@ export default class Threads extends View {
     this.code = new Map(); // `${key}:${i}` -> { st: EditorState, or false when it could not be made, text }
     this.copied = null; // { id, at }
     this.toast = null;
-    // Turns whose line is open (level 1): the tool calls by kind and the numbers under it.
+    // Turns whose line is open (level 1): the steps and the numbers under it. A running turn's
+    // line is open until the person opens or closes it (lineTouched); then their choice stays,
+    // also after the turn ends. Open step groups (level 2), by "<turn>:<step>".
     this.lineOpen = new Set();
+    this.lineTouched = new Set();
+    this.groupOpen = new Set();
     this.query = "";
     this.filtering = false;
     this.choosing = false;
@@ -742,7 +754,10 @@ export default class Threads extends View {
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
-      case "kinds": return `kinds${n} ${toolKindsText(r.turn.toolNames)}`;
+      case "itext": return `itext${n} h${this.height(r)} | ${r.src.replace(/\n/g, " ⏎ ").slice(0, 120)}`;
+      case "grp": return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
+      case "call": return `call${n} ${r.more ? `+${r.more}` : r.name}`;
+      case "wspin": return `wspin${n} Working…`;
       case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
       case "copy": {
@@ -1531,7 +1546,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const key = [
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
-      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), this.filterText(), status,
+      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
@@ -1554,7 +1569,9 @@ export default class Threads extends View {
     }
     // Only the running turn depends on the selection (one-line row, or the card when
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
-    const li = this.baseRows.length - 1;
+    // The running turn's own row: last, or followed by its open steps.
+    let li = this.baseRows.length - 1;
+    while (li > 0 && !this.baseRows[li].live && ["itext", "grp", "call", "wspin"].includes(this.baseRows[li].kind)) li--;
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
@@ -1665,6 +1682,58 @@ export default class Threads extends View {
     const split = Boolean(item.turn.images?.length);
     if (split) out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, kind: "wrow", split, shape: this.shape(item.turn, true) });
+    // Open while it runs: the steps as they arrive, newest at the bottom, then "Working…".
+    if (this.lineIsOpen(item.key, true)) {
+      this.stepRows(item, out, true);
+      if (this.status() === "working") out.push({ ...item, live: false, kind: "wspin", key: `ws:${item.key}` });
+    }
+  }
+
+  // Level 1's steps, in order: each interim text, and each group's line; an open group
+  // (level 2) adds one row per call. A running turn's last group, with nothing said since,
+  // is the one still running.
+  stepRows(item, out, live = false) {
+    const { key, turn } = item;
+    const steps = turn.steps ?? [];
+    steps.forEach((st, i) => {
+      if (st.k === "text") {
+        out.push({ ...item, live: false, kind: "itext", key: `it:${key}:${i}`, src: st.t, ...this.stepLinks(st) });
+        return;
+      }
+      const now = live && i === steps.length - 1 && !turn.after?.length;
+      out.push({ ...item, live: false, kind: "grp", key: `gp:${key}:${i}`, gi: i, step: st, now });
+      if (!this.groupOpen.has(`${key}:${i}`)) return;
+      st.calls.forEach((name, j) => out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:${j}`, name }));
+      if (st.count > st.calls.length) out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:more`, more: st.count - st.calls.length });
+    });
+  }
+  lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
+  isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
+
+  // → opens the selected turn one level deeper: the turn, then its line (level 1), then its
+  // step groups (level 2). ← backs out one level. A running turn has no closed state: its
+  // line opens and closes.
+  deeper(cx) {
+    const k = this.sel;
+    const turn = k ? this.findTurn(k) : null;
+    if (!turn) return false;
+    const live = this.isLiveKey(k);
+    if (!live && !this.open.has(k)) { this.toggle(k, cx); this.lineOpen.add(k); this.lineTouched.add(k); return true; }
+    if (!this.lineIsOpen(k, live)) { this.toggleLine(k, live); cx.notify(); return true; }
+    (turn.steps ?? []).forEach((st, i) => { if (st.k === "group") this.groupOpen.add(`${k}:${i}`); });
+    cx.notify();
+    return true;
+  }
+  shallower(cx) {
+    const k = this.sel;
+    const turn = k ? this.findTurn(k) : null;
+    if (!turn) return false;
+    const live = this.isLiveKey(k);
+    const groups = [...this.groupOpen].filter((g) => g.startsWith(`${k}:`));
+    if (groups.length && this.lineIsOpen(k, live)) { for (const g of groups) this.groupOpen.delete(g); cx.notify(); return true; }
+    if (this.lineIsOpen(k, live) && (live || this.open.has(k))) { this.toggleLine(k, live); cx.notify(); return true; }
+    if (!live && this.open.has(k)) { this.toggle(k, cx); return true; }
+    return false;
   }
 
   // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 5). A closed
@@ -2013,8 +2082,8 @@ export default class Threads extends View {
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     // Level 1, under the line when it is open: the tool calls by kind, the numbers, and on
     // i what they mean.
-    if (this.lineOpen.has(key)) {
-      if (toolKindsText(turn.toolNames)) out.push({ ...item, kind: "kinds", key: `kd:${key}` });
+    if (this.lineIsOpen(key, false)) {
+      this.stepRows(item, out);
       out.push({ ...item, kind: "stats", key: `st:${key}` });
       if (this.legendOn) out.push({ ...item, kind: "legend", key: `lg:${key}` });
     }
@@ -2780,6 +2849,29 @@ export default class Threads extends View {
     memo.set(key, { sig, out });
     return out;
   }
+  // An interim text with the link rules applied, kept for the step until the rules or the
+  // repo change. Every rebuild of the rows asks for each step of every open turn, and the
+  // rules run a set of patterns over the text: for hundreds of steps that ran past Herdr's
+  // time for a draw ("This view could not be re-rendered", interrupted). New texts share the
+  // reshaping time (SHAPE_MS): past it a text shows as written, and the next frame links it.
+  // Link rules lengthen the text; past 4,000 characters it stays as written, since Herdr
+  // draws nothing for Markdown over 4,096.
+  stepLinks(st) {
+    const ver = `${this.linksVer}|${this.links.length}|${this.remote.repo ?? ""}|${this.remote.owner ?? ""}`;
+    this.stepLinked ??= new WeakMap();
+    const known = this.stepLinked.get(st);
+    if (known?.ver === ver) return known.lk;
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      return { md: st.t, links: 0 };
+    }
+    const t0 = now();
+    const linked = this.linkOne(st.t);
+    const lk = linked.md.length <= 4000 ? { md: linked.md, links: linked.links } : { md: st.t, links: 0 };
+    this.stepLinked.set(st, { ver, lk });
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return lk;
+  }
   linkOne(md) { return this.links.length ? linkify(md, this.links, { repo: this.remote.repo, owner: this.remote.owner }) : { md, links: 0 }; }
 
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
@@ -2948,7 +3040,14 @@ export default class Threads extends View {
     if (kind === "st") { this.legendOn = !this.legendOn; this.sel = id; return cx.notify(); }
     // A click on the line opens it to level 1, or closes it.
     if (kind === "rhead") { this.toggleLine(id); this.sel = id; return cx.notify(); }
-    if (["md", "nr", "code", "lh", "sx", "lg", "kd"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
+    // A click on a step group's line opens it to its calls (level 2), or closes it.
+    if (kind === "gp") {
+      const g = `${rest.slice(0, 2).join(":")}:${rest[2]}`;
+      if (this.groupOpen.has(g)) this.groupOpen.delete(g); else this.groupOpen.add(g);
+      this.sel = rest.slice(0, 2).join(":");
+      return cx.notify();
+    }
+    if (["md", "nr", "code", "lh", "sx", "lg", "it", "cl", "ws"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
   // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout).
@@ -3068,12 +3167,15 @@ export default class Threads extends View {
         // i shows what the numbers mean, opening the selected turn and its line first.
         this.legendOn = !this.legendOn;
         const k = this.sel;
-        if (this.legendOn && k && this.findTurn(k) && !this.findTurn(k).live) {
-          if (!this.open.has(k)) this.open.add(k);
+        if (this.legendOn && k && this.findTurn(k) && !this.isLiveKey(k)) {
+          if (!this.open.has(k)) this.toggle(k, cx);
           this.lineOpen.add(k);
+          this.lineTouched.add(k);
         }
         return true;
       }
+      case "deeper": return this.deeper(cx);
+      case "shallower": return this.shallower(cx);
       case "filter": this.filtering = true; this.settingsOpen = false; this.input.focus(); return true;
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
@@ -4203,6 +4305,12 @@ export default class Threads extends View {
     }
     const slots = this.slotsMemo;
     const due = this.probeDue();
+    // Parts left for later frames (PROBE_MAX): the parts drawn now report their sizes and
+    // ask for a frame, but one that never reports would not, so ask here too.
+    if (this.probeLeft > 0 && !this.probeNext) {
+      this.probeNext = true;
+      cx.timer.after(16, (cx) => { this.probeNext = false; cx.notify(); });
+    }
     this.flushCode(cx);
     this.flushImages(cx);
     // Scrolls wait until this frame has laid the list out with its new rows, and until every
@@ -4538,14 +4646,33 @@ export default class Threads extends View {
 
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure
-  // replaces it.
+  // replaces it. Kept per text until the width or the type changes: every rebuild of the
+  // rows asks again for each text in the list, and a turn's open work can hold hundreds of
+  // them. Worked out afresh on each rebuild, they ran past Herdr's time for a draw ("This
+  // view could not be re-rendered", interrupted). New texts share the reshaping time
+  // (SHAPE_MS): past it a text gets a rough height from its length, and the next frame
+  // works it out (render).
   mdHeight(md) {
     const w = this.prose();
     const { line } = this.rt();
+    const cw = this.charW(MD_CHAR);
+    const gap = this.paraGap();
+    const geo = `${w}|${line}|${cw}|${gap}`;
+    if (this.mdHeights?.geo !== geo || this.mdHeights.map.size > 4000) this.mdHeights = { geo, map: new Map() };
+    const known = this.mdHeights.map.get(md);
+    if (known != null) return known;
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
+    }
+    const t0 = now();
     let h = 0;
     const blocks = md.split(/\n{2,}/);
-    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, this.charW(MD_CHAR)) * line;
-    return h + (blocks.length - 1) * this.paraGap() + line;
+    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, cw) * line;
+    h += (blocks.length - 1) * gap + line;
+    this.mdHeights.map.set(md, h);
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return h;
   }
 
   chipRows(texts) {
@@ -4745,7 +4872,10 @@ export default class Threads extends View {
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r) + (r.caption ? 24 : 0);
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
-      case "kinds": return ROW.GAP + KINDS_H;
+      case "itext": return 6 + this.mdHeight(r.src);
+      case "grp": return STEP_GAP + GROUP_H;
+      case "call": return CALL_H;
+      case "wspin": return STEP_GAP + GROUP_H;
       case "stats": {
         const line = this.countsLine(r.turn);
         const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
@@ -4779,6 +4909,7 @@ export default class Threads extends View {
     switch (r.kind) {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
+      case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
@@ -4827,19 +4958,25 @@ export default class Threads extends View {
   // The parts still to measure, each drawn in the probe for at most three frames: a part
   // that never reports keeps its estimate (the debug report says "measured: none").
   probeDue() {
-    const out = [];
+    const want = [];
     this.probeTries ??= new Map();
     for (const r of this.probeRows ?? []) {
       if (this.measured(r) != null) continue;
       const sig = this.partSig(r);
       const k = `${r.key}|${sig}`;
-      const n = this.probeTries.get(k) ?? 0;
-      if (n >= 3) continue;
-      this.probeTries.set(k, n + 1);
-      out.push([r, sig]);
+      if ((this.probeTries.get(k) ?? 0) >= 3) continue;
+      want.push([r, sig, k]);
     }
+    if (want.length > PROBE_MAX) {
+      const top = (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0;
+      const at = (r) => this.baseIndex?.get(r.kind === "cmd" ? r.key.slice(4) : r.key) ?? 0;
+      want.sort((a, b) => Math.abs(at(a[0]) - top) - Math.abs(at(b[0]) - top));
+    }
+    const out = want.slice(0, PROBE_MAX);
+    for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
+    this.probeLeft = want.length - out.length;
     if (this.probeTries.size > 4000) this.probeTries.clear();
-    return out;
+    return out.map(([r, sig]) => [r, sig]);
   }
 
   // Zero height, clipped and fully transparent, outside the list: the parts laid out at the
@@ -5052,12 +5189,15 @@ export default class Threads extends View {
     if (this.failed(turn)) return d ? `Failed after ${d}` : "Failed";
     return d ? `Worked for ${d}` : "Worked";
   }
-  toggleLine(key) { if (this.lineOpen.has(key)) this.lineOpen.delete(key); else this.lineOpen.add(key); }
+  toggleLine(key, live = false) {
+    if (this.lineIsOpen(key, live)) this.lineOpen.delete(key); else this.lineOpen.add(key);
+    this.lineTouched.add(key);
+  }
   // The line as text, for the debug report and the tests: "plan · ⚠ Worked for 40s 📌 2".
   lineText(turn, key = null) {
     const pinNo = this.pinNumber(turn);
     return [this.mixedAgents(turn) ? `${this.agentName(turn)} ·` : null, this.workText(turn),
-      key && this.lineOpen.has(key) ? "[open]" : null, this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
+      key && this.lineIsOpen(key, false) ? "[open]" : null, this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
   }
 
   // The strip under a reply (ui.js actsLayout): on the selected turn, copy the reply, quote
@@ -5560,7 +5700,7 @@ export default class Threads extends View {
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
         return v_flex().pt(ROW.GAP)
-          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineOpen.has(tkey)))
+          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
               .when(i > 0, (el) => el.child(div().child("·")))
@@ -5668,10 +5808,27 @@ export default class Threads extends View {
               .child(svg(ICON("image")).size(13)).child(gone ? "Image no longer on disk" : st === "wait" ? "Loading image…" : "This image could not be shown"))
           .child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim).child(label));
       }
-      case "kinds":
-        return v_flex().pt(ROW.GAP).child(h_flex().h(KINDS_H).gap(6).items_center().min_w(0).text_size(12).text_color(t.dim)
-          .child(svg(ICON("wrench")).size(12).flex_none())
-          .child(div().flex_1().min_w(0).truncate().child(toolKindsText(turn.toolNames))));
+      case "itext":
+        // The agent's interim text, as Markdown at the reading size, between step groups.
+        return this.readBlock(div().mt(6)).child(this.mdView(tv(`th-it-${r.key}`), r.md, this.replySelectable()));
+      case "grp": {
+        // A step group's line: the tool icon (its calls are not read, so it claims no check),
+        // the spinner while it runs, and a chevron.
+        const open = this.groupOpen.has(`${tkey}:${r.gi}`);
+        return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
+          .child(r.now ? this.liveIcon(this.liveState(t), 12) : svg(ICON("wrench")).size(12).flex_none().text_color(t.dim))
+          .child(div().min_w(0).truncate().child(groupText(r.step.calls, r.step.count, r.now)))
+          .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
+      }
+      case "call":
+        // One call in an open group: its kind's icon and the tool's name. What it ran and
+        // printed are read when asked for (level 3).
+        return h_flex().h(CALL_H).pl(18).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
+          .child(svg(ICON(r.more ? "plus" : KIND_ICON[toolKind(r.name)])).size(12).flex_none())
+          .child(div().min_w(0).truncate().when(!r.more, (e) => e.font_family(mono)).child(r.more ? `${r.more} more calls` : r.name));
+      case "wspin":
+        return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().text_size(12.5).text_color(t.working)
+          .child(this.liveIcon(this.liveState(t), 12)).child("Working…");
       case "legend":
         return v_flex().mt(6).gap(4).children(this.legendEntries(turn).map(([icon, text]) => h_flex().gap(6).items_start()
           .child(svg(ICON(icon)).size(11).mt(4).flex_none().text_color(t.dim))
@@ -5720,7 +5877,7 @@ export default class Threads extends View {
     // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
-      : [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ...quote, ["/", "filter"], ...pinHint, ["o", "outline"]];
+      : [["↑↓", "move"], ["↵", "open"], ["c", "copy"], ...quote, ["/", "filter"], ...pinHint, ["→", "work"], ["o", "outline"]];
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
