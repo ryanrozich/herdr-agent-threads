@@ -230,3 +230,49 @@ test("a pasted image in a running Codex 0.166 turn reads and decodes", () => {
   expect(got.i).toBe(0);
   expect(readFileSync(join(cache, ID, got.file)).toString("base64")).toBe(PNG);
 });
+
+test("level 3: Codex calls carry their call ids, and calls.sh reads each one's input and output by id", () => {
+  ordinal = 0;
+  second = 0;
+  const dir = mkdtempSync(join(tmpdir(), "threads-codex-calls-"));
+  const file = join(dir, `rollout-2026-01-02T03-00-00-${ID}.jsonl`);
+  const call = (type, id, extra) => line("response_item", { type, call_id: id, ...extra });
+  writeFileSync(file, [
+    line("session_meta", { id: ID, cwd: "/home/dev/shop" }),
+    prompt("turn-0001", [{ type: "text", text: "Fix the cart total" }]),
+    call("function_call", "call_e1", { name: "exec_command", arguments: JSON.stringify({ cmd: "bun test cart", workdir: "/home/dev/shop" }) }),
+    call("function_call_output", "call_e1", { output: "Chunk ID: 1a\nWall time: 1.2 seconds\nProcess exited with code 1\nOutput:\n1 fail" }),
+    call("function_call", "call_s1", { name: "shell", arguments: JSON.stringify({ command: ["bash", "-lc", "ls src"] }) }),
+    call("function_call_output", "call_s1", { output: JSON.stringify({ output: "cart.ts\ntax.ts", metadata: { exit_code: 0 } }) }),
+    call("custom_tool_call", "call_p1", { name: "apply_patch", input: "*** Begin Patch\n*** Update File: src/cart.ts\n@@\n-a\n+b\n*** End Patch" }),
+    call("custom_tool_call_output", "call_p1", { output: JSON.stringify({ output: "Success.", metadata: { exit_code: 0 } }) }),
+    call("custom_tool_call", "call_x1", { name: "exec", input: 'const r = await tools.exec_command({cmd:"rg \\"total\\" src"});\ntext(r)' }),
+    call("custom_tool_call_output", "call_x1", { output: [{ type: "input_text", text: "Script completed\nWall time 0.2 seconds\nOutput:\n" }, { type: "input_text", text: '{"chunk_id":"9","exit_code":2,"output":"rg: src: no such file"}' }] }),
+    call("local_shell_call", "call_l1", { action: { type: "exec", command: ["git", "status"] } }),
+    call("function_call", "call_j1", { name: "js", arguments: JSON.stringify({ code: "await x()", title: "Read the cart" }) }),
+    call("function_call_output", "call_j1", { output: "Script failed\nTypeError" }),
+    say("Fixed."),
+    done(9000),
+  ].join(""));
+  const ev = execFileSync("sh", [extractor, file, "0", String(1 << 20), "codex"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(ev.filter((e) => e.k === "u").map((e) => `${e.n}:${e.id}`)).toEqual(["exec_command:call_e1", "shell:call_s1", "apply_patch:call_p1", "exec:call_x1", "shell:call_l1", "js:call_j1"]);
+  // No tool input reaches the events, only the ids.
+  expect(JSON.stringify(ev)).not.toContain("bun test cart");
+  const s = newSession(ID, file);
+  for (const e of ev) apply(s, e);
+  expect(s.turns[0].steps[0].ids).toEqual(["call_e1", "call_s1", "call_p1", "call_x1", "call_l1", "call_j1"]);
+  const calls = join(root, "mods/agent-threads/calls.sh");
+  const got = execFileSync("sh", [calls, file, "codex", ...s.turns[0].steps[0].ids], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const ins = Object.fromEntries(got.filter((x) => x.k === "in").map((x) => [x.id, x.in]));
+  expect(ins).toEqual({ call_e1: "bun test cart", call_s1: "ls src", call_p1: "src/cart.ts", call_x1: 'rg "total" src', call_l1: "git status", call_j1: "Read the cart" });
+  const outs = Object.fromEntries(got.filter((x) => x.k === "out").map((x) => [x.id, x]));
+  expect(Object.keys(outs).sort()).toEqual(["call_e1", "call_j1", "call_p1", "call_s1", "call_x1"]);
+  expect(outs.call_s1).toMatchObject({ out: "cart.ts\ntax.ts", err: false, lines: 2 });
+  expect(outs.call_p1).toMatchObject({ out: "Success.", err: false });
+  // Failed: a nonzero exit, a command its script ran that exited with a code, a failed script.
+  expect(outs.call_e1.err).toBe(true);
+  expect(outs.call_x1.err).toBe(true);
+  expect(outs.call_j1.err).toBe(true);
+  expect(outs.call_x1.out).toContain("rg: src: no such file");
+  expect(outs.call_e1.ts).toMatch(/^2026-01-02T03:/);
+});

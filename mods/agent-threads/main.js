@@ -59,6 +59,8 @@ const STEP_GAP = 4;
 const CALL_H = 20;
 // Calls read for level 3 kept in memory at once (pruneCalls).
 const CALLS_MAX = 800;
+// The agents whose calls calls.sh reads.
+const CALLS_READ = new Set(["claude", "codex"]);
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -1746,10 +1748,11 @@ export default class Threads extends View {
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
   isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
 
-  // Level 3's data. Calls are read for Claude Code so far: the group must carry its calls' ids.
+  // Level 3's data. Calls are read for Claude Code and Codex so far: the group must carry its
+  // calls' ids.
   readsCalls(si, st) {
     const file = this.sessions[si]?.file;
-    return Boolean(file && st?.ids?.some(Boolean) && harnessOfFile(file) === "claude");
+    return Boolean(file && st?.ids?.some(Boolean) && CALLS_READ.has(harnessOfFile(file)));
   }
   callEntry(si, id) { return id ? this.calls.get(`${this.sessions[si]?.file}#${id}`) ?? null : null; }
   // What a group's line adds from the calls read so far: whether one failed, and while the
@@ -1793,7 +1796,7 @@ export default class Threads extends View {
         const got = new Map();
         let ok = false;
         try {
-          const r = await exec("sh", [SCRIPT("calls.sh"), ...(job.tail ? ["--tail"] : []), job.file, "claude", ...job.ids]);
+          const r = await exec("sh", [SCRIPT("calls.sh"), ...(job.tail ? ["--tail"] : []), job.file, harnessOfFile(job.file), ...job.ids]);
           ok = r.code === 0;
           for (const l of ok ? r.stdout.split("\n") : []) {
             let x = null;

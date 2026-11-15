@@ -6,7 +6,8 @@
 # "out","lines"} for its result (at most 24 KB of text, and its whole line count). The panel
 # keeps these in memory only: nothing is written here, and nothing is saved.
 # --tail reads only the transcript's last 4 MB, for the newest call of a group still running.
-# Claude Code: the tool_use and tool_result blocks with these ids.
+# Claude Code: the tool_use and tool_result blocks with these ids. Codex: the calls and outputs
+# with these call ids.
 set -eu
 tail=
 if [ "${1:-}" = --tail ]; then tail=1; shift; fi
@@ -40,6 +41,43 @@ case $harness in
         elif .type == "tool_result" and (.tool_use_id as $i | $want | index($i)) != null then
           (.content | text) as $o
           | {id: .tool_use_id, k: "out", ts: $l.timestamp, err: (.is_error == true), out: $o[0:24576], lines: ($o | split("\n") | length)}
+        else empty end' -R
+    ;;
+  codex)
+    # Codex: response_item lines. A function_call's arguments are JSON in a string; a
+    # custom_tool_call's input is text (a patch, or the script its exec tool runs); a
+    # local_shell_call has its command as a list. Outputs are text, JSON with an output and
+    # an exit code, or a list of input_text parts. A compaction line repeats old calls inside
+    # its history, so only response_item lines count. A call failed when its script failed, it
+    # was aborted, or a command it ran (a chunk line of its exec tool) exited with a code.
+    if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | jq -c --arg ids "$ids" '
+      def argv: if type == "array" then (if .[2] != null and (.[1] | tostring | test("^-l?c$")) then .[2] else map(tostring) | join(" ") end) else . end;
+      def firstline: tostring | split("\n") | map(select(test("\\S"))) | (.[0] // "");
+      def input:
+        if .type == "function_call" then
+          ((.arguments // "") | (fromjson? // .)) as $a
+          | if ($a | type) == "object" then
+              ($a.cmd // ($a.command | if . == null then null else argv end) // $a.title // $a.path // $a.file_path // $a.query // $a.url // $a.message // ($a.code | if . == null then null else firstline end) // ($a | tojson))
+            else $a end
+        elif .type == "local_shell_call" then (.action.command // [] | argv)
+        else (.input // "" | tostring) as $i
+          | ($i | [scan("\\*\\*\\* (?:Update|Add|Delete) File: ([^\n]+)")] | map(.[0])) as $files
+          | (first($i | match("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"") | .captures[0].string) // null | if . == null then null else (("\"" + . + "\"") | fromjson? // .) end) as $cmd
+          | if ($files | length) != 0 then ($files | join(", ")) elif $cmd then $cmd else ($i | firstline) end
+        end | tostring | .[0:400];
+      def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and (.type == "input_text" or .type == "output_text" or .type == "text")) | .text) | join("\n")) elif . == null then "" else tojson end;
+      ($ids | split(" ") | map(select(. != ""))) as $want
+      | (fromjson? // empty) | select(type == "object" and .type == "response_item") | . as $l | ($l.payload // {}) as $p
+      | select(($p.call_id | type) == "string" and (($p.call_id) as $i | $want | index($i)) != null)
+      | if ($p.type == "function_call" or $p.type == "custom_tool_call" or $p.type == "local_shell_call") then
+          {id: $p.call_id, k: "in", ts: $l.timestamp, in: ($p | input)}
+        elif ($p.type == "function_call_output" or $p.type == "custom_tool_call_output") then
+          ($p.output | if type == "string" then (fromjson? // .) else . end) as $o
+          | (if ($o | type) == "object" and ($o | has("output")) then ($o.output | text) else ($o | text) end) as $t
+          | ((($o | type) == "object" and ((($o.metadata.exit_code? // 0) != 0) or $o.success? == false))
+             or ($t | split("\n") | .[0:8] | any(test("^(Script failed|aborted)|tool failed|^Process exited with code [1-9]|^Exit code: [1-9]|^\\{\"chunk_id\".*\"exit_code\":[1-9]")))) as $err
+          | {id: $p.call_id, k: "out", ts: $l.timestamp, err: $err, out: $t[0:24576], lines: ($t | split("\n") | length)}
         else empty end' -R
     ;;
   *) echo "not read for $harness yet" >&2; exit 4 ;;

@@ -12,7 +12,7 @@ Tested on Claude Code 2.1.318, Codex CLI 0.160.0, OpenCode 1.19.5 and 2.2.5, Pi 
 | Pasted images | Yes | Yes | Yes | Yes, while the temporary file Pi saved is on disk | No, the word `[Image]` shows in their place | No |
 | Tokens, time, model, tool count, cache hit | Yes | Yes | Yes | Yes | Tool count, and the time of a turn the pane watched. No tokens, model or cache | Yes, with the model you chose in agy |
 | Agent messages | Yes | Yes | No | No | No | No |
-| Each call's command and output, in an open group | Yes | Not yet, tool names only | Not yet, tool names only | Not yet, tool names only | Not yet, tool names only | Not yet, tool names only |
+| Each call's command and output, in an open group | Yes | Yes | Not yet, tool names only | Not yet, tool names only | Not yet, tool names only | Not yet, tool names only |
 | Reads its session from | A JSONL file | A JSONL file | A SQLite database, read-only | A JSONL file | A JSONL file | A JSONL file |
 | Finds the terminal's session by | The process's session record, or for `claude attach` the background session's record | The file the process has open, or the one Codex's app-server daemon has open for its folder | The terminal's title, then its folder (for `opencode attach`, the server's folder or `--dir`) | Its command line, then its folder | The chat the process has open, then its command line, then its folder | The conversation folder the process has open, then its command line |
 
