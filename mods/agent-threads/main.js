@@ -773,7 +773,7 @@ export default class Threads extends View {
         const time = callTime(c?.inTs, c?.outTs);
         return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
       }
-      case "cout": return `cout${n} ${r.st} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
+      case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
       case "wspin": return `wspin${n} Working…`;
       case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
@@ -1735,7 +1735,9 @@ export default class Threads extends View {
         if (!id || !this.callOpen.has(`${key}:${i}:${j}`)) return;
         const c = this.callEntry(item.si, id);
         const all = this.callAll.has(`${key}:${i}:${j}`);
-        out.push({ ...item, live: false, kind: "cout", key: `co:${key}:${i}:${j}`, id, gi: i, ci: j, all,
+        // The running group's newest call with no result yet is still running.
+        const going = now && j === st.calls.length - 1 && c?.st === "ok" && c.out == null;
+        out.push({ ...item, live: false, kind: "cout", key: `co:${key}:${i}:${j}`, id, gi: i, ci: j, all, going,
           st: c?.st ?? "wait", box: outLines(c?.out, all, c?.lines) });
       });
       if (st.count > st.calls.length) out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:more`, more: st.count - st.calls.length });
@@ -6001,7 +6003,7 @@ export default class Threads extends View {
         // A call's output (level 3): mono lines, not wrapped, OUT.SHOW of them with the last
         // ones fading when more are left out, and Show all (up to OUT.MAX) or Show less.
         const lines = r.box.lines;
-        const note = r.st === "wait" ? "Reading…" : r.st === "err" ? "Could not read this call" : r.st === "none" ? "Not in the transcript" : "No output";
+        const note = r.going ? "Running…" : r.st === "wait" ? "Reading…" : r.st === "err" ? "Could not read this call" : r.st === "none" ? "Not in the transcript" : "No output";
         const fade = (i) => (r.box.cut && i >= lines.length - 3 ? alpha(t.muted, [0.75, 0.5, 0.25][i - (lines.length - 3)]) : t.muted);
         const more = r.box.cut ? (r.all ? `Showing ${lines.length} of ${r.box.total} lines` : `Show all ${r.box.total} lines`) : r.all && r.box.total > OUT.SHOW ? "Show less" : null;
         return v_flex().pl(18).pt(2).pb(2).min_w(0).max_w(this.prose())

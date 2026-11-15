@@ -5359,7 +5359,9 @@ test("level 3 while a turn runs: the running group names what runs now; an open 
   expect(detail(`cl:${a}:0:0`)).toBe("call#1 one bun run e2e [closed]");
   v.click(`cl:${a}:0:0`, cx);
   await settled();
-  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 0\/0 /);
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok running lines 0\/0 /);
+  // Its box says so, not "No output".
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).going).toBe(true);
   // The output arrives: once the session grows, the open call is read again.
   const res = { type: "user", timestamp: ts(20), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_b1", content: "12 passed" }] } };
   writeFileSync(file, `${JSON.stringify(use)}\n${JSON.stringify(res)}\n`);
