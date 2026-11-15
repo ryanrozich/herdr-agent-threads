@@ -3071,6 +3071,17 @@ export default class Threads extends View {
   click(key, cx) {
     const [kind, ...rest] = key.split(":");
     const id = rest.join(":");
+    // While the Turn card is open, a press anywhere closes it and does nothing else: the card
+    // is drawn inside a list item, which can carry no handlers, so a press on the card lands on
+    // whatever item lies under it. A press on another line's info icon moves it there.
+    if (this.detailsOpen && Popup) {
+      const x = this.pressX ?? this.mouseX;
+      const other = kind === "rhead" && id !== this.sel && this.infoHit(x);
+      this.pressX = null;
+      this.detailsOpen = other;
+      if (other) this.sel = id;
+      return cx.notify();
+    }
     // A press in the Select view's editor or a code block's editor belongs to that editor:
     // taking the keyboard back here would blur it and clear the selection the person just
     // made. The card is still selected (c, q and s act on it), with a redraw only when the
@@ -3190,12 +3201,12 @@ export default class Threads extends View {
       if (seg) this.copy(seg.text, `code:${id}`, `Code copied · ${plural(seg.text.split("\n").length, "line")}`, cx);
       return;
     }
-    // A click on the line opens it to level 1, or closes it. On an open line the info icon at
-    // its right end opens the Turn card, or closes it.
+    // A click on the line opens it to level 1, or closes it. The info icon at its right end
+    // opens the Turn card, or closes it, and leaves the line as it was.
     if (kind === "rhead") {
       const x = this.pressX ?? this.mouseX;
       this.pressX = null;
-      if (this.lineIsOpen(id, false) && this.infoHit(x)) {
+      if (this.infoHit(x)) {
         this.detailsOpen = !(this.detailsOpen && this.sel === id);
         if (this.detailsOpen) this.keysOpen = false;
         this.sel = id;
@@ -3351,8 +3362,13 @@ export default class Threads extends View {
       case "legend": {
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (!this.sel || !this.findTurn(this.sel)) return false;
+        // Beside the selected turn's Worked for line, brought on screen first. A running
+        // turn has no settled line, so nothing to show it beside.
+        const at = Popup ? this.detailsAnchor(this.sel) : this.sel;
+        if (!at) return false;
         this.detailsOpen = true;
         this.keysOpen = false;
+        if (Popup && !this.onScreen(at)) this.scrollTo = { key: at, how: "top" };
         return true;
       }
       case "deeper": return this.deeper(cx);
@@ -3930,7 +3946,7 @@ export default class Threads extends View {
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .child(this.footer(t))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
-      .when(Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
+      .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -5544,17 +5560,49 @@ export default class Threads extends View {
         .child(div().flex_1())
         .when(pinned, (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
-        .when(Boolean(info), (el) => el.child(div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
-          .child(svg(ICON("info")).size(12).when(info !== "hover", (e) => e.text_color(info === "on" ? t.accent : t.dim))))));
+        .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
-  // The info icon's state on a turn's line: none while the line is closed.
+  infoIcon(t, state) {
+    return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
+      .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
+  }
+  // The info icon of a turn's line, for item itemKey. Where the card is open for this turn it
+  // is the card's anchor: a Popup with the card's top right corner under the icon's right
+  // edge, or its bottom right corner over it when the line is low in the pane (detailsDir).
+  // Never in the hidden probe, which would draw a second card.
+  lineIcon(t, itemKey, key, probe) {
+    const state = this.infoState(key);
+    if (probe || state !== "on" || !Popup) return { state };
+    const turn = this.findTurn(key);
+    if (!turn || this.detailsAnchor(key) !== itemKey) return { state };
+    const up = this.detailsDir(itemKey, turn) === "up";
+    return { state, el: Popup.new(`th-details-${key}`, this.infoIcon(t, state)).anchor(up ? "bottom_right" : "top_right")
+      .content(this.detailsCard(t, turn, up)) };
+  }
+  // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
+  // the pointer is on the line).
   infoState(key) {
-    if (!this.lineIsOpen(key, false)) return null;
     if (this.sel !== key) return "hover";
     return this.detailsOpen ? "on" : "sel";
   }
-  // An open line on a turn not selected shows its info icon while the pointer is on it.
+  // A line on a turn not selected shows its info icon while the pointer is on it.
   lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
+  // The list item whose Worked for line the card opens beside: an open turn's line, or a
+  // closed turn's row. Null for a running turn, the outline and the Pinned view.
+  detailsAnchor(key) {
+    const rows = this.rowsMemo ?? this.rows();
+    if (rows.some((r) => r.key === `rhead:${key}`)) return `rhead:${key}`;
+    const row = rows.find((r) => r.key === key);
+    return row && row.kind === "turn" && !row.live && !row.running && !row.compact ? key : null;
+  }
+  // Whether a list item was in the range the list last drew.
+  onScreen(key) {
+    const rows = this.rowsMemo ?? [];
+    const i = rows.findIndex((r) => r.key === key);
+    const [a, b] = this.viewRange ?? [0, 0];
+    return i >= a && i < b;
+  }
   // The line's words: "Worked for 2m 31s"; a stopped or failed turn says how long it ran.
   workText(turn) {
     const d = turn.durationMs ? fmtDuration(turn.durationMs) : null;
@@ -5721,7 +5769,8 @@ export default class Threads extends View {
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
       ]),
-      this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn)),
+      r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
+        : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
@@ -6074,7 +6123,7 @@ export default class Threads extends View {
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
         return this.lineInfo(t, tkey, v_flex().pt(ROW.GAP))
-          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.infoState(tkey)))
+          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.lineIcon(t, r.key, tkey, probe)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
               .when(i > 0, (el) => el.child(div().child("·")))
@@ -6304,33 +6353,65 @@ export default class Threads extends View {
             .children(items.map(row))))));
   }
 
-  // i: the Turn card, over the bottom of the pane like the ? sheet, with the selected turn's
-  // numbers and what each means (detailRows). The list does not move under it, and it
-  // follows the selection, so ↑ ↓ compare turns. i, Esc or its close button closes it.
-  detailsTurn() { return this.detailsOpen && this.sel ? this.findTurn(this.sel) : null; }
-  detailsView(t) {
-    const turn = this.detailsTurn();
-    if (!turn) return div();
-    const close = (_e, cx) => { cx.stop_propagation(); this.detailsOpen = false; cx.notify(); };
-    const room = Math.max(120, (this.rootH || 600) - 46 - (this.footerH ?? 38) - 16);
+  // i: the Turn card, with the selected turn's numbers and what each means (detailRows). It
+  // opens beside the info icon of the turn's Worked for line (lineIcon), follows the
+  // selection, so ↑ ↓ compare turns, and closes with i, Esc or any press. On Herdr before
+  // 0.1.15 (no Popup) it sits over the bottom of the pane instead, like the ? sheet.
+  cardW() { return Math.min(420, Math.min(replyWidth(this.width), this.prose()) + 8); }
+  detailsCard(t, turn, up = false) {
     const row = ([label, value, what, under]) => h_flex().gap(14).items_start().min_w(0)
       .child(div().flex_none().w(78).text_size(12.5).line_height("18px").text_color(t.muted).child(label))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().text_size(12.5).line_height("18px").text_color(t.foreground).child(value))
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
-    const live = this.isLiveKey(this.sel);
+    return v_flex().id("th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
+      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
+        .child(this.kbd(t, "i"))
+        .child(div().flex_none().size(22).flex().items_center().justify_center().child(svg(ICON("x")).size(13).text_color(t.dim))))
+      .child(v_flex().px(12).pb(12).gap(8).children(this.detailRows(turn).map(row)));
+  }
+  // The card's height before it is drawn: the head, then each row's value, counts and
+  // explanation, wrapped at the card's text width.
+  cardH(turn) {
+    const per = Math.max(10, Math.floor((this.cardW() - 24 - 78 - 14) / 6.2));
+    return 34 + 12 + this.detailRows(turn).reduce((h, [, , what, under], i) => h + (i ? 8 : 0) + 18 + 2 + (under ? 18 : 0) + wrappedLines(what, per) * 16, 0);
+  }
+  // Down from the icon, or up when the line sits low in the pane and the card would not fit
+  // under it. The list says which items it drew, not where, so the line's height in the pane
+  // is worked out from the item sizes: how far the first drawn item is scrolled off is what
+  // keeps the last drawn item on screen and the next one off (exact at the end of the list).
+  detailsDir(itemKey, turn) {
+    const rows = this.rowsMemo ?? [];
+    const sizes = this.sizesMemo ?? [];
+    const i = rows.findIndex((r) => r.key === itemKey);
+    const [a, b] = this.viewRange ?? [0, 0];
+    if (i < a || i >= b) return "down";
+    let all = 0;
+    for (let k = a; k < b; k++) all += sizes[k] ?? 0;
+    const last = sizes[b - 1] ?? 0;
+    const H = this.listH;
+    const lo = Math.max(0, all - last - H);
+    const hi = b >= rows.length ? Math.max(lo, all - H) : Math.max(lo, Math.min(sizes[a] ?? 0, all - H));
+    let y = b >= rows.length ? -Math.max(0, all - H) : -(lo + hi) / 2;
+    for (let k = a; k < i; k++) y += sizes[k] ?? 0;
+    // An open turn's line item has the line at its top; a closed row has it over the start of
+    // the reply and the strip.
+    const sh = rows[i].shape;
+    const under = (sh?.reply?.length ?? 2) * this.rt().line + (sh?.rMore ? ROW.MORE : 0) + ROW.GAP + ROW.ACTS + ROW.PAD_B;
+    y += itemKey.startsWith("rhead:") ? ROW.GAP + ROW.LINE : (sizes[i] ?? 0) - under;
+    const h = this.cardH(turn) + 4;
+    return y + h > H && y - ROW.LINE > h ? "up" : "down";
+  }
+  detailsTurn() { return this.detailsOpen && this.sel ? this.findTurn(this.sel) : null; }
+  detailsView(t) {
+    const turn = this.detailsTurn();
+    if (!turn) return div();
     return h_flex().absolute().bottom((this.footerH ?? 38) + 8).left(0).right(0).px(8).justify_center()
-      .child(v_flex().id("th-details").w_full().max_w(420)
-        .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
-        .on_click((_e, cx) => cx.stop_propagation())
-        .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
-          .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground)
-            .child(live ? `Turn #${turn.n} · so far` : `Turn #${turn.n}`))
-          .child(this.kbd(t, "i"))
-          .child(this.iconButton(t, "th-details-close", "x", "Close (Esc)", close)))
-        .child(v_flex().id("th-details-list").max_h(room - 34).overflow_y_scrollbar().px(12).pb(12).gap(8)
-          .children(this.detailRows(turn).map(row))));
+      .on_click((_e, cx) => { cx.stop_propagation(); this.detailsOpen = false; cx.notify(); })
+      .child(this.detailsCard(t, turn).mt(0));
   }
 
   // True when the shown turns span more than one day (day dividers, and [ ] moves by day).

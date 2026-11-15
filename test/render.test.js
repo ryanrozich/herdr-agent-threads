@@ -1585,53 +1585,123 @@ test("Turn card: i opens the selected turn's numbers over the bottom of the pane
   expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
 });
 
-test("Turn card: the open line's info icon shows on the selected turn and under the pointer, and a press on it opens the card", async () => {
+test("Turn card: every settled Worked for line has the info icon, on the selected turn and under the pointer, and a press on it opens the card beside it", async () => {
   const { v, cx } = await pane(fixture());
-  const t = v.current().turns.find((x) => x.tools > 0);
+  const t = v.current().turns.find((x) => x.tools > 0 && x.done);
   const key = `0:${t.n}`;
-  v.open = new Set([key]);
   v.width = 380;
-  const lineOf = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
+  v.bodyW = 380;
+  const right = 16 + Math.min(380 - 32, v.prose());
+  const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
+  const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed line has no icon.
+  // A closed turn: its row's line has the icon, dim when selected, revealed by the pointer
+  // otherwise (no colour of its own, inside a hover reveal).
   v.sel = key;
-  expect(v.infoState(key)).toBe(null);
-  expect(icons(lineOf())).not.toContain("info.svg");
-  v.toggleLine(key);
-  // Selected: drawn in the dim colour.
+  expect(icons(rowOf())).toContain("info.svg");
+  v.sel = null;
+  let c = rowOf();
+  expect(icons(c)).toContain("info.svg");
+  let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
+  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  // An open turn with its line closed: the icon too.
+  v.open = new Set([key]);
+  v.sel = key;
+  expect(v.lineIsOpen(key, false)).toBe(false);
   expect(v.infoState(key)).toBe("sel");
-  expect(icons(lineOf())).toContain("info.svg");
-  // Not selected: drawn with no colour of its own inside a hover reveal.
+  expect(icons(partOfLine())).toContain("info.svg");
   v.sel = null;
   expect(v.infoState(key)).toBe("hover");
-  const c = lineOf();
-  expect(icons(c)).toContain("info.svg");
+  c = partOfLine();
   expect(c.some((e) => e[0] === "id" && e[1] === `rh:${key}`)).toBe(true);
-  const at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
+  at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
   expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
-  // A press at the line's right end opens the card on that turn and leaves the line open.
-  const right = 16 + Math.min(380 - 32, v.prose());
-  v.bodyW = 380;
+  // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
   expect(v.detailsOpen).toBe(true);
   expect(v.sel).toBe(key);
-  expect(v.lineIsOpen(key, false)).toBe(true);
+  expect(v.lineIsOpen(key, false)).toBe(false);
   expect(v.infoState(key)).toBe("on");
-  // Again closes it.
-  v.pressX = right - 6;
-  v.click(`rhead:${key}`, cx);
-  expect(v.detailsOpen).toBe(false);
-  expect(v.lineIsOpen(key, false)).toBe(true);
-  // A press on the words closes the line, as before.
+  // The card is a Popup on the icon, its top right corner under the icon's right edge.
+  c = partOfLine();
+  const pop = c.findIndex((e) => e[0] === "Popup" && e[1] === `th-details-${key}`);
+  expect(pop).toBeGreaterThan(-1);
+  expect(c.slice(pop).some((e) => e[0] === "anchor" && e[1] === "top_right")).toBe(true);
+  expect(c.some((e) => e[0] === "child" && e[1] === `Turn #${t.n}`)).toBe(true);
+  // Never in the hidden probe.
+  rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), true); const pc = rec; rec = null;
+  expect(pc.some((e) => e[0] === "Popup")).toBe(false);
+  // While open, any press closes it and does nothing else: a press on the words of the line
+  // does not open the line.
   v.pressX = 40;
   v.click(`rhead:${key}`, cx);
-  expect(v.lineIsOpen(key, false)).toBe(false);
   expect(v.detailsOpen).toBe(false);
-  // A keyboard press (no position) toggles the line.
-  v.pressX = null; v.mouseX = null;
+  expect(v.lineIsOpen(key, false)).toBe(false);
+  // With the card closed, a press on the words opens the line, as before.
+  v.pressX = 40;
   v.click(`rhead:${key}`, cx);
   expect(v.lineIsOpen(key, false)).toBe(true);
+  // The icon again on the open line: the card, and the line stays open.
+  v.pressX = right - 6;
+  v.click(`rhead:${key}`, cx);
+  expect(v.detailsOpen).toBe(true);
+  expect(v.lineIsOpen(key, false)).toBe(true);
+  // A press on another item while open closes the card and leaves that item alone.
+  const md = v.rows().find((r) => r.kind === "md" && partOf(r, key));
+  if (md) {
+    v.click(md.key, cx);
+    expect(v.detailsOpen).toBe(false);
+  }
+  // A keyboard press (no position) on the line toggles the line.
+  v.pressX = null; v.mouseX = null;
+  v.click(`rhead:${key}`, cx);
+  expect(v.lineIsOpen(key, false)).toBe(false);
+});
+
+test("Turn card: i opens it beside the selected turn's line, brings that line on screen first, and opens upward when the line sits low", async () => {
+  const { v, cx } = await pane(fixture());
+  const turns = v.current().turns.filter((x) => x.done);
+  const t = turns[turns.length - 2];
+  const key = `0:${t.n}`;
+  v.width = 380;
+  v.sel = key;
+  const rows = v.rows();
+  v.rowsMemo = rows;
+  // A closed turn: the anchor is its row; an open one: its line.
+  expect(v.detailsAnchor(key)).toBe(key);
+  // Off screen: i asks the list to bring the row on screen.
+  const i = rows.findIndex((r) => r.key === key);
+  v.viewRange = [i + 1, i + 3];
+  v.scrollTo = null;
+  v.key(keyEv("i"), cx);
+  expect(v.detailsOpen).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key, how: "top" });
+  v.action("escape", cx);
+  // On screen near the top: no scroll, and the card opens down.
+  v.viewRange = [i, i + 4];
+  v.scrollTo = null;
+  v.key(keyEv("i"), cx);
+  expect(v.scrollTo).toBe(null);
+  expect(v.detailsDir(key, t)).toBe("down");
+  // Low in the pane: up.
+  v.sizesMemo = rows.map(() => 120);
+  v.listH = 600;
+  v.viewRange = [Math.max(0, i - 4), i + 1];
+  expect(i).toBeGreaterThanOrEqual(4);
+  {
+    expect(v.detailsDir(key, t)).toBe("up");
+    rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null;
+    expect(c.some((e) => e[0] === "anchor" && e[1] === "bottom_right")).toBe(true);
+  }
+  v.action("escape", cx);
+  // An open turn anchors to its line.
+  v.open = new Set([key]);
+  v.rowsMemo = v.rows();
+  expect(v.detailsAnchor(key)).toBe(`rhead:${key}`);
+  // The card's width keeps its left edge in the pane.
+  expect(v.cardW()).toBeLessThanOrEqual(Math.min(380 - 32, v.prose()) + 8);
+  expect(v.cardH(t)).toBeGreaterThan(100);
 });
 
 // ---- round 3: D1 ----------------------------------------------------------------------------
