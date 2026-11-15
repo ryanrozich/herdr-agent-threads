@@ -41,7 +41,10 @@ def tokens:
 
 def reply:
   ((.content // "") as $t | if ($t | length) > 0 then {k: "t", t: ($t | cap)} else empty end),
-  (.tool_calls[]? | select(type == "object") | {k: "u", n: (.name // "tool")}),
+  # A call has no id: "s<step>.<i>" names it, the planner step's i-th call, whose result is the
+  # step at <step> + 1 + i (calls.sh).
+  (.step_index as $s | (.tool_calls // []) | to_entries[] | select(.value | type == "object")
+   | {k: "u", n: (.value.name // "tool")} + (if ($s | type) == "number" then {id: "s\($s).\(.key)"} else {} end)),
   tokens,
   (if .status == "ERROR" then {k: "e", t: ((.error // "error") | tostring | cap)} else empty end),
   (if ((.content // "") | length) > 0 and ((.tool_calls // []) | length) == 0

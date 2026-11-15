@@ -60,7 +60,7 @@ const CALL_H = 20;
 // Calls read for level 3 kept in memory at once (pruneCalls).
 const CALLS_MAX = 800;
 // The agents whose calls calls.sh reads.
-const CALLS_READ = new Set(["claude", "codex", "pi", "opencode"]);
+const CALLS_READ = new Set(["claude", "codex", "pi", "opencode", "antigravity"]);
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -1748,8 +1748,8 @@ export default class Threads extends View {
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
   isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
 
-  // Level 3's data. Calls are read for Claude Code, Codex, Pi and OpenCode so far: the group
-  // must carry its calls' ids.
+  // Level 3's data. Calls are read for every agent but Cursor, which records no calls' ids or
+  // output: the group must carry its calls' ids.
   readsCalls(si, st) {
     const file = this.sessions[si]?.file;
     return Boolean(file && st?.ids?.some(Boolean) && CALLS_READ.has(harnessOfFile(file)));

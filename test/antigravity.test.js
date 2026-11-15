@@ -91,7 +91,7 @@ test("builds turns from an Antigravity conversation", () => {
   expect(plain.ts).toBe(Date.parse("2026-01-05T15:07:00Z"));
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.toolNames).toEqual({ read_file: 1 });
-  expect(plain.steps).toEqual([{ k: "group", calls: ["read_file"], count: 1 }]);
+  expect(plain.steps).toEqual([{ k: "group", calls: ["read_file"], ids: ["s1.0"], count: 1 }]);
   expect(plain.done).toBe(true);
   // The turn ran from its prompt to its answer.
   expect(plain.durationMs).toBe(5000);
@@ -177,4 +177,31 @@ test("locate.sh agy-open names the conversation folder a process holds open", as
     p.kill();
   }
   expect(execFileSync("sh", [locator, "agy-dir"], { encoding: "utf8", env: { ...process.env, AGY_DATA_DIR: data } }).trim()).toBe(data);
+});
+
+test("level 3: a call is named by its planner step and place, and calls.sh reads it and the result step after it", () => {
+  step = 0;
+  const body = [
+    user("Fix the cart total", 0),
+    line({ step_index: step++, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(1), input_tokens: 10, output_tokens: 1, cache_read_tokens: 0,
+      tool_calls: [{ name: "read_file", args: { Path: "/home/dev/shop/src/cart.ts", StartLine: 1, EndLine: 9 } }, { name: "run_command", args: { CommandLine: "bun test cart", WaitMsBeforeAsync: 500 } }] }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "ERROR", created_at: at(2), error: "no such file",
+      content: "Created At: 2026-01-05T09:07:02-06:00\nCompleted At: 2026-01-05T09:07:02-06:00\nEncountered error in step execution: no such file" }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "DONE", created_at: at(3),
+      content: "Created At: 2026-01-05T09:07:03-06:00\nCompleted At: 2026-01-05T09:07:09-06:00\nCommand output:\n1 fail\nexpected 3" }),
+    line({ step_index: step++, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(12), content: "Fixed.", input_tokens: 10, output_tokens: 1, cache_read_tokens: 0 }),
+  ].join("");
+  const f = file(body);
+  const s = read(f, 1 << 20);
+  expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["s1.0", "s1.1"]);
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), f, "antigravity", "s1.0", "s1.1", "s9.0"], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["s1.0", "/home/dev/shop/src/cart.ts"], ["s1.1", "bun test cart"]]);
+  // The result's text leaves out its time lines; its time is when it completed.
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.ts])).toEqual([
+    ["s1.0", true, "Encountered error in step execution: no such file", "2026-01-05T09:07:02-06:00"],
+    ["s1.1", false, "Command output:\n1 fail\nexpected 3", "2026-01-05T09:07:09-06:00"],
+  ]);
+  // An id that is not s<step>.<i> matches nothing.
+  expect(execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), f, "antigravity", "call_1"], { encoding: "utf8" })).toBe("");
 });
