@@ -85,8 +85,6 @@ function mark(key, size) {
 // Pasted images, decoded by image.sh into the mod's data folder (kept across installs, never
 // in the repo, trimmed to 200 MB). image() takes paths from the app home.
 const IMG_DIR = `data/${MOD}/images`;
-const IMG_MAX_H = 260;
-const IMG_FULL_H = 1600;
 // Bytes per extractor call. A 6.7 MB busy transcript reads in 4 calls, so the header's
 // percentage moves, and each call's parse and apply run in slices (read()).
 const CHUNK = 2 * 1024 * 1024;
@@ -177,7 +175,7 @@ const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "stats
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -597,7 +595,7 @@ export default class Threads extends View {
     this.res = { kind: "resolving" };
     this.sel = null; // key of the selected turn
     this.open = new Set(); // keys of expanded turns
-    this.full = new Set(); // keys showing the whole prompt ("k"), an image ("i:k:n") or an update ("l:k")
+    this.full = new Set(); // keys showing the whole prompt ("k") or an update ("l:k")
     this.selecting = null; // the open turn whose reply shows as selectable source
     this.selEditor = null; // { key, st, text }
     this.code = new Map(); // `${key}:${i}` -> { st: EditorState, or false when it could not be made, text }
@@ -1709,12 +1707,23 @@ export default class Threads extends View {
         const item = { kind: "turn", key, turn, s, si, last, live };
         if (live) this.liveRows(item, out);
         else if (this.open.has(key)) this.expanded(item, out);
-        else out.push({ ...item, shape: this.shape(turn) });
+        else this.closedRows(item, out);
         if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
       });
       flush();
     });
     return out;
+  }
+
+  // A closed turn. With pasted images its meta line and tiles are an item of their own
+  // ("wtop", keyed imgs:<turn>), as a running turn's are, so a click on a tile opens the review
+  // at that image (a list item has one click handler), and the row follows without its meta
+  // line ("split").
+  closedRows(item, out) {
+    const shape = this.shape(item.turn);
+    if (!shape.thumbs) { out.push({ ...item, shape }); return; }
+    out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
+    out.push({ ...item, shape, split: true });
   }
 
   // The running turn. With pasted images its meta line and tiles are an item of their own
@@ -2240,11 +2249,8 @@ export default class Threads extends View {
     const resume = this.resumeAt();
     const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
-    // Pasted images: their tiles over the message, and under the tiles each one opened full size.
-    if (turn.images?.length) {
-      out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
-      turn.images.forEach((_, i) => { if (this.full.has(`i:${key}:${i}`)) out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: true }); });
-    }
+    // Pasted images: their tiles over the message. A tile opens the review.
+    if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
     out.push({ ...item, kind: "ustrip", key: `us:${key}` });
     const text = this.replyText(turn);
@@ -2633,29 +2639,16 @@ export default class Threads extends View {
   imgGone(turn, i) { return Boolean(this.imgs?.get(turn.imgLine)?.files?.some((f) => f.i === i && f.gone)); }
   imgState(turn) { return this.imgs?.get(turn.imgLine)?.st ?? "wait"; }
 
-  // An open card's image box, in design px: the image at the card's text width or its own
-  // size (never enlarged), at most IMG_MAX_H tall, or IMG_FULL_H once clicked.
-  imgBox(r) {
-    const w = this.inner();
-    const f = this.imgFile(r.turn, r.i);
-    if (!f) return { w, h: this.imgState(r.turn) === "wait" ? 120 : 44 };
-    if (!(f.w > 0 && f.h > 0)) return { w, h: r.full ? 600 : 200 };
-    const natural = Math.min(f.h, (f.h * w) / f.w);
-    const h = Math.max(24, Math.round(Math.min(natural, r.full ? IMG_FULL_H : IMG_MAX_H)));
-    return { w: Math.min(w, Math.round((h * f.w) / f.h)), h };
-  }
-
-  // The tiles over a message (ui.js tileRow): the images that fit, then "+N". In an open
-  // card a tile shows a ring while that image is open full size below.
+  // The tiles over a message (ui.js tileRow): the images that fit, then "+N". Each opens the
+  // review at its image.
   tileLayout(turn) { return tileRow(turn.images.map((_, i) => this.imgFile(turn, i)), this.width, this.prefs.textSize, this.chars()); }
-  thumbStrip(t, turn, key, open = false) {
+  thumbStrip(t, turn, key) {
     this.wantImages(turn, key);
     const L = this.tileLayout(turn);
     return h_flex().h(L.size).gap(TILE_GAP).justify_end().items_center().min_w(0)
       .children(L.tiles.map(({ i, w }) => {
         const f = this.imgFile(turn, i);
-        const on = open && this.full.has(`i:${key}:${i}`);
-        return div().flex_none().w(w).h(L.size).rounded(10).overflow_hidden().border_1().border_color(on ? t.accent : t.border).bg(t.background)
+        return div().flex_none().w(w).h(L.size).rounded(10).overflow_hidden().border_1().border_color(t.border).bg(t.background)
           .when(Boolean(f), (el) => el.child(image(f.path).size_full()))
           .when(!f, (el) => el.flex().items_center().justify_center().child(svg(ICON("image")).size(16).text_color(t.dim)));
       }))
@@ -2663,9 +2656,8 @@ export default class Threads extends View {
         .text_size(12).text_color(t.muted).child(`+${L.more}`)));
   }
 
-  // The image a press on an open card's tiles landed on, or the first one. The tiles sit on
-  // the right of the card's text width.
-  // With strict, a press that misses the tiles gives null.
+  // The image a press on a row of tiles landed on, or the first one. The tiles sit on the
+  // right of the card's text width. With strict, a press that misses the tiles gives null.
   tileAt(turn, strict = false) {
     const L = this.tileLayout(turn);
     const x = this.pressX;
@@ -3125,33 +3117,18 @@ export default class Threads extends View {
       return;
     }
     if (kind === "imgs") {
+      // A tile opens the review at its image, on any turn: at rest, open or running. It
+      // selects the turn and changes nothing else, so the list is as it was when the review
+      // closes. "+N" opens the first image the tiles leave out. A press beside the tiles on a
+      // closed turn opens it, as a press on the rest of its row does; on a running or open
+      // turn it selects it. A missing image takes no click.
       const turn = this.findTurn(id);
       if (!turn?.images?.length) return;
-      const top = this.baseRows?.some((r) => r.key === key && r.kind === "wtop");
-      const i = this.tileAt(turn, top);
+      const i = this.tileAt(turn, true);
       this.pressX = null;
-      // A running turn's tiles: one opens the message's images full window, as the larger
-      // image does in a finished turn. A press beside them selects the turn.
-      if (top) {
-        this.sel = id;
-        if (i != null) this.openGallery(turn, Math.min(i, turn.images.length - 1));
-        return cx.notify();
-      }
-      // "+N" opens the first image the tiles leave out.
-      const k = `i:${id}:${Math.min(i, turn.images.length - 1)}`;
-      this.full.has(k) ? this.full.delete(k) : this.full.add(k);
       this.sel = id;
-      return cx.notify();
-    }
-    if (kind === "img") {
-      // An image shown large: a click opens every image in the message full window. Its
-      // tile over the message shrinks it again.
-      const k = `i:${id}`;
-      const tk = rest.slice(0, 2).join(":");
-      const turn = this.findTurn(tk);
-      this.sel = tk;
-      if (turn && this.openGallery(turn, Number(rest[2]))) return cx.notify();
-      this.full.has(k) ? this.full.delete(k) : this.full.add(k);
+      if (i != null && this.openGallery(turn, Math.min(i, turn.images.length - 1))) return cx.notify();
+      if (i == null && !this.open.has(id) && this.baseRows?.some((r) => r.key === id && r.kind === "turn")) return this.toggle(id, cx);
       return cx.notify();
     }
     if (kind === "you") { this.full.has(id) ? this.full.delete(id) : this.full.add(id); this.sel = id; return cx.notify(); }
@@ -4704,6 +4681,9 @@ export default class Threads extends View {
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
       if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
       this.scrollTo = null;
+      // A closed or running turn with pasted images has its tiles in the item over its row
+      // (wtop): a scroll to the turn takes them along.
+      const lead = (k) => (rows[k - 1]?.kind === "wtop" && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
@@ -4715,7 +4695,9 @@ export default class Threads extends View {
       // A turn's head at the top of the pane, with the note above it when the search hides
       // the turn. It lands like a place, so a head already on screen still goes to the top.
       if (i >= 0 && how === "head") {
-        if (rows[i - 1]?.key === `visit:${rows[i].key}`) i -= 1;
+        const k = rows[i].key;
+        i = lead(i);
+        if (rows[i - 1]?.key === `visit:${k}`) i -= 1;
         if (rows[i - 1]?.kind === "pday") i -= 1; // a pin's day header comes with it
         how = "land";
       }
@@ -4725,7 +4707,8 @@ export default class Threads extends View {
         let j = i;
         while (j + 1 < rows.length && CARD.has(rows[j + 1].kind) && rows[j + 1].kind !== "head") j++;
         // A return to a turn the search hides: its note shows above its head.
-        let top = rows[i - 1]?.key === `visit:${rows[i].key}` ? i - 1 : i;
+        let top = lead(i);
+        if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, "top"); cx.notify(); });
@@ -4733,11 +4716,16 @@ export default class Threads extends View {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
         // is then above the view and lands at the top.
+        i = lead(i);
         let j = i;
         for (let below = 0; j + 1 < rows.length && below < this.listH; j++) below += slots[j];
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(i, "top"); cx.notify(); });
-      } else if (i >= 0) cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
+      } else if (i >= 0) {
+        const top = lead(i);
+        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
+        if (top !== i) cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, how); cx.notify(); });
+      }
     }
     const dim = Boolean(this.res.ended);
     const sticky = this.stickyDay();
@@ -5186,12 +5174,19 @@ export default class Threads extends View {
     return rows;
   }
 
+  // What a closed row gives to the wtop item over it when split (closedRows): its top
+  // padding, its meta line and its tiles. Their gap stays, as the top of the row.
+  splitCut(r) {
+    if (!r.split) return 0;
+    return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
+  }
+
   // A part's list height: what the probe measured for it, else the estimate. A collapsed
   // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
     if (r.kind === "turn" && r.shape?.md != null) {
       const m = this.measured(this.cmdRow(r));
-      return m != null ? r.shape.mdBase + m : r.shape.height;
+      return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r);
     }
     if (PROBED.has(r.kind)) {
       const m = this.measured(r);
@@ -5206,14 +5201,13 @@ export default class Threads extends View {
       case "spacer": return r.h;
       case "gap": return r.h;
       case "tail": return r.h;
-      case "turn": return r.shape.height;
+      case "turn": return r.shape.height - this.splitCut(r);
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "wake": return WAKE_H;
       case "line": return outlineHeight(this.prefs.textSize);
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize, this.chars());
-      case "img": return 8 + 4 + 18 + this.imgBox(r).h;
       case "divider": return 36;
       case "day": return 46;
       case "pday": return PDAY_H;
@@ -5705,10 +5699,11 @@ export default class Threads extends View {
     const tone = sh.tone;
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     const bt = this.bubbleLook(t, turn.agent).theme;
+    // Split: the meta line and tiles are the wtop item over it (closedRows).
     return this.rowFrame(t, sel, focusedPanel, false, [
-      ...(turn.agent ? [this.senderLine(t, turn)] : []),
+      ...(turn.agent && !r.split ? [this.senderLine(t, turn)] : []),
       this.youGroup(t, turn, key, sel, [
-        ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
+        ...(sh.thumbs && !r.split ? [this.thumbStrip(t, turn, key)] : []),
         this.bubble(t, turn, [
           this.promptBlock(bt, turn, sh, sel),
           ...(sh.pMore ? [this.moreLine(bt)] : []),
@@ -5719,7 +5714,7 @@ export default class Threads extends View {
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
-    ]);
+    ], r.split ? ROW.GAP : ROW.PAD_T);
   }
 
   // A closed row's message and the strip under it, as one element, so a hover anywhere on
@@ -6158,23 +6153,7 @@ export default class Threads extends View {
               .child(svg(ICON("info")).size(12).text_color(this.legendOn ? t.accent : t.dim))))
           .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t, t.background)).child(this.countsLine(turn))));
       }
-      case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey, true));
-      case "img": {
-        this.wantImages(turn, tkey);
-        const f = this.imgFile(turn, r.i);
-        const box = this.imgBox(r);
-        const n = turn.images[r.i]?.n;
-        const st = this.imgState(turn);
-        const gone = !f && this.imgGone(turn, r.i);
-        const label = [`[Image #${n ?? r.i + 1}]`, gone ? turn.images[r.i]?.src : null, f?.w ? `${f.w}×${f.h}` : null,
-          f ? (turn.images.length > 1 ? `click for all ${turn.images.length} full window` : "click for full window") : null].filter(Boolean).join(" · ");
-        return v_flex().pt(8).gap(4)
-          .child(f
-            ? div().w(box.w).h(box.h).rounded(6).overflow_hidden().border_1().border_color(t.border).bg(t.background).child(image(f.path).size_full())
-            : h_flex().w_full().h(box.h).gap(6).rounded(6).bg(t.background).items_center().justify_center().text_size(12).text_color(t.dim)
-              .child(svg(ICON("image")).size(13)).child(gone ? "Image no longer on disk" : st === "wait" ? "Loading image…" : "This image could not be shown"))
-          .child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim).child(label));
-      }
+      case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey));
       case "itext":
         // The agent's interim text, as Markdown at the reading size, between step groups.
         return this.readBlock(div().mt(6)).child(this.mdView(tv(`th-it-${r.key}`), r.md, this.replySelectable()));
