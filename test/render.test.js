@@ -5295,7 +5295,7 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   expect(detail(`cl:${a}:0:0`)).toBe("call#1 bun test cart · 2s [closed]");
   expect(detail(`cl:${a}:0:1`)).toBe("call#1 bun run lint · 1s [failed] [closed]");
   // A failed call marks its group too, in the blocked colour.
-  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands [failed] [open]");
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed] [open]");
   rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `cl:${a}:0:1`)); const c1 = rec; rec = null;
   if (v.partContent) {
     expect(c1.some((e) => e[0] === "svg" && String(e[1]).endsWith("circle-x.svg"))).toBe(true);
@@ -5329,6 +5329,73 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   const { NOT_A_PLACE } = await import("../mods/agent-threads/pins.js");
   expect(NOT_A_PLACE.has("co")).toBe(true);
   draw(v, cx);
+});
+
+test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
+  // Two groups: one with a failed command, one where every call worked.
+  const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000e.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s, err = false) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: err }] } });
+  const lines = [use("toolu_e1", "Bash", { command: "bun test" }, 1), res("toolu_e1", "ok", 2),
+    use("toolu_e2", "Bash", { command: "bun run lint" }, 3), res("toolu_e2", "lint: 2 errors", 4, true),
+    use("toolu_e3", "Bash", { command: "bun run lint --fix" }, 5), res("toolu_e3", "fixed", 6),
+    use("toolu_e4", "Bash", { command: "bun run lint" }, 7), res("toolu_e4", "clean", 8)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000e", file);
+  for (const e of [{ k: "p", o: "human", t: "Fix the lint", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_e1" }, { k: "u", n: "Bash", id: "toolu_e2" },
+    { k: "t", t: "Lint failed; fixing it." }, { k: "u", n: "Bash", id: "toolu_e3" }, { k: "u", n: "Bash", id: "toolu_e4" },
+    { k: "t", t: "Fixed." }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+  const icons = (k) => {
+    rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === k)); const c = rec; rec = null;
+    return { svgs: c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()), red: c.some((e) => e[0] === "text_color" && e[1] === theme.blocked), text: c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]) };
+  };
+  v.sel = a;
+  v.action("deeper", cx);
+  await settled();
+  // Not read yet: the tool icon and "Ran N commands", with no check and nothing red.
+  expect(v.calls.size).toBe(0);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands");
+  if (v.partContent) {
+    for (const k of [`gp:${a}:0`, `gp:${a}:2`]) {
+      const g = icons(k);
+      expect(g.svgs).toContain("wrench.svg");
+      expect(g.svgs).not.toContain("check.svg");
+      expect(g.svgs).not.toContain("circle-x.svg");
+      expect(g.red).toBe(false);
+    }
+  }
+  // Opened, the calls are read: the failed group has the red mark and "1 failed", the other a check.
+  v.action("deeper", cx);
+  await settled();
+  expect(v.calls.size).toBe(4);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed] [open]");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands [ok] [open]");
+  // Closed again, they keep it while the calls stay in memory.
+  v.action("shallower", cx);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed]");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands [ok]");
+  if (v.partContent) {
+    const f = icons(`gp:${a}:0`);
+    expect(f.svgs).toContain("circle-x.svg");
+    expect(f.red).toBe(true);
+    expect(f.text).toContain("· 1 failed");
+    const ok = icons(`gp:${a}:2`);
+    expect(ok.svgs).toContain("check.svg");
+    expect(ok.svgs).not.toContain("wrench.svg");
+    expect(ok.red).toBe(false);
+  }
 });
 
 test("level 3 while a turn runs: the running group names what runs now; an open call read before its output reads it again once the session grows", async () => {

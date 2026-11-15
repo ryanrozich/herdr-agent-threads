@@ -765,7 +765,7 @@ export default class Threads extends View {
       case "itext": return `itext${n} h${this.height(r)} | ${r.src.replace(/\n/g, " ⏎ ").slice(0, 120)}`;
       case "grp": {
         const g = this.groupInfo(r);
-        return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${g.current ? ` · ${g.current}` : ""}${g.failed ? " [failed]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
+        return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${g.current ? ` · ${g.current}` : ""}${g.failed ? ` · ${g.failed} failed [failed]` : g.known ? " [ok]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
       }
       case "call": {
         if (r.more) return `call${n} +${r.more}`;
@@ -1754,11 +1754,16 @@ export default class Threads extends View {
   callEntry(si, id) { return id ? this.calls.get(`${this.sessions[si]?.file}#${id}`) ?? null : null; }
   // What a group's line adds from the calls read so far: whether one failed, and while the
   // group runs, what its newest call runs.
+  // What a group's line can say about its calls. Calls are read only when a group opens, so
+  // a group not read yet claims nothing: no check and no red mark. Once every call's result is
+  // in memory it has the check, or the red mark and how many failed.
   groupInfo(r) {
-    if (!r.read) return { failed: false, current: null };
-    const failed = r.step.ids.some((id) => this.callEntry(r.si, id)?.err === true);
-    const last = r.now ? this.callEntry(r.si, r.step.ids.at(-1)) : null;
-    return { failed, current: last?.input ? callText(r.step.calls.at(-1), last.input) : null };
+    if (!r.read) return { known: false, failed: 0, current: null };
+    const cs = r.step.ids.map((id) => (id ? this.callEntry(r.si, id) : null));
+    const failed = cs.filter((c) => c?.err === true).length;
+    const known = cs.length > 0 && cs.every((c) => c?.st === "ok" && c.out != null);
+    const last = r.now ? cs.at(-1) : null;
+    return { known, failed, current: last?.input ? callText(r.step.calls.at(-1), last.input) : null };
   }
   // Queues the calls not read yet. A call read before its output was written is read again
   // once the session has grown, while its group is open; tail reads only the file's end.
@@ -5968,14 +5973,16 @@ export default class Threads extends View {
         // The agent's interim text, as Markdown at the reading size, between step groups.
         return this.readBlock(div().mt(6)).child(this.mdView(tv(`th-it-${r.key}`), r.md, this.replySelectable()));
       case "grp": {
-        // A step group's line: a check when done, a red mark once a call in it failed, the
-        // spinner while it runs (with what runs now, once read), and a chevron.
+        // A step group's line: the tool icon until its calls are read, then a check, or a red
+        // mark and how many failed; the spinner while it runs (with what runs now, once read);
+        // and a chevron.
         const open = this.groupOpen.has(`${tkey}:${r.gi}`);
         const g = this.groupInfo(r);
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
           .child(r.now ? this.liveIcon(this.liveState(t), 12)
-            : svg(ICON(g.failed ? "circle-x" : "check")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
+            : svg(ICON(g.failed ? "circle-x" : g.known ? "check" : "wrench")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
           .child(div().flex_none().child(groupText(r.step.calls, r.step.count, r.now)))
+          .when(g.failed > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`· ${g.failed} failed`)))
           .when(Boolean(g.current), (e) => e.child(div().min_w(0).truncate().font_family(mono).text_size(11.5).text_color(t.dim).child(g.current)))
           .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
       }
