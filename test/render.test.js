@@ -1698,7 +1698,7 @@ test("the Quote button in Select view quotes what ⌘C copied and leaves the key
   } finally { v.h.focus = focus; v.barHit = hit; }
 });
 
-test("pasted images: tiles over the message at any width, decoded on first draw, opened full size one at a time", async () => {
+test("pasted images: tiles over the message at any width, decoded on first draw, and one click on a tile opens the review", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--images"));
   const turns = v.current().turns.filter((t) => t.images.length);
   expect(turns.map((t) => t.images.map((i) => i.n))).toEqual([[1], [2, 3], [4]]);
@@ -1729,29 +1729,26 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   const L = v.tileLayout(two);
   expect(L.tiles).toEqual([{ i: 0, w: 68, x: 0 }, { i: 1, w: 91, x: 74 }]);
   expect(L.more).toBe(0);
-  // Open: the tiles over the message; a press on the second tile opens it full size under
-  // them, and again closes it.
-  v.toggle(key, cx);
+  // At rest the meta line and tiles are an item of their own over the row (wtop), and the
+  // two add up to the row's shape.
+  v.fitKey = null;
   let rows = v.rows();
   const at = (k) => rows.findIndex((r) => r.key === k);
-  expect(at(`imgs:${key}`)).toBe(at(key) + 1);
-  expect(at(`you:${key}`)).toBe(at(`imgs:${key}`) + 1);
-  expect(v.height(rows[at(`imgs:${key}`)])).toBe(8 + 91);
+  expect(rows[at(`imgs:${key}`)]).toMatchObject({ kind: "wtop", turnKey: key });
+  expect(rows[at(`imgs:${key}`) + 1]).toMatchObject({ kind: "turn", key, split: true });
+  expect(v.height(rows[at(`imgs:${key}`)]) + v.height(rows[at(key)])).toBe(v.shape(two).height);
+  // One click on the second tile at rest opens the review at that image. The turn is
+  // selected and stays closed, and nothing else changes.
   v.bodyW = 380;
+  v.sel = null;
+  overlays.length = 0;
   v.pressX = 380 - ROW.PAD_X - 10; // inside the right-hand tile
   v.click(`imgs:${key}`, cx);
-  rows = v.rows();
-  const big = rows[at(`imgs:${key}`) + 1];
-  expect(big).toMatchObject({ kind: "img", key: `img:${key}:1`, full: true });
-  const side = Math.min(400, v.inner()); // at the card's width, never enlarged
-  expect(v.imgBox(big)).toEqual({ w: side, h: side });
-  // A press on the large image opens the message's images full window (the gallery), at
-  // that image; the press on its tile shrinks it again.
-  overlays.length = 0;
-  v.click(big.key, cx);
   expect(overlays).toHaveLength(1);
   expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", width: 1, height: 1, props: { gallery: { at: 1, title: `#${two.n}` } } });
   expect(overlays[0].props.gallery.images.map((x) => [x.path, x.w, x.h])).toEqual([[f.path, 300, 600], [v.imgFile(two, 1).path, 400, 400]]);
+  expect(v.sel).toBe(key);
+  expect(v.open.has(key)).toBe(false);
   // The reading panel's copy of the turn: its prompt with the labels, the reply, the stats
   // and the bubble's colours, and the panel shown (settings.json viewerReply).
   const vt = overlays[0].props.gallery.turn;
@@ -1761,13 +1758,34 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   expect(vt.fill).toBe(v.bubbleLook(theme, false).style.fill);
   v.prefs = { ...v.prefs, viewerReply: false };
   overlays.length = 0;
-  v.click(big.key, cx);
-  expect(overlays[0].props.gallery.panel).toBe(false);
-  v.prefs = { ...v.prefs, viewerReply: true };
-  expect(v.rows().some((r) => r.kind === "img")).toBe(true);
   v.pressX = 380 - ROW.PAD_X - 10;
   v.click(`imgs:${key}`, cx);
+  expect(overlays[0].props.gallery.panel).toBe(false);
+  v.prefs = { ...v.prefs, viewerReply: true };
+  // A press beside the tiles opens the turn, as a press on the rest of its row does.
+  overlays.length = 0;
+  v.pressX = 40;
+  v.click(`imgs:${key}`, cx);
+  expect(overlays).toHaveLength(0);
+  expect(v.open.has(key)).toBe(true);
+  // Open: the tiles over the message, and a tile still opens the review in one click. No
+  // larger image shows inside the turn.
+  rows = v.rows();
+  expect(at(`imgs:${key}`)).toBe(at(key) + 1);
+  expect(rows[at(`imgs:${key}`)].kind).toBe("imgs");
+  expect(at(`you:${key}`)).toBe(at(`imgs:${key}`) + 1);
+  expect(v.height(rows[at(`imgs:${key}`)])).toBe(8 + 91);
+  v.pressX = 380 - ROW.PAD_X - 10;
+  v.click(`imgs:${key}`, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0].props.gallery.at).toBe(1);
+  expect(v.open.has(key)).toBe(true);
   expect(v.rows().some((r) => r.kind === "img")).toBe(false);
+  // Beside the tiles of an open turn: it stays open and selected.
+  v.pressX = 40;
+  v.click(`imgs:${key}`, cx);
+  expect(v.open.has(key)).toBe(true);
+  expect(overlays).toHaveLength(1);
   // Drawn rows and cards hold image elements with the cached paths.
   rec = [];
   v.render(cx);
@@ -1833,10 +1851,11 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(overlays[0].props.gallery.images).toHaveLength(2);
   // No image tile is drawn larger under a running turn.
   expect(v.rows().some((r) => r.kind === "img")).toBe(false);
-  // Once it ends it is an ordinary row with its tiles over the bubble.
+  // Once it ends it is a closed row, and its tiles stay an item of their own over it.
   last.done = true; last.shapeKey = null; s.version++; v.fitKey = null;
   rows = v.rows();
-  expect(rows.some((r) => r.kind === "wtop")).toBe(false);
+  expect(rows[at(key) - 1].kind).toBe("wtop");
+  expect(rows[at(key)]).toMatchObject({ kind: "turn", split: true });
   expect(rows[at(key)].shape.thumbs).toBe(true);
 });
 
@@ -3568,7 +3587,13 @@ test("a collapsed reply draws as Markdown: its block is measured, and the row is
   const before = v.height(withTiles);
   v.probed(cmd.key, v.partSig(cmd), { width: 500, height: 63 }, cx);
   const after = v.height(withTiles);
-  expect(after).toBe(withTiles.shape.mdBase + 63);
+  // A row with tiles gives its meta line and tiles to the wtop item over it.
+  expect(after).toBe(withTiles.shape.mdBase + 63 - v.splitCut(withTiles));
+  if (withTiles.shape.thumbs) {
+    const top = v.rows().find((r) => r.key === `imgs:${withTiles.key}`);
+    expect(top.kind).toBe("wtop");
+    expect(v.height(top) + after).toBe(withTiles.shape.mdBase + 63);
+  }
   if (withTiles.shape.thumbs) expect(withTiles.shape.mdBase).toBeGreaterThan(rowHeight(withTiles.shape.p, 0, 0) + 40);
   expect(typeof before).toBe("number");
 });
@@ -5618,4 +5643,25 @@ test("the floating top's fade is painted as a gradient where Herdr can, and in s
   expect(calls().some((e) => e[0] === "id" && e[1] === "th-fade-steps")).toBe(true);
   const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
   expect(src).toContain("bg.linear_gradient(180, bg.stop(t.background, 55), bg.stop(alpha(t.background, 0), 100))");
+});
+
+test("a scroll to a closed turn with pasted images lands on its tiles, the item over its row", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6", "--images"));
+  v.width = 545;
+  v.listH = 400;
+  draw(v, cx);
+  const two = v.current().turns.find((t) => t.images.length === 2);
+  const key = `0:${two.n}`;
+  const rows = v.rows();
+  const tiles = rows.findIndex((r) => r.key === `imgs:${key}`);
+  expect(rows[tiles + 1].key).toBe(key);
+  for (const how of ["land", "head"]) {
+    const scrolled = [];
+    v.scroll = { scroll_to_item: (i, h) => scrolled.push([i, h]), scroll_to_bottom() {} };
+    v.scrollTo = { key, how };
+    cx.timers = [];
+    draw(v, cx);
+    cx.flush();
+    expect(scrolled.at(-1)).toEqual([tiles, "top"]);
+  }
 });
