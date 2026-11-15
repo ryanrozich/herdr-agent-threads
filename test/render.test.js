@@ -827,9 +827,48 @@ test("the command name is quiet: no fill, muted, foreground when bare, tinted on
   expect(v.cmdColor(low)).toBe(theme.muted);
 });
 
+test("long messages show in full by default: no Show more anywhere, and Shorten long messages brings the cuts back", async () => {
+  const { v, cx } = await pane(fixture());
+  v.width = 380;
+  expect(v.prefs.truncate).toBe(false);
+  const long = v.current().turns.find((x) => v.replyText(x).length > 400 && x.done);
+  expect(long).toBeTruthy();
+  long.prompt = "Please look at this. ".repeat(60);
+  long.shapeKey = null;
+  draw(v, cx);
+  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  const row = () => v.rows().find((r) => r.turn === long && r.kind === "turn");
+  // Off: the whole reply as Markdown and the whole prompt, and no Show more.
+  let sh = v.shape(long);
+  expect(sh.rMore).toBe(false);
+  expect(sh.pMore).toBe(false);
+  expect(sh.md.length).toBeGreaterThanOrEqual(v.replyText(long).length - 10);
+  expect(strings(() => v.rowItem(theme, row(), false))).not.toContain("Show more");
+  // The panel: the switch, and no line steppers while it is off.
+  v.settingsOpen = true;
+  let panel = strings(() => v.render(cx));
+  expect(panel).toContain("Shorten long messages");
+  expect(panel).toContain("Every message and reply shows in full.");
+  expect(panel).not.toContain("Reply lines");
+  // On: the row is cut to its line limits with Show more, and the steppers show.
+  v.action("truncate", cx);
+  expect(v.prefs.truncate).toBe(true);
+  panel = strings(() => v.render(cx));
+  expect(panel).toContain("Reply lines");
+  v.settingsOpen = false;
+  draw(v, cx);
+  sh = v.shape(long);
+  expect(sh.rMore || sh.pMore).toBe(true);
+  expect(strings(() => v.rowItem(theme, row(), false))).toContain("Show more");
+  // Reset to defaults turns it off again.
+  v.action("resetSettings", cx);
+  expect(v.prefs.truncate).toBe(false);
+});
+
 test("prompt quotes: rows draw a bar line within the budget, the card draws Markdown", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
-  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
+  // Markdown in the message: the plain look. Rows cut to their line limits (Shorten long messages).
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain", truncate: true };
   v.width = 380;
   draw(v, cx);
   const snap = () => state.shared["threads.debug"].t4;
@@ -1036,9 +1075,16 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
   const keys = view.turnKeys(view.rows());
   view.toggle(keys.at(-2), r.cx);
+  // The list draws the rows of one screen at its end, as Herdr does (the stub otherwise draws
+  // all 1,305, and each row's own cost, its hover card and its whole reply, adds up past
+  // anything Herdr draws). allFrame is the same open frame with every row drawn, for the log.
+  listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
   const openFrame = time(() => view.render(r.cx));
   const nextFrame = time(() => view.render(r.cx));
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame }));
+  listWindow = null;
+  view.toggle(keys.at(-3), r.cx);
+  const allFrame = time(() => view.render(r.cx));
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
 test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", () => {
@@ -1064,7 +1110,7 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   expect(r.toggleOff).toBeLessThan(25 * slow);
   expect(r.openFrame).toBeLessThan(50 * slow);
   const f = (x) => x.toFixed(1);
-  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms`);
+  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms; with every row drawn ${f(r.allFrame)} ms`);
 }, 130000);
 
 test("S1: before the first chunk the header says Reading… with no percentage, and the bar is indeterminate", async () => {
@@ -1474,6 +1520,7 @@ test("C3: the open card's reply starts with the first block after the last tool 
 
 test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show all only past 6 lines", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  v.prefs = { ...v.prefs, truncate: true }; // Shorten long messages
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   const key = `0:${t.n}`;
   v.open = new Set([key]);
@@ -1722,6 +1769,9 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
 
 test("Turn card: i opens it beside the selected turn's line, brings that line on screen first, and opens upward when the line sits low", async () => {
   const { v, cx } = await pane(fixture());
+  // Short closed rows (Shorten long messages), so the made-up 120 px row sizes below match
+  // the rows' shapes.
+  v.prefs = { ...v.prefs, truncate: true };
   const turns = v.current().turns.filter((x) => x.done);
   const t = turns[turns.length - 2];
   const key = `0:${t.n}`;
@@ -5210,6 +5260,7 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
   const { v, cx } = await paneWith(busy(), null, 1000);
   v.width = 545;
+  v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;

@@ -13,6 +13,9 @@
 // bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "plain", the default for the person's, is the
 // theme's own look) or "#rrggbb".
+// truncate: shorten long messages (false, the default: every message and reply shows in full,
+// with no Show more anywhere). On, a collapsed row shows promptLines and replyLines of each
+// with Show more, and an open turn's message and running reply are cut with Show all.
 // alwaysShowTime: keep each message's time under its bubble (false, the default: the time
 // shows under the selected turn's bubble only).
 // youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
@@ -33,7 +36,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -84,6 +87,7 @@ export function parseSettings(text) {
       readingWidth: typeof raw.readingWidth === "boolean" ? raw.readingWidth : DEFAULTS.readingWidth,
       viewerReply: typeof raw.viewerReply === "boolean" ? raw.viewerReply : DEFAULTS.viewerReply,
       alwaysShowTime: typeof raw.alwaysShowTime === "boolean" ? raw.alwaysShowTime : DEFAULTS.alwaysShowTime,
+      truncate: typeof raw.truncate === "boolean" ? raw.truncate : DEFAULTS.truncate,
     },
     error: null,
   };
