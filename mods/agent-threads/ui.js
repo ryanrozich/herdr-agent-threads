@@ -1539,7 +1539,9 @@ export function callText(name, input) {
 // and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
 // gap while every turn has its own tick. h is the rail's height, days the day starts after
 // the first.
-export const RAIL = { W: 24, PAD: 6, MAX: 9, MIN: 3, DAY: 7, MARK: 7, SEL: 13, RIGHT: 5 };
+// The card beside a hovered tick: at most CARD_W wide, CARD_GAP px left of the tick, its prompt
+// clipped to two lines of about CARD_CHARS characters.
+export const RAIL = { W: 24, PAD: 6, MAX: 9, MIN: 3, DAY: 7, MARK: 7, SEL: 13, RIGHT: 5, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
 export function railLayout(count, days, h) {
   const fit = (gaps) => {
     const room = Math.max(RAIL.MIN, h - 2 * RAIL.PAD - gaps * RAIL.DAY);

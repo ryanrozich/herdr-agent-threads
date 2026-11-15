@@ -74,6 +74,7 @@ mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
   InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
+  Popup: { new: (id) => { if (rec) rec.push(["Popup", id]); return el; } },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
@@ -4963,6 +4964,52 @@ test("a settings change in a long session reshapes rows over several frames, the
   v.shapeBudget = Infinity;
   expect(shown().map((r) => r.shape.height)).toEqual(keep);
   expect(v.shapeLeft).toBe(0);
+});
+
+test("the rail card: a hovered tick shows its turn's number and time over two lines of its prompt, beside it on the left", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  let { ticks } = v.railTicks();
+  // Each tick is the trigger of a Popup anchored on its right centre, so the card sits to its left.
+  rec = []; v.railView(theme); let r = rec; rec = null;
+  expect(r.filter((e) => e[0] === "Popup").length).toBe(ticks.length);
+  expect(r.some((e) => e[0] === "anchor" && e[1] === "right_center")).toBe(true);
+  expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(false);
+  expect(r.some((e) => e[0] === "tooltip")).toBe(false);
+  // Pointing at a tick opens its card; leaving it closes it.
+  const hovers = r.filter((e) => e[0] === "on_hover").map((e) => e[1]);
+  expect(hovers.length).toBe(ticks.length);
+  hovers[1](true, cx);
+  expect(v.railHover).toBe(ks[1]);
+  rec = []; v.railView(theme); r = rec; rec = null;
+  expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
+  const turn = v.findTurn(ks[1]);
+  const c = v.railCard(ticks[1]);
+  expect(c.head).toMatch(new RegExp(`^#${turn.n} · \\d`));
+  expect(c.body.length).toBeGreaterThan(0);
+  expect(c.body.length).toBeLessThanOrEqual(2 * 40);
+  expect(r.some((e) => e[0] === "child" && e[1] === c.head)).toBe(true);
+  hovers[0](false, cx);
+  expect(v.railHover).toBe(ks[1]);
+  hovers[1](false, cx);
+  expect(v.railHover).toBe(null);
+  // The test command opens it by turn number, since the test window has no pointer.
+  v.debug = true;
+  v.action(`debugRailCard:${turn.n}`, cx);
+  expect(v.railHover).toBe(ks[1]);
+  v.action("debugRailCard:-", cx);
+  expect(v.railHover).toBe(null);
+  // A pinned turn says so; a tick that stands for several turns names the range.
+  v.sel = ks[2];
+  v.action("pin", cx);
+  ({ ticks } = v.railTicks());
+  expect(v.railCard(ticks[2]).head).toMatch(/ · pinned$/);
+  v.listH = 12;
+  ({ ticks } = v.railTicks());
+  expect(ticks[0].turns.length).toBeGreaterThan(1);
+  expect(v.railCard(ticks[0]).head).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {

@@ -27,6 +27,8 @@ import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle, v_virtual_l
 // panel) is new in Herdr 0.1.15. A named import of it stops the mod loading on 0.1.14, so it
 // is read from the module's namespace, and the viewer works without it.
 import * as gpuiBase from "gpui-base";
+// Popup (the rail card) is new in 0.1.15 too: without it the rail keeps its one-line tooltip.
+const Popup = gpuiBase.Popup?.new ? gpuiBase.Popup : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -722,6 +724,7 @@ export default class Threads extends View {
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
+      railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
       contrast: this.contrastList(),
       // Each theme's selected-turn fill and text-selection colour, for the highlight check.
       textSel: this.textSel ?? null, press: { moved: Math.round(this.pressMoved ?? 0), count: this.pressCount ?? 1 },
@@ -3403,6 +3406,13 @@ export default class Threads extends View {
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
     if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
+    // Tests only: "debugRailCard:3" opens the rail card of the turn #3 tick, as a hover
+    // would ("debugRailCard:-" closes it), since the test window has no pointer.
+    if (this.debug && name.startsWith("debugRailCard:")) {
+      const n = name.slice(14);
+      this.railHover = n === "-" ? null : this.railTicks().ticks.find((k) => k.turns.some((x) => String(x.turn.n) === n))?.key ?? null;
+      return true;
+    }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
     if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land", person: true }; return true; }
     // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
@@ -6172,6 +6182,15 @@ export default class Threads extends View {
     const cut = text.length > 60 ? `${text.slice(0, 59)}…` : text;
     return [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null, cut || null].filter(Boolean).join(" · ");
   }
+  // The rail card (Herdr 0.1.15, Popup): a tick's turn on two lines, its number and time over
+  // its prompt, at most two lines of it. A tick that stands for several turns names the range.
+  railCard(k) {
+    const a = k.turns[0].turn;
+    const head = k.turns.length > 1 ? `#${a.n} to #${k.last.turn.n}`
+      : [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null].filter(Boolean).join(" · ");
+    const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
+    return { head, body: clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text };
+  }
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
@@ -6181,12 +6200,27 @@ export default class Threads extends View {
         const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
         const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        return div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+        const tick = div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
-          .tooltip(this.railTip(k))
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(mark);
+        // On Herdr 0.1.15 a hovered tick shows the card beside it, to its left; before that,
+        // the one-line tooltip.
+        if (!Popup) return tick.tooltip(this.railTip(k));
+        const open = this.railHover === k.key;
+        return Popup.new(`th-tick-card-${i}`, tick.on_hover((on, cx) => {
+          if (on) this.railHover = k.key;
+          else if (this.railHover === k.key) this.railHover = null;
+          cx.notify();
+        })).anchor("right_center").when(open, (el) => el.content(this.railCardView(t, k)));
       }));
+  }
+  railCardView(t, k) {
+    const c = this.railCard(k);
+    return v_flex().id("th-rail-card").mr(RAIL.CARD_GAP).w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
+      .rounded(8).border_1().border_color(t.border).bg(t.popover ?? t.raised).shadow_md()
+      .child(div().text_size(11).line_height("15px").text_color(t.dim).child(c.head))
+      .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().text_color(t.foreground).child(c.body)));
   }
   railJump(key, cx) {
     this.toList();
