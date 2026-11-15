@@ -5114,6 +5114,12 @@ test("steps: interim text between groups in order; → opens the turn, its line,
   v.action("shallower", cx);
   expect(parts()).not.toContain("call");
   expect(parts()).toContain("grp");
+  // A closed group's line has the tool icon and no check: its calls are not read, so it
+  // cannot know they passed.
+  rec = []; v.partContent(theme, v.rows().find((r) => r.key === `gp:${a}:1`), false); const gl = rec; rec = null;
+  const glyphs = gl.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(glyphs).toContain("wrench.svg");
+  expect(glyphs).not.toContain("check.svg");
   v.action("shallower", cx);
   expect(parts()).not.toContain("grp");
   expect(v.open.has(a)).toBe(true);

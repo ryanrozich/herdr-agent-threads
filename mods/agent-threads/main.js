@@ -5757,10 +5757,11 @@ export default class Threads extends View {
         // The agent's interim text, as Markdown at the reading size, between step groups.
         return this.readBlock(div().mt(6)).child(this.mdView(tv(`th-it-${r.key}`), r.md, this.replySelectable()));
       case "grp": {
-        // A step group's line: a check when done, the spinner while it runs, and a chevron.
+        // A step group's line: the tool icon (its calls are not read, so it claims no check),
+        // the spinner while it runs, and a chevron.
         const open = this.groupOpen.has(`${tkey}:${r.gi}`);
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
-          .child(r.now ? this.liveIcon(this.liveState(t), 12) : svg(ICON("check")).size(12).flex_none().text_color(t.dim))
+          .child(r.now ? this.liveIcon(this.liveState(t), 12) : svg(ICON("wrench")).size(12).flex_none().text_color(t.dim))
           .child(div().min_w(0).truncate().child(groupText(r.step.calls, r.step.count, r.now)))
           .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
       }
