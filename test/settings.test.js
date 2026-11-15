@@ -5,8 +5,8 @@ import { test, expect, mock } from "bun:test";
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
-// The chat look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "slate", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true };
+// The quiet look's settings at their defaults.
+const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true, alwaysShowTime: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -36,9 +36,9 @@ test("invalid JSON keeps the defaults with a one-line note", () => {
 
 test("the file text keeps unknown keys and clamps what it writes", () => {
   const t = settingsText({ promptLines: 14 }, '{"replyLines": 5, "future": "x"}');
-  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...CHAT, look: 2 });
+  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...CHAT, look: 3 });
   expect(t.endsWith("\n")).toBe(true);
-  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...CHAT, look: 2 });
+  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...CHAT, look: 3 });
 });
 
 test("the only write goes to data/agent-threads/settings.json with the expected snapshot", async () => {
@@ -49,7 +49,7 @@ test("the only write goes to data/agent-threads/settings.json with the expected 
     ["/apphome/data/agent-threads/settings.json", null],
     ["/apphome/data/agent-threads/settings.json", '{"promptLines":4}'],
   ]);
-  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, ...CHAT, look: 2 });
+  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, ...CHAT, look: 3 });
 });
 
 test("a save never replaces a file that does not parse (F5)", async () => {
@@ -95,7 +95,7 @@ test("a file from before the chat look holding the old defaults reads as the new
   expect(parseSettings('{"promptLines": 2, "replyLines": 3, "look": 2}').values).toMatchObject({ promptLines: 2, replyLines: 3 });
   // Choosing 2 and 3 from the panel writes the mark with them, so they hold.
   const t = settingsText({ promptLines: 2, replyLines: 3 }, '{"promptLines": 4, "replyLines": 3}');
-  expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 2 });
+  expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 3 });
   expect(parseSettings(t).values).toMatchObject({ promptLines: 2, replyLines: 3 });
 });
 
@@ -103,9 +103,31 @@ test("bubble colours take a preset name or #rrggbb, and anything else the defaul
   const v = (j) => parseSettings(JSON.stringify(j)).values;
   expect(v({ bubbleColor: "Teal", agentBubbleColor: "plain" })).toMatchObject({ bubbleColor: "teal", agentBubbleColor: "plain" });
   expect(v({ bubbleColor: "#1a2b3c", agentBubbleColor: "#abc" })).toMatchObject({ bubbleColor: "#1A2B3C", agentBubbleColor: "#AABBCC" });
-  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("slate");
+  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("plain");
   expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "plum" });
   expect(v({ bubbleColor: "Blue", agentBubbleColor: "purple" })).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "purple" }); // the bright pair
+});
+
+test("the quiet look: slate in a file from before it was the old default and reads as plain; any other colour, or slate chosen since, is kept", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values;
+  expect(v({ bubbleColor: "slate" }).bubbleColor).toBe("plain");
+  expect(v({ bubbleColor: "slate", look: 2 }).bubbleColor).toBe("plain");
+  expect(v({ bubbleColor: "teal", look: 2 }).bubbleColor).toBe("teal");
+  expect(v({ bubbleColor: "#1a2b3c" }).bubbleColor).toBe("#1A2B3C");
+  expect(v({ bubbleColor: "slate", look: 3 }).bubbleColor).toBe("slate");
+  // Choosing slate writes the new mark with it, so it holds.
+  const t = settingsText({ bubbleColor: "slate" }, '{"bubbleColor": "plain", "look": 3}');
+  expect(JSON.parse(t)).toMatchObject({ bubbleColor: "slate", look: 3 });
+  expect(parseSettings(t).values.bubbleColor).toBe("slate");
+  // The agent's bubble keeps its default.
+  expect(v({}).agentBubbleColor).toBe("plum");
+});
+
+test("alwaysShowTime is a boolean, false by default", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values.alwaysShowTime;
+  expect(v({})).toBe(false);
+  expect(v({ alwaysShowTime: true })).toBe(true);
+  expect(v({ alwaysShowTime: "yes" })).toBe(false);
 });
 
 test("your name is one line of 1 to 40 characters, and anything else is You", () => {

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync, realp
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -69,7 +69,7 @@ let lastList = null;
 let herdrSettings = { font_family: "Mono" };
 // updates().app.version: Herdr's version.
 let herdrVersion = "0.1.13";
-mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: () => el, image: () => el }));
+mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
 mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
   InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
@@ -235,26 +235,22 @@ test("focusTerminal targets the pane by id and says so", async () => {
   expect(v.toast.text).toBe("t4 is closed");
 });
 
-test("the action bar acts only inside each button", async () => {
+test("the strip under the reply acts only on each icon", async () => {
   const { v } = await pane(fixture("--only", "2"));
   v.sel = v.turnKeys(v.rows())[0];
   v.width = 380;
-  // Copy reply 16–123, Select 129–221, Quote (icon) 227–257, Terminal 271–364.
-  expect(v.barHit(20, 380)).toBe("copy");
-  expect(v.barHit(170, 380)).toBe("select");
-  expect(v.barHit(240, 380)).toBe("quote");
-  expect(v.barHit(264, 380)).toBe(null);
-  expect(v.barHit(350, 380)).toBe("terminal");
+  // Copy 12–34, Quote 38–60, Select 64–86, Terminal 90–112, at any width.
+  expect(v.barHit(20)).toBe("copy");
+  expect(v.barHit(50)).toBe("quote");
+  expect(v.barHit(75)).toBe("select");
+  expect(v.barHit(100)).toBe("terminal");
+  expect(v.barHit(200)).toBe(null);
   v.width = 240;
-  // Copy 16–99, Select 105–135, Quote 141–171, Terminal 194–224 (icons).
-  expect(v.barHit(120, 240)).toBe("select");
-  expect(v.barHit(150, 240)).toBe("quote");
-  expect(v.barHit(215, 240)).toBe("terminal");
-  expect(v.barHit(182, 240)).toBe(null);
-  // No pane shows the terminal: no Quote and no Terminal, so Select keeps its label.
+  expect(v.barHit(100)).toBe("terminal");
+  // No pane shows the terminal: no Quote and no Terminal, so Select moves up beside Copy.
   state.panes = state.panes.filter((p) => p.terminal !== "t4");
-  expect(v.barHit(150, 240)).toBe("select");
-  expect(v.barHit(230, 240)).toBe(null);
+  expect(v.barHit(50)).toBe("select");
+  expect(v.barHit(75)).toBe(null);
   expect(readFileSync(join(modDir, "main.js"), "utf8")).toContain("barHit");
 });
 
@@ -268,7 +264,7 @@ test("Select text swaps the formatted reply for a selectable source view, and ba
   let kinds = v.rows().map((r) => r.kind);
   expect(kinds).toContain("seltext");
   expect(kinds).not.toContain("md");
-  expect(v.rowDetail(v.rows().find((r) => r.kind === "copy"))).toContain("Formatted");
+  expect(v.rowDetail(v.rows().find((r) => r.kind === "copy"))).toContain("select(on)");
   expect(v.action("escape", cx)).toBe(true);
   expect(v.selecting).toBe(null);
   kinds = v.rows().map((r) => r.kind);
@@ -340,12 +336,12 @@ test("the working card's estimate uses the 21 px prompt and 20 px note lines it 
     if (!r) continue;
     seen++;
     const est = v.estimate(r);
-    // The smallest it can be: padding, meta, one prompt line in the bubble, the live line,
-    // one note line, padding.
-    expect(est).toBeGreaterThanOrEqual(8 + 16 + 6 + 12 + 21 + 6 + 18 + 6 + 20 + 10);
+    // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
+    // the live line, one note line, padding.
+    expect(est).toBeGreaterThanOrEqual(8 + 12 + 21 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
     // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
     const g = v.workingGeom(r.turn);
-    expect(est).toBe(8 + 16 + 6 + 12 + g.lines * 21 + 6 + 18 + 6 + g.note * 20 + 10);
+    expect(est).toBe(8 + 12 + g.lines * 21 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
     const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
     expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
     rec = [];
@@ -771,7 +767,7 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
   v.notePress(cx);
   cx.clip = part;
   v.notePress(cx); // the press on the Quote button
-  v.mouseX = v.pressX = v.bar(v.findTurn(key)).quote[0] + 4;
+  v.mouseX = v.pressX = v.acts(v.findTurn(key)).quote[0] + 4;
   v.bodyW = v.width;
   v.quoteAt = 0;
   v.click(`cp:${key}`, cx);
@@ -1300,13 +1296,13 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       const c = Math.min(w, fitWidth());
       expect(v.width).toBeCloseTo(c, 6);
       const left = (w - c) / 2;
-      const g = v.barGeom(c, v.findTurn(key));
+      const g = v.barGeom(v.findTurn(key));
       for (const [name, b] of Object.entries(g)) {
         if (!b) continue;
         down({ local_position: { x: (left + (b[0] + b[1]) / 2) * 0.9, y: 10 }, bounds: { width: w * 0.9 } });
         v.sel = key;
         // Only the hit is checked: the handlers themselves are covered elsewhere.
-        const hit = v.barHit(v.pressX, v.bodyW, v.findTurn(key));
+        const hit = v.barHit(v.pressX, v.findTurn(key));
         expect(hit).toBe(name);
         expect(v.bodyW).toBeCloseTo(c, 6);
       }
@@ -1343,7 +1339,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       v.meas = new Map(); v.probeTries = new Map();
       v.open = new Set([key]);
       const parts = v.rows().filter((r) => PROBED_KINDS.includes(r.kind) && partOf(r, key));
-      expect(parts.map((r) => r.kind)).toEqual(expect.arrayContaining(["you", "rhead", "md", "lhead", "latest", "stats"]));
+      expect(parts.map((r) => r.kind)).toEqual(expect.arrayContaining(["you", "rhead", "md", "lhead", "latest"]));
       const probes = probeEntries(frame(v, cx));
       // The closed rows' Markdown reply blocks are measured too ("cmd:<key>").
       expect([...probes.keys()].filter((k) => !k.startsWith("cmd:")).sort()).toEqual(parts.map((r) => r.key).sort());
@@ -1379,7 +1375,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       v.report();
       const rep = state.shared["threads.debug"].t4;
       expect(rep.zoom).toBe(zoom);
-      expect(rep.parts.find((x) => x.startsWith(`st:${key} `))).toMatch(/est \d+ · measured: \d+ · slot \d+/);
+      expect(rep.parts.find((x) => x.startsWith(`rhead:${key} `))).toMatch(/est \d+ · measured: \d+ · slot \d+/);
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
 });
@@ -1428,6 +1424,8 @@ test("C1: the counts line is in the stats part's probe entry, at 16 px lines of 
   const { v, cx } = await pane(fixture("--only", "2"));
   const key = v.turnKeys(v.rows())[0];
   v.open = new Set([key]);
+  // The numbers show on i, under the reply.
+  v.legendOn = true;
   const line57 = "cache read 1,204,331 · written 12,345 · new input 123,456";
   expect(line57.length).toBe(57);
   // 57 characters × 6.6 px: 376 px, so 2 lines in a 240 px pane (208 px of text) and in a
@@ -1519,7 +1517,7 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
 
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
 
-test("C2: plain chip names, and i or a click on the stats shows a legend of the chips shown", async () => {
+test("C2: plain chip names, and i or a click on the stats shows the numbers and a legend of the chips shown", async () => {
   const { v, cx } = await pane(fixture());
   const t = v.current().turns.find((x) => x.compactions > 0 && stats(x).cachePct != null);
   expect(t).toBeTruthy();
@@ -1535,6 +1533,7 @@ test("C2: plain chip names, and i or a click on the stats shows a legend of the 
   expect(texts.some((x) => / tok$|^compacted$|^cache \d/.test(x))).toBe(false);
   const kinds = () => v.rows().filter((r) => partOf(r, key)).map((r) => r.kind);
   expect(kinds()).not.toContain("legend");
+  expect(kinds()).not.toContain("stats");
   expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
   v.key(keyEv("i"), cx);
   expect(kinds()).toContain("legend");
@@ -1572,6 +1571,7 @@ test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where m
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
+  v.legendOn = true;
   v.width = 380;
   const colourOf = (calls, text) => {
     const i = calls.findIndex(([n, x]) => n === "child" && x === text);
@@ -1779,11 +1779,12 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   const at = (k) => rows.findIndex((r) => r.key === k);
   expect(rows[at(`imgs:${key}`)]).toMatchObject({ kind: "wtop", turnKey: key });
   expect(rows[at(`imgs:${key}`) + 1]).toMatchObject({ kind: "wrow", key, split: true });
-  // The tiles are 91 px at 380 px, under the meta line; the row under them starts at its bubble.
-  expect(v.height(rows[at(`imgs:${key}`)])).toBe(ROW.PAD_T + ROW.META + ROW.GAP + 91);
+  // The tiles are 91 px at 380 px, at the top of the row; the row under them starts at its
+  // bubble, 6 px down.
+  expect(v.height(rows[at(`imgs:${key}`)])).toBe(ROW.PAD_T + 91);
   const wrow = rows[at(key)];
   expect(v.shape(last, true).thumbs).toBeUndefined();
-  expect(v.height(wrow)).toBe(v.shape(last, true).height - ROW.PAD_T - ROW.META);
+  expect(v.height(wrow)).toBe(v.shape(last, true).height - ROW.PAD_T + ROW.GAP);
   // Decoded on first draw, as in a finished turn.
   for (let i = 0; i < 40 && v.imgState(last) !== "ok"; i++) {
     v.render(cx); cx.flush();
@@ -1802,7 +1803,7 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(card).toMatchObject({ kind: "working", split: true });
   expect(rows[at(key) - 1].kind).toBe("wtop");
   const g = v.workingGeom(last);
-  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 21 + 6 + 18 + 6 + g.note * 20 + 10);
+  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 21 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
   draw(v, cx);
   // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
   overlays.length = 0;
@@ -2462,24 +2463,47 @@ test("pins.json that does not parse is left alone, and pins still work until it 
 });
 const saved0 = () => new Promise((r) => setTimeout(r, 30));
 
-test("a click on the open card's pin pins it, and a click elsewhere on the head still closes it", async () => {
+// Where the pin icon is drawn in the strip under an open turn's message, at a 500 px body.
+const pinX = (v, key) => { const L = stripLayout(500, v.stripText(v.findTurn(key), true), !v.findTurn(key).agent); return (L.pin[0] + L.pin[1]) / 2; };
+const copyX = (v, key) => { const L = stripLayout(500, v.stripText(v.findTurn(key), true), !v.findTurn(key).agent); return (L.copy[0] + L.copy[1]) / 2; };
+
+test("the pin in the strip under an open turn's message pins it; copy there copies the prompt; a press elsewhere on it only selects; its icons act on a turn not selected", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const a = keys()[0];
   v.toggle(a, cx);
+  v.sel = a;
   v.bodyW = 500;
-  v.pressX = 500 - 42;
-  v.click(a, cx);
+  v.pressX = pinX(v, a);
+  v.click(`us:${a}`, cx);
   expect(v.isPinned(a)).toBe(true);
   expect(v.open.has(a)).toBe(true);
-  v.pressX = 200;
+  expect(v.lastBarHit).toMatchObject({ hit: "pin", strip: "you" });
+  v.pressX = copyX(v, a);
+  v.click(`us:${a}`, cx);
+  expect(cx.clip).toBe(v.findTurn(a).prompt);
+  expect(v.copied?.id).toBe(`prompt:${a}`);
+  v.pressX = 100;
+  v.click(`us:${a}`, cx);
+  expect(v.open.has(a)).toBe(true);
+  expect(v.isPinned(a)).toBe(true);
+  // On a turn that is not selected the strip shows its icons while the pointer is on it, so
+  // a press on the pin acts there too (here it unpins) and selects the turn.
+  v.sel = null;
+  v.pressX = pinX(v, a);
+  v.click(`us:${a}`, cx);
+  expect(v.sel).toBe(a);
+  expect(v.isPinned(a)).toBe(false);
+  expect(v.lastBarHit).toMatchObject({ hit: "pin", strip: "you" });
+  // The same under the reply: copy copies the reply on a turn not selected.
+  v.sel = null;
+  const g = v.barGeom(v.findTurn(a));
+  v.pressX = (g.copy[0] + g.copy[1]) / 2;
+  v.click(`cp:${a}`, cx);
+  expect(v.sel).toBe(a);
+  expect(v.copied?.id).toBe(`reply:${a}`);
+  // A click on the turn's top closes it.
   v.click(a, cx);
   expect(v.open.has(a)).toBe(false);
-  expect(v.isPinned(a)).toBe(true);
-  // A collapsed row's click there opens it, since it has no pin to hit.
-  v.pressX = 500 - 42;
-  v.click(a, cx);
-  expect(v.open.has(a)).toBe(true);
-  expect(v.isPinned(a)).toBe(true);
 });
 
 test("with a quote key of p, an open turn's pin pins and the Pinned view's header button unpins (the README's fallback)", async () => {
@@ -2493,11 +2517,12 @@ test("with a quote key of p, an open turn's pin pins and the Pinned view's heade
   v.width = 500;
   // The list's header has no pin button to fall back on.
   expect(v.headerButtons().map((b) => b[0])).not.toContain("th-pin");
-  // An open turn's top line pin pins it.
+  // The pin in the strip under an open turn's message pins it.
   v.toggle(a, cx);
+  v.sel = a;
   v.bodyW = 500;
-  v.pressX = 500 - 42;
-  v.click(a, cx);
+  v.pressX = pinX(v, a);
+  v.click(`us:${a}`, cx);
   expect(v.isPinned(a)).toBe(true);
   // In the Pinned view the header's pin button unpins the selected pin with the mouse.
   v.setView("pinned");
@@ -3159,15 +3184,22 @@ test("the list measuring its first item does not move a pin's place", async () =
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });
 
-test("bubbles are slate for the person and plum for agents by default, white text on both, and the panel's swatches change them", async () => {
+test("the person's bubble is plain and an agent's plum by default, and the panel's swatches change them", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   const you = () => v.bubbleLook(theme, false);
   const agent = () => v.bubbleLook(theme, true);
-  expect(you().style).toMatchObject({ fill: "#47648F", ink: "#FFFFFF", outline: false });
+  // Plain: the theme's text colour at 8%, in the theme's own colours.
+  expect(you().style).toMatchObject({ fill: "#e6e6e614", ink: theme.foreground, outline: false });
+  expect(you().theme).toBe(theme);
   expect(agent().style).toMatchObject({ fill: "#715C91", ink: "#FFFFFF", outline: false });
   // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
   // a command and Show more read on it.
+  v.action("bubbleColor:slate", cx);
+  expect(you().style).toMatchObject({ fill: "#47648F", ink: "#FFFFFF", outline: false });
   expect(you().theme).toMatchObject({ foreground: "#FFFFFF", accent: "#FFFFFF", background: "#47648F" });
+  // Chosen from the panel, slate holds (the change is parsed with the current mark; the
+  // file's side is in settings.test.js).
+  expect(v.prefs.bubbleColor).toBe("slate");
   v.settingsOpen = true;
   draw(v, cx);
   expect(v.action("bubbleColor:teal", cx)).toBe(true);
@@ -3188,7 +3220,7 @@ test("bubbles are slate for the person and plum for agents by default, white tex
   v.action("youName:Sam", cx);
   expect(v.prefs.youName).toBe("Sam");
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "slate", agentBubbleColor: "plum", youName: "You" });
+  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -3197,6 +3229,7 @@ test("a coloured bubble draws the open message as plain text in its ink, quotes 
   const { v, cx } = await pane(fixture("--only", "0", "--quotes"));
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   const you = () => v.rows().filter((r) => r.kind === "you").map((r) => v.youMd(r));
+  v.action("bubbleColor:teal", cx);
   expect(you().length).toBeGreaterThan(0);
   expect(you().every((y) => y.plain && y.parts)).toBe(true);
   expect(you().some((y) => y.parts.some((p) => p.quote))).toBe(true);
@@ -3206,41 +3239,69 @@ test("a coloured bubble draws the open message as plain text in its ink, quotes 
   draw(v, cx);
 });
 
-test("turn header: #n then the name at the left, the time last, for the person's turns and an agent's, open or closed", async () => {
+test("the quiet turn: no meta line over the bubble; the strip under it shows #n and the time on the selected turn, the time on all with alwaysShowTime", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const strings = (el) => { rec = []; el(); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
-  const turn = v.current().turns.find((tn) => !tn.agent);
-  const closed = strings(() => v.metaLine(theme, turn));
-  expect(closed.slice(0, 3)).toEqual([`#${turn.n}`, "·", "You"]);
-  expect(closed.at(-1)).toBe(fmtTimeForTest(turn.ts));
-  const agentTurn = { ...turn, agent: true, sender: { name: "general-purpose" } };
-  const a = strings(() => v.metaLine(theme, agentTurn));
-  expect(a[0]).toBe(`#${turn.n}`);
-  expect(a.indexOf(`#${turn.n}`)).toBeLessThan(a.findIndex((x) => /general-purpose/.test(x)));
-  // The person's header spans their bubble: as wide as it, at the right with it.
   const calls = (el) => { rec = []; el(); const c = rec; rec = null; return c; };
-  const c240 = calls(() => v.metaLine(theme, turn, null, fmtTimeForTest(turn.ts), null, 240));
-  expect(c240.some((e) => e[0] === "w" && e[1] === 240)).toBe(true);
-  expect(c240.some((e) => e[0] === "justify_end")).toBe(true);
-  expect(v.headerFit(turn, "7:33 AM", 240, false, null, null)).toMatchObject({ w: 240, name: true });
-  // A short bubble drops the name before the time, and never goes under the number and time.
-  const short = v.headerFit(turn, "7:33 AM", 90, false, null, null);
-  expect(short.name).toBe(false);
-  expect(short.w).toBeGreaterThanOrEqual(90);
-  const tiny = v.headerFit(turn, "7:33 AM", 40, false, null, null);
-  expect(tiny.w).toBeGreaterThan(40);
-  expect(strings(() => v.metaLine(theme, turn, null, "7:33 AM", null, 90))).toEqual([`#${turn.n}`, "7:33 AM"]);
-  // An agent's turn keeps its header at the reply's left edge, the pane's width.
-  expect(calls(() => v.metaLine(theme, agentTurn, null, "7:33 AM", null, null)).some((e) => e[0] === "justify_end")).toBe(false);
-  // Drawn rows pass the bubble's width.
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
-  const rc = calls(() => v.rowItem(theme, row, false));
-  expect(rc.some((e) => e[0] === "w" && e[1] === row.shape.bubbleW)).toBe(true);
-  // The earlier header, for side-by-side review: the person's name and #n after it.
-  v.action("debugHeader:right", cx);
-  expect(strings(() => v.metaLine(theme, turn)).slice(0, 3)).toEqual(["You", "·", `#${turn.n}`]);
-  v.action("debugHeader:split", cx);
-  expect(strings(() => v.metaLine(theme, turn))[0]).toBe(`#${turn.n}`);
+  const turn = row.turn;
+  const time = fmtTimeForTest(turn.ts);
+  v.sel = null;
+  let drawn = strings(() => v.rowItem(theme, row, false));
+  expect(drawn).not.toContain("You");
+  expect(drawn.some((x) => x.includes(`#${turn.n}`))).toBe(false);
+  // The time is drawn for a hover on the message to reveal: the message and its strip are one
+  // element, clear at rest and dim while the pointer is on it. No icons on a closed row that
+  // is not selected, since its one click opens it.
+  expect(drawn).toContain(time);
+  const rest = calls(() => v.rowItem(theme, row, false));
+  const clear = rest.findIndex((e) => e[0] === "text_color" && e[1] === "#00000000");
+  expect(clear).toBeGreaterThan(-1);
+  expect(rest.slice(clear).some((e) => e[0] === "text_color" && e[1] === theme.dim)).toBe(true);
+  expect(rest.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop())).not.toContain("pin.svg");
+  // An open turn's strips are items of their own, so each reveals its icons on its own
+  // hover: copy, pin and "#n · time" under the message; copy, quote, select and terminal
+  // under the reply.
+  const svgs = (el) => calls(el).filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(svgs(() => v.youStrip(theme, turn, row.key, false, "all"))).toEqual(["copy.svg", "pin.svg"]);
+  expect(strings(() => v.youStrip(theme, turn, row.key, false, "all"))).toContain(`#${turn.n} · ${time}`);
+  expect(svgs(() => v.actsStrip(theme, turn, row.key, false, true))).toContain("text-cursor.svg");
+  expect(strings(() => v.youStrip(theme, turn, row.key, false))).toEqual([]);
+  expect(drawn).toContain(v.workText(turn));
+  expect(v.workText(turn)).toMatch(/^Worked for \d/);
+  // No stats line under the reply, and no fill on a selected row.
+  expect(drawn.some((x) => / tokens/.test(x))).toBe(false);
+  v.sel = row.key;
+  drawn = strings(() => v.rowItem(theme, row, true));
+  expect(drawn).toContain(`#${turn.n} · ${time}`);
+  const sel = calls(() => v.rowItem(theme, row, true));
+  expect(sel.some((e) => e[0] === "bg" && e[1] === theme.selected)).toBe(false);
+  // The selected row's two strips draw their icons: copy and pin under the bubble; copy,
+  // quote, select and terminal under the reply.
+  const icons = sel.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  for (const i of ["copy.svg", "pin.svg", "quote.svg", "text-cursor.svg", "square-terminal.svg"]) expect(icons).toContain(i);
+  // The bubble's width is passed on.
+  expect(sel.some((e) => e[0] === "w" && e[1] === row.shape.bubbleW)).toBe(true);
+  // Always show time: the time under every bubble, no icons until the turn is selected.
+  v.sel = null;
+  v.action("alwaysTime", cx);
+  expect(v.prefs.alwaysShowTime).toBe(true);
+  drawn = strings(() => v.rowItem(theme, row, false));
+  expect(drawn).toContain(time);
+  expect(calls(() => v.rowItem(theme, row, false)).filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop())).not.toContain("pin.svg");
+  v.action("alwaysTime", cx);
+  expect(v.prefs.alwaysShowTime).toBe(false);
+  // The strips keep their height either way, so selecting a turn moves nothing.
+  const h = row.shape.height;
+  v.sel = row.key;
+  expect(v.rows().find((r) => r.key === row.key).shape.height).toBe(h);
+  // An agent's message: its sender over the bubble, its strip on the left.
+  const agentTurn = { ...turn, agent: true, sender: { kind: "agent", name: "general-purpose" } };
+  const a = calls(() => v.senderLine(theme, agentTurn));
+  expect(a.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]).join(" ")).toMatch(/general-purpose/);
+  expect(calls(() => v.youStrip(theme, agentTurn, "0:1", true)).some((e) => e[0] === "justify_end")).toBe(false);
+  expect(calls(() => v.youStrip(theme, turn, "0:1", true)).some((e) => e[0] === "justify_end")).toBe(true);
+  draw(v, cx);
 });
 
 test("names: yours over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
@@ -3248,20 +3309,21 @@ test("names: yours over your message, none over a reply (one agent), who replied
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
-  // The reply starts straight under the message: no agent's name over it, closed or open.
-  expect(drawn(row)).toContain("You");
+  // No name over your message (the bubble on the right says it is yours), and none over
+  // the reply in a session with one agent.
+  expect(drawn(row)).not.toContain("You");
   expect(drawn(row)).not.toContain("shop-agent");
-  expect(v.captionParts(row.turn).some(([icon]) => icon === "name")).toBe(false);
-  // A session where more than one agent replied (OpenCode records each turn's agent): the
-  // open turn's caption leads with who replied, the closed row still has no name.
+  expect(v.lineText(row.turn)).not.toContain("·");
+  // A session where more than one agent replied (OpenCode records each turn's agent): who
+  // replied leads the line, closed or open.
   const own = v.current().turns.filter((x) => !x.agent);
   own[0].by = "build";
   own[1].by = "plan";
-  expect(v.captionParts(own[0])[0]).toEqual(["name", "build"]);
-  expect(v.captionParts(own[1])[0]).toEqual(["name", "plan"]);
-  expect(drawn(v.rows().find((r) => r.kind === "turn" && r.turn === own[0]))).not.toContain("build");
+  expect(v.lineText(own[0])).toStartWith("build · ");
+  expect(v.lineText(own[1])).toStartWith("plan · ");
+  expect(drawn(v.rows().find((r) => r.kind === "turn" && r.turn === own[0]))).toContain("build");
   own[1].by = "build";
-  expect(v.captionParts(own[0]).some(([icon]) => icon === "name")).toBe(false);
+  expect(v.lineText(own[0])).not.toContain("build");
   // An agent message never makes the session mixed, and its own caption names no one.
   // (It sits in the session, with another agent's name, so the old check would have named it.)
   const msg = { ...own[1], agent: true, by: "plan" };
@@ -3289,7 +3351,8 @@ test("names: yours over your message, none over a reply (one agent), who replied
   field.set_value("  Sam ");
   field.handlers.change({}, cx);
   expect(v.prefs.youName).toBe("Sam");
-  expect(drawn(row)).toContain("Sam");
+  // Your name heads the turn in the image viewer; the list draws no name over your message.
+  expect(drawn(row)).not.toContain("Sam");
   expect(v.key(keyEv("escape"), cx)).toBe(true);
   expect(v.naming).toBe(false);
   expect(field.value()).toBe("Sam");
@@ -3315,17 +3378,20 @@ test("an agent message keeps its sender's name over the bubble, and a reply row 
   const msgs = v.rows().filter((r) => r.kind === "turn" && r.turn.agent && r.turn.sender?.name);
   expect(msgs.length).toBeGreaterThan(0);
   for (const r of msgs) expect(drawn(r).some((s) => s.includes(senderLabel(r.turn.sender, v.width)) || s === r.turn.sender.name)).toBe(true);
-  // A turn with nothing the reply leaves out: its open caption is an 8 px gap, no name.
+  // A turn with nothing the reply leaves out: its open caption is the line alone, 6 px down.
   const quiet = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && !r.turn.tools && !r.turn.followups && !v.borrowedFrom(r.turn));
   expect(quiet).toBeTruthy();
   v.toggle(quiet.key, cx);
   const cap = v.rows().find((r) => r.kind === "rhead" && r.turn === quiet.turn);
   expect(v.captionParts(cap.turn)).toEqual([]);
-  expect(v.estimate(cap)).toBe(8);
+  expect(v.estimate(cap)).toBe(6 + 24);
   v.toggle(quiet.key, cx);
   const md = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md != null);
   expect(md.shape.mdBase).toBe(rowHeight(md.shape.p, 0, (md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
-  expect(md.shape.mdBase).toBe(8 + 16 + 6 + 12 + md.shape.p * 21 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
+  expect(md.shape.mdBase).toBe(8 + 12 + md.shape.p * 21 + 6 + 16 + 6 + 24 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
+  // An agent's message is taller by its sender line.
+  const am = msgs[0];
+  expect(am.shape.height).toBeGreaterThan(0);
 });
 
 test("reading type: message and reply text at the Text size on 1.5 lines, a reading line wide at 960 px, labels unchanged", async () => {
@@ -3979,7 +4045,7 @@ test("the day while scrolling has a strip of its own above the list, never over 
 
 // ---- design-review picks (2026-11-11) -----------------------------------------------------
 
-test("a pinned turn shows its pin number in the list's top line, as in the Pinned view", async () => {
+test("a pinned turn shows its pin number at the end of its line, as in the Pinned view", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const k = keys();
   for (const i of [3, 1]) { v.sel = k[i]; v.action("pin", cx); }
@@ -3992,11 +4058,12 @@ test("a pinned turn shows its pin number in the list's top line, as in the Pinne
   expect(texts(row(k[3]))).toContain("2");
   expect(v.pinNumber(row(k[0]).turn)).toBe(null);
   expect(texts(row(k[0]))).not.toContain("1");
-  // The open card's head carries it too, and unpinning drops it.
+  // The open turn's line carries it too, and unpinning drops it.
   v.toggle(k[1], cx);
-  const head = v.rows().find((r) => r.kind === "head" && r.key === `h:${k[1]}`) ?? v.rows().find((r) => r.kind === "head");
-  rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
+  const line = v.rows().find((r) => r.kind === "rhead" && r.key === `rhead:${k[1]}`);
+  rec = []; v.partContent(theme, line, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
   expect(hs).toContain("1");
+  expect(v.lineText(line.turn)).toContain("[pin 1]");
   // Unpinning the first renumbers the other.
   v.sel = k[1]; v.action("pin", cx);
   expect(v.pinNumber(v.findTurn(k[3]))).toBe(1);
@@ -4528,7 +4595,7 @@ test("a drag that selects text never closes or collapses anything; a click that 
   expect(v.open.has(key)).toBe(true);
 });
 
-test("a drag ending on Collapse under a long reply or on the action bar does nothing; a click on Collapse closes the turn", async () => {
+test("a drag ending on Collapse under a long reply or on the strip under it does nothing; a click on Collapse closes the turn", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const turn = v.sessions.at(-1).turns.at(-1);
   turn.after = [readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim()];
@@ -4543,7 +4610,8 @@ test("a drag ending on Collapse under a long reply or on the action bar does not
   // The action bar: a drag that ends on Copy reply copies nothing.
   const copies = [];
   v.copyReply = (id) => copies.push(id);
-  v.pressX = v.barGeom(v.width, turn).copy[0] + 4;
+  v.sel = key;
+  v.pressX = v.barGeom(turn).copy[0] + 4;
   gesture(v, cx, `cp:${key}`, { from: { x: 150, y: 300 }, to: { x: 160, y: 720 } });
   expect(copies).toEqual([]);
   // Without the drag the same release on Collapse closes the turn, which stays selected.
@@ -4557,7 +4625,7 @@ function fillAndBar(calls) {
   return { fill: calls.filter(([n, x]) => n === "bg" && x === theme.selected).length, bar: calls.filter(([n, x]) => n === "w" && x === 2).length };
 }
 
-test("while you select text in a turn its fill lifts so Herdr's highlight shows, and the bar stays", async () => {
+test("the selected turn has its bar and no fill, so Herdr's highlight always shows; a drag still notes the text selection", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   const key = `0:${t.n}`;
@@ -4566,7 +4634,7 @@ test("while you select text in a turn its fill lifts so Herdr's highlight shows,
   v.full.add(`l:${key}`);
   const md = v.rows().find((r) => r.kind === "md");
   const before = fillAndBar(frame(v, cx));
-  expect(before.fill).toBeGreaterThan(0);
+  expect(before.fill).toBe(0);
   expect(before.bar).toBeGreaterThan(0);
   // The drag starts: the fill goes as soon as the press has moved, before the release.
   let calls = frame(v, cx);
@@ -4583,10 +4651,10 @@ test("while you select text in a turn its fill lifts so Herdr's highlight shows,
   v.click(md.key, cx);
   for (const name of ["copy", "quote", "keys", "keys"]) v.action(name, cx);
   expect(fillAndBar(frame(v, cx)).fill).toBe(0);
-  // A click that does not move clears Herdr's selection, and the fill is back.
+  // A click that does not move clears Herdr's selection; still no fill.
   gesture(v, cx, md.key);
   expect(v.textSel).toBe(null);
-  expect(fillAndBar(frame(v, cx)).fill).toBe(before.fill);
+  expect(fillAndBar(frame(v, cx))).toEqual(before);
   // A double press (a word) lifts it at once; a key that moves on brings it back.
   calls = frame(v, cx);
   handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 600 }), button: "left", click_count: 2 }, cx);
@@ -4604,7 +4672,7 @@ test("while you select text in a turn its fill lifts so Herdr's highlight shows,
   expect(fillAndBar(frame(v, cx)).fill).toBe(0);
 });
 
-test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag leaves the fill", async () => {
+test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag notes no text selection and draws no fill", async () => {
   const was = herdrVersion;
   herdrVersion = "0.1.12";
   try {
@@ -4614,7 +4682,7 @@ test("before Herdr 0.1.13, where the formatted reply cannot be selected, a drag 
     v.sel = key;
     gesture(v, cx, key, { from: { x: 120, y: 600 }, to: { x: 300, y: 450 } });
     expect(v.textSel ?? null).toBe(null);
-    expect(fillAndBar(frame(v, cx)).fill).toBeGreaterThan(0);
+    expect(fillAndBar(frame(v, cx)).fill).toBe(0);
   } finally { herdrVersion = was; }
 });
 

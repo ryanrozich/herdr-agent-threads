@@ -41,15 +41,17 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, barLayout, headPinHit, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// A clear colour, for what a hover reveals.
+const CLEAR = "#00000000";
 const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
 // An agent's mark on its tile (MARKS in harness.js), size px square, or null for an agent
 // with none. A one-colour mark is drawn white; a full-colour one as it is.
@@ -145,7 +147,7 @@ const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legen
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "img", "rhead", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -720,22 +722,25 @@ export default class Threads extends View {
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
-      case "head": return `head${n}${who} | ${[when(r.turn.ts), fmtDuration(r.turn.durationMs)].filter(Boolean).join(" · ")}`;
+      case "head": return `head${n}${who}`;
+      case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
       case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
-      case "rhead": return `rhead${n}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
+      case "rhead": return `rhead${n} ${this.lineText(r.turn)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
       case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
       case "copy": {
-        const L = this.bar(r.turn);
-        const b = (on, label, icon) => (on ? label : `[${icon} icon]`);
-        return `copy${n} ${L.labels.copy} + ${b(L.labels.select, this.selecting === `${r.si}:${r.turn.n}` ? "Formatted" : "Select", "select")}${L.quote ? ` + ${b(L.labels.quote, "Quote", "quote")}` : ""}${L.terminal ? ` + ${b(L.labels.terminal, "Terminal", "terminal")}` : ""}`;
+        const L = this.acts(r.turn);
+        const on = this.sel === `${r.si}:${r.turn.n}`;
+        const selOn = this.selecting === `${r.si}:${r.turn.n}`;
+        const icons = ["copy", "quote", "select", "terminal"].filter((k) => L[k]).map((k) => (k === "select" && selOn ? "select(on)" : k)).join(" ");
+        return `copy${n} ${on ? icons : `(empty) hover:${icons}`}`;
       }
       case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
       case "line": {
@@ -850,7 +855,8 @@ export default class Threads extends View {
   // Changes settings from the panel, keys or commands: applied now, then written. A save
   // that finds the file changed meanwhile reads it again and applies the change on top.
   changePrefs(patch, cx) {
-    const next = parseSettings(JSON.stringify({ ...this.prefs, ...patch })).values;
+    // The current mark, so a slate chosen here is kept (settings.js LOOK).
+    const next = parseSettings(JSON.stringify({ ...this.prefs, ...patch, look: LOOK })).values;
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
@@ -1917,8 +1923,9 @@ export default class Threads extends View {
       // While filtering, the row shows the text around the first match, as one run.
       quotes: !q, size: P.textSize,
     });
-    // A running turn draws its live line (18 px, a label) where the reply goes.
-    if (live) sh.height += 18 - sh.r * this.rt().line;
+    // A running turn draws its live line where a finished one has its line, then a 16 px
+    // stats line where the reply and the strip under it go.
+    if (live) sh.height += ROW.STATS - sh.r * this.rt().line - ROW.GAP - ROW.ACTS;
     // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
     // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
     // and until then an estimate; mdBase is the row without it.
@@ -1930,7 +1937,7 @@ export default class Threads extends View {
       sh.reply = md.md.split("\n");
       sh.r = md.lines;
       sh.rMore = md.cut;
-      sh.mdBase = rowHeight(sh.p, 0, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), line);
+      sh.mdBase = rowHeight(sh.p, 0, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), line, Boolean(turn.agent));
       sh.mdEst = md.lines * line + md.gaps * Math.max(0, this.paraGap() - line / 2);
       sh.height = sh.mdBase + sh.mdEst;
     }
@@ -1987,6 +1994,7 @@ export default class Threads extends View {
       turn.images.forEach((_, i) => { if (this.full.has(`i:${key}:${i}`)) out.push({ ...item, kind: "img", key: `img:${key}:${i}`, i, full: true }); });
     }
     out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) });
+    out.push({ ...item, kind: "ustrip", key: `us:${key}` });
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
@@ -2046,8 +2054,12 @@ export default class Threads extends View {
       push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
     }
-    out.push({ ...item, kind: "stats", key: `st:${key}` });
-    if (this.legendOn) out.push({ ...item, kind: "legend", key: `lg:${key}` });
+    // The numbers and what they mean show on i (or a click on the line's numbers), under
+    // the reply. The line does not open yet.
+    if (this.legendOn) {
+      out.push({ ...item, kind: "stats", key: `st:${key}` });
+      out.push({ ...item, kind: "legend", key: `lg:${key}` });
+    }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
 
@@ -2503,6 +2515,15 @@ export default class Threads extends View {
     this.copy(text, `reply:${key}`, `Reply copied · ${text.length.toLocaleString()} chars, Markdown`, cx);
   }
 
+  // The copy icon under a message: the prompt as the person wrote it.
+  copyPrompt(key, cx) {
+    const turn = this.findTurn(key);
+    if (!turn || !this.turnKeys(this.rows()).includes(key)) return;
+    const text = turn.prompt ?? "";
+    if (!text) return;
+    this.copy(text, `prompt:${key}`, `Prompt copied · ${text.length.toLocaleString()} chars`, cx);
+  }
+
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
   // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
@@ -2810,7 +2831,7 @@ export default class Threads extends View {
     }
     if (kind === "cp") this.clipAtPress = this.clipBefore;
     if (kind === "cp" && this.selecting === id) {
-      const hit = this.barHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width, this.findTurn(id));
+      const hit = this.barHit(this.pressX ?? this.mouseX, this.findTurn(id));
       if (hit === "quote") { this.pressX = null; this.lastBarHit = { hit }; this.quote(cx, "button", id); return cx.notify(); }
     }
     // The panel has the keyboard again, even if an editor's blur event was missed. A search
@@ -2818,7 +2839,6 @@ export default class Threads extends View {
     this.toList();
     if (/^\d+$/.test(kind)) {
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
-      if (this.open.has(key) && headPinHit(this.pressX, this.bodyW)) { this.pressX = null; this.togglePin(key, cx); return cx.notify(); }
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -2870,19 +2890,34 @@ export default class Threads extends View {
       return cx.notify();
     }
     if (kind === "cp") {
-      // The action bar is one list item: Copy reply on the left, Terminal on the right. A
-      // list item takes one click handler, so the press position tells them apart, and a
-      // press between the two buttons does nothing.
+      // The strip under the reply is one list item. A list item takes one click handler, so
+      // the press position tells its icons apart. A press beside them selects the turn. The
+      // icons show while the pointer is on the strip, so a press on one acts on any turn.
       const x = this.pressX ?? this.mouseX;
       const w = this.bodyW ?? this.width;
       this.pressX = null;
-      const hit = this.barHit(x, w, this.findTurn(id));
+      const hit = this.barHit(x, this.findTurn(id));
       this.lastBarHit = { x: x == null ? null : Math.round(x), w: Math.round(w), hit };
+      this.sel = id;
       if (hit === "terminal" && this.pane()) return this.focusTerminal(cx);
       if (hit === "copy") return this.copyReply(id, cx);
       if (hit === "select") return this.toggleSelect(id, cx);
-      if (hit === "quote") { this.sel = id; this.quote(cx, "button", id); return cx.notify(); }
-      return;
+      if (hit === "quote") { this.quote(cx, "button", id); return cx.notify(); }
+      return cx.notify();
+    }
+    if (kind === "us") {
+      // The strip under an open turn's message: copy the prompt, or pin, by press position.
+      const x = this.pressX ?? this.mouseX;
+      const w = this.bodyW ?? this.width;
+      this.pressX = null;
+      const turn = this.findTurn(id);
+      this.sel = id;
+      const text = turn ? this.stripText(turn, true) : "";
+      const hit = text ? boxHit(stripLayout(w, text, !turn.agent), x, ["copy", "pin"]) : null;
+      this.lastBarHit = { x: x == null ? null : Math.round(x), w: Math.round(w), hit, strip: "you" };
+      if (hit === "copy") return this.copyPrompt(id, cx);
+      if (hit === "pin") { this.togglePin(id, cx); return cx.notify(); }
+      return cx.notify();
     }
     // Before Herdr 0.1.13 the formatted reply cannot be selected: say once per pane how to
     // select its text.
@@ -2899,28 +2934,18 @@ export default class Threads extends View {
     if (["rhead", "md", "nr", "code", "lh", "sx", "lg"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
-  // The action bar's buttons, from the left edge of the list (ui.js barLayout): Copy reply,
-  // Select and Quote start after the list margin, border and card padding (16 px);
-  // Terminal ends 16 px before the right. Quote shows when a pane shows a terminal on this
-  // computer and the turn has a reply; Terminal when a pane shows the terminal.
-  bar(turn, w = this.width) {
+  // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout).
+  // Quote shows when a pane shows a terminal on this computer and the turn has a reply;
+  // Terminal when a pane shows the terminal.
+  acts(turn) {
     const pane = Boolean(this.pane());
     const quote = pane && !this.terminal.includes("/") && Boolean(turn && this.replyText(turn));
-    return barLayout(w, { quote, terminal: pane });
+    return actsLayout({ quote, terminal: pane });
   }
-  barGeom(w = this.width, turn = this.sel ? this.findTurn(this.sel) : null) {
-    const L = this.bar(turn, w);
-    return { copy: L.copy, select: L.select, quote: L.quote, terminal: L.terminal };
-  }
-  barHit(x, w, turn = this.sel ? this.findTurn(this.sel) : null) {
+  barGeom(turn = this.sel ? this.findTurn(this.sel) : null) { return this.acts(turn); }
+  barHit(x, turn = this.sel ? this.findTurn(this.sel) : null) {
     if (x == null) return "copy"; // a keyboard or synthetic press
-    const g = this.barGeom(w, turn);
-    const inside = (b) => b && x >= b[0] - 2 && x <= b[1] + 2;
-    if (inside(g.copy)) return "copy";
-    if (inside(g.select)) return "select";
-    if (inside(g.quote)) return "quote";
-    if (inside(g.terminal)) return "terminal";
-    return null;
+    return boxHit(this.acts(turn), x, ["copy", "quote", "select", "terminal"]);
   }
 
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
@@ -3010,6 +3035,7 @@ export default class Threads extends View {
       case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "fit": return this.fitToReading(cx);
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
+      case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
         // In Select view, s returns to the formatted reply of the turn being selected, even
@@ -3028,7 +3054,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) this.settingsOpen = false; return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime }, cx); return true;
       case "escape":
         if (this.keysOpen) { this.keysOpen = false; return true; }
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
@@ -3084,9 +3110,6 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugWidth:240" lays the pane out for that width.
-    // Design review only: "debugHeader:right" draws the earlier header (all on the right
-    // for the person's turns), "debugHeader:split" the current one.
-    if (/^debugHeader:(split|right)$/.test(name)) { this.headerRight = name.endsWith("right"); for (const s of this.sessions) for (const tn of s.turns) tn.shapeKey = null; this.rowsKey = null; return true; }
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
     if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
@@ -3955,6 +3978,13 @@ export default class Threads extends View {
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
         .child(label("Agent messages"))
         .child(sw))
+      .child(v_flex().gap(2)
+        .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action("alwaysTime", cx); cx.notify(); })
+          .child(svg(ICON("clock")).size(13).flex_none().text_color(t.muted))
+          .child(label("Always show time"))
+          .child(toggle(Boolean(P.alwaysShowTime))))
+        .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.alwaysShowTime ? "Each message's time shows under its bubble." : "A message's time shows when its turn is selected.")))
       .child(h_flex().id("th-set-width").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keepWidth", cx); cx.notify(); })
         .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
@@ -4613,16 +4643,14 @@ export default class Threads extends View {
     const canLess = r.full && this.youClip(r.turn).more > 0;
     const chip = r.turn.cmd ? this.rt().line + 4 : 0;
     const label = r.turn.agent ? 16 + 4 : 0;
-    // 6 above, 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
-    return 6 + 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
+    // 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
+    return 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
   }
 
-  // The caption over an open turn's reply: what the reply does not show, [icon, text]. The
-  // agent's name leads it only in a session where more than one agent replied (OpenCode
-  // records each turn's agent), since the reply sits straight under the person's message.
+  // The caption under an open turn's line: what the reply does not show, [icon, text]. The
+  // agent's name in a session where more than one agent replied leads the line itself.
   captionParts(turn) {
-    const out = this.mixedAgents(turn) ? [["name", this.agentName(turn)]] : [];
-    if (turn.tools > 0) out.push(["wrench", `${plural(turn.tools, "tool call")} (not shown)`]);
+    const out = [];
     if (turn.followups > 0) out.push(["bell", plural(turn.followups, "background update")]);
     const by = this.borrowedFrom(turn);
     if (by) out.push(["bot", `shared with agent message #${by.n}${by.sender?.name ? ` from ${by.sender.name}` : ""}`]);
@@ -4663,8 +4691,8 @@ export default class Threads extends View {
       case "spacer": return r.h;
       case "tail": return r.h;
       case "turn": return r.shape.height;
-      case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + ROW.META : 0);
-      case "wtop": return ROW.PAD_T + ROW.META + ROW.GAP + thumbSize(this.width, this.prefs.textSize);
+      case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
+      case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize);
       case "wake": return WAKE_H;
       case "line": return outlineHeight(this.prefs.textSize);
       case "cmd": return r.est;
@@ -4678,11 +4706,13 @@ export default class Threads extends View {
       case "resume": return 30;
       case "working": {
         const g = this.workingGeom(r.turn);
-        return (r.split ? ROW.GAP : ROW.PAD_T + ROW.META + ROW.GAP) + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line + ROW.GAP + 18 + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
+        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line
+          + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
-      case "head": return ROW.PAD_T + 18;
+      case "head": return ROW.PAD_T;
+      case "ustrip": return ROW.GAP + ROW.META;
       case "you": return this.youHeight(r);
-      case "rhead": return 8 + this.captionRows(r.turn) * 18;
+      case "rhead": return ROW.GAP + ROW.LINE + (this.captionRows(r.turn) ? 6 + this.captionRows(r.turn) * 18 : 0);
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
@@ -4701,7 +4731,7 @@ export default class Threads extends View {
         const lines = this.legendEntries(r.turn).reduce((n, [, text]) => n + wrappedLines(text, Math.floor(per)), 0);
         return 6 + (lines + 1) * 19 + (this.legendEntries(r.turn).length - 1) * 4;
       }
-      case "copy": return 10 + 28 + ROW.PAD_B;
+      case "copy": return ROW.GAP + ROW.ACTS + ROW.PAD_B;
     }
     return 30;
   }
@@ -4909,16 +4939,106 @@ export default class Threads extends View {
     }
   }
 
-  // The frame of a collapsed exchange: 16 px in from each side, the meta line, the message,
-  // the reply and the stats line 6 px apart (ui.js rowHeight). The selected exchange has a
-  // light fill across the pane and a 2 px bar on its left edge, in the accent colour while
-  // the pane has the keyboard.
-  rowFrame(t, sel, focusedPanel, live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
+  // The frame of a collapsed exchange: 16 px in from each side, its parts 6 px apart (ui.js
+  // rowHeight). The selected exchange has a 2 px bar on its left edge, in the accent colour
+  // while the pane has the keyboard, and no fill, so a text selection in it always shows.
+  rowFrame(t, sel, focusedPanel, _live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
     return v_flex().w_full().relative().px(ROW.PAD_X).pt(top).pb(bottom).gap(ROW.GAP).min_w(0)
-      .when(sel && !live, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
       .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .children(kids);
+  }
+
+  // The sender over an agent's message: its icon and name in the agent colour, on the left.
+  senderLine(t, turn) {
+    const ac = this.agentColor(t);
+    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0)
+      .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
+      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)));
+  }
+
+  // The text of the strip under a bubble: "#7 · 9:12 AM" on the selected turn, the time alone
+  // under every other bubble with alwaysShowTime, else nothing.
+  stripText(turn, sel, time = fmtTime(turn.ts)) {
+    if (sel) return [`#${turn.n}`, time].filter(Boolean).join(" · ");
+    return this.prefs.alwaysShowTime ? time : "";
+  }
+
+  // Hover reveal: an element whose text and icons are clear at rest and dim while the
+  // pointer is on it. Children that set no colour of their own take it. gpui restyles only
+  // the hovered element itself, so the strip a hover reveals must sit inside that element.
+  reveal(t, el) { return el.text_color(CLEAR).hover((s) => s.text_color(t.dim)); }
+
+  // The strip under a bubble (ui.js stripLayout): on the selected turn, copy the prompt, the
+  // pin (in the accent colour when the turn is pinned) and "#7 · 9:12 AM", at the bubble's
+  // right edge (an agent's: its left). It keeps its height when it shows nothing. On other
+  // turns `hover` draws what a hover on the element around it reveals, in no colour of its
+  // own: "time" the time alone (a closed row, whose one click opens it), "all" the icons and
+  // "#7 · 9:12 AM" (an open turn's strip, an item of its own, whose icons take a click).
+  youStrip(t, turn, key, sel, hover = null, time = fmtTime(turn.ts)) {
+    const always = this.stripText(turn, false, time);
+    const icons = sel || hover === "all";
+    const text = icons ? this.stripText(turn, true, time) : always || (hover === "time" ? time : "");
+    const lit = sel || Boolean(always);
+    const agent = turn.agent;
+    const el = h_flex().h(ROW.META).w_full().items_center().text_size(11.5).min_w(0).when(!agent, (e) => e.justify_end());
+    if (!text) return el;
+    const L = stripLayout(this.width, text, !agent);
+    const box = (icon, color) => div().flex_none().w(ICON_BOX).h(ROW.META).flex().items_center().justify_center()
+      .child(svg(ICON(icon)).size(13).when(Boolean(color), (e) => e.text_color(color)));
+    const copied = this.copied?.id === `prompt:${key}`;
+    return el.when(Boolean(agent), (e) => e.ml(-4))
+      .when(icons, (e) => e.child(box(copied ? "check" : "copy", copied ? t.ansi2 : sel ? t.dim : null)).child(div().w(2).flex_none())
+        .child(box("pin", sel && this.isPinnedTurn(turn) ? t.accent : sel ? t.dim : null)).child(div().w(4).flex_none()))
+      .child(div().flex_none().w(L.tw).whitespace_nowrap().overflow_hidden().when(lit, (e) => e.text_color(t.dim)).when(!agent, (e) => e.text_right()).child(text));
+  }
+
+  // The line between the message and the reply: "Worked for 2m 31s" and a chevron, over a
+  // hairline. In a session where more than one agent replied, the agent's name leads it; a
+  // stopped or failed turn leads with its icon; a pinned turn ends it with the pin and its
+  // number in the accent colour.
+  workLine(t, turn, pinNo = this.pinNumber(turn)) {
+    const icon = turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
+    const name = this.mixedAgents(turn) ? this.agentName(turn) : null;
+    const pinned = this.isPinnedTurn(turn);
+    return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
+      .child(h_flex().h(17).gap(5).items_center().text_size(12).text_color(t.dim).min_w(0)
+        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().child("·")))
+        .when(Boolean(icon), (el) => el.child(icon))
+        .child(div().flex_none().child(this.workText(turn)))
+        .child(svg(ICON("chevron-right")).size(12).flex_none())
+        .child(div().flex_1())
+        .when(pinned, (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
+        .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo)))));
+  }
+  workText(turn) { return turn.durationMs ? `Worked for ${fmtDuration(turn.durationMs)}` : "Worked"; }
+  // The line as text, for the debug report and the tests: "plan · ⚠ Worked for 40s 📌 2".
+  lineText(turn) {
+    const pinNo = this.pinNumber(turn);
+    return [this.mixedAgents(turn) ? `${this.agentName(turn)} ·` : null, turn.interrupted ? "[stopped]" : this.failed(turn) ? "[failed]" : null,
+      this.workText(turn), this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
+  }
+
+  // The strip under a reply (ui.js actsLayout): on the selected turn, copy the reply, quote
+  // it, select its text and go to the terminal, as icons (keys c q s t). It keeps its height
+  // when it shows nothing. A collapsed row is one list item and a press on it opens the
+  // turn; an open turn's strip is an item of its own, and click() tells its icons apart.
+  // With `hover` (an open turn's strip on a turn not selected) it draws the icons in no
+  // colour of their own, for the hover around it to reveal.
+  actsStrip(t, turn, key, show, hover = false) {
+    const el = h_flex().h(ROW.ACTS).items_center().ml(-4).gap(4).when(show, (e) => e.text_color(t.dim));
+    if (!show && !hover) return el;
+    const L = this.acts(turn);
+    const copied = this.copied?.id === `reply:${key}`;
+    const has = Boolean(this.replyText(turn));
+    const ink = show ? t.dim : null;
+    const box = (icon, color = ink, on = true) => div().flex_none().w(ICON_BOX).h(ROW.ACTS).flex().items_center().justify_center()
+      .when(!on, (e) => e.opacity(0.4)).child(svg(ICON(icon)).size(13).when(Boolean(color), (e) => e.text_color(color)));
+    return el
+      .child(box(copied ? "check" : "copy", copied ? t.ansi2 : ink, has))
+      .when(Boolean(L.quote), (e) => e.child(box("quote")))
+      .child(box("text-cursor", this.selecting === key ? t.accent : ink, has))
+      .when(Boolean(L.terminal), (e) => e.child(box("square-terminal")));
   }
 
   // Width left for an agent's sender label on the meta line: the pane less the icon, #n,
@@ -4934,83 +5054,12 @@ export default class Threads extends View {
     return Math.max(36, Math.floor(Math.min(tw * 0.6, tw - fixed)));
   }
 
-  // The line over the message: "📌 🔔 3 🖼 1 #7 · 8:43 AM" on the right for the person's
-  // own messages; "<icon> t7 review · #7 · 8:43 AM" on the left for an agent's. A stopped
-  // or failed turn leads with its icon. lead: an icon in place of that (the running turn's).
-  // bw: the bubble's width, which the header of the person's own turn spans (metaSplit).
-  metaLine(t, turn, lead = null, time = fmtTime(turn.ts), pinNo = null, bw = null) {
-    pinNo ??= this.pinNumber(turn);
-    const agent = turn.agent;
-    const ac = this.agentColor(t);
-    const icon = lead ?? (turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null);
-    const count = (name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n);
-    if (!this.headerRight) return this.metaSplit(t, turn, icon, time, pinNo, count, null, bw);
-    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
-      .when(!agent, (el) => el.justify_end()
-        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis()
-          .font_semibold().text_color(t.muted).child(this.prefs.youName))
-        .child(div().flex_none().child("·")))
-      .when(agent, (el) => el
-        .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
-        .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-          .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)))
-        .child(div().flex_none().child("·")))
-      .when(Boolean(icon), (el) => el.child(icon))
-      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
-      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
-      .child(div().flex_none().font_family(this.mono()).child(`#${turn.n}`))
-      .child(div().flex_none().child("·"))
-      .child(div().flex_none().truncate().child(time));
-  }
-
-  // The turn header: "#7 · You" or "#7 · <icon> t7 review", then the time at the right end.
-  // The number is a step brighter than the name. An agent's turn starts it at the reply's
-  // left edge. The person's own spans their bubble (bw), from its left edge to its right
-  // (headerFit): a short bubble gets a short header, which drops the name before the time.
-  metaSplit(t, turn, icon, time, pinNo, count0, tail = null, bw = null) {
-    pinNo ??= this.pinNumber(turn);
-    const count = count0 ?? ((name, n) => h_flex().flex_none().gap(3).items_center().child(svg(ICON(name)).size(10)).child(n));
-    const agent = turn.agent;
-    const ac = this.agentColor(t);
-    const fit = !agent && bw ? this.headerFit(turn, time, bw, Boolean(icon), pinNo, tail) : null;
-    const name = !fit || fit.name;
-    const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).text_color(t.dim).min_w(0)
-      .when(Boolean(fit), (el) => el.flex_none().w(fit?.w ?? 0))
-      .child(div().flex_none().font_family(this.mono()).text_color(t.muted).child(`#${turn.n}`))
-      .when(name, (el) => el.child(div().flex_none().child("·")))
-      .when(agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac)))
-      .when(name, (el) => el.child(div().flex_none().max_w(fit ? fit.nameW : this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-        .font_semibold().text_color(agent ? ac : t.dim).child(agent ? senderLabel(turn.sender, this.width) : this.prefs.youName)))
-      .when(Boolean(icon), (el) => el.child(icon))
-      .when(this.isPinnedTurn(turn), (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-      .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
-      .when(turn.followups > 0, (el) => el.child(count("bell", countLabel(turn.followups))))
-      .child(div().flex_1().min_w(0).truncate().text_right().child(time))
-      .when(Boolean(tail), (el) => el.children(tail));
-    return fit ? h_flex().w_full().min_w(0).justify_end().child(line) : line;
-  }
-
-  // The person's header over a bubble bw wide: its width, and whether the name fits beside
-  // the number, the icons and the time (6.6 px a character at 11.5 px, 7.2 for the mono
-  // number, 5 px gaps). Narrower than the number, icons and time, it keeps that width and
-  // reaches past the bubble's left edge, so the time stays whole.
-  headerFit(turn, time, bw, icon, pinNo, tail) {
-    const ch = 6.6;
-    const icons = (icon ? 17 : 0) + (this.isPinnedTurn(turn) ? 17 : 0) + (pinNo != null ? 12 : 0)
-      + (turn.followups > 0 ? 18 + countLabel(turn.followups).length * ch : 0) + (tail ? tail.length * 19 : 0);
-    const base = Math.ceil(`#${turn.n}`.length * 7.2 + 5 + icons + time.length * ch);
-    const nameW = Math.ceil(this.prefs.youName.length * ch + 2);
-    const w = Math.max(bw, base);
-    return { w, name: base + 10 + 4 + nameW <= w, nameW: Math.max(0, w - base - 14) };
-  }
-
   // The person's message in a bubble on the right (an agent's: an outlined bubble on the
   // left), as wide as its widest line (ui.js rowShape bubbleW).
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill)
+    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -5098,7 +5147,8 @@ export default class Threads extends View {
     return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, lh));
   }
 
-  // A collapsed exchange: the meta line, the message, the start of the reply, the stats.
+  // A collapsed exchange: the sender (an agent's), the message, the strip under it, the line,
+  // the start of the reply and the strip under that (ui.js rowHeight).
   rowItem(t, r, focusedPanel) {
     if (r.compact) return this.pinRow(t, r, focusedPanel);
     const { turn, key } = r;
@@ -5108,17 +5158,27 @@ export default class Threads extends View {
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, false, [
-      this.metaLine(t, turn, null, fmtTime(turn.ts), r.pinNo ?? null, turn.agent ? null : sh.bubbleW),
-      ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
-      this.bubble(t, turn, [
-        this.promptBlock(bt, turn, sh, sel),
-        ...(sh.pMore ? [this.moreLine(bt)] : []),
-      ], sh.bubbleW),
+      ...(turn.agent ? [this.senderLine(t, turn)] : []),
+      this.youGroup(t, turn, key, sel, [
+        ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
+        this.bubble(t, turn, [
+          this.promptBlock(bt, turn, sh, sel),
+          ...(sh.pMore ? [this.moreLine(bt)] : []),
+        ], sh.bubbleW),
+      ]),
+      this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn)),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
-      this.statsLine(t, this.statsText(turn)),
+      this.actsStrip(t, turn, key, sel),
     ]);
+  }
+
+  // A closed row's message and the strip under it, as one element, so a hover anywhere on
+  // the message reveals the time under it. The gap is the row's own.
+  youGroup(t, turn, key, sel, kids) {
+    return this.reveal(t, v_flex().id(`yg:${key}`).w_full().gap(ROW.GAP).min_w(0))
+      .children([...kids, this.youStrip(t, turn, key, sel, "time")]);
   }
 
   // A closed pin in the Pinned view (ui.js PIN_ROW): its digit in an accent badge, then
@@ -5236,55 +5296,57 @@ export default class Threads extends View {
         .child(["Updating", clock, turn.wakeTools ? plural(turn.wakeTools, "tool call") : null, said || null].filter(Boolean).join(" · ")));
   }
 
-  // The running turn when it is not selected: the message, then where the reply will be,
-  // the live state, its clock and tool calls so far, in the live colour.
+  // The live line of a running turn, where a finished turn has its line: its state, the
+  // agent, its clock and tool calls so far, in the live colour, over a hairline.
+  liveLine(t, turn, tokens = false) {
+    const st = this.liveState(t);
+    const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
+    const s = stats(turn);
+    const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, tokens && this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
+    return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
+      .child(h_flex().h(17).gap(6).items_center().min_w(0)
+        .child(this.liveIcon(st, 13))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)));
+  }
+
+  // The running turn when it is not selected: the message, the strip under it, the live
+  // line, then where the reply will be.
   workingRow(t, r, focusedPanel) {
     const { turn, key } = r;
-    const st = this.liveState(t);
     const sel = this.sel === key;
-    const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
+    const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, true, [
-      ...(r.split ? [] : [this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : sh.bubbleW)]),
-      this.bubble(t, turn, [this.promptBlock(this.bubbleLook(t, turn.agent).theme, turn, sh), ...(sh.pMore ? [this.moreLine(this.bubbleLook(t, turn.agent).theme)] : [])], sh.bubbleW),
-      h_flex().h(18).gap(6).items_center().min_w(0)
-        .child(this.liveIcon(st, 13))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color)
-          .child([this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`].filter(Boolean).join(" · "))),
+      ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
+      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, turn, sh), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
+      this.liveLine(t, turn),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ], r.split ? ROW.GAP : ROW.PAD_T);
   }
 
-  // A running turn's meta line and its pasted images' tiles, over the rest of its row. A
-  // click on a tile opens the message's images full window.
+  // A running turn's sender (an agent's) and its pasted images' tiles, over the rest of its
+  // row. A click on a tile opens the message's images full window.
   workingTop(t, r, focusedPanel) {
     const { turn } = r;
-    const st = this.liveState(t);
     const sel = this.sel === r.turnKey;
-    const bw = sel ? bubbleMax(this.width, this.prefs.textSize) : this.shape(turn, true).bubbleW;
     return this.rowFrame(t, sel, focusedPanel, true, [
-      this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bw),
+      ...(turn.agent ? [this.senderLine(t, turn)] : []),
       this.thumbStrip(t, turn, r.turnKey),
     ], ROW.PAD_T, 0);
   }
 
-  // The running turn when selected: the message in full (up to 6 lines), the live state with
-  // its clock, tool calls and tokens so far, and a note on where the reply will appear.
-  // Every line has a fixed height, so the drawn height is the estimate (F3).
+  // The running turn when selected: the message in full (up to 6 lines), the strip under
+  // it, the live line with its tokens, and a note on where the reply will appear. Every line
+  // has a fixed height, so the drawn height is the estimate (F3).
   workingItem(t, r) {
-    const { turn } = r;
-    const s = stats(turn);
-    const st = this.liveState(t);
-    const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
+    const { turn, key } = r;
     const g = this.workingGeom(turn);
-    const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      ...(r.split ? [] : [this.metaLine(t, turn, this.liveIcon(st, 12), st.spin ? "now" : fmtTime(turn.ts), null, turn.agent ? null : bubbleMax(this.width, this.prefs.textSize))]),
+      ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
       this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize)),
-      h_flex().h(18).gap(6).items_center().min_w(0)
-        .child(this.liveIcon(st, 13))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(st.color).child(live)),
+      this.youStrip(t, turn, key, true),
+      this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
     ], r.split ? ROW.GAP : ROW.PAD_T);
   }
@@ -5385,12 +5447,10 @@ export default class Threads extends View {
   cardPart(t, r, size) {
     const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
     const sel = this.sel === tkey;
-    const fill = sel && this.textSel !== tkey;
     const focusedPanel = this.h.is_focused();
     return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
       .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
       .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
-      .when(fill, (el) => el.bg(t.selected))
       .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(this.partContent(t, r, false));
   }
@@ -5404,24 +5464,9 @@ export default class Threads extends View {
     const mono = this.mono();
     switch (r.kind) {
       case "head":
-        // The meta line of an open turn, on the right like a closed one's: "#7 · Sat 8:43 AM ·
-        // 2m 31s", then the pin and the chevron that closes it. A list item takes one click
-        // handler, so click() tells the pin by position (headPinHit).
-        if (!this.headerRight) {
-          // The person's: over their bubble, as wide as it (youMd bw), ending at its right edge.
-          const bw = turn.agent ? null : this.youMd({ turn, full: this.full.has(r.key) }).bw;
-          return div().when(Boolean(turn.agent), (el) => el.pr(4)).child(this.metaSplit(t, turn, turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null,
-            [when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · "), null, null,
-            [svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim), svg(ICON("chevron-up")).size(14).flex_none()], bw));
-        }
-        return h_flex().h(18).gap(6).items_center().text_size(11.5).text_color(t.dim).pr(4)
-          .when(turn.interrupted || this.failed(turn), (el) => el.child(this.statusIcon(t, turn)))
-          .when(turn.agent, (el) => el.child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t)))
-            .child(div().flex_none().max_w(this.labelRoom(turn, this.inner())).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-              .font_semibold().text_color(this.agentColor(t)).child(senderLabel(turn.sender, this.width))))
-          .child(div().flex_1().min_w(0).truncate().text_right().child([`#${turn.n}`, when(turn.ts), fmtDuration(turn.durationMs)].filter(Boolean).join(" · ")))
-          .child(svg(ICON("pin")).size(13).flex_none().text_color(this.isPinned(r.key) ? t.accent : t.dim))
-          .child(svg(ICON("chevron-up")).size(14).flex_none());
+        // The top of an open turn: its padding alone. The number, time and pin are in the
+        // strip under the message (ustrip), and Show less, Collapse or Esc close it.
+        return div();
       case "you": {
         const y = this.youMd(r);
         const { style, theme: bt } = this.bubbleLook(t, turn.agent);
@@ -5450,7 +5495,7 @@ export default class Threads extends View {
         // The message in its bubble, on the right (an agent's outlined, on the left, under its
         // sender), as wide as its widest line.
         const agent = turn.agent;
-        return h_flex().w_full().mt(6).when(!agent, (el) => el.justify_end())
+        return h_flex().w_full().when(!agent, (el) => el.justify_end())
           .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
@@ -5466,15 +5511,17 @@ export default class Threads extends View {
             .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
+      case "ustrip": return this.reveal(t, div().id(`ush:${tkey}`).pt(ROW.GAP)).child(this.youStrip(t, turn, tkey, this.sel === tkey, "all"));
       case "rhead":
-        // Under the message, before the reply: what the reply does not show, wrapping
-        // ("🔧 9 tool calls (not shown) · 🔔 144 background updates"), led by who replied in a
-        // session with more than one agent. With nothing to say it is an 8 px gap.
-        return h_flex().mt(8).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
-          .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
-            .when(i > 0, (el) => el.child(div().child("·")))
-            .when(icon === "name", (el) => el.child(div().font_semibold().text_color(t.muted).child(text)))
-            .when(icon !== "name", (el) => el.child(svg(ICON(icon)).size(11).flex_none()).child(text))));
+        // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
+        // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
+        // message #4").
+        return v_flex().pt(ROW.GAP)
+          .child(this.workLine(t, turn))
+          .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
+            .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
+              .when(i > 0, (el) => el.child(div().child("·")))
+              .child(svg(ICON(icon)).size(11).flex_none()).child(text)))));
       case "lhead":
         return h_flex().mt(14).gap(6).items_center().text_size(10.5)
           .child(div().font_semibold().text_color(this.labelInk(t, t.background)).child("LATEST UPDATE"))
@@ -5582,34 +5629,7 @@ export default class Threads extends View {
         return v_flex().mt(6).gap(4).children(this.legendEntries(turn).map(([icon, text]) => h_flex().gap(6).items_start()
           .child(svg(ICON(icon)).size(11).mt(4).flex_none().text_color(t.dim))
           .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.muted).child(text))));
-      case "copy": {
-        const copied = this.copied?.id === `reply:${tkey}`;
-        const has = Boolean(this.replyText(turn));
-        // Widths and labels from ui.js barLayout, the same figures barHit reads.
-        const L = this.bar(turn);
-        const wOf = (b) => b[1] - b[0];
-        const side = (b, icon, label, on = false) => h_flex().flex_none().w(wOf(b)).h(28).gap(6).items_center().justify_center().rounded(7)
-          .border_1().border_color(on ? t.accent : t.border).text_size(12.5)
-          .bg(on ? t.raised : t.background).text_color(on ? t.foreground : t.muted)
-          .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .child(svg(ICON(icon)).size(13))
-          .when(Boolean(label), (el) => el.child(label));
-        const selOn = this.selecting === tkey;
-        return (h_flex().mt(10).gap(6).items_center()
-          .child(h_flex().flex_none().w(wOf(L.copy)).h(28).gap(6).items_center().justify_center().rounded(7).text_size(12.5).font_medium()
-            .when(!has, (el) => el.opacity(0.4))
-            .bg(copied ? alpha(t.ansi2, 0.13) : t.background).border_1().border_color(copied ? t.ansi2 : t.border)
-            .text_color(copied ? t.ansi2 : t.foreground)
-            .child(svg(ICON(copied ? "check" : "copy")).size(13)).child(copied ? "Copied" : L.labels.copy))
-          // Select: the reply as selectable source text (s).
-          .when(has, (el) => el.child(side(L.select, "text-cursor", L.labels.select ? (selOn ? "Formatted" : "Select") : null, selOn)))
-          // Quote: pastes the reply (or, in Select view, the copied part) into the terminal's
-          // input as a Markdown quote, without sending it (q).
-          .when(Boolean(L.quote), (el) => el.child(side(L.quote, "quote", L.labels.quote ? "Quote" : null)))
-          .child(div().flex_1())
-          // Terminal: focuses the terminal pane (it cannot scroll the terminal to this turn).
-          .when(Boolean(L.terminal), (el) => el.child(side(L.terminal, "square-terminal", L.labels.terminal ? "Terminal" : null))));
-      }
+      case "copy": return this.reveal(t, div().id(`cph:${tkey}`).pt(ROW.GAP)).child(this.actsStrip(t, turn, tkey, this.sel === tkey, true));
     }
     return div();
   }

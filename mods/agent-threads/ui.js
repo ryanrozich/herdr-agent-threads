@@ -653,13 +653,17 @@ export function middle(text, max) {
 }
 
 // Row geometry, shared by the drawing and the stated heights. A collapsed turn is drawn as
-// a chat exchange: 16 px in from each side (where an open turn's text starts), the meta line, the person's message in a bubble
-// on the right (an agent's on the left), the reply as plain text under it, then the stats
-// line. The bubble is at most 82% of the text width (90% under 320 px) and has 10 px of
-// padding each side and 6 px above and below. The *_CHAR widths are measured at 13 px;
-// readType scales them to the reading size.
+// a chat exchange, 16 px in from each side (where an open turn's text starts): the person's
+// message in a bubble on the right (an agent's on the left, under its sender's name), the
+// strip under it (META: copy, pin, "#7 · 9:12 AM", shown on the selected turn), the line
+// ("Worked for 2m 31s" over a hairline, LINE), the reply as plain text, then the strip under
+// the reply (ACTS: copy, quote, select, terminal, shown on the selected turn). Both strips
+// keep their height when they show nothing, so nothing moves when a turn is selected. The
+// bubble is at most 82% of the text width (90% under 320 px) and has 10 px of padding each
+// side and 6 px above and below. The *_CHAR widths are measured at 13 px; readType scales
+// them to the reading size.
 export const ROW = Object.freeze({
-  META: 16, STATS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
+  META: 16, STATS: 16, LINE: 24, ACTS: 16, MORE: 18, PAD_T: 8, PAD_B: 10, GAP: 6, PAD_X: 16,
   BUBBLE_PX: 10, BUBBLE_PY: 6, PROMPT_CHAR: 6.7, AGENT_CHAR: 6.5, REPLY_CHAR: 6.7, CHIP_CHAR: 7.3,
 });
 
@@ -731,9 +735,10 @@ export function tileRow(dims, width, text = TEXT_SIZE) {
 // Height of a collapsed exchange with p prompt lines and r reply lines of `line` px, and
 // `more` Show more lines (one under a cut message, one under a cut reply). The reply starts
 // straight under the message, with no name over it.
-export function rowHeight(p, r, more = 0, line = readType().line) {
-  return ROW.PAD_T + ROW.META + ROW.GAP + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + line * r
-    + ROW.GAP + ROW.STATS + ROW.PAD_B + ROW.MORE * more;
+// An agent's message has its sender's name over the bubble (META and a gap more).
+export function rowHeight(p, r, more = 0, line = readType().line, agent = false) {
+  return ROW.PAD_T + (agent ? ROW.META + ROW.GAP : 0) + 2 * ROW.BUBBLE_PY + line * p + ROW.GAP + ROW.META
+    + ROW.GAP + ROW.LINE + ROW.GAP + line * r + ROW.GAP + ROW.ACTS + ROW.PAD_B + ROW.MORE * more;
 }
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
@@ -782,7 +787,7 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   const bubbleW = Math.min(bubbleMax(width, size), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
   return {
     p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
-    height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line),
+    height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line, agent),
   };
 }
 
@@ -1422,42 +1427,51 @@ export function focusTarget(panes, terminal, myTab) {
   return all.find((p) => p.tab === myTab) ?? all[0] ?? null;
 }
 
-// The open card's action bar at a pane width: Copy reply, Select and Quote from the left,
-// Terminal at the right, 6 px apart inside a 16 px inset. While they do not fit, Quote's
-// label goes first, then Select's, then "Copy reply" becomes "Copy", then Terminal's.
-// Returns each button's [start, end] (null when it is not shown) and its label (null:
-// icon only).
-export function barLayout(w, { quote = true, terminal = true } = {}) {
-  const btn = (label) => 10 + 13 + 6 + label + 10 + 2;
-  const W = { copy: btn(66), copyShort: btn(42), sel: 92, quote: btn(36), term: btn(52), icon: 30 };
-  const tiers = [
-    [true, true, true, true], [true, true, false, true], [true, false, false, true], [false, false, false, true], [false, false, false, false],
-  ];
-  let out = null;
-  for (const [longCopy, selLabel, quoteLabel, termLabel] of tiers) {
-    const copyW = longCopy ? W.copy : W.copyShort;
-    const selW = selLabel ? W.sel : W.icon;
-    const quoteW = quoteLabel ? W.quote : W.icon;
-    const termW = termLabel ? W.term : W.icon;
-    const copy = [16, 16 + copyW];
-    const select = [copy[1] + 6, copy[1] + 6 + selW];
-    const q = quote ? [select[1] + 6, select[1] + 6 + quoteW] : null;
-    const term = terminal ? [w - 16 - termW, w - 16] : null;
-    const right = (q ?? select)[1];
-    out = {
-      copy, select, quote: q, terminal: term,
-      labels: { copy: longCopy ? "Copy reply" : "Copy", select: selLabel, quote: quoteLabel, terminal: termLabel },
-    };
-    if (right + 6 <= (term ? term[0] : w - 16 + 6)) return out;
+// The two strips of the selected turn draw their icons 13 px in 22 px boxes, so a press
+// anywhere in a box counts (a list item takes one click handler, so click() tells the
+// icons apart by the press position). STRIP_CHAR is an 11.5 px label's character.
+export const ICON_BOX = 22;
+export const STRIP_CHAR = 6.6;
+
+// The strip under an open turn's reply: copy, quote, select and terminal from the left, the
+// first glyph on the reply's left edge (16 px). Quote shows when a pane shows a terminal on
+// this computer and the turn has a reply; terminal when a pane shows the terminal. Returns
+// each icon's [start, end], or null when it is not shown.
+export function actsLayout({ quote = true, terminal = true } = {}) {
+  const out = { copy: null, quote: null, select: null, terminal: null };
+  let x = ROW.PAD_X - 4;
+  for (const [name, on] of [["copy", true], ["quote", quote], ["select", true], ["terminal", terminal]]) {
+    if (!on) continue;
+    out[name] = [x, x + ICON_BOX];
+    x += ICON_BOX + 4;
   }
   return out;
 }
 
-// Whether a press at x falls on the pin icon of an open card's head, in a body w wide. Its
-// inner edge is w - 16 (the card's margin, border and padding); the chevron takes 14 px of
-// that, then a 6 px gap, then the 13 px pin. The zone stops short of the chevron.
-export function headPinHit(x, w) {
-  return x != null && w != null && x >= w - 54 && x <= w - 33;
+// The strip under a bubble in a body w wide: copy the prompt, pin, then "#7 · 9:12 AM" in a
+// box as wide as its text. The person's strip ends at the bubble's right edge (w - 16); an
+// agent's starts at its left. Returns { copy, pin, text } as [start, end] and the text width.
+export function stripLayout(w, text, right = true) {
+  const tw = Math.ceil([...text].length * STRIP_CHAR) + 2;
+  if (right) {
+    const t = [w - ROW.PAD_X - tw, w - ROW.PAD_X];
+    const pin = [t[0] - 4 - ICON_BOX, t[0] - 4];
+    const copy = [pin[0] - 2 - ICON_BOX, pin[0] - 2];
+    return { copy, pin, text: t, tw };
+  }
+  const copy = [ROW.PAD_X - 4, ROW.PAD_X - 4 + ICON_BOX];
+  const pin = [copy[1] + 2, copy[1] + 2 + ICON_BOX];
+  return { copy, pin, text: [pin[1] + 4, pin[1] + 4 + tw], tw };
+}
+
+// Which box of a layout a press at x falls in (2 px of slack each side), or null.
+export function boxHit(layout, x, names) {
+  if (x == null) return null;
+  for (const n of names) {
+    const b = layout[n];
+    if (b && x >= b[0] - 2 && x <= b[1] + 2) return n;
+  }
+  return null;
 }
 
 // A pin in the Pinned column and the narrow Pinned view is a compact row, so five fit in a

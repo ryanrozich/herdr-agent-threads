@@ -36,7 +36,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 ### Read a long session as a chat
 
-Your prompt is a bubble on the right. The reply starts right under it, and its time, tokens and model sit below. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
+Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Select a turn to see its time and the copy, pin, quote and terminal icons; `i` shows its tokens and model. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
