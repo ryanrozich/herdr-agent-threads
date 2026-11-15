@@ -39,7 +39,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
-      [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Explain the stats"], [["t"], "Focus the terminal"],
+      [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Show or hide the turn's numbers"], [["t"], "Focus the terminal"],
     ]],
     ["Pins", [
       ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
@@ -1593,6 +1593,13 @@ export function stripLayout(w, text, right = true) {
   const copy = [ROW.PAD_X - 4, ROW.PAD_X - 4 + ICON_BOX];
   const pin = [copy[1] + 2, copy[1] + 2 + ICON_BOX];
   return { copy, pin, text: [pin[1] + 4, pin[1] + 4 + tw], tw };
+}
+
+// The info icon at the right end of an open "Worked for" line, in a line lineW wide that
+// starts ROW.PAD_X in: [start, end] from the column's left edge.
+export function infoBox(lineW) {
+  const end = ROW.PAD_X + lineW;
+  return [end - ICON_BOX, end];
 }
 
 // Which box of a layout a press at x falls in (2 px of slack each side), or null.

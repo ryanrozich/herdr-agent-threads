@@ -323,7 +323,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
   expect(focusCalls).toBe(before + 1);
   v.code.delete(`${key}:1`);
   // A click on another part of the list still takes the keyboard back.
-  v.click(`st:${key}`, cx);
+  v.click(`it:${key}:0`, cx);
   expect(focusCalls).toBe(before + 2);
   st.handlers.blur();
   expect(v.editorFocused).toBe(false);
@@ -1319,7 +1319,7 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
 
 // ---- round 3: V3b, measured heights, and C1, C3, C5 on top -------------------------------
 
-const PROBED_KINDS = ["you", "rhead", "md", "lhead", "latest", "stats", "legend", "noreply"];
+const PROBED_KINDS = ["you", "rhead", "md", "lhead", "latest", "noreply"];
 // Whether a list item is a part of the card for turn key ("0:3": "you:0:3", "md:0:3:1", …).
 const partOf = (r, key) => r.key === key || r.key.split(":").slice(1, 3).join(":") === key;
 // The probe's entries in a recorded frame: part key -> its on_size_change handler.
@@ -1436,37 +1436,6 @@ test("V3b: the first-frame estimate is never under the reading-line reference, a
   draw(v, cx);
 });
 
-test("C1: the counts line is in the stats part's probe entry, at 16 px lines of 0.6 em", async () => {
-  const { v, cx } = await pane(fixture("--only", "2"));
-  const key = v.turnKeys(v.rows())[0];
-  v.open = new Set([key]);
-  // The numbers show under the open line (level 1).
-  v.toggleLine(key);
-  v.legendOn = true;
-  const line57 = "cache read 1,204,331 · written 12,345 · new input 123,456";
-  expect(line57.length).toBe(57);
-  // 57 characters × 6.6 px: 376 px, so 2 lines in a 240 px pane (208 px of text) and in a
-  // 380 px one (348 px), 1 at 640.
-  v.width = 240; expect(v.countsHeight(line57)).toBe(6 + 2 * 16);
-  v.width = 380; expect(v.countsHeight(line57)).toBe(6 + 2 * 16);
-  v.width = 640; expect(v.countsHeight(line57)).toBe(6 + 16);
-  v.width = 380; expect(v.countsHeight(line57.slice(0, 50))).toBe(6 + 16);
-  for (const w of [240, 380]) {
-    v.forcedWidth = w; v.width = w; v.meas = new Map(); v.probeTries = new Map();
-    const st = v.rows().find((r) => r.kind === "stats");
-    const counts = v.countsLine(st.turn);
-    expect(counts).toMatch(/^cache read /);
-    const calls = frame(v, cx);
-    const at = calls.findIndex(([n, x]) => n === "id" && String(x).startsWith(`th-probe-${st.key}-`));
-    expect(at).toBeGreaterThanOrEqual(0);
-    const next = calls.findIndex(([n, x], i) => i > at && n === "id" && String(x).startsWith("th-probe-"));
-    const inProbe = calls.slice(at, next < 0 ? undefined : next);
-    expect(inProbe.some(([n, x]) => n === "child" && x === counts)).toBe(true);
-    expect(inProbe.some(([n, x]) => n === "line_height" && x === "16px")).toBe(true);
-    expect(v.estimate(st)).toBeGreaterThanOrEqual(10 + 22 + v.countsHeight(counts));
-  }
-});
-
 test("C3: the open card's reply starts with the first block after the last tool call, and copy and quote send that text", async () => {
   const r = await quotePane("--blocks");
   const { v, cx } = r;
@@ -1534,71 +1503,152 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
 
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
 
-test("C2: plain chip names, and i or a click on the stats shows the numbers and a legend of the chips shown", async () => {
+test("Turn card: i opens the selected turn's numbers over the bottom of the pane, follows the selection, and opens nothing in the list", async () => {
   const { v, cx } = await pane(fixture());
   const t = v.current().turns.find((x) => x.compactions > 0 && stats(x).cachePct != null);
   expect(t).toBeTruthy();
   const key = `0:${t.n}`;
   v.sel = key;
+  v.width = 380;
+  const kinds = () => v.rows().filter((r) => partOf(r, key)).map((r) => r.kind);
+  // The numbers are no longer parts of the open work.
+  v.open = new Set([key]);
+  v.toggleLine(key);
+  expect(kinds()).not.toContain("stats");
+  expect(kinds()).not.toContain("legend");
+  const before = v.rows().map((r) => r.key).join(",");
+  v.key(keyEv("i"), cx);
+  expect(v.detailsOpen).toBe(true);
+  // The list does not change under the card.
+  expect(v.rows().map((r) => r.key).join(",")).toBe(before);
+  // Context compacted first, then model, tokens, tool calls and cache hit with its counts.
+  const rows = v.detailRows(t);
+  expect(rows.map((r) => r[0])).toEqual(["Context", "Model", "Tokens", "Tool calls", "Cache hit"]);
+  const cache = rows.find((r) => r[0] === "Cache hit");
+  expect(cache[1]).toMatch(/^[\d.]+%$/);
+  expect(cache[3]).toMatch(/^read [\d,]+ · written [\d,]+ · new input [\d,]+$/);
+  expect(rows.find((r) => r[0] === "Tokens")[2]).toMatch(/cache read count\.$/);
+  // Elapsed time stays on "Worked for" and is not repeated.
+  expect(rows.some((r) => /^\d+[hms]/.test(r[1]))).toBe(false);
+  // Drawn over the list with its title, each value and what it means.
+  let calls = frame(v, cx);
+  const ids = calls.filter(([n]) => n === "id").map((c) => c[1]);
+  expect(ids).toContain("th-details");
+  expect(calls.some(([n, x]) => n === "child" && x === `Turn #${t.n}`)).toBe(true);
+  for (const [, value, what, under] of rows) {
+    expect(calls.some(([n, x]) => n === "child" && x === value)).toBe(true);
+    expect(calls.some(([n, x]) => n === "child" && x === what)).toBe(true);
+    if (under) expect(calls.some(([n, x]) => n === "child" && x === under)).toBe(true);
+  }
+  // It follows the selection: down shows the next turn's numbers.
+  v.key(keyEv("down"), cx);
+  expect(v.detailsOpen).toBe(true);
+  expect(v.sel).not.toBe(key);
+  calls = frame(v, cx);
+  expect(calls.some(([n, x]) => n === "child" && x === `Turn #${v.findTurn(v.sel).n}`)).toBe(true);
+  // i closes it, and so does Esc, before anything else Esc does.
+  v.key(keyEv("i"), cx);
+  expect(v.detailsOpen).toBe(false);
+  expect(frame(v, cx).some(([n, x]) => n === "id" && x === "th-details")).toBe(false);
+  v.sel = key;
+  v.key(keyEv("i"), cx);
+  v.action("escape", cx);
+  expect(v.detailsOpen).toBe(false);
+  expect(v.open.has(key)).toBe(true);
+  // i on a closed turn opens the card and leaves the turn closed.
+  v.open.clear();
+  v.key(keyEv("i"), cx);
+  expect(v.detailsOpen).toBe(true);
+  expect(v.open.has(key)).toBe(false);
+  // The ? sheet and the card do not stack.
+  v.action("keys", cx);
+  expect(v.detailsOpen).toBe(false);
+  v.key(keyEv("i"), cx);
+  expect(v.keysOpen).toBe(false);
+  expect(v.detailsOpen).toBe(true);
+  v.action("escape", cx);
+  // With nothing selected, i does nothing.
+  v.sel = null;
+  expect(v.action("legend", cx)).toBe(false);
+  expect(v.detailsOpen).toBe(false);
+  // A turn without a cache count or compaction lists only what it has.
+  const plain = v.current().turns.find((x) => !x.compactions && stats(x).cachePct == null);
+  if (plain) {
+    const names = v.detailRows(plain).map((r) => r[0]);
+    expect(names).not.toContain("Cache hit");
+    expect(names).not.toContain("Context");
+    expect(names).toContain("Tool calls");
+  }
+  // The ? sheet names the key; the footer keeps to the most-used keys.
+  const { keySheet } = await import("../mods/agent-threads/ui.js");
+  expect(keySheet("q").flatMap(([, items]) => items).find(([k]) => k[0] === "i" && k.length === 1)?.[1]).toBe("Show or hide the turn's numbers");
+  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
+});
+
+test("Turn card: the open line's info icon shows on the selected turn and under the pointer, and a press on it opens the card", async () => {
+  const { v, cx } = await pane(fixture());
+  const t = v.current().turns.find((x) => x.tools > 0);
+  const key = `0:${t.n}`;
   v.open = new Set([key]);
   v.width = 380;
-  const texts = v.statTexts(t);
-  expect(texts[0]).toMatch(/^[\d.]+k? tokens$/);
-  expect(texts).toContain("context compacted");
-  expect(texts.some((x) => /^\d+ tool calls?$/.test(x))).toBe(true);
-  expect(texts.some((x) => /^cache hit [\d.]+%$/.test(x))).toBe(true);
-  expect(texts.some((x) => / tok$|^compacted$|^cache \d/.test(x))).toBe(false);
-  const kinds = () => v.rows().filter((r) => partOf(r, key)).map((r) => r.kind);
-  expect(kinds()).not.toContain("legend");
-  expect(kinds()).not.toContain("stats");
-  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
-  v.key(keyEv("i"), cx);
-  expect(kinds()).toContain("legend");
-  expect(kinds().indexOf("legend")).toBe(kinds().indexOf("stats") + 1);
-  const entries = v.legendEntries(t);
-  // One entry per chip shown, context compacted first, then the counts line.
-  expect(entries.length).toBe(texts.length + 1);
-  expect(entries[0][1]).toMatch(/^context compacted: /);
-  expect(entries[1][1]).toMatch(/^tokens: .*cache read count above\.$/);
-  expect(entries.at(-1)[1]).toMatch(/^cache read · written · new input: /);
-  // The legend is a measured part, drawn in the probe.
-  v.meas = new Map(); v.probeTries = new Map();
-  expect([...probeEntries(frame(v, cx)).keys()]).toContain(`lg:${key}`);
-  draw(v, cx);
-  expect(state.shared["threads.debug"].t4.detail.find((d) => d.startsWith(`legend#${t.n}`))).toMatch(/^legend#\d+ context compacted · tokens · /);
-  v.key(keyEv("i"), cx);
-  expect(kinds()).not.toContain("legend");
-  // A click on the stats part toggles it too.
-  v.click(`st:${key}`, cx);
-  expect(kinds()).toContain("legend");
-  v.click(`st:${key}`, cx);
-  expect(kinds()).not.toContain("legend");
-  // A turn without a cache count or compaction lists only its own chips.
-  const plain = v.current().turns.find((x) => !x.compactions && stats(x).cachePct == null);
-  if (plain) expect(v.legendEntries(plain).map((x) => x[1].split(":")[0])).toEqual(v.statChips(plain).map((c) => ({ tokens: "tokens", duration: "duration", model: "model · effort", tools: "tool calls" })[c[0]]));
-  // The footer keeps to the most-used keys; i is on the ? sheet.
-  v.width = 380;
-  v.open.clear();
-  expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
+  const lineOf = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
+  const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  // A closed line has no icon.
+  v.sel = key;
+  expect(v.infoState(key)).toBe(null);
+  expect(icons(lineOf())).not.toContain("info.svg");
+  v.toggleLine(key);
+  // Selected: drawn in the dim colour.
+  expect(v.infoState(key)).toBe("sel");
+  expect(icons(lineOf())).toContain("info.svg");
+  // Not selected: drawn with no colour of its own inside a hover reveal.
+  v.sel = null;
+  expect(v.infoState(key)).toBe("hover");
+  const c = lineOf();
+  expect(icons(c)).toContain("info.svg");
+  expect(c.some((e) => e[0] === "id" && e[1] === `rh:${key}`)).toBe(true);
+  const at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
+  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  // A press at the line's right end opens the card on that turn and leaves the line open.
+  const right = 16 + Math.min(380 - 32, v.prose());
+  v.bodyW = 380;
+  v.pressX = right - 6;
+  v.click(`rhead:${key}`, cx);
+  expect(v.detailsOpen).toBe(true);
+  expect(v.sel).toBe(key);
+  expect(v.lineIsOpen(key, false)).toBe(true);
+  expect(v.infoState(key)).toBe("on");
+  // Again closes it.
+  v.pressX = right - 6;
+  v.click(`rhead:${key}`, cx);
+  expect(v.detailsOpen).toBe(false);
+  expect(v.lineIsOpen(key, false)).toBe(true);
+  // A press on the words closes the line, as before.
+  v.pressX = 40;
+  v.click(`rhead:${key}`, cx);
+  expect(v.lineIsOpen(key, false)).toBe(false);
+  expect(v.detailsOpen).toBe(false);
+  // A keyboard press (no position) toggles the line.
+  v.pressX = null; v.mouseX = null;
+  v.click(`rhead:${key}`, cx);
+  expect(v.lineIsOpen(key, false)).toBe(true);
 });
 
 // ---- round 3: D1 ----------------------------------------------------------------------------
 
-test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where muted is faint; the chat look has no FINAL REPLY or YOU label", async () => {
+test("D1: LATEST UPDATE draws in muted, or foreground where muted is faint; the chat look has no FINAL REPLY or YOU label", async () => {
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
   v.toggleLine(`0:${t.n}`);
-  v.legendOn = true;
   v.width = 380;
   const colourOf = (calls, text) => {
     const i = calls.findIndex(([n, x]) => n === "child" && x === text);
     for (let j = i - 1; j >= 0 && j > i - 8; j--) if (calls[j][0] === "text_color") return calls[j][1];
     return null;
   };
-  const counts = v.countsLine(t);
   let calls = frame(v, cx);
-  for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.muted);
+  for (const label of ["LATEST UPDATE"]) expect(colourOf(calls, label)).toBe(theme.muted);
   expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU"))).toBe(false);
   // A theme whose muted reads under 4.5:1 on the card: foreground.
   const faint = { ...theme, muted: "#5a5a5a" };
@@ -1606,7 +1656,7 @@ test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where m
   try {
     Object.assign(theme, faint);
     calls = frame(v, cx);
-    for (const label of ["LATEST UPDATE", counts]) expect(colourOf(calls, label)).toBe(theme.foreground);
+    for (const label of ["LATEST UPDATE"]) expect(colourOf(calls, label)).toBe(theme.foreground);
   } finally { theme.muted = real; }
   draw(v, cx);
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);
@@ -5159,7 +5209,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.setView("all");
 });
 
-test("level 1 and 2: a click on an open turn's line opens it to its steps and the numbers; a group opens to its calls; i adds the legend; a stopped turn says how long it ran", async () => {
+test("level 1 and 2: a click on an open turn's line opens it to its steps; a group opens to its calls; i opens the Turn card and nothing in the list; a stopped turn says how long it ran", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
     { k: "u", n: "Read" }, { k: "u", n: "Bash" }, { k: "u", n: "Bash" }, { k: "u", n: "Edit" },
@@ -5173,18 +5223,17 @@ test("level 1 and 2: a click on an open turn's line opens it to its steps and th
   v.action("open", cx);
   expect(v.open.has(a)).toBe(true);
   // Closed line: no level 1 parts, a right chevron.
-  expect(kinds()).not.toContain("stats");
   expect(kinds()).not.toContain("grp");
   const lineOf = () => { rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `rhead:${a}`)); const c = rec; rec = null; return c; };
   const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   if (v.partContent) expect(svgs(lineOf())).toContain("chevron-right.svg");
-  // A click on the line opens it: the step group, then the numbers, before the reply.
+  // A click on the line opens it: the step group, then straight into the reply.
   v.click(`rhead:${a}`, cx);
   expect(v.lineIsOpen(a, false)).toBe(true);
   const ks = kinds();
   expect(ks.indexOf("grp")).toBe(ks.indexOf("rhead") + 1);
-  expect(ks.indexOf("stats")).toBe(ks.indexOf("grp") + 1);
-  expect(ks.indexOf("md")).toBeGreaterThan(ks.indexOf("stats"));
+  expect(ks.indexOf("md")).toBe(ks.indexOf("grp") + 1);
+  expect(ks).not.toContain("stats");
   expect(ks).not.toContain("legend");
   expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:0`))).toBe("grp#1 Read 1 file, ran 2 commands and edited 1 file");
   // A click on the group opens it to one row per call (level 2), and closes it again.
@@ -5195,22 +5244,23 @@ test("level 1 and 2: a click on an open turn's line opens it to its steps and th
   expect(kinds()).not.toContain("call");
   expect(v.rowDetail(v.rows().find((r) => r.key === `rhead:${a}`))).toMatch(/Worked for 2m 31s \[open\]/);
   if (v.partContent) expect(svgs(lineOf())).toContain("chevron-down.svg");
-  // i adds the legend under the open line.
+  // i opens the Turn card and changes nothing in the list.
+  const open = kinds().join(",");
   v.action("legend", cx);
-  expect(kinds()).toContain("legend");
+  expect(v.detailsOpen).toBe(true);
+  expect(kinds().join(",")).toBe(open);
   v.action("legend", cx);
-  expect(kinds()).not.toContain("legend");
-  expect(kinds()).toContain("stats"); // the line stays open
-  // A second click closes it.
+  expect(v.detailsOpen).toBe(false);
+  // A second click closes the line.
   v.click(`rhead:${a}`, cx);
-  expect(kinds()).not.toContain("stats");
-  // i on a closed turn opens the turn and its line, with the legend.
+  expect(kinds()).not.toContain("grp");
+  // i on a closed turn leaves it closed.
   const b = "0:3";
   v.sel = b;
   v.action("legend", cx);
-  expect(v.open.has(b)).toBe(true);
-  expect(v.lineIsOpen(b, false)).toBe(true);
-  v.legendOn = false;
+  expect(v.open.has(b)).toBe(false);
+  expect(v.lineIsOpen(b, false)).toBe(false);
+  v.detailsOpen = false;
   // A stopped turn's line says so, in the blocked colour, with no icon.
   const stopped = v.findTurn("0:2");
   expect(stopped.interrupted).toBe(true);
@@ -5250,7 +5300,8 @@ test("steps: interim text between groups in order; → opens the turn, its line,
   expect(v.open.has(a)).toBe(true);
   const p1 = parts();
   const at1 = p1.indexOf("rhead");
-  expect(p1.slice(at1, at1 + 6)).toEqual(["rhead", "itext", "grp", "itext", "grp", "stats"]);
+  expect(p1.slice(at1, at1 + 5)).toEqual(["rhead", "itext", "grp", "itext", "grp"]);
+  expect(p1).not.toContain("stats");
   const its = v.rows().filter((r) => r.kind === "itext" && r.key.startsWith(`it:${a}:`));
   expect(its.map((r) => r.src)).toEqual(["Looking at the cart.", "Found it. Running the tests."]);
   expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:1`))).toBe("grp#1 Read 1 file and searched 1 time");
@@ -5274,12 +5325,13 @@ test("steps: interim text between groups in order; → opens the turn, its line,
   expect(v.open.has(a)).toBe(true);
   v.action("shallower", cx);
   expect(v.open.has(a)).toBe(false);
-  // A turn with no tool calls opens to its numbers alone.
+  // A turn with no tool calls opens to its line and the reply.
   v.sel = "0:2";
   v.action("deeper", cx);
   const p2 = v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === "0:2").map((r) => r.kind);
   expect(p2).not.toContain("grp");
-  expect(p2).toContain("stats");
+  expect(p2).not.toContain("stats");
+  expect(v.lineIsOpen("0:2", false)).toBe(true);
   // Group and call rows are never a pin's reading place.
   const { NOT_A_PLACE } = await import("../mods/agent-threads/pins.js");
   for (const k of ["gp", "cl", "ws"]) expect(NOT_A_PLACE.has(k)).toBe(true);
