@@ -55,8 +55,8 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, callText, shortPaths, OUT,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -171,8 +171,6 @@ const TV_LINE = 21;
 const CODE_LINE = 20;
 // The Updating line under a done turn while a background task has woken the agent.
 const WAKE_H = 24;
-// The code box's borders and the editor's own padding inside it, left and right.
-const CODE_PAD = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
@@ -799,7 +797,7 @@ export default class Threads extends View {
         const time = callTime(c?.inTs, c?.outTs, c?.ms);
         return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
       }
-      case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
+      case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +first" : ""} ${this.outEditorFor(r) ? `editor ${this.outLangOf(r)}` : "plain"} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
       case "wspin": return `wspin${n} Working…`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
       case "copy": {
@@ -1782,8 +1780,8 @@ export default class Threads extends View {
         const all = this.callAll.has(`${key}:${i}:${j}`);
         // The running group's newest call with no result yet is still running.
         const going = now && j === st.calls.length - 1 && c?.st === "ok" && c.out == null;
-        out.push({ ...item, live: false, kind: "cout", key: `co:${key}:${i}:${j}`, id, gi: i, ci: j, all, going,
-          st: c?.st ?? "wait", box: outLines(c?.out, all, c?.lines) });
+        out.push({ ...item, live: false, kind: "cout", key: `co:${key}:${i}:${j}`, id, gi: i, ci: j, all, going, name,
+          st: c?.st ?? "wait", box: outLines(c?.out, true, c?.lines) });
       });
       if (st.count > st.calls.length) out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:more`, more: st.count - st.calls.length });
     });
@@ -2351,13 +2349,12 @@ export default class Threads extends View {
   // border.
   codeBoxH(r) { return r.shown * CODE_LINE + 16; }
 
-  // The editor wraps long lines (soft_wrap), so a block never sits scrolled sideways and
-  // each line starts at the left edge. rows: the wrapped rows (ui.js codeRows) at the box's
-  // width less the editor's padding, 7.3 px a character at 12 px. A block of up to
-  // CODE_LINES rows shows them all; a taller one scrolls inside, and says so.
+  // The editor does not wrap: a long line scrolls sideways inside the box, as the owner asked,
+  // so rows are the block's lines. A block of up to CODE_LINES rows shows them all; a taller
+  // one scrolls inside, and says so.
   codeShape(text) {
     const lines = text.split("\n");
-    const rows = codeRows(text, (this.inner() - CODE_PAD) / 7.3);
+    const rows = lines.length;
     return { lines: lines.length, rows, shown: Math.min(CODE_LINES, rows), caption: rows > CODE_LINES };
   }
 
@@ -2712,6 +2709,70 @@ export default class Threads extends View {
     for (const [k, c] of this.code ?? []) if (k.startsWith(prefix)) { if (c.st) c.st.release(); this.code.delete(k); this.editorFocused = false; }
   }
 
+  // A code block with no editor (one that failed to start): its lines, not wrapped, scrolling
+  // both ways inside the box.
+  plainCode(t, id, text, mono) {
+    return v_flex().id(id).size_full().px(8).py(6).items_start().overflow_scroll().text_size(12).font_family(mono).text_color(t.muted)
+      .children(text.split("\n").map((l) => div().flex_none().h(CODE_LINE).line_height(`${CODE_LINE}px`).whitespace_nowrap().child(l || " ")));
+  }
+
+  // Read-only editors that colour an opened call's output (outLang), by session file and call
+  // id. render() asks for the missing ones (syncOutEditors) and a timer makes them, since an
+  // editor cannot be made while drawing; editors for outputs no longer open are released.
+  outLangOf(r) {
+    const c = this.callEntry(r.si, r.id);
+    return c?.out ? outLang(c.out, c.input, toolKind(r.name)) : null;
+  }
+  outKey(r) { return `${this.sessions[r.si]?.file}#${r.id}`; }
+  outEditorFor(r) {
+    const e = this.outEds?.get(this.outKey(r));
+    const c = this.callEntry(r.si, r.id);
+    return e && c && e.text === c.out ? e.st || null : null;
+  }
+  syncOutEditors(cx) {
+    const eds = (this.outEds ??= new Map());
+    const want = new Map();
+    for (const r of this.rowsMemo ?? []) {
+      if (r.kind !== "cout" || !r.box.lines.length) continue;
+      const lang = this.outLangOf(r);
+      if (lang) want.set(this.outKey(r), { lang, text: this.callEntry(r.si, r.id).out });
+    }
+    let missing = false;
+    for (const [k, e] of eds) {
+      const w = want.get(k);
+      if (!w || w.text !== e.text) { if (e.st) e.st.release(); eds.delete(k); }
+    }
+    for (const k of want.keys()) if (!eds.has(k)) missing = true;
+    if (!missing || this.outNext) return;
+    this.outNext = true;
+    cx.timer.after(0, (cx) => {
+      this.outNext = false;
+      const t = theme();
+      for (const [k, w] of want) {
+        if (eds.has(k)) continue;
+        let st = false;
+        try {
+          st = EditorState.new({
+            language: w.lang, value: w.text.split("\n").slice(0, OUT.MAX).map((l) => this.short(l.replace(/\t/g, "    ").slice(0, OUT.CHARS))).join("\n"),
+            readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+            font_family: settings().font_family, font_size: 11.5, syntax: this.syntaxColors(t),
+          });
+        } catch (e) {
+          console.log(`agent-threads: no editor for ${w.lang} output: ${e?.message ?? e}`);
+        }
+        if (st) this.watchEditor(st);
+        eds.set(k, { st, text: w.text });
+      }
+      cx.notify();
+    });
+  }
+  syntaxColors(t) {
+    return {
+      keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
+      constant: t.ansi6, boolean: t.ansi1, operator: t.muted, punctuation: t.dim, variable: t.foreground, "string.escape": t.ansi6,
+    };
+  }
+
   // Read-only editors for an open turn's code blocks. An editor is made again when its
   // block's text changed (a running turn's interim reply, a replaced file), and editors
   // for blocks the reply no longer has are released.
@@ -2730,7 +2791,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
+          language: langFor(seg.lang), value: seg.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -3246,10 +3307,8 @@ export default class Threads extends View {
       this.sel = tk;
       return cx.notify();
     }
-    // A click on an output box shows all its lines, or the first ones again.
+    // A click on an output box selects its turn; the box scrolls, and shows every line it holds.
     if (kind === "co") {
-      const c = rest.slice(0, 4).join(":");
-      if (this.callAll.has(c)) this.callAll.delete(c); else this.callAll.add(c);
       this.sel = rest.slice(0, 2).join(":");
       return cx.notify();
     }
@@ -3585,7 +3644,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
+          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -3808,10 +3867,9 @@ export default class Threads extends View {
     const rt = readType(turn.size);
     const head = turn.running ? `Still running · the reply as of ${turn.asOf}` : turn.when;
     const pad = (el) => el.pl(L.padX).pr(L.padX);
-    const textW = L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k, textW) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -3846,10 +3904,10 @@ export default class Threads extends View {
   // A fenced code block in the panel, as the open turn draws one: the language and Copy on a
   // head, then the highlighted code, up to CODE_LINES wrapped rows (a taller one scrolls
   // inside, and says so).
-  galleryCode(t, c, k, textW) {
+  galleryCode(t, c, k) {
     const mono = this.mono();
     const copied = this.gal.codeCopied === k;
-    const rows = codeRows(c.text, (textW - CODE_PAD) / 7.3);
+    const rows = c.text.split("\n").length;
     const shown = Math.min(CODE_LINES, rows);
     return v_flex().w_full()
       .child(h_flex().h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
@@ -3862,7 +3920,7 @@ export default class Threads extends View {
           .child(svg(ICON(copied ? "check" : "copy")).size(12)).child(copied ? "Copied" : "Copy")))
       .child(div().w_full().h(shown * CODE_LINE + 16).rounded_b(7).overflow_hidden().border_1().border_t(0).border_color(t.border).bg(t.background)
         .text_size(12).line_height(`${CODE_LINE}px`)
-        .child(c.st ? Editor.new(c.st).size_full().py(6) : div().p(8).font_family(mono).text_color(t.muted).child(c.text)))
+        .child(c.st ? Editor.new(c.st).size_full().py(6) : this.plainCode(t, `th-gallery-code-${k}`, c.text, mono)))
       .when(rows > CODE_LINES, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
         .child(`${plural(rows, "row")} · scrolls inside`)));
   }
@@ -3930,6 +3988,7 @@ export default class Threads extends View {
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
     this.rows();
+    this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
     if (this.shapeLeft > 0 && !this.shapeNext) {
       this.shapeNext = true;
@@ -5291,7 +5350,7 @@ export default class Threads extends View {
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
       case "call": return r.one ? STEP_GAP + GROUP_H : CALL_H;
-      case "cout": return outHeight(r.box, r.all);
+      case "cout": return outHeight(r.box);
       case "wspin": return STEP_GAP + GROUP_H;
       case "copy": return ROW.GAP + ROW.ACTS + ROW.PAD_B;
     }
@@ -6232,7 +6291,7 @@ export default class Threads extends View {
         return (v_flex()
           .child(div().h(this.codeBoxH(r)).rounded_b(7).overflow_hidden().border_1().border_t(0).border_color(t.border).bg(t.background)
             .text_size(12).line_height(`${CODE_LINE}px`)
-            .child(st ? Editor.new(st).size_full().py(6) : div().p(8).text_size(12).line_height(`${CODE_LINE}px`).font_family(mono).text_color(t.muted).child(r.seg.text)))
+            .child(st ? Editor.new(st).size_full().py(6) : this.plainCode(t, `th-code-${r.key}`, r.seg.text, mono)))
           // One 18 px line at any width (its height is fixed): short, and cut with an ellipsis.
           .when(r.caption, (el) => el.child(div().pt(6).text_size(11.5).line_height("18px").truncate().text_color(t.dim)
             .child(`${plural(r.rows, "row")} · scrolls inside`))));
@@ -6278,23 +6337,28 @@ export default class Threads extends View {
         return h_flex().when(r.one, (e) => e.mt(STEP_GAP).h(GROUP_H)).when(!r.one, (e) => e.h(CALL_H).pl(18))
           .gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
           .child(icon)
-          .child(div().flex_1().min_w(0).truncate().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(this.short(callText(r.name, c?.input))))
+          // What it ran scrolls sideways when longer than the row, in place of an ellipsis.
+          .child(div().id(`th-call-${r.key}`).flex_1().min_w(0).overflow_x_scroll().whitespace_nowrap().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(this.short(callText(r.name, c?.input))))
           .when(Boolean(time), (e) => e.child(div().flex_none().text_size(11).child(time)))
           .when(Boolean(r.id), (e) => e.child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none()));
       }
       case "cout": {
-        // A call's output (level 3): mono lines, not wrapped, OUT.SHOW of them with the last
-        // ones fading when more are left out, and Show all (up to OUT.MAX) or Show less.
+        // A call's output (level 3): mono lines, not wrapped, in a box OUT.SHOW lines tall that
+        // scrolls down and sideways inside, holding up to OUT.MAX lines. JSON, a diff or a read
+        // file with a known extension is shown in a read-only editor that colours it
+        // (outLang); the editor is made between frames, so the first frame shows plain lines.
         const lines = r.box.lines;
         const note = r.going ? "Running…" : r.st === "wait" ? "Reading…" : r.st === "err" ? "Could not read this call" : r.st === "none" ? "Not in the transcript" : "No output";
-        const fade = (i) => (r.box.cut && i >= lines.length - 3 ? alpha(t.muted, [0.75, 0.5, 0.25][i - (lines.length - 3)]) : t.muted);
-        const more = r.box.cut ? (r.all ? `Showing ${lines.length} of ${r.box.total} lines` : `Show all ${r.box.total} lines`) : r.all && r.box.total > OUT.SHOW ? "Show less" : null;
+        const shown = Math.max(1, Math.min(OUT.SHOW, lines.length));
+        const ed = probe ? null : this.outEditorFor(r);
+        const inner = !lines.length ? div().h(OUT.LINE).line_height(`${OUT.LINE}px`).text_color(t.dim).child(note)
+          : ed ? Editor.new(ed).size_full()
+            : v_flex().id(`th-out-${r.key}`).size_full().items_start().overflow_scroll()
+              .children(lines.map((l) => div().flex_none().h(OUT.LINE).line_height(`${OUT.LINE}px`).whitespace_nowrap().font_family(mono).text_color(t.muted).child(this.short(l) || " ")));
         return v_flex().pl(18).pt(2).pb(2).min_w(0).max_w(this.prose())
           .child(v_flex().px(10).py(OUT.PAD).rounded(6).border_1().border_color(t.border).bg(t.background).min_w(0).overflow_hidden().text_size(11.5)
-            .children(lines.length
-              ? lines.map((l, i) => div().h(OUT.LINE).line_height(`${OUT.LINE}px`).truncate().font_family(mono).text_color(fade(i)).child(this.short(l) || " "))
-              : [div().h(OUT.LINE).line_height(`${OUT.LINE}px`).text_color(t.dim).child(note)]))
-          .when(Boolean(more), (e) => e.child(div().h(OUT.MORE).line_height(`${OUT.MORE}px`).text_size(11.5).text_color(t.accent).child(more)));
+            .child(div().w_full().min_w(0).h(shown * OUT.LINE).child(inner)))
+          .when(r.box.cut, (e) => e.child(div().h(OUT.MORE).line_height(`${OUT.MORE}px`).text_size(11.5).text_color(t.dim).child(`The first ${lines.length} of ${r.box.total} lines`)));
       }
       case "wspin":
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().text_size(12.5).text_color(t.working)

@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -781,26 +781,36 @@ test("level 3 helpers: a call's time, its output's lines and box height, and its
   expect(callTime("2026-11-01T09:00:00.000Z", "2026-11-01T09:02:05.000Z")).toBe("2m 05s");
   expect(callTime("2026-11-01T09:00:00.000Z", null)).toBe("");
   expect(callTime("2026-11-01T09:00:05.000Z", "2026-11-01T09:00:00.000Z")).toBe("");
-  // 12 lines at first, tabs as spaces, each line cut, trailing blank lines dropped.
-  const out = Array.from({ length: 30 }, (_, i) => (i === 0 ? `a\tb${"x".repeat(500)}` : `line ${i + 1}`)).join("\n");
+  // Every line up to OUT.MAX (the box scrolls), tabs as spaces, each line kept to OUT.CHARS
+  // (it scrolls sideways), trailing blank lines dropped.
+  const out = Array.from({ length: 30 }, (_, i) => (i === 0 ? `a\tb${"x".repeat(OUT.CHARS + 500)}` : `line ${i + 1}`)).join("\n");
   const box = outLines(`${out}\n\n`);
-  expect(box.lines.length).toBe(OUT.SHOW);
+  expect(box.lines.length).toBe(30);
   expect(box.lines[0].startsWith("a    b")).toBe(true);
   expect(box.lines[0].length).toBe(OUT.CHARS);
-  expect(box).toMatchObject({ total: 30, cut: true });
-  expect(outLines(out, true)).toMatchObject({ total: 30, cut: false });
-  expect(outLines(out, true).lines.length).toBe(30);
-  // calls.sh clips long output and gives the whole count: all of it is never shown.
+  expect(box).toMatchObject({ total: 30, cut: false });
+  // calls.sh clips long output and gives the whole count: the box says it holds the first lines.
   expect(outLines("one\ntwo", true, 900)).toMatchObject({ total: 900, cut: true });
   expect(outLines("")).toEqual({ lines: [], total: 0, cut: false });
   expect(outLines("a\r\nb").lines).toEqual(["a", "b"]);
   const big = Array.from({ length: 1000 }, () => "y").join("\n");
-  expect(outLines(big, true).lines.length).toBe(OUT.MAX);
-  // Heights: padding, border, margins, one line at least, and the Show all row.
+  expect(outLines(big).lines.length).toBe(OUT.MAX);
+  expect(outLines(big).cut).toBe(true);
+  // Heights: padding, border, margins, one line at least, at most OUT.SHOW lines in view, and
+  // the dim line when the output is longer than the box holds.
   expect(outHeight(outLines(""))).toBe(8 * 2 + 2 + 16 + 4);
-  expect(outHeight(box)).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
-  expect(outHeight(outLines(out, true), true)).toBe(8 * 2 + 2 + 30 * 16 + 4 + 22);
-  expect(outHeight(outLines("a\nb", true), true)).toBe(8 * 2 + 2 + 2 * 16 + 4);
+  expect(outHeight(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
+  expect(outHeight(outLines(big))).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
+  expect(outHeight(outLines("a\nb"))).toBe(8 * 2 + 2 + 2 * 16 + 4);
+  // The language an output is coloured as.
+  expect(outLang('{"a": [1, 2]}')).toBe("json");
+  expect(outLang("{not json")).toBe(null);
+  expect(outLang("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b")).toBe("diff");
+  expect(outLang("const a = 1;", "src/cart.ts", "read")).toBe("js");
+  expect(outLang("     1→const a = 1;", "src/cart.ts", "read")).toBe(null);
+  expect(outLang("const a = 1;", "src/cart.ts", "bash")).toBe(null);
+  expect(outLang("12 passed")).toBe(null);
+  expect(outLang("")).toBe(null);
   expect(callText("Bash", "bun test\n  --watch")).toBe("bun test --watch");
   expect(callText("Bash", "")).toBe("Bash");
   expect(callText("Bash", null)).toBe("Bash");

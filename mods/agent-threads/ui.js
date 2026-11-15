@@ -1523,8 +1523,10 @@ export function callTime(inTs, outTs, took = null) {
 // The lines of a call's output box: OUT.SHOW at first, or up to OUT.MAX once shown in full.
 // Lines are not wrapped: each is cut at OUT.CHARS and tabs become spaces, so every line is one
 // OUT.LINE tall. total is the whole output's line count (lines, when calls.sh clipped it).
-export const OUT = { SHOW: 12, MAX: 400, CHARS: 400, LINE: 16, PAD: 8, MORE: 22 };
-export function outLines(out, all = false, lines = 0) {
+// SHOW lines of an output box are in view; the rest, up to MAX, scroll inside it. A line keeps
+// up to CHARS characters and scrolls sideways.
+export const OUT = { SHOW: 12, MAX: 400, CHARS: 2000, LINE: 16, PAD: 8, MORE: 22 };
+export function outLines(out, all = true, lines = 0) {
   const list = String(out ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
   if (list.length === 1 && list[0] === "") return { lines: [], total: 0, cut: false };
   const total = Math.max(list.length, Number(lines) || 0);
@@ -1534,9 +1536,28 @@ export function outLines(out, all = false, lines = 0) {
 // The output box's height: its lines, or one line saying there are none, inside its padding
 // and 1 px border, 2 px above and below, and the Show all row when lines are left out or all
 // of them show.
-export function outHeight(box, all = false) {
-  const n = Math.max(1, box.lines.length);
-  return OUT.PAD * 2 + 2 + n * OUT.LINE + 4 + (box.cut || (all && box.total > OUT.SHOW) ? OUT.MORE : 0);
+// The box shows up to OUT.SHOW lines and scrolls inside past that; under it, a dim line when
+// the output is longer than OUT.MAX lines.
+export function outHeight(box) {
+  const n = Math.max(1, Math.min(OUT.SHOW, box.lines.length));
+  return OUT.PAD * 2 + 2 + n * OUT.LINE + 4 + (box.cut ? OUT.MORE : 0);
+}
+// The language a call's output is coloured as, for Herdr's editor, or null for plain text:
+// JSON that parses, a unified diff, or a file read whose path has a known extension (not when
+// the agent numbered its lines, as Claude Code does, which would colour the numbers).
+export function outLang(out, input = "", kind = "") {
+  const s = String(out ?? "").trim();
+  if (!s) return null;
+  if (/^[[{]/.test(s) && s.length <= 200000) {
+    try { JSON.parse(s); return "json"; } catch { /* not JSON */ }
+  }
+  if (/^@@ [^\n]* @@/m.test(s) && /^(diff --git|--- |\+\+\+ |@@ )/m.test(s)) return "diff";
+  if (kind === "read") {
+    const m = /\.([A-Za-z0-9]+)\s*$/.exec(String(input ?? ""));
+    const lang = m ? LANG[m[1].toLowerCase()] : null;
+    if (lang && !/^\s*\d+[→\t|:]/.test(s)) return lang;
+  }
+  return null;
 }
 // A call's text on its row: what it ran or read (calls.sh picks the command, path, pattern,
 // query or URL), on one line; the tool's name until that is read.
