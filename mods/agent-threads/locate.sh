@@ -212,12 +212,18 @@ cursor-label)
 agy-dir)
   printf '%s\n' "${AGY_DATA_DIR:-$HOME/.gemini/antigravity-cli}" ;;
 agy-open)
-  # agy keeps its conversation's folder open (<data>/brain/<id>), so the path names the
-  # conversation. After a new conversation the folder with the newest transcript wins. MCP
-  # servers it starts run as children.
+  # agy holds its conversation's lock file open (<data>/presence/<id>.lock), so the path
+  # names the conversation. After a new conversation the folder with the newest transcript
+  # wins. MCP servers it starts run as children.
   pids="$1 $(pgrep -P "$1" 2>/dev/null | tr '\n' ' ')"
   # shellcheck disable=SC2086 # the pids are meant to split
-  dirs=$(for p in $pids; do lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n -E 's#^(.*/brain/[0-9A-Za-z_-]{8,})(/.*)?$#\1#p' || true; done | sort -u)
+  dirs=$(for p in $pids; do
+    if [ -d "/proc/$p/fd" ]; then
+      readlink /proc/"$p"/fd/* 2>/dev/null
+    else
+      lsof -n -P -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p'
+    fi
+  done | sed -n -E 's#^(.+)/presence/([0-9A-Za-z_-]{8,})\.lock$#\1/brain/\2#p' | sort -u)
   [ -n "$dirs" ] || exit 1
   printf '%s\n' "$dirs" | while IFS= read -r d; do
     [ -d "$d" ] || continue
