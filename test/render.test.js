@@ -3596,8 +3596,9 @@ test("the sticky day: the day of the item at the top of the pane, in its own str
   // list, so it never covers the band under it.
   const before = rows[days[2] ? days[2][1] - 1 : -1];
   if (before) { v.topKey = before.key; expect(v.stickyDay()?.key).toBe(d1.key); }
-  // The drawn body carries it.
+  // The drawn pane carries it while the person scrolls (the floating top's pill).
   v.topKey = inside.key;
+  v.scrollSeenAt = Date.now();
   rec = [];
   v.render(cx);
   const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
@@ -4082,29 +4083,39 @@ test("the image viewer opens with the panel as settings.json last left it, and a
   expect(afterId(none.calls(), "th-gallery-reply")).toBe(null);
 });
 
-test("the day while scrolling has a strip of its own above the list, never over a row", async () => {
+test("the list's day pill floats over the top while scrolling and goes 1.5 s after; the Pinned view keeps its strip", async () => {
   const { v, cx } = await pane(fixture("--extra", "6", "--gap", "43200"));
   v.width = 545;
   draw(v, cx);
   const rows = v.rows();
   expect(rows.some((r) => r.kind === "day")).toBe(true);
+  const idsOf = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
   rec = []; draw(v, cx); let calls = rec; rec = null;
-  const ids = calls.filter((e) => e[0] === "id").map((e) => e[1]);
-  // The strip comes before the list's box, so the list starts under it.
-  expect(ids.indexOf("th-day-strip")).toBeGreaterThan(-1);
-  expect(ids.indexOf("th-day-strip")).toBeLessThan(ids.indexOf("threads-listbox"));
-  // Scrolled into a day: the pill is in the strip, and the strip is not drawn over the list.
+  // No strip above the list: the list's box is the first thing under the root.
+  expect(idsOf(calls)).not.toContain("th-day-strip");
+  // Scrolled into a day: the pill shows only while the person scrolls.
   const inDay = rows.find((r, i) => i > 0 && rows[i - 1].kind !== "day" && r.kind !== "day" && rows[i + 1]?.kind !== "day" && rows.slice(0, i).some((x) => x.kind === "day"));
   v.topKey = inDay.key;
   expect(v.stickyDay()).not.toBe(null);
   rec = []; draw(v, cx); calls = rec; rec = null;
-  const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-day-strip");
-  const pill = calls.findIndex((e) => e[0] === "id" && e[1] === "th-sticky-day");
-  expect(pill).toBeGreaterThan(at);
-  expect(calls.slice(at - 12, at).some((e) => e[0] === "absolute")).toBe(false);
-  // The list's height is measured from its own box, under the strip.
-  handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: 380, height: 500 }, cx);
-  expect(v.listH).toBe(500);
+  expect(idsOf(calls)).not.toContain("th-sticky-day");
+  v.topKey = inDay.key;
+  v.listWheel({ delta: { y: 40 } });
+  expect(v.dayPillShown()).toBe(true);
+  // (The stub list draws every item, which moves topKey to the first; the pane reads the day
+  // before the list draws.)
+  v.topKey = inDay.key;
+  rec = []; draw(v, cx); calls = rec; rec = null;
+  const ids = idsOf(calls);
+  // In the floating top, drawn after the list's box, so it sits over the list.
+  expect(ids.indexOf("th-sticky-day")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  expect(ids.indexOf("th-float")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  // 1.5 s after the last scroll the timer takes it away.
+  v.scrollSeenAt = Date.now() - 1600;
+  expect(v.dayPillShown()).toBe(false);
+  // The Pinned view keeps the strip of its own above the list.
+  v.view = "pinned";
+  expect(v.floating()).toBe(false);
 });
 
 // ---- design-review picks (2026-11-11) -----------------------------------------------------
@@ -4151,6 +4162,7 @@ test("the first-run notice and the unsupported note name every agent Threads rea
 });
 
 test("the header shows the agent's state beside the badge: Working, Needs you, Done or Exited, and nothing it cannot know", async () => {
+  // The header is drawn in the Pinned view; the list's floating top has a test of its own.
   const { HARNESS } = await import("../mods/agent-threads/harness.js");
   const { v, cx } = await pane(fixture("--only", "3"));
   v.width = 545;
@@ -4789,7 +4801,7 @@ test("o shows the outline: one row per turn under the same day bands, with the s
   v.key(keyEv("o"), cx);
   expect(v.outline).toBe(true);
   draw(v, cx);
-  const rows = v.rows().filter((r) => r.kind !== "spacer");
+  const rows = v.rows().filter((r) => r.kind !== "spacer" && r.kind !== "gap");
   expect(rows.filter((r) => r.kind === "line").map((r) => r.key)).toEqual(turns);
   expect(rows.every((r) => r.kind === "line" || r.kind === "day")).toBe(true);
   expect(rows.filter((r) => r.kind === "day").map((r) => r.key)).toEqual(daysBefore);
@@ -5535,4 +5547,75 @@ test("level 3 while a turn runs: the running group names what runs now; an open 
   expect(detail(`cl:${a}:0:0`)).toBe("call#1 one bun run e2e · 19s [open]");
   expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 1\/1 h\d+ \| 12 passed$/);
   draw(v, cx);
+});
+
+test("the floating top: no header row, the state top left at every width, icons only with the pointer or the keyboard, the rest in settings", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  v.width = 545;
+  v.listH = 400;
+  v.h.is_focused = () => false;
+  state.terminals[0].status = "idle";
+  draw(v, cx);
+  expect(v.floating()).toBe(true);
+  const drawn = () => { rec = []; v.render(cx); const c = rec; rec = null; return c; };
+  const idsOf = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
+  let ids = idsOf(drawn());
+  // No header row: no badge and no header text. The state is there, and no icons at rest.
+  expect(ids).not.toContain("th-badge");
+  expect(ids).toContain("th-state");
+  expect(ids).not.toContain("th-search");
+  expect(ids).not.toContain("th-settings");
+  // The floating top is drawn after the list's box, so it sits over the list.
+  expect(ids.indexOf("th-float")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  // The list starts TOP_BAND down, so its first row is not under the state.
+  expect(v.rows()[0].kind).toBe("gap");
+  expect(v.rows()[0].h).toBe(32);
+  // The state keeps its word under 440 px too (the header put a dot on the badge there).
+  v.width = 380;
+  const strs = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  let calls = drawn();
+  expect(idsOf(calls)).toContain("th-state");
+  expect(strs(calls)).toContain("Done");
+  v.width = 545;
+  // Its tooltip names the terminal and session, as the badge's did, and a click goes to the terminal.
+  const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-state");
+  const tip = calls.slice(at, at + 14).find((e) => e[0] === "tooltip")?.[1];
+  expect(tip).toMatch(/^Claude finished its newest turn · click to go to the terminal \(t\) · .*Reading t4 · session /);
+  // The pointer in the pane, or the keyboard in the panel: search, pinned and settings, in that order.
+  v.paneHover = true;
+  ids = idsOf(drawn());
+  expect(["th-search", "th-pinned", "th-settings"].map((id) => ids.indexOf(id)).every((x, i, a) => x > 0 && (i === 0 || x > a[i - 1]))).toBe(true);
+  expect(v.floatButtons().map((b) => [b[0], b[1], b[2].split(" (")[0]])).toEqual([["th-search", "search", "Search"], ["th-pinned", "pin", "Open the Pinned column beside Threads"], ["th-settings", "sliders-horizontal", "Settings"]]);
+  v.paneHover = false;
+  v.h.is_focused = () => true;
+  expect(idsOf(drawn())).toContain("th-settings");
+  v.h.is_focused = () => false;
+  // Settings open: in the flow under the band, ending with the agent, the counts and the title.
+  v.settingsOpen = true;
+  calls = drawn();
+  ids = idsOf(calls);
+  expect(ids.indexOf("th-top")).toBeGreaterThan(-1);
+  expect(ids.indexOf("th-top")).toBeLessThan(ids.indexOf("threads-listbox"));
+  expect(ids).toContain("th-about");
+  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
+  v.settingsOpen = false;
+  // A search field opens under the band too.
+  v.filtering = true;
+  ids = idsOf(drawn());
+  expect(ids.indexOf("th-search-field")).toBeGreaterThan(ids.indexOf("th-top"));
+  v.filtering = false;
+  // The Pinned view keeps its header and has no floating top.
+  v.view = "pinned";
+  ids = idsOf(drawn());
+  expect(ids).not.toContain("th-float");
+  expect(ids).toContain("th-pinned-heading");
+});
+
+test("the floating top's fade is painted as a gradient where Herdr can, and in steps of alpha before that", async () => {
+  const { v } = await pane(fixture("--only", "3"));
+  const calls = () => { rec = []; v.fadeLayer(theme); const c = rec; rec = null; return c; };
+  // The test stubs have no PathBuilder: the steps.
+  expect(calls().some((e) => e[0] === "id" && e[1] === "th-fade-steps")).toBe(true);
+  const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
+  expect(src).toContain("bg.linear_gradient(180, bg.stop(t.background, 55), bg.stop(alpha(t.background, 0), 100))");
 });

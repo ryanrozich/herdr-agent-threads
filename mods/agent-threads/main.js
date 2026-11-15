@@ -29,6 +29,10 @@ import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle, v_virtual_l
 import * as gpuiBase from "gpui-base";
 // Popup (the rail card) is new in 0.1.15 too: without it the rail keeps its one-line tooltip.
 const Popup = gpuiBase.Popup?.new ? gpuiBase.Popup : null;
+// PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
+// 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
+import * as gpuiKit from "gpui-kit";
+const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -120,7 +124,12 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
-const DAY_STRIP = 32; // the strip above the list that shows the day while scrolling
+const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
+// The floating top: the band the state and the icons sit in over the top of the list, and the
+// gap the list leaves above its first row so nothing starts under them.
+const TOP_BAND = 32;
+// The day pill over the list shows while you scroll, and goes this long after you stop.
+const DAY_PILL_MS = 1500;
 const PDAY_H = 30; // a day header in the Pinned view
 // What Herdr's layout px size adds to the width a pane measures (its frame).
 const PANE_FRAME = 2;
@@ -676,7 +685,11 @@ export default class Threads extends View {
       if (this.prefsPoll) { this.readPrefs(cx); this.readPins(cx); }
     });
     // The sticky day: redraw once the top of the pane moved into another day.
-    cx.timer.every(120, (cx) => { if (this.stickyDue) { this.stickyDue = false; cx.notify(); } });
+    cx.timer.every(120, (cx) => {
+      // The day pill goes DAY_PILL_MS after the last scroll.
+      if (this.scrollSeenAt && Date.now() - this.scrollSeenAt >= DAY_PILL_MS) { this.scrollSeenAt = 0; this.stickyDue = true; }
+      if (this.stickyDue) { this.stickyDue = false; cx.notify(); }
+    });
     // The running turn's clock, once a second while one is shown.
     cx.timer.every(1000, (cx) => {
       this.watchRead(cx);
@@ -1601,17 +1614,23 @@ export default class Threads extends View {
       if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
     }
     const z = this.zoom();
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}`;
+    const gap = this.floating() ? TOP_BAND : 0;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
       if (this.view !== "pinned" && !this.outlined() && rows.length) { rows = [...rows, { kind: "tail", key: "tail", h: TAIL }]; sizes = [...sizes, TAIL]; }
       // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
       // reads from the top: pin 1 first.
+      // The floating top: a list that fills the pane starts TOP_BAND down, so its first row is
+      // not under the state; a short one's spacer is at least that tall.
       const total = sizes.reduce((x, y) => x + y, 0);
-      if (this.view !== "pinned" && this.listH > 0 && rows.length && total < this.listH - 1) {
+      if (this.view !== "pinned" && this.listH > 0 && rows.length && total + gap < this.listH - 1) {
         rows = [{ kind: "spacer", key: "spacer", h: this.listH - total }, ...rows];
         sizes = [this.listH - total, ...sizes];
+      } else if (gap && rows.length) {
+        rows = [{ kind: "gap", key: "gap", h: gap }, ...rows];
+        sizes = [gap, ...sizes];
       }
       this.rowsMemo = rows;
       this.sizesMemo = sizes;
@@ -2408,6 +2427,7 @@ export default class Threads extends View {
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
     this.scrolledBy(dy, Date.now());
+    this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
   }
   // The person's latest scroll, by direction (dy > 0 is up); the other direction is forgotten.
@@ -2486,7 +2506,7 @@ export default class Threads extends View {
     if (back?.sel !== undefined) this.sel = back.sel;
     if (back?.follow) { this.follow = true; this.toBottom = true; return true; }
     this.follow = false;
-    const k = back?.top && back.top !== "spacer" ? back.top : this.sel;
+    const k = back?.top && back.top !== "spacer" && back.top !== "gap" ? back.top : this.sel;
     if (k) this.scrollTo = { key: k, how: back?.top ? "land" : "center", or: this.sel ? [this.sel] : [], until: Date.now() + 400 };
     return true;
   }
@@ -3416,7 +3436,11 @@ export default class Threads extends View {
       return true;
     }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
-    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land", person: true }; return true; }
+    if (this.debug && name.startsWith("debugScroll:")) { this.scrollTo = { key: name.slice(12), how: "land", person: true }; this.scrollSeenAt = Date.now(); return true; }
+    // The pointer in the pane or out of it (debugHover:1, debugHover:0): the test window has no pointer.
+    if (this.debug && name.startsWith("debugHover:")) { this.paneHover = name.slice(11) === "1"; return true; }
+    // The day pill held for 6.5 s, long enough for the test window's screenshot after a step.
+    if (this.debug && name === "debugDayPill") { this.scrollSeenAt = Date.now() + 5000; return true; }
     // Tests only: "debugClick:470:imgs:0:5" is a press at x 470 (design px) on that list item.
     if (this.debug && /^debugClick:\d+:/.test(name)) {
       const [, x, ...k] = name.split(":");
@@ -3882,9 +3906,15 @@ export default class Threads extends View {
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
     if (this.debug) this.measure();
+    const floating = this.floating();
+    const banners = this.banners(t);
+    // The day at the top of the list, read before the list draws (body), for the day pill.
+    this.stickyNow = null;
     return v_flex()
       .id("threads-root")
       .track_focus(this.h)
+      // The pointer in the pane: the floating top shows its icons.
+      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.paneHover)) { this.paneHover = Boolean(on); cx.notify(); } })
       .on_key_down((e, cx) => this.key(e, cx))
       .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
@@ -3897,9 +3927,10 @@ export default class Threads extends View {
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
-      .child(this.header(t))
-      .children(this.banners(t))
+      .when(!floating, (el) => el.child(this.header(t)).children(banners))
+      .when(floating && this.topBlock(banners), (el) => el.child(this.topPanels(t, banners)))
       .child(this.body(t, focusedPanel, cx))
+      .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .child(this.footer(t))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
@@ -4212,8 +4243,95 @@ export default class Threads extends View {
       .child(div().flex_none().text_size(13.5).font_semibold().text_color(t.foreground).child("Pinned"));
   }
 
+  // The floating top (the list and the outline): no header row and no day strip. The state
+  // sits top left and is always there; search, pinned and settings show at the top right while
+  // the pointer is in the pane or the panel has the keyboard. The rest is in settings. The
+  // Pinned view, and the Pinned pane, keep their header: every row there is a pin, so the view
+  // keeps its own tinted line.
+  floating() { return this.view !== "pinned" && !this.pinnedPane; }
+
+  // Settings, the search field and the banners sit in the flow under the band, so the state
+  // and the icons float over empty room and never over a control.
+  topBlock(banners) { return this.settingsOpen || this.filtering || Boolean(this.query) || banners.length > 0; }
+  topPanels(t, banners) {
+    return v_flex().id("th-top").flex_none().pt(TOP_BAND)
+      .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
+      .when(this.filtering || Boolean(this.query), (el) => el.child(this.searchField(t)))
+      .children(banners);
+  }
+
+  floatTop(t, focusedPanel) {
+    const show = Boolean(this.paneHover || focusedPanel || this.settingsOpen || this.filtering || this.query);
+    const day = this.dayPillShown() ? this.stickyNow : null;
+    return div().id("th-float").absolute().top(0).left(0).right(0).h(TOP_BAND)
+      .child(this.fadeLayer(t))
+      .when(Boolean(day), (el) => el.child(h_flex().absolute().top(4).left(0).right(0).justify_center()
+        .child(div().id("th-sticky-day").child(this.dayPill(t, day)))))
+      .child(h_flex().absolute().top(0).left(0).right(0).h(TOP_BAND).pl(8).pr(10).gap(6).items_center()
+        .child(this.floatState(t))
+        .child(div().flex_1())
+        .when(show, (el) => el.children(this.floatButtons().map(([id, icon, tip, act, on, count]) => {
+          const b = this.iconButton(t, id, icon, tip, this.headerClick(act), on, count);
+          // A patch in the list's colour, so a reply under the icon never shows through.
+          return on ? b : b.bg(t.background);
+        }))));
+  }
+
+  // The fade under the floating top: the list's colour at the top, clear at the band's foot, so
+  // a reply scrolled under the state fades out. Painted as a gradient on Herdr 0.1.15, in
+  // steps of alpha before that.
+  fadeLayer(t) {
+    const win = globalThis.window;
+    if (PAINT && typeof win?.paint_path === "function") {
+      try {
+        const rect = PAINT.PathBuilder.fill().move_to("0%", "0%").line_to("100%", "0%").line_to("100%", "100%").line_to("0%", "100%").close().build();
+        const bg = PAINT.Background;
+        return win.paint_path(rect, bg.linear_gradient(180, bg.stop(t.background, 55), bg.stop(alpha(t.background, 0), 100)))
+          .absolute().top(0).left(0).size_full();
+      } catch { /* the steps below */ }
+    }
+    return v_flex().id("th-fade-steps").absolute().top(0).left(0).size_full()
+      .children([1, 1, 0.8, 0.45].map((a) => div().flex_1().w_full().bg(alpha(t.background, a))));
+  }
+
+  // The state, top left: its dot and word, or what the pane is doing before it has one
+  // ("Reading… 42%", "Finding…", "No session"). The tooltip says which terminal, session and
+  // title it reads, as the badge's did. A click goes to the terminal, as t does.
+  floatState(t) {
+    const st = this.agentStateNow();
+    const s = this.current();
+    const text = st ? null : s?.loaded ? null : this.headerText() || null;
+    if (!st && !text) return div();
+    const color = st ? t[st.tone] ?? t.dim : null;
+    const title = s?.title ? `"${s.title}"` : null;
+    const tip = [st ? this.stateTip(st) : null, STATE_CLICK, title, this.bindingTip()].filter(Boolean).join(" · ");
+    return h_flex().id("th-state").flex_none().gap(5).h(24).px(STATE_PAD + 1).items_center().rounded(5).cursor_pointer()
+      .bg(t.background)
+      .on_click((_e, cx) => this.stateClick(cx))
+      .hover((x) => x.bg(t.hover))
+      .tooltip(tip)
+      .when(Boolean(st), (el) => el.child(div().flex_none().size(7).rounded(4).bg(color)))
+      .child(div().flex_none().text_size(12).text_color(st?.tone === "blocked" ? color : t.muted).child(st ? st.word : text));
+  }
+
+  // The floating top's icons, as data: [id, icon, tip, action, on, count]. Pinned is a pin with
+  // the count at its corner.
+  floatButtons() {
+    const pins = this.pinnedList().length;
+    const col = this.pinnedPaneOpen();
+    const pinTip = col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
+      : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`;
+    return [
+      ["th-search", "search", "Search (/)", "filterToggle", this.filtering || Boolean(this.query), null],
+      ["th-pinned", "pin", pins ? `${pinTip} · ${plural(pins, "pin")}` : pinTip, "pinned", Boolean(col), pins ? String(pins) : null],
+      ["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null],
+    ];
+  }
+
+  // The day pill over the list: while the person scrolls, and DAY_PILL_MS after.
+  dayPillShown() { return Boolean(this.scrollSeenAt) && Date.now() - this.scrollSeenAt < DAY_PILL_MS; }
+
   header(t) {
-    const q = this.query.trim();
     const pinned = this.view === "pinned";
     // The Pinned view's header: an accent bar along its top and a light accent tint.
     return v_flex().flex_none().relative().border_b(1).border_color(t.border)
@@ -4225,19 +4343,31 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(this.headerText()))
         .when(this.debug && Boolean(this.timing) && !this.narrow(), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)))
         .children(this.headerButtons().map(([id, icon, tip, act, on, count, label, dot]) => {
-          const click = (_e, cx) => {
-            if (act === "filterToggle") {
-              this.filtering = !this.filtering;
-              this.settingsOpen = false;
-              if (this.filtering) this.input.focus();
-              else { this.input.set_value(""); this.query = ""; this.h.focus(); }
-            } else this.action(act, cx);
-            cx.notify();
-          };
+          const click = this.headerClick(act);
           return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count, dot);
         })))
       .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
-      .when(this.filtering || Boolean(this.query), (el) => el.child(h_flex().mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
+      .when(this.filtering || Boolean(this.query), (el) => el.child(this.searchField(t)));
+  }
+
+  // A header or floating-top button's click: the search button opens or closes the field
+  // (Esc and the field's x close it too), the rest are actions.
+  headerClick(act) {
+    return (_e, cx) => {
+      if (act === "filterToggle") {
+        this.filtering = !this.filtering;
+        this.settingsOpen = false;
+        if (this.filtering) this.input.focus();
+        else { this.input.set_value(""); this.query = ""; this.h.focus(); }
+      } else this.action(act, cx);
+      cx.notify();
+    };
+  }
+
+  // The search field, under the header, or under the floating top's band.
+  searchField(t) {
+    const q = this.query.trim();
+    return h_flex().id("th-search-field").mx(10).mb(8).h(30).px(8).gap(6).items_center().rounded(7)
         .border_1().border_color(this.filtering ? t.accent : t.border).bg(t.chrome)
         // A click back into a kept search: the typing is the field's again.
         .on_mouse_down("left", (_e, cx) => { this.filtering = true; cx.notify(); })
@@ -4246,7 +4376,7 @@ export default class Threads extends View {
         .when(!q, (el) => el.child(this.kbd(t, "/")))
         .when(Boolean(q), (el) => el.child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
           .child(this.filterCount())))
-        .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }))));
+        .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }));
   }
 
   // "3 of 41 · 2 hidden": matching shown turns of all shown turns across every session in
@@ -4295,7 +4425,7 @@ export default class Threads extends View {
       .child(h_flex().id("th-set-agents").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("agents", cx); cx.notify(); })
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
-        .child(label("Agent messages"))
+        .child(label(this.counts().hiddenAll && !P.agentTurns ? `Agent messages · ${this.counts().hiddenAll.toLocaleString()} hidden` : "Agent messages"))
         .child(sw))
       .child(v_flex().gap(2)
         .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
@@ -4330,7 +4460,22 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(mono).text_color(t.dim).child(path))
         .child(this.button(t, "th-set-copy", this.narrow() ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", "Settings path copied", cx); }, "copy")))
       .child(h_flex().gap(6)
-        .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")));
+        .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")))
+      .when(this.floating(), (el) => el.child(this.aboutRow(t)));
+  }
+
+  // Settings' last row with the floating top: the agent, the turn and hidden counts and the
+  // session's title, which the header row showed. Its tooltip names the terminal and session.
+  aboutRow(t) {
+    const agent = this.agent();
+    const s = this.current();
+    const c = s?.loaded ? this.counts() : null;
+    const text = [c ? plural(c.shownCur, "turn") : this.headerText(), c?.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null, s?.title].filter(Boolean).join(" · ");
+    return h_flex().id("th-about").gap(6).items_center().pt(8).border_t_1().border_color(t.border).tooltip(this.bindingTip())
+      .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted))
+      .child(div().flex_none().text_size(12).text_color(t.foreground).child(agent.name))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(text))
+      .when(this.debug && Boolean(this.timing), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)));
   }
 
   // Width: Comfortable, Wide and Full side by side, the chosen one filled. In a pane narrower
@@ -4597,10 +4742,12 @@ export default class Threads extends View {
     const dim = Boolean(this.res.ended);
     const sticky = this.stickyDay();
     this.stickyShown = sticky?.key ?? null;
-    // The day while scrolling has a strip of its own above the list, so it never covers a
-    // message or a control. The strip stays while the list has day bands (it shows nothing
-    // while a band is at the top), so the list does not move when the day appears.
-    const strip = this.hasDayStrip(rows);
+    this.stickyNow = sticky;
+    // The Pinned view's day while scrolling has a strip of its own above the list, so it never
+    // covers a message or a control. The strip stays while the list has day bands (it shows
+    // nothing while a band is at the top), so the list does not move when the day appears.
+    // The floating top shows a pill over the list instead, only while scrolling (floatTop).
+    const strip = !this.floating() && this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e, cx) => {
         const x = e.local_position?.x;
@@ -5057,6 +5204,7 @@ export default class Threads extends View {
     const w = this.inner();
     switch (r.kind) {
       case "spacer": return r.h;
+      case "gap": return r.h;
       case "tail": return r.h;
       case "turn": return r.shape.height;
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
@@ -5311,6 +5459,7 @@ export default class Threads extends View {
   item(t, r, focusedPanel, size) {
     switch (r.kind) {
       case "spacer": return div();
+      case "gap": return div();
       case "tail": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
