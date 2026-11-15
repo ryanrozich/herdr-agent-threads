@@ -36,13 +36,19 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 ### Read a long session as a chat
 
-Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Point at a message for its time, and select a turn for the copy, pin, quote and terminal icons. In an open turn, click the grey line to see the work before the reply: what the agent said along the way, each run of tool calls, then tokens and model. For every agent but Cursor, open a run to see each command, and click one to see its output. `→` and `←` open and close it a level at a time. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
+Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Point at a message for its time, and select a turn for the copy, pin, quote and terminal icons. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
+### See what the agent did
+
+In an open turn, click the grey line to see the work before the reply: what the agent said along the way, each run of tool calls, then tokens and model. For every agent but Cursor, open a run to see each command, file or search, and click one to see its output. A run's calls are read from the transcript only when you open it, and kept in memory only. `→` and `←` open and close the work a level at a time.
+
+<a href="docs/screenshots/work.png"><img src="docs/screenshots/work.png" alt="An open turn's work: a run of tool calls, each naming its file or command, with one command's test output open" width="400"></a>
+
 ### Find an answer
 
-Press `/` and type. The list narrows to the turns that match. `g` jumps to a turn number, and `[` `]` move a day at a time.
+Press `/` and type. The list narrows to the turns that match. `g` jumps to a turn number, and `[` `]` move a day at a time. The rail on the list's right edge has a tick for each turn: point at one for the turn's number and the start of your prompt, and click it to go there.
 
 <a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests" width="400"></a>
 

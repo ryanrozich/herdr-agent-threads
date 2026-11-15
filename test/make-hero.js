@@ -311,14 +311,14 @@ const LONG_NOTES = [
   "The checkout service logs a warning when the total it charges differs from the total the cart page sent with the order. Before the fix that warning fired a few times a day in the test region. After the deploy it should not fire at all. If it does, the log line has the cart id and both totals, which is enough to replay the cart in the totals tests and see which step disagrees.",
 ];
 
-// Turn 7: the open card
+// Turn 7: the open card. Its tool calls have short outputs, for the work shot (work.png).
 p = prompt("Fix that one-cent checkout bug, it's ACME-123", 180);
-tool("Read", { file_path: `${cwd}/src/cart/totals.ts` }, "…", p);
-tool("Grep", { pattern: "Math.round" }, "…", p);
-tool("Edit", { file_path: `${cwd}/src/cart/totals.ts` }, "…", p);
-tool("Edit", { file_path: `${cwd}/src/cart/totals.test.ts` }, "…", p);
-tool("Bash", { command: "bun run test src/cart && bun run e2e --grep checkout" }, "…", p, 30);
-tool("Bash", { command: "gh pr create --fill" }, "…", p);
+tool("Read", { file_path: `${cwd}/src/cart/totals.ts` }, ["export function orderTotal(lines: Line[], taxRate: number) {", "  let total = 0;", "  for (const line of lines) {", "    const net = line.price * line.qty;", "    total += Math.round(net * (1 + taxRate) * 100) / 100;", "  }", "  return total;", "}"].join("\n"), p);
+tool("Grep", { pattern: "Math.round" }, ["src/cart/totals.ts:5:    total += Math.round(net * (1 + taxRate) * 100) / 100;", "src/cart/format.ts:12:  return Math.round(cents) / 100;"].join("\n"), p);
+tool("Edit", { file_path: `${cwd}/src/cart/totals.ts` }, "The file src/cart/totals.ts has been updated.", p);
+tool("Edit", { file_path: `${cwd}/src/cart/totals.test.ts` }, "The file src/cart/totals.test.ts has been updated.", p);
+tool("Bash", { command: "bun run test src/cart && bun run e2e --grep checkout" }, ["bun test v1.4.2", "", "src/cart/totals.test.ts:", "✓ one item, no tax", "✓ three items with tax", "✓ five items, discount code", "✓ the cart from ACME-123", "✓ zero quantity", "✓ rounding stays in cents", "", " 18 pass", " 0 fail", "", "Running 18 checkout tests using 2 workers", "  18 passed (41.2s)"].join("\n"), p, 30);
+tool("Bash", { command: "gh pr create --fill" }, "https://github.com/acme/acme-web/pull/482", p);
 assistant([{ type: "text", text: [
   "Found it. Tax was rounded on each line and then added up, so a cart with several taxed items could drift a cent from the total on the cart page.",
   "",
