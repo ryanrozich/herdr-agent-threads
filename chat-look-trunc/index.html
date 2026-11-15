@@ -1,0 +1,113 @@
+<title>Full Messages Default</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 75ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.list { display: grid; gap: 14px; }
+.list ol, .list ul { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; }
+.group { display: grid; gap: 28px; }
+.pair { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 80ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.one { display: grid; grid-template-columns: minmax(0, 560px); }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+.count { display: grid; gap: 8px; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--surface); max-width: 80ch; }
+.count .num { font: 600 40px/1 var(--sans); }
+.count ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 22px 16px; align-items: start; }
+.steps .wide { grid-column: 1 / -1; max-width: 980px; }
+.step { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.how { font: 500 13px var(--sans); }
+.how b { display: inline-block; font: 600 12px var(--mono); color: var(--accent); margin-right: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.what { color: var(--muted); font-size: 14px; }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+
+.rec { display: grid; gap: 8px; max-width: 980px; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · no truncation by default · draft PR 50</div>
+  <h1>Long messages show in full, with no Show more</h1>
+  <p class="lede">The owner found the blue Show more links distracting and asked for full replies by default, with shortening as a setting to opt into. Real frames from Herdr 0.1.15 in an isolated test window on the mini, on a synthetic session. Both builds start with turn #7 selected and closed, then ↑. Click any frame to open it full size. The arrow keys step through them and Esc closes.</p>
+</header>
+<section class="group"><h2>The recordings</h2><div class="duo">
+<figure class="step"><div class="how"><b>Before</b>main</div><button class="shot" type="button"><img src="before.gif" alt="Recording before: closed turns cut with Show more" loading="lazy"></button><figcaption class="what">Closed turns show 4 lines of the prompt and 6 of the reply, each with Show more.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>PR 50, 348a6ac</div><button class="shot" type="button"><img src="after.gif" alt="Recording after: closed turns in full, the setting, and the cuts back when it is on" loading="lazy"></button><figcaption class="what">Closed turns show the whole reply, code block included. The settings panel has Shorten long messages, off. Turned on, the cuts and Show more come back.</figcaption></figure>
+</div></section>
+<section class="group"><h2>Frame by frame</h2><div class="steps">
+<figure class="step"><div class="how"><b>Before</b>#7 selected</div><button class="shot" type="button"><img src="before-0.png" alt="Before: turn 7 closed, its reply cut with Show more" loading="lazy"></button><figcaption class="what">The reply stops after a few lines, with Show more under it, and the next prompt too.</figcaption></figure>
+<figure class="step"><div class="how"><b>Before</b>↑</div><button class="shot" type="button"><img src="before-1.png" alt="Before: up to turn 6" loading="lazy"></button><figcaption class="what">The same cuts on every closed turn.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>#7 selected</div><button class="shot" type="button"><img src="after-0.png" alt="After: turn 7 closed, its whole reply shown" loading="lazy"></button><figcaption class="what">The whole reply: the list, the code block and the last line. No Show more.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>↑</div><button class="shot" type="button"><img src="after-1.png" alt="After: up to turn 6, in full" loading="lazy"></button><figcaption class="what">Turn #6 in full too.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>Settings</div><button class="shot" type="button"><img src="after-2.png" alt="After: the settings panel with Shorten long messages off" loading="lazy"></button><figcaption class="what">"Shorten long messages", off, with "Every message and reply shows in full." The line steppers show only while it is on.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>Shorten long messages on</div><button class="shot" type="button"><img src="on-1.png" alt="After: with the setting on, the cuts and Show more come back" loading="lazy"></button><figcaption class="what">As before this change: the first lines of each message, with Show more.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>and off again</div><button class="shot" type="button"><img src="on-2.png" alt="After: the setting off again, back to full messages" loading="lazy"></button><figcaption class="what">Back to full messages.</figcaption></figure>
+</div></section>
+<section class="list"><h2>What changed</h2><ul>
+<li>A new setting, truncate, shown as Shorten long messages in the settings panel with a scissors icon. It is off by default.</li>
+<li>Off: a closed turn shows the whole prompt and the whole reply as Markdown. An open turn shows the whole message, and a running turn's latest update is not cut. No Show more or Show all appears.</li>
+<li>On: everything is cut as before, and the Prompt lines and Reply lines steppers show under it. Reset to defaults turns it off.</li>
+<li>The mod's draw time on a 2,000-turn session is unchanged, also with every reply about 4,000 characters long: about 4 ms with nothing changed and 11 to 13 ms for a rebuild, against Herdr's 50 ms limit. Herdr's own drawing of long replies while scrolling cannot be timed on the test window, which has no wheel.</li>
+<li>No notice or hint appears anywhere.</li>
+</ul></section>
+<section class="list"><h2>Not in this change</h2><ul>
+<li>Code and output boxes that scroll sideways, and highlighting through fenced blocks, come next as their own change.</li>
+</ul></section>
+<section class="list"><h2>Left for the owner to check by hand</h2><ul>
+<li>Scroll a long session with the wheel and say whether it feels as smooth as before.</li>
+</ul></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
