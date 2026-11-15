@@ -811,3 +811,16 @@ test("callTime prefers the agent's own duration when it records one", () => {
   expect(callTime(null, null, 40)).toBe("<0.1s");
   expect(callTime(null, null, null)).toBe("");
 });
+
+test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
+  const { readType, fitWidth, widthChars, WIDTH_NAMES } = await import("../mods/agent-threads/ui.js");
+  expect(WIDTH_NAMES).toEqual(["comfortable", "wide", "full"]);
+  expect(widthChars("nope")).toBe(70);
+  const at = (w, size) => [readType(size, widthChars(w)).measure, fitWidth(size, widthChars(w))];
+  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 479], [461, 545], [592, 676]]);
+  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 592], [592, 676], [761, 845]]);
+  expect(at("full", 14)).toEqual([Infinity, Infinity]);
+  // A bubble's line stops at Wide's in Full.
+  expect(readType(14, Infinity).bubble).toBe(592);
+  expect(readType(14).bubble).toBe(461);
+});
