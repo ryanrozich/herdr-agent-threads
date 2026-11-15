@@ -55,7 +55,7 @@ ev as (
   -- A reply's text and tool calls, in order.
   select x.un, x.seq, 1, printf('%06d', x.ord), x.id,
     case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.v,'$.text'), 1, 200000))
-      else json_object('k','u','n', json_extract(x.v,'$.name')) end, null, ''
+      else json_object('k','u','n', json_extract(x.v,'$.name'), 'id', json_extract(x.v,'$.id')) end, null, ''
   from items x
   where x.ty <> 'text' or length(json_extract(x.v,'$.text')) > 0
   union all

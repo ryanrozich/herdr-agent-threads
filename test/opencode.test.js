@@ -251,3 +251,22 @@ test("a missing database reads as missing", () => {
   expect(parseChunk(out).missing).toBe(true);
   expect(existsSync("/nonexistent/opencode.db")).toBe(false);
 });
+
+test("1.x level 3: calls carry their callID, and calls.sh reads each one's input, output, error and duration from part", () => {
+  const o = open();
+  user(o, "msg_u1", "Fix the cart total", 0);
+  assistant(o, "msg_a1", "msg_u1", 100, { finish: "tool-calls" });
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "toolu_b1", state: { status: "completed", input: { command: "bun test cart" }, output: "1 fail\nexpected 3", title: "x", time: { start: T0 + 100, end: T0 + 2100 } } });
+  part(o, "msg_a1", { type: "tool", tool: "webfetch", callID: "call_w1", state: { status: "error", input: { url: "https://example.com/docs" }, error: "fetch failed", time: { start: T0 + 2200, end: T0 + 2210 } } });
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "call_p1", state: { status: "running", input: { command: "bun run e2e" }, time: { start: T0 + 2300 } } });
+  assistant(o, "msg_a2", "msg_u1", 3000);
+  part(o, "msg_a2", { type: "text", text: "Fixed." });
+  o.db.close();
+  const s = read(o);
+  expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["toolu_b1", "call_w1", "call_p1"]);
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), `${o.path}#${SID}`, "opencode", "toolu_b1", "call_w1", "call_p1"], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "in").map((x) => x.in)).toEqual(["bun test cart", "https://example.com/docs", "bun run e2e"]);
+  // A call still running has its input and no output yet.
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["toolu_b1", false, "1 fail\nexpected 3", 2, 2000], ["call_w1", true, "fetch failed", 1, 10]]);
+});

@@ -19,6 +19,11 @@ shift 2
 for id in "$@"; do
   case $id in "" | *[!0-9A-Za-z_.:\|-]*) echo "bad call id" >&2; exit 2 ;; esac
 done
+# OpenCode: the session is "<database>#<session id>", and opencode.sh reads it with SQL.
+if [ "$harness" = opencode ]; then
+  sh "$(dirname "$0")/opencode.sh" calls "${file%#*}" "${file##*#}" "$@"
+  exit $?
+fi
 case $file in /*) ;; *) file=./$file ;; esac
 [ -f "$file" ] || { echo "no transcript" >&2; exit 3; }
 ids=$(printf '%s ' "$@")
