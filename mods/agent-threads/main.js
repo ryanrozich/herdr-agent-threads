@@ -5735,8 +5735,8 @@ export default class Threads extends View {
   }
 
   // The Jump to latest pill: it floats at the bottom centre of the list while the end of the
-  // list is off screen, in the list's own view (not the outline or the Pinned view). It
-  // carries a dot while something new came in below the screen.
+  // list is off screen, in the list's own view (not the outline or the Pinned view). A down
+  // arrow leads its label, and a dot leads both while something new came in below the screen.
   pillShown() {
     return this.bottomShown === false && this.view !== "pinned" && !this.pinnedPane && !this.outlined();
   }
@@ -5749,8 +5749,8 @@ export default class Threads extends View {
         .tooltip(dot ? "New below · jump to latest (End)" : "Jump to latest (End)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("latest", cx); cx.notify(); })
         .when(dot, (el) => el.child(div().id("th-latest-pill-dot").flex_none().size(6).rounded(3).bg(t.accent)))
-        .child(div().flex_none().child("Jump to latest"))
-        .child(svg(ICON("chevrons-down")).size(12).flex_none().text_color(t.muted)));
+        .child(svg(ICON("arrow-down")).size(12).flex_none().text_color(t.muted))
+        .child(div().flex_none().child("Jump to latest")));
   }
 
   toastView(t) {

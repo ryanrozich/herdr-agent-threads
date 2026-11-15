@@ -4267,6 +4267,15 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   expect(pillIds()).toEqual(expect.arrayContaining(["th-latest-pill", "th-latest-pill-dot"]));
   rec = []; v.pillView(theme); const tip = rec.find((e) => e[0] === "tooltip")?.[1]; rec = null;
   expect(tip).toBe("New below · jump to latest (End)");
+  // Left to right: the dot, a down arrow, then the label.
+  rec = []; v.pillView(theme); const order = rec; rec = null;
+  const at = (f) => order.findIndex(f);
+  const dotAt = at((e) => e[0] === "id" && e[1] === "th-latest-pill-dot");
+  const arrowAt = at((e) => e[0] === "svg" && String(e[1]).endsWith("/arrow-down.svg"));
+  const labelAt = at((e) => e[0] === "child" && e[1] === "Jump to latest");
+  expect(dotAt).toBeGreaterThan(-1);
+  expect(arrowAt).toBeGreaterThan(dotAt);
+  expect(labelAt).toBeGreaterThan(arrowAt);
   v.toast = { text: "x", at: 1 };
   rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
   v.footerH = 38;
