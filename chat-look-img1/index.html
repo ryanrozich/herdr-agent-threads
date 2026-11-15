@@ -1,0 +1,116 @@
+<title>Chat Look One Click</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 75ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.list { display: grid; gap: 14px; }
+.list ol, .list ul { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; }
+.group { display: grid; gap: 28px; }
+.pair { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 80ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.one { display: grid; grid-template-columns: minmax(0, 560px); }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+.count { display: grid; gap: 8px; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--surface); max-width: 80ch; }
+.count .num { font: 600 40px/1 var(--sans); }
+.count ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 22px 16px; align-items: start; }
+.steps .wide { grid-column: 1 / -1; max-width: 980px; }
+.step { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.how { font: 500 13px var(--sans); }
+.how b { display: inline-block; font: 600 12px var(--mono); color: var(--accent); margin-right: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.what { color: var(--muted); font-size: 14px; }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+
+.rec { display: grid; gap: 8px; max-width: 980px; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · chat look · images, step 1 · PR 44</div>
+  <h1>One click from a pasted image to the review</h1>
+  <p class="lede">Real frames from Herdr 0.1.15 in an isolated test window on the mini, running PR 44 (on top of PR 43, the floating top). The session is synthetic and the images are drawn placeholders. Click any frame to open it full size. The arrow keys step through them and Esc closes.</p>
+</header>
+<section class="count" aria-label="Count">
+  <div class="num">1 click</div>
+  <p>From a resting list to the full-screen review, on any turn: at rest, open or running. It was 3. Esc puts the list back exactly as it was.</p>
+</section>
+<section class="group"><h2>The recording</h2>
+  <figure class="rec"><div class="how"><b>Recording</b>At rest, one click on a tile, then Esc</div><button class="shot" type="button"><img src="one-click.gif" alt="Recording: at rest, one click on a tile opens the review, Esc puts the list back" loading="lazy"></button><figcaption class="what">Three frames from the test window, looping.</figcaption></figure>
+</section>
+<section class="group"><h2>With PR 44</h2><div class="steps">
+<figure class="step"><div class="how"><b>At rest</b>A turn with one pasted image</div><button class="shot" type="button"><img src="after-1-one-image.png" alt="At rest: A turn with one pasted image" loading="lazy"></button><figcaption class="what">The tile sits over the bubble as before. It is now a list item of its own, so it takes its own click.</figcaption></figure>
+<figure class="step"><div class="how"><b>At rest</b>Turn #5, two images</div><button class="shot" type="button"><img src="after-2-two-images.png" alt="At rest: Turn #5, two images" loading="lazy"></button><figcaption class="what">Nothing clicked yet.</figcaption></figure>
+<figure class="step wide"><div class="how"><b>Click 1</b>Click the second tile</div><button class="shot" type="button"><img src="after-3-review.png" alt="Click 1: Click the second tile" loading="lazy"></button><figcaption class="what">The review opens on Image 2 of 2, with the prompt and the reply beside it. The turn is selected and stays closed.</figcaption></figure>
+<figure class="step"><div class="how"><b>Esc</b>Close the review</div><button class="shot" type="button"><img src="after-4-back.png" alt="Esc: Close the review" loading="lazy"></button><figcaption class="what">The list is exactly as it was: same scroll, turn #5 still closed.</figcaption></figure>
+<figure class="step"><div class="how"><b>Optional</b>Click the turn to open it</div><button class="shot" type="button"><img src="after-5-opened.png" alt="Optional: Click the turn to open it" loading="lazy"></button><figcaption class="what">The reply in full. The tiles stay over the message, and there is no larger image inside the turn any more.</figcaption></figure>
+<figure class="step wide"><div class="how"><b>Click 1</b>Click a tile on the open turn</div><button class="shot" type="button"><img src="after-6-review-open.png" alt="Click 1: Click a tile on the open turn" loading="lazy"></button><figcaption class="what">The review again, in one click.</figcaption></figure>
+<figure class="step"><div class="how"><b>Esc</b>Close the review</div><button class="shot" type="button"><img src="after-7-back-open.png" alt="Esc: Close the review" loading="lazy"></button><figcaption class="what">The turn is still open and the list has not moved.</figcaption></figure>
+</div></section>
+<section class="group"><h2>Before, on the stack today</h2><div class="steps">
+<figure class="step"><div class="how"><b>Today</b>At rest</div><button class="shot" type="button"><img src="before-2-two-images.png" alt="Today: At rest" loading="lazy"></button><figcaption class="what">A click on a tile only opened the turn.</figcaption></figure>
+<figure class="step"><div class="how"><b>Today, click 1</b>Click the turn</div><button class="shot" type="button"><img src="before-3-opened.png" alt="Today, click 1: Click the turn" loading="lazy"></button><figcaption class="what">The turn opens.</figcaption></figure>
+<figure class="step"><div class="how"><b>Today, click 2</b>Click a tile</div><button class="shot" type="button"><img src="before-5-large.png" alt="Today, click 2: Click a tile" loading="lazy"></button><figcaption class="what">The image showed larger inside the turn.</figcaption></figure>
+<figure class="step wide"><div class="how"><b>Today, click 3</b>Click the larger image</div><button class="shot" type="button"><img src="before-6-viewer.png" alt="Today, click 3: Click the larger image" loading="lazy"></button><figcaption class="what">Only then the review.</figcaption></figure>
+</div></section>
+<section class="list"><h2>Notes</h2><ul>
+<li>A press beside the tiles of a closed turn opens it, as a press on the rest of its row does. On an open turn it only selects it.</li>
+<li>A jump to a turn (a pin, the rail, a search hit) now lands on its tiles, not just under them.</li>
+<li>Still to come in later steps: 64 px tiles with +N on the last tile (step 2), the f key (step 3), and the quieter review (step 4). The review in these frames is today's.</li>
+<li>No notice or hint appears anywhere in this flow.</li>
+<li>Nothing is merged.</li>
+</ul></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
