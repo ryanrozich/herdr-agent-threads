@@ -80,6 +80,7 @@ mock.module("gpui-base", () => ({
   InputState: { new: () => { const st = { handlers: {}, text: "", on(ev, f) { st.handlers[ev] = f; return true; }, value: () => st.text, set_value(x) { st.text = x; }, focus() {} }; return st; } },
   Input: { new: () => el }, Scrollbar: { vertical: () => el },
   Popup: { new: (id) => { if (rec) rec.push(["Popup", id]); return el; } },
+  HoverCard: { new: (id) => { if (rec) rec.push(["HoverCard", id]); return el; } },
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
@@ -1583,6 +1584,53 @@ test("Turn card: i opens the selected turn's numbers over the bottom of the pane
   const { keySheet } = await import("../mods/agent-threads/ui.js");
   expect(keySheet("q").flatMap(([, items]) => items).find(([k]) => k[0] === "i" && k.length === 1)?.[1]).toBe("Show or hide the turn's numbers");
   expect(v.footerHints().map(([k, l]) => `${k} ${l}`)).not.toContain("i explain");
+});
+
+test("Turn card: resting the pointer on a line's info icon shows the card, on a closed or an open turn, with no click", async () => {
+  const { v } = await pane(fixture());
+  const t = v.current().turns.find((x) => x.tools > 0 && x.done);
+  const key = `0:${t.n}`;
+  v.width = 380;
+  v.bodyW = 380;
+  const rowOf = (sel) => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), sel); const c = rec; rec = null; return c; };
+  const partOfLine = (probe = false) => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), probe); const c = rec; rec = null; return c; };
+  const hover = (c) => {
+    const i = c.findIndex((e) => e[0] === "HoverCard" && e[1] === `th-hover-${key}`);
+    return i < 0 ? null : c.slice(i);
+  };
+  // A closed turn, not selected and selected: the icon is a HoverCard's trigger, the card its
+  // content, anchored under the icon's right edge, with no close mark.
+  for (const sel of [null, key]) {
+    v.sel = sel;
+    const h = hover(rowOf(sel === key));
+    expect(h).not.toBeNull();
+    expect(h.some((e) => e[0] === "anchor" && e[1] === "top_right")).toBe(true);
+    expect(h.some((e) => e[0] === "open_delay")).toBe(true);
+    expect(h.some((e) => e[0] === "child" && e[1] === `Turn #${t.n}`)).toBe(true);
+    expect(h.some((e) => e[0] === "id" && e[1] === "th-details-hover")).toBe(true);
+    expect(h.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop())).not.toContain("x.svg");
+  }
+  // Hovering opens nothing: no state changes, so the turn stays closed.
+  expect(v.detailsOpen).toBe(false);
+  expect(v.open.has(key)).toBe(false);
+  // An open turn: on its own line item, never in the hidden probe.
+  v.open = new Set([key]);
+  v.sel = null;
+  expect(hover(partOfLine())).not.toBeNull();
+  expect(partOfLine(true).some((e) => e[0] === "HoverCard")).toBe(false);
+  // While i's card is open, no hover cards, so only one card shows.
+  v.sel = key;
+  v.detailsOpen = true;
+  const c = partOfLine();
+  expect(c.some((e) => e[0] === "HoverCard")).toBe(false);
+  expect(c.some((e) => e[0] === "Popup" && e[1] === `th-details-${key}`)).toBe(true);
+  // A running turn has no settled line, so no card.
+  v.detailsOpen = false;
+  const run = v.rows().find((r) => r.kind === "turn" && (r.running || r.live));
+  if (run) {
+    rec = []; v.rowItem(theme, run, false); const rc = rec; rec = null;
+    expect(rc.some((e) => e[0] === "HoverCard")).toBe(false);
+  }
 });
 
 test("Turn card: every settled Worked for line has the info icon, on the selected turn and under the pointer, and a press on it opens the card beside it", async () => {
@@ -3406,7 +3454,8 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   v.sel = null;
   let drawn = strings(() => v.rowItem(theme, row, false));
   expect(drawn).not.toContain("You");
-  expect(drawn.some((x) => x.includes(`#${turn.n}`))).toBe(false);
+  // (The Turn card in the line's hover card is titled "Turn #n"; it shows only under the pointer.)
+  expect(drawn.some((x) => x.includes(`#${turn.n}`) && x !== `Turn #${turn.n}`)).toBe(false);
   // The time is drawn for a hover on the message to reveal: the message and its strip are one
   // element, clear at rest and dim while the pointer is on it. No icons on a closed row that
   // is not selected, since its one click opens it.
@@ -3426,8 +3475,9 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   expect(strings(() => v.youStrip(theme, turn, row.key, false))).toEqual([]);
   expect(drawn).toContain(v.workText(turn));
   expect(v.workText(turn)).toMatch(/^Worked for \d/);
-  // No stats line under the reply, and no fill on a selected row.
-  expect(drawn.some((x) => / tokens/.test(x))).toBe(false);
+  // No stats line under the reply (the hover card's own text aside), and no fill on a selected row.
+  const card = new Set(v.detailRows(turn).flat().filter(Boolean));
+  expect(drawn.some((x) => / tokens/.test(x) && !card.has(x))).toBe(false);
   v.sel = row.key;
   drawn = strings(() => v.rowItem(theme, row, true));
   expect(drawn).toContain(`#${turn.n} · ${time}`);

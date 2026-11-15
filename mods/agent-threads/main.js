@@ -29,6 +29,13 @@ import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle, v_virtual_l
 import * as gpuiBase from "gpui-base";
 // Popup (the rail card) is new in 0.1.15 too: without it the rail keeps its one-line tooltip.
 const Popup = gpuiBase.Popup?.new ? gpuiBase.Popup : null;
+// How long the pointer rests on a line's info icon before its Turn card shows, and how long the
+// card stays after the pointer leaves the icon and the card (time to cross the gap between).
+const HOVER_OPEN_MS = 300;
+const HOVER_CLOSE_MS = 200;
+// HoverCard opens the Turn card while the pointer rests on a line's info icon. It owns its open
+// state, so it needs no handler, which a list item cannot carry.
+const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
@@ -3902,6 +3909,7 @@ export default class Threads extends View {
     if (this.gal) return this.galleryView();
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
+    this.monoFont = null;
     if (this.stickStep) this.applyStick();
     this.fitColumn();
     this.react(cx);
@@ -4062,7 +4070,8 @@ export default class Threads extends View {
     const z = Number(settings()?.zoom);
     return Number.isFinite(z) && z > 0 ? Math.min(3, Math.max(0.5, z)) : 1;
   }
-  mono() { return settings().font_family ?? "JetBrains Mono"; }
+  // Read once a draw: every Turn card on screen asks for it.
+  mono() { return (this.monoFont ??= settings().font_family ?? "JetBrains Mono"); }
 
   iconButton(t, id, icon, tip, onClick, on = false, count = null, dot = false) {
     return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer().relative()
@@ -5090,8 +5099,19 @@ export default class Threads extends View {
   // The Turn card's rows (i): [label, value, what it means, counts under the value or null],
   // "context compacted" first when it happened. Elapsed time stays on "Worked for".
   detailRows(turn) {
-    const st = stats(turn);
+    // Kept per turn, since every settled line on screen carries a card; the key notices a turn
+    // that changed in place (a reply still arriving).
     const who = this.agent().short;
+    const k = `${who}|${turn.tools}|${turn.model}|${turn.effort}|${turn.compactions}|${Object.keys(turn.usage ?? {}).length}`;
+    const m = (this.detailMemo ??= new WeakMap());
+    const hit = m.get(turn);
+    if (hit && hit.k === k) return hit.rows;
+    const rows = this.detailRowsOf(turn, who);
+    m.set(turn, { k, rows });
+    return rows;
+  }
+  detailRowsOf(turn, who) {
+    const st = stats(turn);
     const model = [shortModel(turn.model), turn.effort].filter(Boolean).join(" · ");
     return [
       turn.compactions ? ["Context", "Compacted", `The conversation got long, so ${who} summarised the earlier part to free room. Some earlier detail is condensed.`, null] : null,
@@ -5566,18 +5586,22 @@ export default class Threads extends View {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
       .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
   }
-  // The info icon of a turn's line, for item itemKey. Where the card is open for this turn it
-  // is the card's anchor: a Popup with the card's top right corner under the icon's right
-  // edge, or its bottom right corner over it when the line is low in the pane (detailsDir).
-  // Never in the hidden probe, which would draw a second card.
+  // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
+  // corner under the icon's right edge, or its bottom right corner over it when the line is
+  // low in the pane (detailsDir). Where i or a click opened the card for this turn, a Popup.
+  // Otherwise, while no card is open, a HoverCard: resting the pointer on the icon shows the
+  // card and moving off hides it, on an open or a closed turn. Never in the hidden probe,
+  // which would draw a second card.
   lineIcon(t, itemKey, key, probe) {
     const state = this.infoState(key);
-    if (probe || state !== "on" || !Popup) return { state };
+    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard))) return { state };
     const turn = this.findTurn(key);
     if (!turn || this.detailsAnchor(key) !== itemKey) return { state };
     const up = this.detailsDir(itemKey, turn) === "up";
-    return { state, el: Popup.new(`th-details-${key}`, this.infoIcon(t, state)).anchor(up ? "bottom_right" : "top_right")
-      .content(this.detailsCard(t, turn, up)) };
+    const anchor = up ? "bottom_right" : "top_right";
+    if (state === "on") return { state, el: Popup.new(`th-details-${key}`, this.infoIcon(t, state)).anchor(anchor).content(this.detailsCard(t, turn, up)) };
+    return { state, el: HoverCard.new(`th-hover-${key}`).anchor(anchor).open_delay(HOVER_OPEN_MS).close_delay(HOVER_CLOSE_MS)
+      .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
   }
   // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
   // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
@@ -6358,26 +6382,35 @@ export default class Threads extends View {
   // selection, so ↑ ↓ compare turns, and closes with i, Esc or any press. On Herdr before
   // 0.1.15 (no Popup) it sits over the bottom of the pane instead, like the ? sheet.
   cardW() { return Math.min(420, Math.min(replyWidth(this.width), this.prose()) + 8); }
-  detailsCard(t, turn, up = false) {
+  // hover: the HoverCard's copy, with no close mark, since moving off closes it.
+  detailsCard(t, turn, up = false, hover = false) {
     const row = ([label, value, what, under]) => h_flex().gap(14).items_start().min_w(0)
       .child(div().flex_none().w(78).text_size(12.5).line_height("18px").text_color(t.muted).child(label))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().text_size(12.5).line_height("18px").text_color(t.foreground).child(value))
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
-    return v_flex().id("th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
+    return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
       .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
         .child(this.kbd(t, "i"))
-        .child(div().flex_none().size(22).flex().items_center().justify_center().child(svg(ICON("x")).size(13).text_color(t.dim))))
+        .when(!hover, (el) => el.child(div().flex_none().size(22).flex().items_center().justify_center().child(svg(ICON("x")).size(13).text_color(t.dim)))))
       .child(v_flex().px(12).pb(12).gap(8).children(this.detailRows(turn).map(row)));
   }
   // The card's height before it is drawn: the head, then each row's value, counts and
   // explanation, wrapped at the card's text width.
+  // Kept per turn and card width, since every settled line on screen carries a card.
   cardH(turn) {
-    const per = Math.max(10, Math.floor((this.cardW() - 24 - 78 - 14) / 6.2));
-    return 34 + 12 + this.detailRows(turn).reduce((h, [, , what, under], i) => h + (i ? 8 : 0) + 18 + 2 + (under ? 18 : 0) + wrappedLines(what, per) * 16, 0);
+    const w = this.cardW();
+    const rows = this.detailRows(turn);
+    const m = (this.cardHMemo ??= new WeakMap());
+    const hit = m.get(turn);
+    if (hit && hit.w === w && hit.rows === rows) return hit.h;
+    const per = Math.max(10, Math.floor((w - 24 - 78 - 14) / 6.2));
+    const h = 34 + 12 + rows.reduce((acc, [, , what, under], i) => acc + (i ? 8 : 0) + 18 + 2 + (under ? 18 : 0) + wrappedLines(what, per) * 16, 0);
+    m.set(turn, { w, rows, h });
+    return h;
   }
   // Down from the icon, or up when the line sits low in the pane and the card would not fit
   // under it. The list says which items it drew, not where, so the line's height in the pane
