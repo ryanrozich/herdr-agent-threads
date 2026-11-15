@@ -962,17 +962,17 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
-  // Code blocks wrap: the editor's soft_wrap is on, so a long line never leaves the block
-  // scrolled sideways, and the box is as tall as the wrapped rows.
+  // Code blocks do not wrap: the editor's soft_wrap is off, so a long line scrolls sideways
+  // inside the block, and the box is as tall as its lines.
   const code = v.rows().find((r) => r.kind === "code");
   expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
   expect(v.codeBoxH(code)).toBe(36);
   v.makeCode(code.key.split(":").slice(1, 3).join(":"));
-  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: false, readonly: true, value: "git log --grep ACME-9" });
   const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
   const shape = v.codeShape(long);
-  expect(shape.rows).toBeGreaterThan(1);
-  expect(shape.shown).toBe(shape.rows);
+  expect(shape.rows).toBe(1);
+  expect(shape.shown).toBe(1);
   expect(shape.caption).toBe(false);
   expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
   // The label is the fence's language, or nothing: never "code".
@@ -5713,20 +5713,33 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   // A group of one, open, is the call's own row, with no group line over it.
   expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
   expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · <0.1s [closed]");
-  // A click on a call opens its output: 12 lines, the rest behind Show all.
+  // A click on a call opens its output: every line in a box 12 lines tall that scrolls inside
+  // and sideways, with no Show all.
   v.click(`cl:${a}:0:0`, cx);
-  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 12\/30 \+Show all h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 plain h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
   const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
-  expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
-  // A click on the box shows every line, and again the first 12.
+  expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
+  rec = []; v.partContent(theme, box, false); const bc = rec; rec = null;
+  expect(bc.some((e) => e[0] === "overflow_scroll")).toBe(true);
+  expect(bc.some((e) => e[0] === "whitespace_nowrap")).toBe(true);
+  expect(bc.some((e) => e[0] === "child" && typeof e[1] === "string" && /^Show (all|less)/.test(e[1]))).toBe(false);
+  // A click on the box only selects its turn.
   v.click(`co:${a}:0:0`, cx);
-  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 \+Show less/);
-  v.click(`co:${a}:0:0`, cx);
-  expect(detail(`co:${a}:0:0`)).toMatch(/lines 12\/30/);
+  expect(detail(`co:${a}:0:0`)).toMatch(/lines 30\/30/);
   // → opens every call's output; ← closes the outputs, then the groups.
   v.action("deeper", cx);
   expect(v.rows().filter((r) => r.kind === "cout").length).toBe(3);
-  expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 h\d+ \| lint: 2 errors$/);
+  expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 plain h\d+ \| lint: 2 errors$/);
+  // The read file has a known extension: between frames its output gets a read-only editor
+  // that colours it as js and does not wrap; plain text stays plain.
+  const before = editors.length;
+  draw(v, cx);
+  cx.flush(0);
+  draw(v, cx);
+  const ed = editors.slice(before).find((e) => e.opts.language === "js");
+  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: false, value: "export const total = 1;" });
+  expect(detail(`co:${a}:2:0`)).toMatch(/ editor js h\d+/);
+  expect(detail(`co:${a}:0:1`)).toMatch(/ plain h\d+/);
   v.action("shallower", cx);
   expect(v.rows().some((r) => r.kind === "cout")).toBe(false);
   expect(v.rows().some((r) => r.kind === "call")).toBe(true);
@@ -5844,7 +5857,7 @@ test("level 3 while a turn runs: the running group names what runs now; an open 
   s.version = (s.version ?? 0) + 1;
   await settled();
   expect(detail(`cl:${a}:0:0`)).toBe("call#1 one bun run e2e · 19s [open]");
-  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 1\/1 h\d+ \| 12 passed$/);
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 1\/1 plain h\d+ \| 12 passed$/);
   draw(v, cx);
 });
 
