@@ -1,0 +1,106 @@
+<title>Chat Look Images</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 75ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.list { display: grid; gap: 14px; }
+.list ol, .list ul { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; }
+.group { display: grid; gap: 28px; }
+.pair { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 80ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.one { display: grid; grid-template-columns: minmax(0, 560px); }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+.count { display: grid; gap: 8px; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--surface); max-width: 80ch; }
+.count .num { font: 600 40px/1 var(--sans); }
+.count ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 22px 16px; align-items: start; }
+.steps .wide { grid-column: 1 / -1; max-width: 980px; }
+.step { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.how { font: 500 13px var(--sans); }
+.how b { display: inline-block; font: 600 12px var(--mono); color: var(--accent); margin-right: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.what { color: var(--muted); font-size: 14px; }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · chat look · pasted images · stack top, PR 42</div>
+  <h1>How pasted images work on the stack today</h1>
+  <p class="lede">Real frames from Herdr 0.1.15 in an isolated test window on the mini, running the mod from the top of the stack (PR 42, width, which holds PRs 29 to 41). The session is synthetic and the images are drawn placeholders. The image flow has not changed; this is what is there now. Click any frame to open it full size. The arrow keys step through them and Esc closes.</p>
+</header>
+<section class="count" aria-label="Count">
+  <div class="num">3 clicks</div>
+  <p>From a resting list to the full-screen review, with no keys. No key gets there: Enter or Space opens a turn, but nothing on the keyboard opens an image.</p>
+  <ol><li>Click the turn. It opens and the reply shows in full.</li><li>Click a tile. That image shows large under the tiles.</li><li>Click the large image. The viewer opens on it, with the prompt and reply beside it.</li></ol>
+</section>
+<section class="group"><h2>Step by step</h2><div class="steps">
+<figure class="step"><div class="how"><b>1 · At rest</b>The list as it opens, nothing clicked</div><button class="shot" type="button"><img src="1-one-image.png" alt="Step 1. At rest: The list as it opens, nothing clicked" loading="lazy"></button><figcaption class="what">A turn with one pasted image. The image is a tile over the bubble.</figcaption></figure>
+<figure class="step"><div class="how"><b>2 · At rest</b>Scroll down</div><button class="shot" type="button"><img src="2-two-images.png" alt="Step 2. At rest: Scroll down" loading="lazy"></button><figcaption class="what">Turn #5 has two pasted images, shown as two tiles. Its reply is cut, with Show more under it.</figcaption></figure>
+<figure class="step"><div class="how"><b>3 · Click 1</b>Click the turn (anywhere on its row, the tiles too)</div><button class="shot" type="button"><img src="3-opened.png" alt="Step 3. Click 1: Click the turn (anywhere on its row, the tiles too)" loading="lazy"></button><figcaption class="what">The turn opens and the reply shows in full. A click on a tile here also only opens the turn; it does not remember which tile.</figcaption></figure>
+<figure class="step"><div class="how"><b>4 · Optional</b>Click "Worked for 58s"</div><button class="shot" type="button"><img src="4-work.png" alt="Step 4. Optional: Click "Worked for 58s"" loading="lazy"></button><figcaption class="what">The work opens: what the agent read and edited, and the numbers. This is not on the way to the images.</figcaption></figure>
+<figure class="step"><div class="how"><b>5 · Click 2</b>Click the second tile</div><button class="shot" type="button"><img src="5-large.png" alt="Step 5. Click 2: Click the second tile" loading="lazy"></button><figcaption class="what">[Image #3] shows large under the tiles, at the panel width. The line under it says "click for all 2 full window".</figcaption></figure>
+<figure class="step wide"><div class="how"><b>6 · Click 3</b>Click the large image</div><button class="shot" type="button"><img src="6-viewer.png" alt="Step 6. Click 3: Click the large image" loading="lazy"></button><figcaption class="what">The full-window viewer opens on Image 2 of 2, with the prompt and the reply beside it. This is the full-screen review.</figcaption></figure>
+<figure class="step wide"><div class="how"><b>7 · Key</b>Right arrow, or the arrow button</div><button class="shot" type="button"><img src="7-viewer-next.png" alt="Step 7. Key: Right arrow, or the arrow button" loading="lazy"></button><figcaption class="what">Image 1 of 2. In the viewer, i hides or shows the reply and c copies it.</figcaption></figure>
+<figure class="step"><div class="how"><b>8 · Key</b>Esc, or Close</div><button class="shot" type="button"><img src="8-closed.png" alt="Step 8. Key: Esc, or Close" loading="lazy"></button><figcaption class="what">Back in the list as it was, with the large image still open under the tiles.</figcaption></figure>
+</div></section>
+<section class="list"><h2>Notes</h2><ul>
+<li>A turn that is still running is the exception: its tiles sit at the top of the turn, and one click on a tile opens the viewer.</li>
+<li>Opening the work (step 4) does not change the count. The images and the work are separate.</li>
+<li>The panel is 560 px wide and the list frames are cropped to it. The viewer frames are the whole test window.</li>
+<li>No code changed for this page. A one-click path is being designed separately.</li>
+</ul></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
