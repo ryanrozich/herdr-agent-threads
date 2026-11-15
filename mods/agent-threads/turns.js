@@ -217,7 +217,7 @@ function addStep(turn, name, id = null) {
     g.calls.push(String(name ?? "tool"));
     // The call's id in the transcript, for calls.sh to find its input and output on demand.
     // A group gets ids only once a call has one, so agents that record none carry no list.
-    const ok = typeof id === "string" && /^[0-9A-Za-z_-]{1,100}$/.test(id);
+    const ok = typeof id === "string" && /^[0-9A-Za-z_.:|-]{1,200}$/.test(id);
     if (ok && !g.ids) g.ids = g.calls.slice(0, -1).map(() => null);
     if (g.ids) g.ids.push(ok ? id : null);
   }

@@ -5303,7 +5303,7 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   }
   // A group of one, open, is the call's own row, with no group line over it.
   expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
-  expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · 0.0s [closed]");
+  expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · <0.1s [closed]");
   // A click on a call opens its output: 12 lines, the rest behind Show all.
   v.click(`cl:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 12\/30 \+Show all h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);

@@ -60,7 +60,7 @@ const CALL_H = 20;
 // Calls read for level 3 kept in memory at once (pruneCalls).
 const CALLS_MAX = 800;
 // The agents whose calls calls.sh reads.
-const CALLS_READ = new Set(["claude", "codex"]);
+const CALLS_READ = new Set(["claude", "codex", "pi"]);
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -772,7 +772,7 @@ export default class Threads extends View {
       case "call": {
         if (r.more) return `call${n} +${r.more}`;
         const c = this.callEntry(r.si, r.id);
-        const time = callTime(c?.inTs, c?.outTs);
+        const time = callTime(c?.inTs, c?.outTs, c?.ms);
         return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
       }
       case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
@@ -1748,8 +1748,8 @@ export default class Threads extends View {
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
   isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
 
-  // Level 3's data. Calls are read for Claude Code and Codex so far: the group must carry its
-  // calls' ids.
+  // Level 3's data. Calls are read for Claude Code, Codex and Pi so far: the group must carry
+  // its calls' ids.
   readsCalls(si, st) {
     const file = this.sessions[si]?.file;
     return Boolean(file && st?.ids?.some(Boolean) && CALLS_READ.has(harnessOfFile(file)));
@@ -1804,7 +1804,7 @@ export default class Threads extends View {
             if (!x || typeof x.id !== "string" || !job.ids.includes(x.id)) continue;
             const c = got.get(x.id) ?? {};
             if (x.k === "in") Object.assign(c, { input: String(x.in ?? ""), inTs: x.ts ?? null });
-            if (x.k === "out") Object.assign(c, { out: String(x.out ?? ""), err: x.err === true, lines: Number(x.lines) || 0, outTs: x.ts ?? null });
+            if (x.k === "out") Object.assign(c, { out: String(x.out ?? ""), err: x.err === true, lines: Number(x.lines) || 0, outTs: x.ts ?? null, ms: Number.isFinite(x.ms) ? x.ms : null });
             got.set(x.id, c);
           }
         } catch { ok = false; }
@@ -5998,7 +5998,7 @@ export default class Threads extends View {
             .child(svg(ICON("plus")).size(12).flex_none()).child(div().min_w(0).truncate().child(`${r.more} more calls`));
         }
         const c = this.callEntry(r.si, r.id);
-        const time = callTime(c?.inTs, c?.outTs);
+        const time = callTime(c?.inTs, c?.outTs, c?.ms);
         const open = this.callOpen.has(`${tkey}:${r.gi}:${r.ci}`);
         const icon = r.now ? this.liveIcon(this.liveState(t), 12)
           : svg(ICON(c?.err ? "circle-x" : KIND_ICON[toolKind(r.name)])).size(12).flex_none().when(Boolean(c?.err), (e) => e.text_color(t.blocked));

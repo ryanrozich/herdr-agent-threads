@@ -61,7 +61,7 @@ def prompt($l; $m):
 def reply($l; $m):
   ( $m.content[]? | select(type == "object")
     | if .type == "text" and ((.text // "") | length) > 0 then {k: "t", t: (.text | cap)}
-      elif .type == "toolCall" then {k: "u", n: (.name // "tool")}
+      elif .type == "toolCall" then {k: "u", n: (.name // "tool"), id: .id}
       else empty end ),
   # input leaves out the cached tokens already, and output counts reasoning.
   ( $m.usage // null
