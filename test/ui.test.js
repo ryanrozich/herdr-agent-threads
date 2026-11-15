@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -726,4 +726,24 @@ test("fencedBlock: a reply block that is one fenced code block, with its languag
   expect(fencedBlock("```\na")).toBe(null);
   expect(fencedBlock("```\na\n~~~")).toBe(null);
   expect(fencedBlock("The chips had a fixed width.")).toBe(null);
+});
+
+test("railLayout: one tick per turn 9 px apart, closing to 3 px, then one tick for several turns", () => {
+  // 20 turns in a 600 px rail: the full 9 px pitch, a 2 px mark, day gaps kept.
+  expect(railLayout(20, 2, 600)).toEqual({ per: 1, ticks: 20, pitch: 9, mark: 2, dayGap: true });
+  // 100 turns in 400 px: 388 px less two 7 px day gaps over 100 ticks closes to 3 px, a 1 px mark.
+  expect(railLayout(100, 2, 400)).toEqual({ per: 1, ticks: 100, pitch: 3, mark: 1, dayGap: true });
+  // 400 turns in 400 px: one tick for 4 turns, and no day gaps once ticks stand for groups.
+  const L = railLayout(400, 3, 400);
+  expect(L.per).toBe(4);
+  expect(L.ticks).toBe(100);
+  expect(L.pitch).toBe(3);
+  expect(L.dayGap).toBe(false);
+  expect(L.ticks * L.pitch).toBeLessThanOrEqual(400 - 2 * RAIL.PAD);
+  // Never under 3 px, never over 9, whatever the height.
+  for (const [n, h] of [[2, 2000], [5, 0], [1000, 100]]) {
+    const x = railLayout(n, 0, h);
+    expect(x.pitch).toBeGreaterThanOrEqual(RAIL.MIN);
+    expect(x.pitch).toBeLessThanOrEqual(RAIL.MAX);
+  }
 });

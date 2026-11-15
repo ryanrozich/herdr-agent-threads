@@ -4318,8 +4318,9 @@ test("no dot when the new end of the list draws on screen, or when the list foll
     expect(v.current().turns.length).toBe(3);
     v.stickyDue = false;
     draw(v, cx); // every row on screen
-    expect(v.unseen).toBe(false);
-    expect(v.stickyDue).toBe(false); // nothing to redraw: the dot never showed
+    expect(v.unseen).toBe(false); // the dot never showed
+    // The rail redraws (its last turn on screen is the new one), not the dot.
+    expect(v.railSeen.endsWith(`|${v.turnKeys(v.rows()).at(-1)}`)).toBe(true);
     if (how === "follow") expect(v.sel).toBe(v.turnKeys(v.rows()).at(-1));
   }
   // The reply to the newest turn counts as new too: its turn ends.
@@ -4950,4 +4951,58 @@ test("a settings change in a long session reshapes rows over several frames, the
   v.shapeBudget = Infinity;
   expect(shown().map((r) => r.shape.height)).toEqual(keep);
   expect(v.shapeLeft).toBe(0);
+});
+
+test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
+  const { RAIL } = await import("../mods/agent-threads/ui.js");
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  expect(v.railShown()).toBe(true);
+  let { L, ticks } = v.railTicks();
+  expect(L.per).toBe(1);
+  expect(ticks.map((k) => k.key)).toEqual(ks);
+  // No scrollbar in the body any more, and the rail is drawn in it.
+  rec = []; v.render(cx); const drawn = rec; rec = null;
+  expect(drawn.some((e) => e[0] === "id" && e[1] === "th-rail")).toBe(true);
+  expect(drawn.some((e) => e[0] === "id" && e[1] === "th-tick-0")).toBe(true);
+  // The turns the list drew are on screen; the selected tick is longer, a pinned one accent.
+  drawRange(v, 0, 3);
+  ({ ticks } = v.railTicks());
+  expect(ticks[0].inView).toBe(true);
+  expect(ticks.at(-1).inView).toBe(false);
+  v.sel = ks[1];
+  v.action("pin", cx);
+  v.sel = ks[2];
+  ({ ticks } = v.railTicks());
+  expect(ticks[1].pinned).toBe(true);
+  expect(ticks[2].sel).toBe(true);
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  expect(r.some((e) => e[0] === "w" && e[1] === RAIL.SEL)).toBe(true);
+  expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
+  // One-line tooltips: number, time, pinned, the prompt's start.
+  expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
+  // A click selects the turn and puts its top at the top of the pane, as a pin return does.
+  v.follow = true;
+  v.railJump(ks[0], cx);
+  expect(v.sel).toBe(ks[0]);
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toEqual({ key: ks[0], how: "head" });
+  // A search keeps every tick and dims the ones it leaves out.
+  const word = v.findTurn(ks[0]).prompt.split(/\s+/).find((w) => w.length > 5);
+  v.query = word;
+  v.rows();
+  ({ ticks } = v.railTicks());
+  expect(ticks.length).toBe(ks.length);
+  expect(ticks.some((k) => k.miss)).toBe(true);
+  expect(ticks[0].miss).toBe(false);
+  v.query = "";
+  // Not in the outline or the Pinned view.
+  v.outline = true;
+  expect(v.railShown()).toBe(false);
+  v.outline = false;
+  v.setView("pinned");
+  expect(v.railShown()).toBe(false);
+  v.setView("all");
 });

@@ -1451,6 +1451,23 @@ export function actsLayout({ quote = true, terminal = true } = {}) {
 // The strip under a bubble in a body w wide: copy the prompt, pin, then "#7 · 9:12 AM" in a
 // box as wide as its text. The person's strip ends at the bubble's right edge (w - 16); an
 // agent's starts at its left. Returns { copy, pin, text } as [start, end] and the text width.
+// The rail on the list's right edge, in place of the scrollbar: one tick per turn, 9 px apart
+// and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
+// gap while every turn has its own tick. h is the rail's height, days the day starts after
+// the first.
+export const RAIL = { W: 24, PAD: 6, MAX: 9, MIN: 3, DAY: 7, MARK: 7, SEL: 13, RIGHT: 5 };
+export function railLayout(count, days, h) {
+  const fit = (gaps) => {
+    const room = Math.max(RAIL.MIN, h - 2 * RAIL.PAD - gaps * RAIL.DAY);
+    const per = count * RAIL.MIN > room ? Math.ceil((count * RAIL.MIN) / room) : 1;
+    const ticks = Math.ceil(count / per);
+    const pitch = Math.max(RAIL.MIN, Math.min(RAIL.MAX, Math.floor(room / Math.max(1, ticks))));
+    return { per, ticks, pitch, mark: pitch >= 5 ? 2 : 1, dayGap: gaps > 0 };
+  };
+  const one = fit(days);
+  return one.per === 1 ? one : fit(0);
+}
+
 export function stripLayout(w, text, right = true) {
   const tw = Math.ceil([...text].length * STRIP_CHAR) + 2;
   if (right) {
