@@ -3505,6 +3505,57 @@ test("a pane wider than the reading width lays the turns out in a centred column
   expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
 });
 
+test("width: Comfortable, Wide and Full set the column and the reading line; choosing one resizes the pane while it is kept at its width, and Full turns that off", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  // The column a wide pane lays its turns out in: 545, 676, then the whole pane.
+  for (const [w, col, prose] of [["comfortable", 545, 461], ["wide", 676, 592], ["full", 960, 928]]) {
+    v.prefs = { ...v.prefs, textSize: 14, width: w };
+    v.paneW = 960;
+    draw(v, cx);
+    expect(v.width).toBe(col);
+    expect(v.prose()).toBe(prose);
+  }
+  // A bubble stops at Wide's line even in Full.
+  expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
+  // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
+  // back to 545; Full leaves it alone and turns the switch off.
+  v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
+  v.paneW = 545;
+  log = [];
+  expect(v.action("width:wide", cx)).toBe(true);
+  expect(v.prefs.width).toBe("wide");
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 676 }]);
+  v.paneW = 676;
+  log = [];
+  v.action("width:comfortable", cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  v.paneW = 545;
+  log = [];
+  v.action("width:full", cx);
+  expect(v.prefs).toMatchObject({ width: "full", readingWidth: false });
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  // Full has no reading width: no fit button, and the pane is never asked back.
+  v.paneW = 1200;
+  v.poll(cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
+  // With the switch off, Wide changes the column only.
+  log = [];
+  v.action("width:wide", cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect(v.action("width:huge", cx)).toBe(false);
+  // The settings panel: a Width row with the three choices, the chosen one first in colour;
+  // in a pane narrower than Comfortable's column, a line says all three look the same.
+  v.paneW = 420;
+  rec = []; v.settingsPanel(theme); const sp = rec; rec = null;
+  const ids = sp.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full"]));
+  const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("Keep the pane at this width");
+  expect(texts).toContain("This pane is narrower than Comfortable (545 px), so all three look the same here.");
+});
+
 test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--images"));
   v.width = 545;
@@ -4907,7 +4958,7 @@ test("a settings change in a long session reshapes rows over several frames, the
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
   expect(shown().length).toBeGreaterThan(100);
   // Reshaped for Reply lines 2: the turn's shape key has the new count, and the row draws it.
-  const fresh = (r) => r.turn.shapeKey?.split("|")[3] === "2" && r.shape === r.turn.shapeMemo && !r.shape.blank;
+  const fresh = (r) => r.turn.shapeKey?.split("|")[4] === "2" && r.shape === r.turn.shapeMemo && !r.shape.blank;
   const realPerf = performance.now.bind(performance);
   let fake = 0;
   // Each reading of the clock moves it 0.25 ms, so a reshape costs about 0.5 ms and a frame

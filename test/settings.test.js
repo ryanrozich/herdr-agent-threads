@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true, alwaysShowTime: false };
+const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -137,4 +137,11 @@ test("your name is one line of 1 to 40 characters, and anything else is You", ()
   expect(v({ youName: "x".repeat(60) })).toBe("x".repeat(40));
   for (const bad of ["", "   ", 7, null, ["Sam"]]) expect(v({ youName: bad })).toBe("You");
   expect(JSON.parse(settingsText({ youName: "Sam" }, null))).toMatchObject({ youName: "Sam" });
+});
+
+test("width is comfortable, wide or full; anything else reads as comfortable", () => {
+  expect(parseSettings('{"width": "wide"}').values.width).toBe("wide");
+  expect(parseSettings('{"width": "full"}').values.width).toBe("full");
+  expect(parseSettings('{"width": "huge"}').values.width).toBe("comfortable");
+  expect(parseSettings('{"width": 90}').values.width).toBe("comfortable");
 });

@@ -16,8 +16,11 @@
 // alwaysShowTime: keep each message's time under its bubble (false, the default: the time
 // shows under the selected turn's bubble only).
 // youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
-// readingWidth: keep the Threads pane at the reading width (true, the default): a pane that
-// opens or is dragged wider is resized back, and the terminal gets the room.
+// width: how long a reading line may be, "comfortable" (70 characters, the default), "wide"
+// (90) or "full" (no limit; a bubble still stops at 90). One value for every pane.
+// readingWidth: keep the Threads pane at the width's column (true, the default): a pane that
+// opens or is dragged wider is resized back, and the terminal gets the room. Choosing a width
+// with it on resizes the pane to that column; choosing Full turns it off.
 // viewerReply: the image viewer shows the turn's prompt and reply beside the image (true, the
 // default); i in the viewer shows or hides it, and the viewer writes the choice here.
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
@@ -27,10 +30,10 @@
 // beside it (pins.js has the format).
 
 import { writeTextFile } from "herdr";
-import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE } from "./ui.js";
+import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", readingWidth: true, viewerReply: true, alwaysShowTime: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -77,6 +80,7 @@ export function parseSettings(text) {
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       youName: nameValue(raw.youName) ?? DEFAULTS.youName,
+      width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,
       readingWidth: typeof raw.readingWidth === "boolean" ? raw.readingWidth : DEFAULTS.readingWidth,
       viewerReply: typeof raw.viewerReply === "boolean" ? raw.viewerReply : DEFAULTS.viewerReply,
       alwaysShowTime: typeof raw.alwaysShowTime === "boolean" ? raw.alwaysShowTime : DEFAULTS.alwaysShowTime,
