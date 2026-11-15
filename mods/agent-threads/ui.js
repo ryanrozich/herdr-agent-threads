@@ -1498,6 +1498,42 @@ export function groupText(calls, count = calls?.length ?? 0, live = false) {
 // The icon for a call of this kind in an open group.
 export const KIND_ICON = { command: "square-terminal", read: "file-search", edit: "text-cursor", search: "search", web: "search", agent: "bot", other: "wrench" };
 
+// Level 3: how long a call took, from its input's time to its output's ("0.4s", "12s",
+// "2m 05s"), or "" when either is missing.
+export function callTime(inTs, outTs) {
+  const ms = Date.parse(outTs ?? "") - Date.parse(inTs ?? "");
+  if (!(ms >= 0)) return "";
+  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+// The lines of a call's output box: OUT.SHOW at first, or up to OUT.MAX once shown in full.
+// Lines are not wrapped: each is cut at OUT.CHARS and tabs become spaces, so every line is one
+// OUT.LINE tall. total is the whole output's line count (lines, when calls.sh clipped it).
+export const OUT = { SHOW: 12, MAX: 400, CHARS: 400, LINE: 16, PAD: 8, MORE: 22 };
+export function outLines(out, all = false, lines = 0) {
+  const list = String(out ?? "").replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  if (list.length === 1 && list[0] === "") return { lines: [], total: 0, cut: false };
+  const total = Math.max(list.length, Number(lines) || 0);
+  const shown = list.slice(0, all ? OUT.MAX : OUT.SHOW).map((l) => l.replace(/\t/g, "    ").slice(0, OUT.CHARS));
+  return { lines: shown, total, cut: total > shown.length };
+}
+// The output box's height: its lines, or one line saying there are none, inside its padding
+// and 1 px border, 2 px above and below, and the Show all row when lines are left out or all
+// of them show.
+export function outHeight(box, all = false) {
+  const n = Math.max(1, box.lines.length);
+  return OUT.PAD * 2 + 2 + n * OUT.LINE + 4 + (box.cut || (all && box.total > OUT.SHOW) ? OUT.MORE : 0);
+}
+// A call's text on its row: what it ran or read (calls.sh picks the command, path, pattern,
+// query or URL), on one line; the tool's name until that is read.
+export function callText(name, input) {
+  const s = String(input ?? "").replace(/\s+/g, " ").trim();
+  return s ? s.slice(0, 300) : String(name ?? "tool");
+}
+
 // The rail on the list's right edge, in place of the scrollbar: one tick per turn, 9 px apart
 // and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
 // gap while every turn has its own tick. h is the rail's height, days the day starts after

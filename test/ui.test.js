@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, callText, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -773,4 +773,35 @@ test("groupText: a group's calls by kind as one sentence, past tense when done a
   expect(groupText([], 0)).toBe("Used no tools");
   expect(groupKinds(["Bash", "Read", "Bash"])).toEqual([["command", 2], ["read", 1]]);
   for (const k of ["command", "read", "edit", "search", "web", "agent", "other"]) expect(typeof KIND_ICON[k]).toBe("string");
+});
+
+test("level 3 helpers: a call's time, its output's lines and box height, and its row text", () => {
+  expect(callTime("2026-11-01T09:00:00.000Z", "2026-11-01T09:00:00.400Z")).toBe("0.4s");
+  expect(callTime("2026-11-01T09:00:00.000Z", "2026-11-01T09:00:12.000Z")).toBe("12s");
+  expect(callTime("2026-11-01T09:00:00.000Z", "2026-11-01T09:02:05.000Z")).toBe("2m 05s");
+  expect(callTime("2026-11-01T09:00:00.000Z", null)).toBe("");
+  expect(callTime("2026-11-01T09:00:05.000Z", "2026-11-01T09:00:00.000Z")).toBe("");
+  // 12 lines at first, tabs as spaces, each line cut, trailing blank lines dropped.
+  const out = Array.from({ length: 30 }, (_, i) => (i === 0 ? `a\tb${"x".repeat(500)}` : `line ${i + 1}`)).join("\n");
+  const box = outLines(`${out}\n\n`);
+  expect(box.lines.length).toBe(OUT.SHOW);
+  expect(box.lines[0].startsWith("a    b")).toBe(true);
+  expect(box.lines[0].length).toBe(OUT.CHARS);
+  expect(box).toMatchObject({ total: 30, cut: true });
+  expect(outLines(out, true)).toMatchObject({ total: 30, cut: false });
+  expect(outLines(out, true).lines.length).toBe(30);
+  // calls.sh clips long output and gives the whole count: all of it is never shown.
+  expect(outLines("one\ntwo", true, 900)).toMatchObject({ total: 900, cut: true });
+  expect(outLines("")).toEqual({ lines: [], total: 0, cut: false });
+  expect(outLines("a\r\nb").lines).toEqual(["a", "b"]);
+  const big = Array.from({ length: 1000 }, () => "y").join("\n");
+  expect(outLines(big, true).lines.length).toBe(OUT.MAX);
+  // Heights: padding, border, margins, one line at least, and the Show all row.
+  expect(outHeight(outLines(""))).toBe(8 * 2 + 2 + 16 + 4);
+  expect(outHeight(box)).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
+  expect(outHeight(outLines(out, true), true)).toBe(8 * 2 + 2 + 30 * 16 + 4 + 22);
+  expect(outHeight(outLines("a\nb", true), true)).toBe(8 * 2 + 2 + 2 * 16 + 4);
+  expect(callText("Bash", "bun test\n  --watch")).toBe("bun test --watch");
+  expect(callText("Bash", "")).toBe("Bash");
+  expect(callText("Bash", null)).toBe("Bash");
 });

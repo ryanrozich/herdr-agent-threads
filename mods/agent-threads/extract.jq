@@ -120,7 +120,7 @@ def assistant_event:
       ( $l.message.content[]?
         | select(type == "object")
         | if .type == "text" then {k: "t", t: ((.text // "") | cap)}
-          elif .type == "tool_use" then {k: "u", n: .name}
+          elif .type == "tool_use" then {k: "u", n: .name, id: .id}
           else empty end ),
       ( select($l.message.id != null and $l.message.usage != null and ($l.apiBlockIndex // 0) == 0)
         | {k: "m", id: $l.message.id, m: $l.message.model, e: ($l.effort // $l.perTurnEffort // null), ts: $l.timestamp,

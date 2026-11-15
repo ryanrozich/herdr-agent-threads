@@ -40,7 +40,7 @@ test("assembles turns from the fixture", () => {
   expect(plain.tools).toBe(0);
   expect(reply(plain)).toStartWith("It fires when a test skips logout");
   expect(fix.tools).toBe(3);
-  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false }, { k: "group", calls: ["Read", "Bash", "Edit"], count: 3 }]);
+  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false }, { k: "group", calls: ["Read", "Bash", "Edit"], ids: ["toolu_000002_Read", "toolu_000003_Bash", "toolu_000004_Edit"], count: 3 }]);
   expect(reply(fix)).toStartWith("The test raced the redirect.");
   expect(reply(fix)).not.toContain("Let me look");
   expect(reply(fix)).not.toContain("background build");
@@ -201,13 +201,13 @@ test("usage of a message split over block lines counts once", () => {
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test("the new extractor gives the old event stream, less repeated usage, non-own text and the newer events", () => {
+test("the new extractor gives the old event stream, less repeated usage, non-own text, call ids and the newer events", () => {
   // The first release's extractor, kept as a fixture to compare against.
   const before = join(root, "test/fixtures/v1-extractor/extract.sh");
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });
