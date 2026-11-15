@@ -1341,19 +1341,28 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       v.open = new Set([key]);
       const parts = v.rows().filter((r) => PROBED_KINDS.includes(r.kind) && partOf(r, key));
       expect(parts.map((r) => r.kind)).toEqual(expect.arrayContaining(["you", "rhead", "md", "lhead", "latest"]));
-      const probes = probeEntries(frame(v, cx));
-      // The closed rows' Markdown reply blocks are measured too ("cmd:<key>").
-      expect([...probes.keys()].filter((k) => !k.startsWith("cmd:")).sort()).toEqual(parts.map((r) => r.key).sort());
-      // Each part reports a height in zoomed px; the list then gets that part's size.
+      // Each part reports a height in zoomed px; the list then gets that part's size. The
+      // probe takes at most 16 parts a frame, so this goes on until it is empty.
       const fed = new Map();
-      parts.forEach((r, i) => {
-        const H = r.kind === "latest" ? 4 * 21 : 40 + i * 13;
-        fed.set(r.key, H);
-        probes.get(r.key)({ width: v.inner() * zoom, height: H * zoom }, cx);
-      });
-      for (const [k, f] of probes) if (k.startsWith("cmd:")) f({ width: v.inner() * zoom, height: 42 * zoom }, cx);
-      const calls = frame(v, cx);
-      expect(probeEntries(calls).size).toBe(0); // measured parts leave the probe
+      const probed = new Set();
+      const heightOf = (k) => {
+        const i = parts.findIndex((r) => r.key === k);
+        if (i < 0) return 42;
+        return parts[i].kind === "latest" ? 4 * 21 : 40 + i * 13;
+      };
+      for (let n = 0; n < 20; n++) {
+        const probes = probeEntries(frame(v, cx));
+        if (!probes.size) break;
+        expect(probes.size).toBeLessThanOrEqual(16);
+        for (const [k, f] of probes) {
+          probed.add(k);
+          if (!k.startsWith("cmd:")) fed.set(k, heightOf(k));
+          f({ width: v.inner() * zoom, height: heightOf(k) * zoom }, cx);
+        }
+      }
+      // The closed rows' Markdown reply blocks are measured too ("cmd:<key>").
+      expect([...probed].filter((k) => !k.startsWith("cmd:")).sort()).toEqual(parts.map((r) => r.key).sort());
+      expect(probeEntries(frame(v, cx)).size).toBe(0); // measured parts leave the probe
       const rows = v.rows();
       for (const r of parts) {
         const i = lastList.keys.indexOf(r.key);
@@ -5134,6 +5143,62 @@ test("steps: interim text between groups in order; → opens the turn, its line,
   // Group and call rows are never a pin's reading place.
   const { NOT_A_PLACE } = await import("../mods/agent-threads/pins.js");
   for (const k of ["gp", "cl", "ws"]) expect(NOT_A_PLACE.has(k)).toBe(true);
+  draw(v, cx);
+});
+
+test("a turn with hundreds of interim texts opens within Herdr's time: links and estimates are kept, new ones wait past the budget, the probe takes a few parts a frame", async () => {
+  const steps = [];
+  // Past 300 steps (STEP_MAX) the rest join the last group, so this is 150 texts.
+  for (let i = 0; i < 300; i++) steps.push({ k: "t", t: `Step ${i} looks at ACME-${i}.\n\nThen the tests again.` }, { k: "u", n: "Read" });
+  const { v, cx } = await scripted([{ k: "p", o: "human", t: "Refactor the cart", ts: at(0) }, ...steps, { k: "t", t: "Done." }, { k: "d", ms: 40000, ts: at(1) }]);
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
+  expect(v.links.length).toBe(1);
+  let linked = 0;
+  const linkOne = v.linkOne.bind(v);
+  v.linkOne = (md) => { if (md.startsWith("Step ")) linked++; return linkOne(md); };
+  const texts = () => v.rows().filter((r) => r.kind === "itext");
+  // Out of time from the start of the draw: each text shows as written with a rough
+  // height, and the next frame is asked for.
+  v.shapeBudget = -1;
+  v.sel = "0:1";
+  v.action("deeper", cx);
+  expect(texts().length).toBe(150);
+  expect(linked).toBe(0);
+  expect(texts().every((r) => r.links === 0 && r.md === r.src)).toBe(true);
+  expect(v.mdHeights.map.size).toBe(0);
+  expect(v.shapeLeft).toBeGreaterThan(0);
+  cx.timers = [];
+  v.render(cx);
+  expect(cx.timers.some((x) => x.ms === 0)).toBe(true);
+  // With time again, the next frame links and measures them, once.
+  v.shapeBudget = 1e9;
+  v.rowsKey = null;
+  expect(texts().every((r) => r.links === 1 && r.md.includes("https://linear.app/acme/issue/ACME-"))).toBe(true);
+  expect(linked).toBe(150);
+  const known = v.mdHeights.map.size;
+  expect(known).toBeGreaterThanOrEqual(150);
+  // A rebuild of the rows (any other reason) runs neither again.
+  v.rowsKey = null;
+  texts();
+  expect(linked).toBe(150);
+  expect(v.mdHeights.map.size).toBe(known);
+  // New link rules link them again.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.example/ACME-$1" }] }));
+  expect(texts().every((r) => r.md.includes("https://linear.example/ACME-"))).toBe(true);
+  expect(linked).toBe(300);
+  // The probe draws at most 16 parts in a frame, nearest the top of the pane first, and asks
+  // for the next frame while parts are left.
+  v.meas = new Map();
+  v.probeTries = new Map();
+  const top = v.baseIndex.get(texts()[75].key);
+  v.topKey = texts()[75].key;
+  const due = v.probeDue();
+  expect(due.length).toBe(16);
+  expect(v.probeLeft).toBeGreaterThan(120);
+  expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key) - top) <= 32)).toBe(true);
+  cx.timers = [];
+  v.render(cx);
+  expect(cx.timers.some((x) => x.ms === 16)).toBe(true);
   draw(v, cx);
 });
 

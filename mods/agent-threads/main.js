@@ -89,6 +89,11 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
+// the pane first. Opening the work of a turn with hundreds of steps put every interim text
+// in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
+// interrupted). The rest are measured over the next frames.
+const PROBE_MAX = 16;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -1692,11 +1697,7 @@ export default class Threads extends View {
     const steps = turn.steps ?? [];
     steps.forEach((st, i) => {
       if (st.k === "text") {
-        // Link rules lengthen the text; past 4,000 characters it stays as written, since Herdr
-        // draws nothing for Markdown over 4,096.
-        const linked = this.linkOne(st.t);
-        const lk = linked.md.length <= 4000 ? linked : { md: st.t, links: 0 };
-        out.push({ ...item, live: false, kind: "itext", key: `it:${key}:${i}`, md: lk.md, src: st.t, links: lk.links });
+        out.push({ ...item, live: false, kind: "itext", key: `it:${key}:${i}`, src: st.t, ...this.stepLinks(st) });
         return;
       }
       const now = live && i === steps.length - 1 && !turn.after?.length;
@@ -2847,6 +2848,29 @@ export default class Threads extends View {
     if (memo.size > 200) memo.clear();
     memo.set(key, { sig, out });
     return out;
+  }
+  // An interim text with the link rules applied, kept for the step until the rules or the
+  // repo change. Every rebuild of the rows asks for each step of every open turn, and the
+  // rules run a set of patterns over the text: for hundreds of steps that ran past Herdr's
+  // time for a draw ("This view could not be re-rendered", interrupted). New texts share the
+  // reshaping time (SHAPE_MS): past it a text shows as written, and the next frame links it.
+  // Link rules lengthen the text; past 4,000 characters it stays as written, since Herdr
+  // draws nothing for Markdown over 4,096.
+  stepLinks(st) {
+    const ver = `${this.linksVer}|${this.links.length}|${this.remote.repo ?? ""}|${this.remote.owner ?? ""}`;
+    this.stepLinked ??= new WeakMap();
+    const known = this.stepLinked.get(st);
+    if (known?.ver === ver) return known.lk;
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      return { md: st.t, links: 0 };
+    }
+    const t0 = now();
+    const linked = this.linkOne(st.t);
+    const lk = linked.md.length <= 4000 ? { md: linked.md, links: linked.links } : { md: st.t, links: 0 };
+    this.stepLinked.set(st, { ver, lk });
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return lk;
   }
   linkOne(md) { return this.links.length ? linkify(md, this.links, { repo: this.remote.repo, owner: this.remote.owner }) : { md, links: 0 }; }
 
@@ -4281,6 +4305,12 @@ export default class Threads extends View {
     }
     const slots = this.slotsMemo;
     const due = this.probeDue();
+    // Parts left for later frames (PROBE_MAX): the parts drawn now report their sizes and
+    // ask for a frame, but one that never reports would not, so ask here too.
+    if (this.probeLeft > 0 && !this.probeNext) {
+      this.probeNext = true;
+      cx.timer.after(16, (cx) => { this.probeNext = false; cx.notify(); });
+    }
     this.flushCode(cx);
     this.flushImages(cx);
     // Scrolls wait until this frame has laid the list out with its new rows, and until every
@@ -4616,14 +4646,33 @@ export default class Threads extends View {
 
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure
-  // replaces it.
+  // replaces it. Kept per text until the width or the type changes: every rebuild of the
+  // rows asks again for each text in the list, and a turn's open work can hold hundreds of
+  // them. Worked out afresh on each rebuild, they ran past Herdr's time for a draw ("This
+  // view could not be re-rendered", interrupted). New texts share the reshaping time
+  // (SHAPE_MS): past it a text gets a rough height from its length, and the next frame
+  // works it out (render).
   mdHeight(md) {
     const w = this.prose();
     const { line } = this.rt();
+    const cw = this.charW(MD_CHAR);
+    const gap = this.paraGap();
+    const geo = `${w}|${line}|${cw}|${gap}`;
+    if (this.mdHeights?.geo !== geo || this.mdHeights.map.size > 4000) this.mdHeights = { geo, map: new Map() };
+    const known = this.mdHeights.map.get(md);
+    if (known != null) return known;
+    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+      this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
+    }
+    const t0 = now();
     let h = 0;
     const blocks = md.split(/\n{2,}/);
-    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, this.charW(MD_CHAR)) * line;
-    return h + (blocks.length - 1) * this.paraGap() + line;
+    for (const b of blocks) h += this.wrapped(b.replace(/[*_`#>]/g, ""), w, cw) * line;
+    h += (blocks.length - 1) * gap + line;
+    this.mdHeights.map.set(md, h);
+    this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    return h;
   }
 
   chipRows(texts) {
@@ -4909,19 +4958,25 @@ export default class Threads extends View {
   // The parts still to measure, each drawn in the probe for at most three frames: a part
   // that never reports keeps its estimate (the debug report says "measured: none").
   probeDue() {
-    const out = [];
+    const want = [];
     this.probeTries ??= new Map();
     for (const r of this.probeRows ?? []) {
       if (this.measured(r) != null) continue;
       const sig = this.partSig(r);
       const k = `${r.key}|${sig}`;
-      const n = this.probeTries.get(k) ?? 0;
-      if (n >= 3) continue;
-      this.probeTries.set(k, n + 1);
-      out.push([r, sig]);
+      if ((this.probeTries.get(k) ?? 0) >= 3) continue;
+      want.push([r, sig, k]);
     }
+    if (want.length > PROBE_MAX) {
+      const top = (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0;
+      const at = (r) => this.baseIndex?.get(r.kind === "cmd" ? r.key.slice(4) : r.key) ?? 0;
+      want.sort((a, b) => Math.abs(at(a[0]) - top) - Math.abs(at(b[0]) - top));
+    }
+    const out = want.slice(0, PROBE_MAX);
+    for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
+    this.probeLeft = want.length - out.length;
     if (this.probeTries.size > 4000) this.probeTries.clear();
-    return out;
+    return out.map(([r, sig]) => [r, sig]);
   }
 
   // Zero height, clipped and fully transparent, outside the list: the parts laid out at the
