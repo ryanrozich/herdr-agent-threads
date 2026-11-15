@@ -29,6 +29,13 @@ import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle, v_virtual_l
 import * as gpuiBase from "gpui-base";
 // Popup (the rail card) is new in 0.1.15 too: without it the rail keeps its one-line tooltip.
 const Popup = gpuiBase.Popup?.new ? gpuiBase.Popup : null;
+// How long the pointer rests on a line's info icon before its Turn card shows, and how long the
+// card stays after the pointer leaves the icon and the card (time to cross the gap between).
+const HOVER_OPEN_MS = 300;
+const HOVER_CLOSE_MS = 200;
+// HoverCard opens the Turn card while the pointer rests on a line's info icon. It owns its open
+// state, so it needs no handler, which a list item cannot carry.
+const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
@@ -47,7 +54,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, callText, shortPaths, OUT,
 } from "./ui.js";
@@ -157,7 +164,6 @@ const LINE = 18; // one line of 13 px text in a box of that height (rows, code)
 // gpui's default line height is about 1.618 times the text size: 21 px for 13 px TextView
 // and plain text (the owner's screenshot measures 21.1). Estimates of such text use it.
 const TV_LINE = 21;
-const COUNTS_LINE = 16; // the counts line's explicit line height (11 px mono)
 // A code block's line: its 12 px editor at gpui's default of about 1.618 em is 19.4 px, so
 // 20 px leaves a code block's last line whole. The block's box sets this line height for
 // the editor to inherit; an editor that keeps its own shorter line leaves a few px of the
@@ -168,14 +174,13 @@ const WAKE_H = 24;
 // The code box's borders and the editor's own padding inside it, left and right.
 const CODE_PAD = 24;
 const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.618 em)
-const MONO_EM = 0.6; // width of a mono character, in em
 // Open-card parts whose text gpui wraps: drawn once more in a hidden probe, measured, and
 // then given that height (measured()).
-const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "stats", "legend", "noreply", "cmd"]);
+const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -664,6 +669,9 @@ export default class Threads extends View {
     // is on screen (then false) or not (then true, the latest button's dot).
     this.unseen = false;
     this.keysOpen = false; // the ? sheet
+    // i: the Turn card over the bottom of the pane, with the selected turn's numbers. It
+    // follows the selection while open. Not saved.
+    this.detailsOpen = false;
     // o: the outline, one row per turn ("line" items). outlineBack is where the list was
     // when it opened, for Esc. Not saved across restarts.
     this.outline = false;
@@ -777,7 +785,6 @@ export default class Threads extends View {
       case "rhead": return `rhead${n} ${this.lineText(r.turn, `${r.si}:${r.turn.n}`)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
-      case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
       case "itext": return `itext${n} h${this.height(r)} | ${r.src.replace(/\n/g, " ⏎ ").slice(0, 120)}`;
       case "grp": {
         const g = this.groupInfo(r);
@@ -791,7 +798,6 @@ export default class Threads extends View {
       }
       case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
       case "wspin": return `wspin${n} Working…`;
-      case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
       case "copy": {
         const L = this.acts(r.turn);
@@ -1586,7 +1592,7 @@ export default class Threads extends View {
       [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
+      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     if (this.rowsKey !== key || !this.baseRows) {
@@ -2267,13 +2273,9 @@ export default class Threads extends View {
     out.push({ ...item, kind: "ustrip", key: `us:${key}` });
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
-    // Level 1, under the line when it is open: the tool calls by kind, the numbers, and on
-    // i what they mean.
-    if (this.lineIsOpen(key, false)) {
-      this.stepRows(item, out);
-      out.push({ ...item, kind: "stats", key: `st:${key}` });
-      if (this.legendOn) out.push({ ...item, kind: "legend", key: `lg:${key}` });
-    }
+    // Level 1, under the line when it is open: the steps, then straight into the reply. The
+    // turn's numbers are on the Turn card (i, or the info icon on the line).
+    if (this.lineIsOpen(key, false)) this.stepRows(item, out);
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
     let used = 0;
     let left = 0;
@@ -3076,6 +3078,17 @@ export default class Threads extends View {
   click(key, cx) {
     const [kind, ...rest] = key.split(":");
     const id = rest.join(":");
+    // While the Turn card is open, a press anywhere closes it and does nothing else: the card
+    // is drawn inside a list item, which can carry no handlers, so a press on the card lands on
+    // whatever item lies under it. A press on another line's info icon moves it there.
+    if (this.detailsOpen && Popup) {
+      const x = this.pressX ?? this.mouseX;
+      const other = kind === "rhead" && id !== this.sel && this.infoHit(x);
+      this.pressX = null;
+      this.detailsOpen = other;
+      if (other) this.sel = id;
+      return cx.notify();
+    }
     // A press in the Select view's editor or a code block's editor belongs to that editor:
     // taking the keyboard back here would blur it and clear the selection the person just
     // made. The card is still selected (c, q and s act on it), with a redraw only when the
@@ -3195,10 +3208,19 @@ export default class Threads extends View {
       if (seg) this.copy(seg.text, `code:${id}`, `Code copied · ${plural(seg.text.split("\n").length, "line")}`, cx);
       return;
     }
-    // The stats part ends in an info icon: a click on it shows or hides what the figures mean.
-    if (kind === "st") { this.legendOn = !this.legendOn; this.sel = id; return cx.notify(); }
-    // A click on the line opens it to level 1, or closes it.
-    if (kind === "rhead") { this.toggleLine(id); this.sel = id; return cx.notify(); }
+    // A click on the line opens it to level 1, or closes it. The info icon at its right end
+    // opens the Turn card, or closes it, and leaves the line as it was.
+    if (kind === "rhead") {
+      const x = this.pressX ?? this.mouseX;
+      this.pressX = null;
+      if (this.infoHit(x)) {
+        this.detailsOpen = !(this.detailsOpen && this.sel === id);
+        if (this.detailsOpen) this.keysOpen = false;
+        this.sel = id;
+        return cx.notify();
+      }
+      this.toggleLine(id); this.sel = id; return cx.notify();
+    }
     // A click on a step group's line opens it to its calls (level 2), or closes it.
     if (kind === "gp") {
       const g = `${rest.slice(0, 2).join(":")}:${rest[2]}`;
@@ -3221,7 +3243,7 @@ export default class Threads extends View {
       this.sel = rest.slice(0, 2).join(":");
       return cx.notify();
     }
-    if (["md", "nr", "code", "lh", "sx", "lg", "it", "cl", "ws"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
+    if (["md", "nr", "code", "lh", "sx", "it", "cl", "ws"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
   // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout).
@@ -3233,6 +3255,12 @@ export default class Threads extends View {
     return actsLayout({ quote, terminal: pane });
   }
   barGeom(turn = this.sel ? this.findTurn(this.sel) : null) { return this.acts(turn); }
+  // Whether a press at x (column px) is on the info icon at the right end of an open line.
+  infoHit(x, w = this.bodyW ?? this.width) {
+    if (x == null) return false;
+    const b = infoBox(Math.min(replyWidth(w), this.prose()));
+    return x >= b[0] - 2 && x <= b[1] + 4;
+  }
   barHit(x, turn = this.sel ? this.findTurn(this.sel) : null) {
     if (x == null) return "copy"; // a keyboard or synthetic press
     return boxHit(this.acts(turn), x, ["copy", "quote", "select", "terminal"]);
@@ -3336,16 +3364,18 @@ export default class Threads extends View {
         return true;
       }
       case "focus": this.focusTerminal(cx); return true;
-      // What the stat chips mean, under every open card's stats, for this pane's session.
+      // i: the Turn card with the selected turn's numbers and what they mean, or closed again.
+      // It opens nothing in the list.
       case "legend": {
-        // i shows what the numbers mean, opening the selected turn and its line first.
-        this.legendOn = !this.legendOn;
-        const k = this.sel;
-        if (this.legendOn && k && this.findTurn(k) && !this.isLiveKey(k)) {
-          if (!this.open.has(k)) this.toggle(k, cx);
-          this.lineOpen.add(k);
-          this.lineTouched.add(k);
-        }
+        if (this.detailsOpen) { this.detailsOpen = false; return true; }
+        if (!this.sel || !this.findTurn(this.sel)) return false;
+        // Beside the selected turn's Worked for line, brought on screen first. A running
+        // turn has no settled line, so nothing to show it beside.
+        const at = Popup ? this.detailsAnchor(this.sel) : this.sel;
+        if (!at) return false;
+        this.detailsOpen = true;
+        this.keysOpen = false;
+        if (Popup && !this.onScreen(at)) this.scrollTo = { key: at, how: "top" };
         return true;
       }
       case "deeper": return this.deeper(cx);
@@ -3355,9 +3385,10 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
-      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) this.settingsOpen = false; return true;
+      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
       case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime }, cx); return true;
       case "escape":
+        if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
         if (this.settingsOpen) { this.settingsOpen = false; return true; }
         if (this.choosing) { this.choosing = false; return true; }
@@ -3878,6 +3909,7 @@ export default class Threads extends View {
     if (this.gal) return this.galleryView();
     if (this.launcher) return div();
     this.renders = (this.renders ?? 0) + 1;
+    this.monoFont = null;
     if (this.stickStep) this.applyStick();
     this.fitColumn();
     this.react(cx);
@@ -3922,6 +3954,7 @@ export default class Threads extends View {
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .child(this.footer(t))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
+      .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
@@ -4037,7 +4070,8 @@ export default class Threads extends View {
     const z = Number(settings()?.zoom);
     return Number.isFinite(z) && z > 0 ? Math.min(3, Math.max(0.5, z)) : 1;
   }
-  mono() { return settings().font_family ?? "JetBrains Mono"; }
+  // Read once a draw: every Turn card on screen asks for it.
+  mono() { return (this.monoFont ??= settings().font_family ?? "JetBrains Mono"); }
 
   iconButton(t, id, icon, tip, onClick, on = false, count = null, dot = false) {
     return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer().relative()
@@ -5058,49 +5092,34 @@ export default class Threads extends View {
     return rows;
   }
 
-  // The stat chips, in order, as [id, icon, label] (C2: plain names, explained by the legend).
-  statChips(turn) {
-    const st = stats(turn);
-    const model = [shortModel(turn.model), turn.effort].filter(Boolean).join(" · ");
-    return [
-      this.showTokens(st) ? ["tokens", "arrows", `${fmtTokens(st.tokens)} tokens`] : null,
-      turn.durationMs ? ["duration", "clock", fmtDuration(turn.durationMs)] : null,
-      model ? ["model", "cpu", model] : null,
-      ["tools", "wrench", plural(turn.tools, "tool call")],
-      st.cachePct != null ? ["cache", "database", `cache hit ${fmtPct(st.cachePct)}`] : null,
-      turn.compactions ? ["compacted", "unfold", "context compacted"] : null,
-    ].filter(Boolean);
-  }
-  statTexts(turn) { return this.statChips(turn).map((c) => c[2]); }
-
   // Codex, OpenCode, Pi and Cursor can leave a turn with no usage on record (one stopped early), and "0 tokens"
   // would claim a count nobody made. Claude Code's cards keep the chip they always had.
   showTokens(st) { return st.tokens > 0 || this.agent().key === "claude"; }
 
-  // The legend under the stats (i, or a click on the stats): one plain sentence for each
-  // chip the card shows, "context compacted" first, then the counts line. [icon, text].
-  legendEntries(turn) {
-    const chips = this.statChips(turn);
-    const counts = Boolean(this.countsLine(turn));
+  // The Turn card's rows (i): [label, value, what it means, counts under the value or null],
+  // "context compacted" first when it happened. Elapsed time stays on "Worked for".
+  detailRows(turn) {
+    // Kept per turn, since every settled line on screen carries a card; the key notices a turn
+    // that changed in place (a reply still arriving).
     const who = this.agent().short;
-    const say = {
-      compacted: `context compacted: the conversation got long, so ${who} summarised the earlier part to free room. Some earlier detail is condensed.`,
-      tokens: `tokens: text ${who} newly read and wrote this turn.${counts ? " Re-reading its cache is not counted, so it can be far smaller than the cache read count above." : ""}`,
-      duration: `duration: how long ${who} worked on this turn, from the prompt to its final reply.`,
-      model: "model · effort: the model that answered, and the effort level it was set to.",
-      tools: `tool calls: commands, file reads and edits ${who} ran for this turn. They are not shown here.`,
-      cache: `cache hit: share of the prompt ${who} read back from its cache instead of processing it again. High is normal on a long session, and cheaper.`,
-    };
-    const order = ["compacted", "tokens", "duration", "model", "tools", "cache"];
-    const out = order.flatMap((id) => { const c = chips.find((x) => x[0] === id); return c ? [[c[1], say[id]]] : []; });
-    if (counts) out.push(["list", "cache read · written · new input: the exact counts behind cache hit: tokens read from the cache, written to it, and new input."]);
-    return out;
+    const k = `${who}|${turn.tools}|${turn.model}|${turn.effort}|${turn.compactions}|${Object.keys(turn.usage ?? {}).length}`;
+    const m = (this.detailMemo ??= new WeakMap());
+    const hit = m.get(turn);
+    if (hit && hit.k === k) return hit.rows;
+    const rows = this.detailRowsOf(turn, who);
+    m.set(turn, { k, rows });
+    return rows;
   }
-
-  // The raw counts under the stat chips (a list item cannot carry the chip's tooltip).
-  countsLine(turn) {
+  detailRowsOf(turn, who) {
     const st = stats(turn);
-    return st.cachePct == null ? null : cacheLine(st);
+    const model = [shortModel(turn.model), turn.effort].filter(Boolean).join(" · ");
+    return [
+      turn.compactions ? ["Context", "Compacted", `The conversation got long, so ${who} summarised the earlier part to free room. Some earlier detail is condensed.`, null] : null,
+      model ? ["Model", model, "The model that answered, and the effort level it was set to.", null] : null,
+      this.showTokens(st) ? ["Tokens", fmtTokens(st.tokens), `Text ${who} newly read and wrote this turn. Re-reading its cache is not counted${st.cachePct != null ? ", so it can be far smaller than the cache read count" : ""}.`, null] : null,
+      ["Tool calls", fmtCount(turn.tools), `Commands, file reads and edits ${who} ran for this turn.`, null],
+      st.cachePct != null ? ["Cache hit", fmtPct(st.cachePct), `Share of the prompt ${who} read back from its cache instead of processing it again. High is normal on a long session, and cheaper. Under it: tokens read from the cache, written to it, and new input.`, cacheLine(st).replace(/^cache /, "")] : null,
+    ].filter(Boolean);
   }
 
   // The prompt text of the YOU block: a command's arguments (its name is on its own line),
@@ -5256,25 +5275,9 @@ export default class Threads extends View {
       case "call": return r.one ? STEP_GAP + GROUP_H : CALL_H;
       case "cout": return outHeight(r.box, r.all);
       case "wspin": return STEP_GAP + GROUP_H;
-      case "stats": {
-        const line = this.countsLine(r.turn);
-        const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
-        return 10 + lines * 16 + (line ? this.countsHeight(line) : 0);
-      }
-      case "legend": {
-        const per = (w - 17) / 5.9;
-        const lines = this.legendEntries(r.turn).reduce((n, [, text]) => n + wrappedLines(text, Math.floor(per)), 0);
-        return 6 + (lines + 1) * 19 + (this.legendEntries(r.turn).length - 1) * 4;
-      }
       case "copy": return ROW.GAP + ROW.ACTS + ROW.PAD_B;
     }
     return 30;
-  }
-
-  // The counts line's first-frame height: 6 px above, then 16 px lines of 11 px mono at
-  // 0.6 em a character (C1).
-  countsHeight(line, w = this.inner()) {
-    return 6 + Math.max(1, Math.ceil((line.length * 11 * MONO_EM) / w)) * COUNTS_LINE;
   }
 
   // ---- measured heights (V3b) ----
@@ -5306,8 +5309,6 @@ export default class Threads extends View {
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
-      case "stats": return `${head}|${this.statTexts(r.turn).join("|")}|${this.countsLine(r.turn) ?? ""}|${this.legendOn ? 1 : 0}`;
-      case "legend": return `${head}|${this.legendEntries(r.turn).map((x) => x[1].length).join(",")}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
       default: return head;
     }
@@ -5563,19 +5564,68 @@ export default class Threads extends View {
   // The line between the message and the reply: "Worked for 2m 31s" and a chevron, over a
   // hairline. In a session where more than one agent replied, the agent's name leads it; a
   // stopped or failed turn leads with its icon; a pinned turn ends it with the pin and its
-  // number in the accent colour.
-  workLine(t, turn, pinNo = this.pinNumber(turn), open = false) {
+  // number in the accent colour. An open line ends with the info icon for the Turn card
+  // (info): "on" while the card shows this turn, "sel" on the selected turn, "hover" with no
+  // colour of its own, for the hover around the line to reveal. Every other part sets its own
+  // colour, so only the icon takes the hover's.
+  workLine(t, turn, pinNo = this.pinNumber(turn), open = false, info = null) {
     const bad = turn.interrupted || this.failed(turn);
     const name = this.mixedAgents(turn) ? this.agentName(turn) : null;
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
-      .child(h_flex().h(17).gap(5).items_center().text_size(12).text_color(t.dim).min_w(0)
-        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().child("·")))
-        .child(div().flex_none().when(bad, (e) => e.text_color(t.blocked)).child(this.workText(turn)))
-        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none())
+      .child(h_flex().h(17).gap(5).items_center().text_size(12).min_w(0)
+        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
+        .child(div().flex_none().text_color(bad ? t.blocked : t.dim).child(this.workText(turn)))
+        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim))
         .child(div().flex_1())
         .when(pinned, (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
-        .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo)))));
+        .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
+        .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
+  }
+  infoIcon(t, state) {
+    return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
+      .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
+  }
+  // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
+  // corner under the icon's right edge, or its bottom right corner over it when the line is
+  // low in the pane (detailsDir). Where i or a click opened the card for this turn, a Popup.
+  // Otherwise, while no card is open, a HoverCard: resting the pointer on the icon shows the
+  // card and moving off hides it, on an open or a closed turn. Never in the hidden probe,
+  // which would draw a second card.
+  lineIcon(t, itemKey, key, probe) {
+    const state = this.infoState(key);
+    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard))) return { state };
+    const turn = this.findTurn(key);
+    if (!turn || this.detailsAnchor(key) !== itemKey) return { state };
+    const up = this.detailsDir(itemKey, turn) === "up";
+    const anchor = up ? "bottom_right" : "top_right";
+    if (state === "on") return { state, el: Popup.new(`th-details-${key}`, this.infoIcon(t, state)).anchor(anchor).content(this.detailsCard(t, turn, up)) };
+    return { state, el: HoverCard.new(`th-hover-${key}`).anchor(anchor).open_delay(HOVER_OPEN_MS).close_delay(HOVER_CLOSE_MS)
+      .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
+  }
+  // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
+  // the pointer is on the line).
+  infoState(key) {
+    if (this.sel !== key) return "hover";
+    return this.detailsOpen ? "on" : "sel";
+  }
+  // A line on a turn not selected shows its info icon while the pointer is on it.
+  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
+  // The list item whose Worked for line the card opens beside: an open turn's line, or a
+  // closed turn's row. Null for a running turn, the outline and the Pinned view.
+  detailsAnchor(key) {
+    const rows = this.rowsMemo ?? this.rows();
+    if (rows.some((r) => r.key === `rhead:${key}`)) return `rhead:${key}`;
+    const row = rows.find((r) => r.key === key);
+    return row && row.kind === "turn" && !row.live && !row.running && !row.compact ? key : null;
+  }
+  // Whether a list item was in the range the list last drew.
+  onScreen(key) {
+    const rows = this.rowsMemo ?? [];
+    const i = rows.findIndex((r) => r.key === key);
+    const [a, b] = this.viewRange ?? [0, 0];
+    return i >= a && i < b;
   }
   // The line's words: "Worked for 2m 31s"; a stopped or failed turn says how long it ran.
   workText(turn) {
@@ -5743,7 +5793,8 @@ export default class Threads extends View {
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
       ]),
-      this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn)),
+      r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
+        : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
@@ -6095,8 +6146,8 @@ export default class Threads extends View {
         // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
-        return v_flex().pt(ROW.GAP)
-          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false)))
+        return this.lineInfo(t, tkey, v_flex().pt(ROW.GAP))
+          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.lineIcon(t, r.key, tkey, probe)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
               .when(i > 0, (el) => el.child(div().child("·")))
@@ -6176,17 +6227,6 @@ export default class Threads extends View {
             .child(`${r.left.toLocaleString()} more characters are left out here. c copies the whole reply.`)))
           .child(h_flex().h(26).gap(5).items_center().text_size(12).text_color(t.dim)
             .child(svg(ICON("chevron-up")).size(12)).child("Collapse").child(div().text_size(11).font_family(mono).child("Esc")));
-      case "stats": {
-        // The stats under the reply, as on a closed exchange, with what only an open turn
-        // shows after them: cache hit and a compaction. The info icon (or i, or a click on
-        // the line) explains them. The exact counts follow on their own 16 px lines (C1).
-        return v_flex().mt(10)
-          .child(h_flex().gap(6).items_start()
-            .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").font_family(mono).text_color(t.dim).child(this.statsFull(turn)))
-            .child(h_flex().flex_none().h(16).items_center()
-              .child(svg(ICON("info")).size(12).text_color(this.legendOn ? t.accent : t.dim))))
-          .when(Boolean(this.countsLine(turn)), (el) => el.child(div().w_full().pt(6).text_size(11).line_height("16px").font_family(mono).text_color(this.labelInk(t, t.background)).child(this.countsLine(turn))));
-      }
       case "imgs": return v_flex().pt(8).child(this.thumbStrip(t, turn, tkey));
       case "itext":
         // The agent's interim text, as Markdown at the reading size, between step groups.
@@ -6242,10 +6282,6 @@ export default class Threads extends View {
       case "wspin":
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().text_size(12.5).text_color(t.working)
           .child(this.liveIcon(this.liveState(t), 12)).child("Working…");
-      case "legend":
-        return v_flex().mt(6).gap(4).children(this.legendEntries(turn).map(([icon, text]) => h_flex().gap(6).items_start()
-          .child(svg(ICON(icon)).size(11).mt(4).flex_none().text_color(t.dim))
-          .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.muted).child(text))));
       case "copy": return this.reveal(t, div().id(`cph:${tkey}`).pt(ROW.GAP)).child(this.actsStrip(t, turn, tkey, this.sel === tkey, true));
     }
     return div();
@@ -6339,6 +6375,76 @@ export default class Threads extends View {
           .children(groups.map(([group, items]) => v_flex().gap(6)
             .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
             .children(items.map(row))))));
+  }
+
+  // i: the Turn card, with the selected turn's numbers and what each means (detailRows). It
+  // opens beside the info icon of the turn's Worked for line (lineIcon), follows the
+  // selection, so ↑ ↓ compare turns, and closes with i, Esc or any press. On Herdr before
+  // 0.1.15 (no Popup) it sits over the bottom of the pane instead, like the ? sheet.
+  cardW() { return Math.min(420, Math.min(replyWidth(this.width), this.prose()) + 8); }
+  // hover: the HoverCard's copy, with no close mark, since moving off closes it.
+  detailsCard(t, turn, up = false, hover = false) {
+    const row = ([label, value, what, under]) => h_flex().gap(14).items_start().min_w(0)
+      .child(div().flex_none().w(78).text_size(12.5).line_height("18px").text_color(t.muted).child(label))
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(12.5).line_height("18px").text_color(t.foreground).child(value))
+        .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
+        .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
+    return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
+      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
+        .child(this.kbd(t, "i"))
+        .when(!hover, (el) => el.child(div().flex_none().size(22).flex().items_center().justify_center().child(svg(ICON("x")).size(13).text_color(t.dim)))))
+      .child(v_flex().px(12).pb(12).gap(8).children(this.detailRows(turn).map(row)));
+  }
+  // The card's height before it is drawn: the head, then each row's value, counts and
+  // explanation, wrapped at the card's text width.
+  // Kept per turn and card width, since every settled line on screen carries a card.
+  cardH(turn) {
+    const w = this.cardW();
+    const rows = this.detailRows(turn);
+    const m = (this.cardHMemo ??= new WeakMap());
+    const hit = m.get(turn);
+    if (hit && hit.w === w && hit.rows === rows) return hit.h;
+    const per = Math.max(10, Math.floor((w - 24 - 78 - 14) / 6.2));
+    const h = 34 + 12 + rows.reduce((acc, [, , what, under], i) => acc + (i ? 8 : 0) + 18 + 2 + (under ? 18 : 0) + wrappedLines(what, per) * 16, 0);
+    m.set(turn, { w, rows, h });
+    return h;
+  }
+  // Down from the icon, or up when the line sits low in the pane and the card would not fit
+  // under it. The list says which items it drew, not where, so the line's height in the pane
+  // is worked out from the item sizes: how far the first drawn item is scrolled off is what
+  // keeps the last drawn item on screen and the next one off (exact at the end of the list).
+  detailsDir(itemKey, turn) {
+    const rows = this.rowsMemo ?? [];
+    const sizes = this.sizesMemo ?? [];
+    const i = rows.findIndex((r) => r.key === itemKey);
+    const [a, b] = this.viewRange ?? [0, 0];
+    if (i < a || i >= b) return "down";
+    let all = 0;
+    for (let k = a; k < b; k++) all += sizes[k] ?? 0;
+    const last = sizes[b - 1] ?? 0;
+    const H = this.listH;
+    const lo = Math.max(0, all - last - H);
+    const hi = b >= rows.length ? Math.max(lo, all - H) : Math.max(lo, Math.min(sizes[a] ?? 0, all - H));
+    let y = b >= rows.length ? -Math.max(0, all - H) : -(lo + hi) / 2;
+    for (let k = a; k < i; k++) y += sizes[k] ?? 0;
+    // An open turn's line item has the line at its top; a closed row has it over the start of
+    // the reply and the strip.
+    const sh = rows[i].shape;
+    const under = (sh?.reply?.length ?? 2) * this.rt().line + (sh?.rMore ? ROW.MORE : 0) + ROW.GAP + ROW.ACTS + ROW.PAD_B;
+    y += itemKey.startsWith("rhead:") ? ROW.GAP + ROW.LINE : (sizes[i] ?? 0) - under;
+    const h = this.cardH(turn) + 4;
+    return y + h > H && y - ROW.LINE > h ? "up" : "down";
+  }
+  detailsTurn() { return this.detailsOpen && this.sel ? this.findTurn(this.sel) : null; }
+  detailsView(t) {
+    const turn = this.detailsTurn();
+    if (!turn) return div();
+    return h_flex().absolute().bottom((this.footerH ?? 38) + 8).left(0).right(0).px(8).justify_center()
+      .on_click((_e, cx) => { cx.stop_propagation(); this.detailsOpen = false; cx.notify(); })
+      .child(this.detailsCard(t, turn).mt(0));
   }
 
   // True when the shown turns span more than one day (day dividers, and [ ] moves by day).
