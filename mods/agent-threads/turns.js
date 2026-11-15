@@ -301,8 +301,8 @@ export function apply(s, e) {
     case "u":
       if (!cur) return;
       // A background wake-up's tool calls are counted apart from the prompt's own.
-      if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else cur.tools++;
-      cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1;
+      // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
+      if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
       if (s.seg === "own") cur.after = [];
       else cur.latestParts = [];
       return;

@@ -130,7 +130,7 @@ export function partOf(itemKey, turnKey) {
 // bar, the Collapse row, and the line a return puts above a place. Scrolling down past a turn
 // leaves one of these at the top of the pane last, and a return there would show only the
 // end of the reply, with the prompt out of view.
-export const NOT_A_PLACE = new Set(["st", "lg", "cp", "fold", "more", "resume"]);
+export const NOT_A_PLACE = new Set(["kd", "st", "lg", "cp", "fold", "more", "resume"]);
 
 // Whether a return to this place starts at the turn's head: a place in the head, the
 // message, an image, the caption or the reply's first block, a place a build before this one

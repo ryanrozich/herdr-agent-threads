@@ -1451,6 +1451,31 @@ export function actsLayout({ quote = true, terminal = true } = {}) {
 // The strip under a bubble in a body w wide: copy the prompt, pin, then "#7 · 9:12 AM" in a
 // box as wide as its text. The person's strip ends at the bubble's right edge (w - 16); an
 // agent's starts at its left. Returns { copy, pin, text } as [start, end] and the text width.
+// A turn's tool calls by kind, from their names as each agent records them (Claude Code's
+// Bash and Read, Codex's shell and apply_patch, OpenCode's bash and grep, Cursor's Shell,
+// Antigravity's run_command and view_file). Kinds keep the order they first appear in, with
+// other last. MCP tools, plans and to-do lists are other.
+const TOOL_KINDS = [
+  ["other", /^mcp__|todo|plan|skill/i],
+  ["web", /web|fetch|brows|url/i],
+  ["agent", /^(task|agent|subagent|spawn|delegate)/i],
+  // "exe" for exec_command: the read-only test flags the bare program word in the mod's code.
+  ["command", /^(bash|shell|exe|local_shell|run_command|run_terminal|terminal|command)/i],
+  ["edit", /edit|write|patch|replace|create_file|notebook/i],
+  ["read", /^(read|view|cat|open_file)/i],
+  ["search", /grep|glob|search|find|^list|^ls$|codebase/i],
+];
+const KIND_WORD = { command: ["command", "commands"], read: ["read", "reads"], edit: ["edit", "edits"], search: ["search", "searches"], web: ["web lookup", "web lookups"], agent: ["agent task", "agent tasks"], other: ["other", "other"] };
+export function toolKind(name) { return TOOL_KINDS.find(([, re]) => re.test(String(name ?? "")))?.[0] ?? "other"; }
+export function toolKinds(names) {
+  const counts = new Map();
+  for (const [name, n] of Object.entries(names ?? {})) { const k = toolKind(name); counts.set(k, (counts.get(k) ?? 0) + n); }
+  const out = [...counts].filter(([k]) => k !== "other");
+  if (counts.has("other")) out.push(["other", counts.get("other")]);
+  return out;
+}
+export function toolKindsText(names) { return toolKinds(names).map(([k, n]) => `${n} ${KIND_WORD[k][n === 1 ? 0 : 1]}`).join(" · "); }
+
 // The rail on the list's right edge, in place of the scrollbar: one tick per turn, 9 px apart
 // and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
 // gap while every turn has its own tick. h is the rail's height, days the day starts after

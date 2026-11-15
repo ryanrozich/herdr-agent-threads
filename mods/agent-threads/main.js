@@ -43,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKindsText,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -52,6 +52,8 @@ import { MOD } from "./name.js";
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
 const rowTurnKey = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
+// The height of level 1's tool calls by kind.
+const KINDS_H = 18;
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -152,7 +154,7 @@ const PROBED = new Set(["you", "rhead", "md", "lhead", "latest", "stats", "legen
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "kinds", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -578,6 +580,8 @@ export default class Threads extends View {
     this.code = new Map(); // `${key}:${i}` -> { st: EditorState, or false when it could not be made, text }
     this.copied = null; // { id, at }
     this.toast = null;
+    // Turns whose line is open (level 1): the tool calls by kind and the numbers under it.
+    this.lineOpen = new Set();
     this.query = "";
     this.filtering = false;
     this.choosing = false;
@@ -734,10 +738,11 @@ export default class Threads extends View {
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
       }
       case "md": return `md${n} links ${r.links ?? 0}${this.mdBroken?.has(r.key) ? " plain" : ""} h${this.height(r)}${r.links ? ` | ${(r.md.match(/\]\(https?:[^)]+\)/g) ?? []).join(" ")}` : ""}`;
-      case "rhead": return `rhead${n} ${this.lineText(r.turn)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
+      case "rhead": return `rhead${n} ${this.lineText(r.turn, `${r.si}:${r.turn.n}`)}${this.captionParts(r.turn).map(([i, x]) => ` · ${i} ${x}`).join("")} h${this.height(r)}`;
       case "lhead": return `lhead${n} LATEST UPDATE · after ${plural(r.turn.followups, "background update")}`;
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
+      case "kinds": return `kinds${n} ${toolKindsText(r.turn.toolNames)}`;
       case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
       case "copy": {
@@ -1526,7 +1531,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const key = [
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
-      [...this.open].join(","), [...this.full].join(","), this.filterText(), status,
+      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), this.filterText(), status,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
@@ -2006,6 +2011,13 @@ export default class Threads extends View {
     out.push({ ...item, kind: "ustrip", key: `us:${key}` });
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
+    // Level 1, under the line when it is open: the tool calls by kind, the numbers, and on
+    // i what they mean.
+    if (this.lineOpen.has(key)) {
+      if (toolKindsText(turn.toolNames)) out.push({ ...item, kind: "kinds", key: `kd:${key}` });
+      out.push({ ...item, kind: "stats", key: `st:${key}` });
+      if (this.legendOn) out.push({ ...item, kind: "legend", key: `lg:${key}` });
+    }
     if (!text) out.push({ ...item, kind: "noreply", key: `nr:${key}` });
     let used = 0;
     let left = 0;
@@ -2062,12 +2074,6 @@ export default class Threads extends View {
       const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
       push({ ...item, kind: "lhead", key: `lh:${key}` });
       out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
-    }
-    // The numbers and what they mean show on i (or a click on the line's numbers), under
-    // the reply. The line does not open yet.
-    if (this.legendOn) {
-      out.push({ ...item, kind: "stats", key: `st:${key}` });
-      out.push({ ...item, kind: "legend", key: `lg:${key}` });
     }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
@@ -2940,7 +2946,9 @@ export default class Threads extends View {
     }
     // The stats part ends in an info icon: a click on it shows or hides what the figures mean.
     if (kind === "st") { this.legendOn = !this.legendOn; this.sel = id; return cx.notify(); }
-    if (["rhead", "md", "nr", "code", "lh", "sx", "lg"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
+    // A click on the line opens it to level 1, or closes it.
+    if (kind === "rhead") { this.toggleLine(id); this.sel = id; return cx.notify(); }
+    if (["md", "nr", "code", "lh", "sx", "lg", "kd"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
   // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout).
@@ -3056,7 +3064,16 @@ export default class Threads extends View {
       }
       case "focus": this.focusTerminal(cx); return true;
       // What the stat chips mean, under every open card's stats, for this pane's session.
-      case "legend": this.legendOn = !this.legendOn; return true;
+      case "legend": {
+        // i shows what the numbers mean, opening the selected turn and its line first.
+        this.legendOn = !this.legendOn;
+        const k = this.sel;
+        if (this.legendOn && k && this.findTurn(k) && !this.findTurn(k).live) {
+          if (!this.open.has(k)) this.open.add(k);
+          this.lineOpen.add(k);
+        }
+        return true;
+      }
       case "filter": this.filtering = true; this.settingsOpen = false; this.input.focus(); return true;
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
@@ -4728,6 +4745,7 @@ export default class Threads extends View {
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r) + (r.caption ? 24 : 0);
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
+      case "kinds": return ROW.GAP + KINDS_H;
       case "stats": {
         const line = this.countsLine(r.turn);
         const lines = Math.max(1, Math.ceil((this.statsFull(r.turn).length * 11.5 * MONO_EM) / (this.inner() - 18)));
@@ -5014,26 +5032,32 @@ export default class Threads extends View {
   // hairline. In a session where more than one agent replied, the agent's name leads it; a
   // stopped or failed turn leads with its icon; a pinned turn ends it with the pin and its
   // number in the accent colour.
-  workLine(t, turn, pinNo = this.pinNumber(turn)) {
-    const icon = turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
+  workLine(t, turn, pinNo = this.pinNumber(turn), open = false) {
+    const bad = turn.interrupted || this.failed(turn);
     const name = this.mixedAgents(turn) ? this.agentName(turn) : null;
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(5).items_center().text_size(12).text_color(t.dim).min_w(0)
         .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().child("·")))
-        .when(Boolean(icon), (el) => el.child(icon))
-        .child(div().flex_none().child(this.workText(turn)))
-        .child(svg(ICON("chevron-right")).size(12).flex_none())
+        .child(div().flex_none().when(bad, (e) => e.text_color(t.blocked)).child(this.workText(turn)))
+        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none())
         .child(div().flex_1())
         .when(pinned, (el) => el.child(svg(ICON("pin")).size(12).flex_none().text_color(t.accent)))
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo)))));
   }
-  workText(turn) { return turn.durationMs ? `Worked for ${fmtDuration(turn.durationMs)}` : "Worked"; }
+  // The line's words: "Worked for 2m 31s"; a stopped or failed turn says how long it ran.
+  workText(turn) {
+    const d = turn.durationMs ? fmtDuration(turn.durationMs) : null;
+    if (turn.interrupted) return d ? `Stopped after ${d}` : "Stopped";
+    if (this.failed(turn)) return d ? `Failed after ${d}` : "Failed";
+    return d ? `Worked for ${d}` : "Worked";
+  }
+  toggleLine(key) { if (this.lineOpen.has(key)) this.lineOpen.delete(key); else this.lineOpen.add(key); }
   // The line as text, for the debug report and the tests: "plan · ⚠ Worked for 40s 📌 2".
-  lineText(turn) {
+  lineText(turn, key = null) {
     const pinNo = this.pinNumber(turn);
-    return [this.mixedAgents(turn) ? `${this.agentName(turn)} ·` : null, turn.interrupted ? "[stopped]" : this.failed(turn) ? "[failed]" : null,
-      this.workText(turn), this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
+    return [this.mixedAgents(turn) ? `${this.agentName(turn)} ·` : null, this.workText(turn),
+      key && this.lineOpen.has(key) ? "[open]" : null, this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
   }
 
   // The strip under a reply (ui.js actsLayout): on the selected turn, copy the reply, quote
@@ -5319,7 +5343,9 @@ export default class Threads extends View {
     const st = this.liveState(t);
     const clock = turn.ts ? fmtClock(Date.now() - turn.ts) : "";
     const s = stats(turn);
-    const live = [this.agentName(turn), st.label, clock, `${plural(turn.tools, "tool call")} so far`, tokens && this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
+    // "Working for 0:48 · 3 tool calls so far"; Needs you and No reply yet keep their words.
+    const state = st.label === "Working" && clock ? `Working for ${clock}` : [st.label, clock].filter(Boolean).join(" · ");
+    const live = [this.mixedAgents(turn) ? this.agentName(turn) : null, state, `${plural(turn.tools, "tool call")} so far`, tokens && this.showTokens(s) && s.tokens > 0 ? `${fmtTokens(s.tokens)} tokens` : null].filter(Boolean).join(" · ");
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(6).items_center().min_w(0)
         .child(this.liveIcon(st, 13))
@@ -5534,7 +5560,7 @@ export default class Threads extends View {
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
         return v_flex().pt(ROW.GAP)
-          .child(this.workLine(t, turn))
+          .child(this.workLine(t, turn, this.pinNumber(turn), this.lineOpen.has(tkey)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
               .when(i > 0, (el) => el.child(div().child("·")))
@@ -5642,6 +5668,10 @@ export default class Threads extends View {
               .child(svg(ICON("image")).size(13)).child(gone ? "Image no longer on disk" : st === "wait" ? "Loading image…" : "This image could not be shown"))
           .child(div().h(18).text_size(11.5).line_height("18px").truncate().text_color(t.dim).child(label));
       }
+      case "kinds":
+        return v_flex().pt(ROW.GAP).child(h_flex().h(KINDS_H).gap(6).items_center().min_w(0).text_size(12).text_color(t.dim)
+          .child(svg(ICON("wrench")).size(12).flex_none())
+          .child(div().flex_1().min_w(0).truncate().child(toolKindsText(turn.toolNames))));
       case "legend":
         return v_flex().mt(6).gap(4).children(this.legendEntries(turn).map(([icon, text]) => h_flex().gap(6).items_start()
           .child(svg(ICON(icon)).size(11).mt(4).flex_none().text_color(t.dim))
