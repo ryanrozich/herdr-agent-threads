@@ -88,7 +88,7 @@ test("2.x: builds a finished turn from session_message", () => {
   expect(t.prompt).toBe("Why does the cart test fail?");
   expect(reply(t)).toBe("It rounds tax per line.");
   expect(t.tools).toBe(1);
-  expect(t.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["shell"], count: 1 }]);
+  expect(t.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["shell"], ids: ["call_1"], count: 1 }]);
   expect(t.model).toBe("glm-5.3-flash-free");
   expect(t.effort).toBe("high");
   expect(t.by).toBe("build"); // the OpenCode agent that replied
@@ -244,4 +244,28 @@ test("2.x: reads change nothing and refuse a bad id", () => {
   try { execFileSync("sh", [script, "read", o.path, "ses'; drop table session_message;--", "0", "40"], { stdio: "pipe" }); }
   catch (e) { code = e.status; }
   expect(code).toBe(2);
+});
+
+test("2.x level 3: calls carry their ids, and calls.sh reads each one's input, output, error and duration from session_message", () => {
+  const o = open({ old: true });
+  user(o, "msg_u1", "Fix the cart total", 0);
+  const call = (id, name, input, state, created, completed) => ({ type: "tool", id, name, state: { input, ...state }, time: { created: T0 + created, completed: T0 + completed } });
+  assistant(o, "msg_a1", 100, [
+    call("call_s1", "shell", { command: "bun test cart" }, { status: "completed", content: [text("1 fail"), text("expected 3")] }, 100, 2600),
+    call("call_r1", "read", { filePath: "src/gone.ts" }, { status: "error", error: { type: "unknown", message: "File not found" } }, 2700, 2706),
+  ], { finish: "tool-calls" });
+  assistant(o, "msg_a2", 3000, [text("Fixed.")]);
+  idle(o, "msg_i1", 4100);
+  o.db.close();
+  const s = read(o);
+  expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["call_s1", "call_r1"]);
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), `${o.path}#${SID}`, "opencode", "call_s1", "call_r1"], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["call_s1", "bun test cart"], ["call_r1", "src/gone.ts"]]);
+  const outs = got.filter((x) => x.k === "out");
+  expect(outs.map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["call_s1", false, "1 fail\nexpected 3", 2, 2500], ["call_r1", true, "File not found", 1, 6]]);
+  expect(outs[0].ts).toBe("2026-01-02T03:00:02.600Z");
+  // A quote in an id or session id is refused before any SQL runs.
+  expect(() => execFileSync("sh", [script, "calls", o.path, SID, "call'1"], { stdio: "pipe" })).toThrow();
+  expect(() => execFileSync("sh", [script, "calls", o.path, "ses'x", "call_1"], { stdio: "pipe" })).toThrow();
 });

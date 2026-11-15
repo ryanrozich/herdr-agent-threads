@@ -46,7 +46,7 @@ ev as (
   -- A reply's text and tool calls, in order.
   select m.un, m.ut, m.uid, 1, m.mt, m.id, x.id,
     case x.ty when 'text' then json_object('k','t','t', substr(json_extract(x.data,'$.text'), 1, 200000))
-      else json_object('k','u','n', json_extract(x.data,'$.tool')) end, null, 0
+      else json_object('k','u','n', json_extract(x.data,'$.tool'), 'id', json_extract(x.data,'$.callID')) end, null, 0
   from msgs m join parts x on x.message_id = m.id
   where m.role = 'assistant' and x.ty in ('text','tool')
     and coalesce(json_extract(m.data,'$.summary'),0) = 0

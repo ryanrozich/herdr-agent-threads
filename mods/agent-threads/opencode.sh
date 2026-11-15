@@ -7,6 +7,7 @@
 #   opencode.sh server-dir <port>                   the folder a local opencode server on that port runs in
 #   opencode.sh peers <pid> <folder>                how many other opencode terminals run there
 #   opencode.sh read <db> <session> <turn> <max>    extractor events, as extract.sh prints them
+#   opencode.sh calls <db> <session> <call id>...   those calls' input and output, as calls.sh prints them
 # OpenCode 2.x keeps sessions in session_v2 and session_message, and 1.x in session, message and
 # part. The tables decide which: 2.x copies 1.x sessions into its own tables and stops writing
 # the old ones. 1.19 already has an empty session_message, so it takes both.
@@ -99,7 +100,27 @@ read)
     win=$((win / 2))
   done
   printf '%s\n' "$ev" ;;
+calls)
+  # Level 3: the tool calls with these ids, from 2.x's session_message table when it has the
+  # session, else from 1.x's part table (2.x copies 1.x sessions, and 1.19 has both tables).
+  db=$1 sid=$2
+  shift 2
+  case $sid in "" | *[!0-9A-Za-z_-]*) echo "bad session id" >&2; exit 2 ;; esac
+  [ -f "$db" ] || { echo "no database" >&2; exit 3; }
+  ids=
+  for id in "$@"; do
+    case $id in "" | *[!0-9A-Za-z_.:\|-]*) echo "bad call id" >&2; exit 2 ;; esac
+    ids="$ids${ids:+,}\"$id\""
+  done
+  [ -n "$ids" ] || exit 0
+  here=$(dirname "$0")
+  sql=opencode-calls.sql
+  if v2 "$db" && [ "$(q "$db" "select count(*) from (select 1 from session_message where session_id='$sid' limit 1);")" = 1 ]; then
+    sql=opencode-calls-v2.sql
+  fi
+  sqlite3 -readonly -batch -noheader -cmd ".timeout 3000" -cmd ".parameter set :sid '$sid'" \
+    -cmd ".parameter set :ids '[$ids]'" "$db" < "$here/$sql" ;;
 *)
-  echo "usage: opencode.sh db|sessions|peers|read ..." >&2
+  echo "usage: opencode.sh db|sessions|peers|read|calls ..." >&2
   exit 2 ;;
 esac
