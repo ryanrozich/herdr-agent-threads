@@ -6329,7 +6329,7 @@ export default class Threads extends View {
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
       .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
-        .rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_md()
+        .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
           .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child("Keys"))
@@ -6437,7 +6437,7 @@ export default class Threads extends View {
   railCardView(t, k) {
     const c = this.railCard(k);
     return v_flex().id("th-rail-card").mr(RAIL.CARD_GAP).w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
-      .rounded(8).border_1().border_color(t.border).bg(t.popover ?? t.raised).shadow_md()
+      .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
       .child(div().text_size(11).line_height("15px").text_color(t.dim).child(c.head))
       .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().text_color(t.foreground).child(c.body)));
   }
@@ -6450,6 +6450,23 @@ export default class Threads extends View {
     cx.notify();
   }
 
+  // The fill of a surface drawn over the list (the pill, the rail card, the ? sheet, a toast):
+  // the popover colour over the pane's background, and a state fill (hover) over that, as one
+  // opaque colour. Themes give hover and selected with alpha, and some give popover so, which
+  // would let the list show through.
+  solidFill(t, state = null) {
+    const k = `${t.background}|${t.popover}|${t.raised}|${state ?? ""}`;
+    const m = (this.fillMemo ??= new Map());
+    let v = m.get(k);
+    if (v == null) {
+      const base = over(t.popover ?? t.raised, over(t.background, "#000000"));
+      v = state ? over(state, base) : base;
+      if (m.size > 16) m.clear();
+      m.set(k, v);
+    }
+    return v;
+  }
+
   // The Jump to latest pill: it floats at the bottom centre of the list while the end of the
   // list is off screen, in the list's own view (not the outline or the Pinned view). A down
   // arrow leads its label, and a dot leads both while something new came in below the screen.
@@ -6460,8 +6477,8 @@ export default class Threads extends View {
     const dot = this.unseen === true;
     return h_flex().absolute().bottom((this.footerH ?? 38) + PILL_GAP).left(0).right(0).justify_center()
       .child(h_flex().id("th-latest-pill").flex_none().h(PILL_H).px(12).gap(6).items_center().rounded(PILL_H / 2)
-        .bg(t.popover).border_1().border_color(t.border).shadow_md().cursor_pointer()
-        .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
+        .bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md().cursor_pointer()
+        .text_size(12).text_color(t.foreground).hover((s) => s.bg(this.solidFill(t, t.hover)))
         .tooltip(dot ? "New below · jump to latest (End)" : "Jump to latest (End)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("latest", cx); cx.notify(); })
         .when(dot, (el) => el.child(div().id("th-latest-pill-dot").flex_none().size(6).rounded(3).bg(t.accent)))
@@ -6473,7 +6490,7 @@ export default class Threads extends View {
     // Just above the footer, whose hints can wrap to two lines, and above the pill.
     const pill = this.pillShown() ? PILL_H + PILL_GAP : 0;
     return h_flex().absolute().bottom((this.footerH ?? 38) + 6 + pill).left(0).right(0).justify_center()
-      .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
+      .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
         .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));

@@ -1612,6 +1612,39 @@ test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where m
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);
 });
 
+test("the Jump to latest pill, the rail card, the ? sheet and toasts have an opaque fill, at rest and under the pointer", async () => {
+  const { v } = await pane(fixture("--only", "2"));
+  // Graphite and paper give hover with alpha, and a theme may give popover so.
+  for (const th of [
+    { ...theme, background: "#1d1f22", popover: "#25272b", hover: "#ffffff0e" },
+    { ...theme, background: "#f7f7f5", popover: "#ffffff", hover: "#0000000c" },
+    { ...theme, background: "#1d1f22", popover: "#25272bcc", hover: "#ffffff0e" },
+  ]) {
+    const rest = v.solidFill(th);
+    const hover = v.solidFill(th, th.hover);
+    for (const c of [rest, hover]) expect(c).toMatch(/^#[0-9a-f]{6}$/);
+    expect(hover).not.toBe(rest);
+    // The pill: the opaque fill, and the opaque hover fill in its hover style.
+    rec = []; v.pillView(th); const pc = rec; rec = null;
+    expect(pc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    // The stub applies a hover style as it is described, so its fill is recorded too.
+    expect(pc).toContainEqual(["bg", hover]);
+    expect(pc.some((e) => e[0] === "bg" && String(e[1]).length === 9)).toBe(false);
+    // The ? sheet and a toast.
+    rec = []; v.keySheetView(th); const kc = rec; rec = null;
+    expect(kc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    v.toast = { text: "x", at: 1 };
+    rec = []; v.toastView(th); const tc = rec; rec = null;
+    v.toast = null;
+    expect(tc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+  }
+  // An opaque popover over an opaque background is itself.
+  expect(v.solidFill({ ...theme, background: "#1d1f22", popover: "#25272b" })).toBe("#25272b");
+  // The rail card.
+  const src = readFileSync(join(modDir, "main.js"), "utf8");
+  expect(src.match(/railCardView\(t, k\) \{[\s\S]*?\n {2}\}/)[0]).toContain("this.solidFill(t)");
+});
+
 // ---- round 3: B4 hardening -----------------------------------------------------------------
 
 test("B4: a clipboard write that throws says Couldn't copy and marks nothing copied", async () => {
