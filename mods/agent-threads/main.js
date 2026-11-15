@@ -22,7 +22,7 @@
 //   ~/.claude. props().debug shows render timings in the header.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, VirtualListScrollHandle, v_virtual_list, TextView, Editor, EditorState } from "gpui-base";
 // ScrollHandle (a plain scroll area's position, which j and k move in the image viewer's
 // panel) is new in Herdr 0.1.15. A named import of it stops the mod loading on 0.1.14, so it
 // is read from the module's namespace, and the viewer works without it.
@@ -43,13 +43,15 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// The turn a list row belongs to, or null (a day band, the spacer, the tail).
+const rowTurnKey = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -1593,6 +1595,9 @@ export default class Threads extends View {
   buildRows(status) {
     if (this.view === "pinned") return this.pinnedRows(status);
     const out = [];
+    // The rail's turns: every shown turn, with the ones a search leaves out marked.
+    const rail = [];
+    this.railTurns = rail;
     const outline = this.outlined();
     let maxN = 1;
     if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
@@ -1621,6 +1626,7 @@ export default class Threads extends View {
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
+        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: this.isLive(s, si, ti, status), miss: Boolean(miss) });
         if (off && !visit) return;
         if (miss && !visit) { unmatched++; return; }
         flush();
@@ -4286,7 +4292,7 @@ export default class Threads extends View {
             .track_scroll(this.scroll)
             .on_item_click((key, cx) => this.click(key, cx))
             .size_full())))
-        .child(Scrollbar.vertical("threads-list").viewport_from_layout().absolute().inset_0()))
+        .when(this.railShown(), (el) => el.child(this.railView(t))))
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
   }
@@ -4878,6 +4884,14 @@ export default class Threads extends View {
       this.bottomShown = range.end >= rows.length;
       // The Jump to latest pill comes and goes with the end of the list.
       if (prevShown !== this.bottomShown) this.stickyDue = true;
+      // The rail brightens the turns on screen: redraw when the first or last one changes.
+      this.viewRange = [range.start, range.end];
+      let f = range.start;
+      while (f < range.end - 1 && !rowTurnKey(rows[f])) f++;
+      let l = range.end - 1;
+      while (l > f && !rowTurnKey(rows[l])) l--;
+      const seen = `${rowTurnKey(rows[f])}|${rowTurnKey(rows[l])}`;
+      if (seen !== this.railSeen) { this.railSeen = seen; this.stickyDue = true; }
       this.lastRange = `${range.start}-${range.end}/${rows.length}`;
       try { this.stickCheck(rows, prevShown, range.start); } catch (e) { this.drawFailed(e, null); }
       if (this.unseen && this.bottomShown) { if (this.unseen === true) this.stickyDue = true; this.unseen = false; }
@@ -5732,6 +5746,71 @@ export default class Threads extends View {
     const days = new Set();
     for (const s of this.sessions) for (const t of s.turns) { days.add(t.day ?? dayKey(t.ts)); if (days.size > 1) return true; }
     return false;
+  }
+
+  // ---- the rail ----
+  // On the list's right edge, in place of the scrollbar, in the list's own view: one tick per
+  // turn (ui.js railLayout). Turns on screen are brighter, the selected turn's tick is longer,
+  // a pinned turn's takes the accent colour and the running turn's pulses. A search dims the
+  // turns it leaves out. A tick's tooltip is one line, and a click puts the turn's top at the
+  // top of the pane, as a pin return does.
+  railShown() {
+    return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1;
+  }
+  railTicks() {
+    const list = this.railTurns ?? [];
+    let days = 0;
+    for (let i = 1; i < list.length; i++) if (list[i].day && list[i].day !== list[i - 1].day) days++;
+    const L = railLayout(list.length, days, Math.max(0, this.listH));
+    // Which turns are on screen, from the range the list last drew.
+    const rows = this.rowsMemo ?? [];
+    const [a, b] = this.viewRange ?? [0, 0];
+    const on = new Set();
+    for (let i = a; i < Math.min(b, rows.length); i++) { const k = rowTurnKey(rows[i]); if (k) on.add(k); }
+    const ticks = [];
+    for (let i = 0; i < list.length; i += L.per) {
+      const g = list.slice(i, i + L.per);
+      const first = g[0];
+      const prev = list[i - 1];
+      ticks.push({
+        key: first.key, last: g[g.length - 1], turns: g,
+        dayStart: L.dayGap && Boolean(prev && first.day && first.day !== prev.day),
+        sel: g.some((x) => x.key === this.sel), pinned: g.some((x) => this.isPinnedTurn(x.turn)),
+        live: g.some((x) => x.live), inView: g.some((x) => on.has(x.key)), miss: g.every((x) => x.miss),
+      });
+    }
+    return { L, ticks };
+  }
+  railTip(k) {
+    const a = k.turns[0].turn;
+    if (k.turns.length > 1) return `#${a.n} to #${k.last.turn.n}`;
+    const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
+    const cut = text.length > 60 ? `${text.slice(0, 59)}…` : text;
+    return [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null, cut || null].filter(Boolean).join(" · ");
+  }
+  railView(t) {
+    const { L, ticks } = this.railTicks();
+    const busy = this.liveState(t).color;
+    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(RAIL.W).justify_center().items_end()
+      .children(ticks.map((k, i) => {
+        const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
+        const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
+        const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
+          .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
+        return div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
+          .tooltip(this.railTip(k))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
+          .child(mark);
+      }));
+  }
+  railJump(key, cx) {
+    this.toList();
+    this.sel = key;
+    this.follow = false;
+    this.toBottom = false;
+    this.scrollTo = { key, how: "head" };
+    cx.notify();
   }
 
   // The Jump to latest pill: it floats at the bottom centre of the list while the end of the
