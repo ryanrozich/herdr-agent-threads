@@ -5665,3 +5665,25 @@ test("a scroll to a closed turn with pasted images lands on its tiles, the item 
     expect(scrolled.at(-1)).toEqual([tiles, "top"]);
   }
 });
+
+test("level 3 lines draw paths from the terminal's working folder, or from ~, and only the drawing changes", async () => {
+  const { v } = await pane(fixture("--only", "1"));
+  v.res = { ...v.res, cwd: "/home/test/acme-web" };
+  expect(v.short("Read /home/test/acme-web/src/admin/export.ts")).toBe("Read src/admin/export.ts");
+  expect(v.short("/home/test/notes/a.md")).toBe("~/notes/a.md");
+  // Pinned to a transcript (no folder from the search): the terminal's own folder.
+  v.res = { ...v.res, cwd: null };
+  const term = state.terminals.find((x) => x.address === v.terminal);
+  const was = term.cwd;
+  term.cwd = "/home/test/acme-web";
+  expect(v.short("/home/test/acme-web/src/a.ts")).toBe("src/a.ts");
+  term.cwd = null;
+  expect(v.short("/home/test/acme-web/src/a.ts")).toBe("~/acme-web/src/a.ts");
+  term.cwd = was;
+  // The call line, the group's current call and each output line go through it; the
+  // transcript and the call entries keep the full text.
+  const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
+  expect(src).toContain(".child(this.short(callText(r.name, c?.input)))");
+  expect(src).toContain("current: last?.input ? this.short(callText(");
+  expect(src).toContain(".child(this.short(l) || \" \")");
+});

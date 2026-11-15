@@ -1539,6 +1539,25 @@ export function outHeight(box, all = false) {
 }
 // A call's text on its row: what it ran or read (calls.sh picks the command, path, pattern,
 // query or URL), on one line; the tool's name until that is read.
+// Paths in a level 3 line, shorter to read and with no home folder in a screenshot: a path in
+// the session's working folder relative to it ("." for the folder itself), and any other path
+// in the home folder from "~". A path starts the text or follows a space, a quote, =, (, [ or
+// a comma, and the folder ends at a slash, a space, a quote or the end.
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function shortPaths(text, cwd, home) {
+  let s = String(text ?? "");
+  const at = (dir, to) => {
+    const d = String(dir ?? "").replace(/\/+$/, "");
+    if (d.length < 2 || !s.includes(d)) return;
+    const head = "(^|[\\s\"'=(\\[,])";
+    s = s.replace(new RegExp(`${head}${reEsc(d)}/`, "g"), (_m, b) => `${b}${to ? `${to}/` : ""}`)
+      .replace(new RegExp(`${head}${reEsc(d)}(?=$|[\\s"'),\\]:;])`, "g"), (_m, b) => `${b}${to || "."}`);
+  };
+  at(cwd, "");
+  at(home, "~");
+  return s;
+}
+
 export function callText(name, input) {
   const s = String(input ?? "").replace(/\s+/g, " ").trim();
   return s ? s.slice(0, 300) : String(name ?? "tool");

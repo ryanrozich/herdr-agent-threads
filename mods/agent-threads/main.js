@@ -49,7 +49,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, callText, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -1791,13 +1791,22 @@ export default class Threads extends View {
   // What a group's line can say about its calls. Calls are read only when a group opens, so
   // a group not read yet claims nothing: no check and no red mark. Once every call's result is
   // in memory it has the check, or the red mark and how many failed.
+  // Paths in a level 3 line (ui.js shortPaths): from the terminal's working folder, or from
+  // ~. Only what is drawn: the transcript and anything copied keep the full path. The folder
+  // is the one the session was found by, else the terminal's own (a pane pinned to a
+  // transcript sits beside a terminal too).
+  short(text) {
+    const cwd = this.res?.cwd || terminals().find((x) => x.address === this.terminal)?.cwd || null;
+    return shortPaths(text, cwd, home());
+  }
+
   groupInfo(r) {
     if (!r.read) return { known: false, failed: 0, current: null };
     const cs = r.step.ids.map((id) => (id ? this.callEntry(r.si, id) : null));
     const failed = cs.filter((c) => c?.err === true).length;
     const known = cs.length > 0 && cs.every((c) => c?.st === "ok" && c.out != null);
     const last = r.now ? cs.at(-1) : null;
-    return { known, failed, current: last?.input ? callText(r.step.calls.at(-1), last.input) : null };
+    return { known, failed, current: last?.input ? this.short(callText(r.step.calls.at(-1), last.input)) : null };
   }
   // Queues the calls not read yet. A call read before its output was written is read again
   // once the session has grown, while its group is open; tail reads only the file's end.
@@ -6187,7 +6196,7 @@ export default class Threads extends View {
         return h_flex().when(r.one, (e) => e.mt(STEP_GAP).h(GROUP_H)).when(!r.one, (e) => e.h(CALL_H).pl(18))
           .gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
           .child(icon)
-          .child(div().flex_1().min_w(0).truncate().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(callText(r.name, c?.input)))
+          .child(div().flex_1().min_w(0).truncate().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(this.short(callText(r.name, c?.input))))
           .when(Boolean(time), (e) => e.child(div().flex_none().text_size(11).child(time)))
           .when(Boolean(r.id), (e) => e.child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none()));
       }
@@ -6201,7 +6210,7 @@ export default class Threads extends View {
         return v_flex().pl(18).pt(2).pb(2).min_w(0).max_w(this.prose())
           .child(v_flex().px(10).py(OUT.PAD).rounded(6).border_1().border_color(t.border).bg(t.background).min_w(0).overflow_hidden().text_size(11.5)
             .children(lines.length
-              ? lines.map((l, i) => div().h(OUT.LINE).line_height(`${OUT.LINE}px`).truncate().font_family(mono).text_color(fade(i)).child(l || " "))
+              ? lines.map((l, i) => div().h(OUT.LINE).line_height(`${OUT.LINE}px`).truncate().font_family(mono).text_color(fade(i)).child(this.short(l) || " "))
               : [div().h(OUT.LINE).line_height(`${OUT.LINE}px`).text_color(t.dim).child(note)]))
           .when(Boolean(more), (e) => e.child(div().h(OUT.MORE).line_height(`${OUT.MORE}px`).text_size(11.5).text_color(t.accent).child(more)));
       }

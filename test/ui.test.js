@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, callText, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -823,4 +823,27 @@ test("width: the reading line and column for Comfortable, Wide and Full at 12, 1
   // A bubble's line stops at Wide's in Full.
   expect(readType(14, Infinity).bubble).toBe(592);
   expect(readType(14).bubble).toBe(461);
+});
+
+test("level 3 paths: relative to the working folder inside it, from ~ elsewhere, others as they are", () => {
+  const cwd = "/home/dev/acme-web";
+  const home = "/home/dev";
+  const cases = [
+    ["/home/dev/acme-web/src/admin/export.ts", "src/admin/export.ts"],
+    ["cd /home/dev/acme-web && bun test", "cd . && bun test"],
+    ["grep -n 'total' /home/dev/acme-web/src", "grep -n 'total' src"],
+    ["path=/home/dev/acme-web/a.ts", "path=a.ts"],
+    ["/home/dev/notes/todo.md", "~/notes/todo.md"],
+    ["ls /home/dev", "ls ~"],
+    // A sibling folder whose name starts with the working folder's is not inside it.
+    ["/home/dev/acme-webapp/x.ts", "~/acme-webapp/x.ts"],
+    ["/etc/hosts", "/etc/hosts"],
+    ["no paths here", "no paths here"],
+  ];
+  for (const [from, to] of cases) expect(shortPaths(from, cwd, home)).toBe(to);
+  // With no working folder known, only the home folder is shortened.
+  expect(shortPaths("/home/dev/acme-web/src/a.ts", null, home)).toBe("~/acme-web/src/a.ts");
+  // A folder given with a trailing slash, and a root or empty folder, which shortens nothing.
+  expect(shortPaths("/home/dev/acme-web/a.ts", "/home/dev/acme-web/", home)).toBe("a.ts");
+  expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
 });
