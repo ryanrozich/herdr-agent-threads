@@ -164,9 +164,9 @@ function newTurn(s, e) {
     followTools: 0,
     wakeTools: 0,
     toolNames: {},
-    // The work before the reply, in order (steps()): the agent's interim text, and groups of
-    // the tool calls in a row between texts, each call by its tool name. The reply is the text
-    // after the last group, so it is not a step.
+    // The work before the reply, in order (addStep): the agent's interim text, and groups of
+    // the tool calls in a row between texts, each call by its tool name and its id (ids). The
+    // reply is the text after the last group, so it is not a step.
     steps: [],
     usage: {},
     // Codex names the model before the prompt it applies to (a "ctx" event).
@@ -203,7 +203,7 @@ function newTurn(s, e) {
 export const STEP_TEXT = 3400;
 export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
-function addStep(turn, name) {
+function addStep(turn, name, id = null) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   if (text) {
@@ -213,7 +213,14 @@ function addStep(turn, name) {
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
   let g = steps[steps.length - 1];
   if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; steps.push(g); }
-  if (g.calls.length < STEP_CALLS) g.calls.push(String(name ?? "tool"));
+  if (g.calls.length < STEP_CALLS) {
+    g.calls.push(String(name ?? "tool"));
+    // The call's id in the transcript, for calls.sh to find its input and output on demand.
+    // A group gets ids only once a call has one, so agents that record none carry no list.
+    const ok = typeof id === "string" && /^[0-9A-Za-z_-]{1,100}$/.test(id);
+    if (ok && !g.ids) g.ids = g.calls.slice(0, -1).map(() => null);
+    if (g.ids) g.ids.push(ok ? id : null);
+  }
   g.count++;
 }
 
@@ -330,7 +337,7 @@ export function apply(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") { addStep(cur, e.n); cur.after = []; }
+      if (s.seg === "own") { addStep(cur, e.n, e.id); cur.after = []; }
       else cur.latestParts = [];
       return;
     case "m":

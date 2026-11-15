@@ -43,7 +43,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, codeRows, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, callText, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -57,6 +57,8 @@ const rowTurnKey = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : nul
 const GROUP_H = 22;
 const STEP_GAP = 4;
 const CALL_H = 20;
+// Calls read for level 3 kept in memory at once (pruneCalls).
+const CALLS_MAX = 800;
 // A clear colour, for what a hover reveals.
 const CLEAR = "#00000000";
 // The Jump to latest pill's height and its gap over the footer.
@@ -162,7 +164,7 @@ const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "stats
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
-const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "itext", "grp", "call", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
+const CARD = new Set(["head", "imgs", "you", "ustrip", "img", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "stats", "legend", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
 const LATEST_LINES = 6;
 
@@ -594,6 +596,12 @@ export default class Threads extends View {
     this.lineOpen = new Set();
     this.lineTouched = new Set();
     this.groupOpen = new Set();
+    // Level 3: each call's input and output, read from the transcript when its group opens
+    // (calls.sh) and kept in memory only, at most CALLS_MAX, by "<file>#<call id>". Calls
+    // whose output box is open, and boxes showing every line, by "<turn>:<step>:<call>".
+    this.calls = new Map();
+    this.callOpen = new Set();
+    this.callAll = new Set();
     this.query = "";
     this.filtering = false;
     this.choosing = false;
@@ -755,8 +763,17 @@ export default class Threads extends View {
       case "latest": return `latest${n} ${r.md ? "all" : `box ${this.latestBox(r)}${this.latestCut(r) ? " +Show all" : ""}`} h${this.height(r)} | ${(r.md ?? r.text).slice(0, 300)}`;
       case "stats": return `stats${n} ${this.statTexts(r.turn).join(" · ")}${this.countsLine(r.turn) ? ` | ${this.countsLine(r.turn)}` : ""} h${this.height(r)}`;
       case "itext": return `itext${n} h${this.height(r)} | ${r.src.replace(/\n/g, " ⏎ ").slice(0, 120)}`;
-      case "grp": return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
-      case "call": return `call${n} ${r.more ? `+${r.more}` : r.name}`;
+      case "grp": {
+        const g = this.groupInfo(r);
+        return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${g.current ? ` · ${g.current}` : ""}${g.failed ? ` · ${g.failed} failed [failed]` : g.known ? " [ok]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
+      }
+      case "call": {
+        if (r.more) return `call${n} +${r.more}`;
+        const c = this.callEntry(r.si, r.id);
+        const time = callTime(c?.inTs, c?.outTs);
+        return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
+      }
+      case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +Show all" : r.all && r.box.total > OUT.SHOW ? " +Show less" : ""} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
       case "wspin": return `wspin${n} Working…`;
       case "legend": return `legend${n} ${this.legendEntries(r.turn).map(([, x]) => x.split(":")[0]).join(" · ")} h${this.height(r)}`;
       case "seltext": return `seltext${n} lines ${r.lines} h${this.height(r)} editor:${this.selEditor?.st ? "yes" : "no"} border:${this.selecting ? "accent" : "border"} | ${this.selectHint()}`;
@@ -1547,6 +1564,7 @@ export default class Threads extends View {
     const key = [
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
       [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
+      [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.promptLines}.${P.replyLines}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.legendOn ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
@@ -1571,7 +1589,7 @@ export default class Threads extends View {
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
     // The running turn's own row: last, or followed by its open steps.
     let li = this.baseRows.length - 1;
-    while (li > 0 && !this.baseRows[li].live && ["itext", "grp", "call", "wspin"].includes(this.baseRows[li].kind)) li--;
+    while (li > 0 && !this.baseRows[li].live && ["itext", "grp", "call", "cout", "wspin"].includes(this.baseRows[li].kind)) li--;
     const lr = this.baseRows[li];
     if (lr?.live && lr.kind !== "line") {
       const kind = this.sel === lr.key ? "working" : "wrow";
@@ -1701,18 +1719,140 @@ export default class Threads extends View {
         return;
       }
       const now = live && i === steps.length - 1 && !turn.after?.length;
-      out.push({ ...item, live: false, kind: "grp", key: `gp:${key}:${i}`, gi: i, step: st, now });
-      if (!this.groupOpen.has(`${key}:${i}`)) return;
-      st.calls.forEach((name, j) => out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:${j}`, name }));
+      const read = this.readsCalls(item.si, st);
+      // The running group's newest call is read from the transcript's tail, so its line can
+      // name what runs now.
+      if (now && read && st.ids?.at(-1)) this.wantCalls(item.si, [st.ids.at(-1)], true);
+      const open = this.groupOpen.has(`${key}:${i}`);
+      if (open && read) this.wantCalls(item.si, st.ids);
+      // A group of one call, once open, is that call's own row.
+      const one = open && read && st.count === 1;
+      if (!one) out.push({ ...item, live: false, kind: "grp", key: `gp:${key}:${i}`, gi: i, step: st, now, read });
+      if (!open) return;
+      st.calls.forEach((name, j) => {
+        const id = read ? st.ids[j] : null;
+        out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:${j}`, name, id, gi: i, ci: j, one, now: one && now });
+        if (!id || !this.callOpen.has(`${key}:${i}:${j}`)) return;
+        const c = this.callEntry(item.si, id);
+        const all = this.callAll.has(`${key}:${i}:${j}`);
+        // The running group's newest call with no result yet is still running.
+        const going = now && j === st.calls.length - 1 && c?.st === "ok" && c.out == null;
+        out.push({ ...item, live: false, kind: "cout", key: `co:${key}:${i}:${j}`, id, gi: i, ci: j, all, going,
+          st: c?.st ?? "wait", box: outLines(c?.out, all, c?.lines) });
+      });
       if (st.count > st.calls.length) out.push({ ...item, live: false, kind: "call", key: `cl:${key}:${i}:more`, more: st.count - st.calls.length });
     });
   }
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
   isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
 
+  // Level 3's data. Calls are read for Claude Code so far: the group must carry its calls' ids.
+  readsCalls(si, st) {
+    const file = this.sessions[si]?.file;
+    return Boolean(file && st?.ids?.some(Boolean) && harnessOfFile(file) === "claude");
+  }
+  callEntry(si, id) { return id ? this.calls.get(`${this.sessions[si]?.file}#${id}`) ?? null : null; }
+  // What a group's line adds from the calls read so far: whether one failed, and while the
+  // group runs, what its newest call runs.
+  // What a group's line can say about its calls. Calls are read only when a group opens, so
+  // a group not read yet claims nothing: no check and no red mark. Once every call's result is
+  // in memory it has the check, or the red mark and how many failed.
+  groupInfo(r) {
+    if (!r.read) return { known: false, failed: 0, current: null };
+    const cs = r.step.ids.map((id) => (id ? this.callEntry(r.si, id) : null));
+    const failed = cs.filter((c) => c?.err === true).length;
+    const known = cs.length > 0 && cs.every((c) => c?.st === "ok" && c.out != null);
+    const last = r.now ? cs.at(-1) : null;
+    return { known, failed, current: last?.input ? callText(r.step.calls.at(-1), last.input) : null };
+  }
+  // Queues the calls not read yet. A call read before its output was written is read again
+  // once the session has grown, while its group is open; tail reads only the file's end.
+  wantCalls(si, ids, tail = false) {
+    const s = this.sessions[si];
+    if (!s?.file) return;
+    const fresh = [];
+    const again = [];
+    for (const id of ids ?? []) {
+      const c = id ? this.calls.get(`${s.file}#${id}`) : undefined;
+      if (!id || c?.st === "wait") continue;
+      if (!c) fresh.push(id);
+      else if (!tail && c.out == null && c.ver !== s.version) again.push(id);
+    }
+    for (const id of [...fresh, ...again]) this.calls.set(`${s.file}#${id}`, { ...this.calls.get(`${s.file}#${id}`), st: "wait" });
+    // A call read again is recent, so only the file's end is read for it.
+    if (fresh.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: fresh, tail });
+    if (again.length) (this.callDue ??= []).push({ file: s.file, ver: s.version, ids: again, tail: true });
+  }
+  flushCalls(cx) {
+    if (this.callBusy || !this.callDue?.length) return;
+    this.callBusy = true;
+    cx.timer.after(0, (cx) => {
+      const job = this.callDue.shift();
+      if (!job) { this.callBusy = false; return; }
+      cx.spawn(async (cx) => {
+        const got = new Map();
+        let ok = false;
+        try {
+          const r = await exec("sh", [SCRIPT("calls.sh"), ...(job.tail ? ["--tail"] : []), job.file, "claude", ...job.ids]);
+          ok = r.code === 0;
+          for (const l of ok ? r.stdout.split("\n") : []) {
+            let x = null;
+            try { x = JSON.parse(l); } catch { continue; }
+            if (!x || typeof x.id !== "string" || !job.ids.includes(x.id)) continue;
+            const c = got.get(x.id) ?? {};
+            if (x.k === "in") Object.assign(c, { input: String(x.in ?? ""), inTs: x.ts ?? null });
+            if (x.k === "out") Object.assign(c, { out: String(x.out ?? ""), err: x.err === true, lines: Number(x.lines) || 0, outTs: x.ts ?? null });
+            got.set(x.id, c);
+          }
+        } catch { ok = false; }
+        for (const id of job.ids) {
+          const k = `${job.file}#${id}`;
+          const was = this.calls.get(k);
+          const c = got.get(id);
+          // A tail read that misses a call's input keeps the input read before.
+          if (c || was?.input != null) this.calls.set(k, { ...was, ...c, st: "ok", ver: job.ver });
+          else this.calls.set(k, { st: ok ? "none" : "err", ver: job.ver });
+        }
+        this.pruneCalls();
+        this.callBusy = false;
+        this.callVer = (this.callVer ?? 0) + 1;
+        cx.notify();
+      });
+    });
+  }
+  // Keeps the cache at CALLS_MAX, dropping the oldest reads first but never a call in an open
+  // group, so open groups are not read over and over.
+  pruneCalls() {
+    if (this.calls.size <= CALLS_MAX) return;
+    const keep = new Set();
+    for (const g of this.groupOpen) {
+      const [si, n, i] = g.split(":");
+      const file = this.sessions[Number(si)]?.file;
+      for (const id of this.findTurn(`${si}:${n}`)?.steps?.[Number(i)]?.ids ?? []) if (id) keep.add(`${file}#${id}`);
+    }
+    for (const [k, c] of this.calls) {
+      if (this.calls.size <= CALLS_MAX) break;
+      if (!keep.has(k) && c.st !== "wait") this.calls.delete(k);
+    }
+  }
+  // A call row's click: its output box opens or closes (level 3).
+  toggleCall(c) {
+    if (this.callOpen.has(c)) { this.callOpen.delete(c); this.callAll.delete(c); } else this.callOpen.add(c);
+  }
+  // The open groups' calls that can show output, by "<turn>:<step>:<call>".
+  openCalls(k, turn) {
+    const si = Number(k.split(":")[0]);
+    const out = [];
+    (turn.steps ?? []).forEach((st, i) => {
+      if (st.k !== "group" || !this.groupOpen.has(`${k}:${i}`) || !this.readsCalls(si, st)) return;
+      st.ids.forEach((id, j) => { if (id) out.push(`${k}:${i}:${j}`); });
+    });
+    return out;
+  }
+
   // → opens the selected turn one level deeper: the turn, then its line (level 1), then its
-  // step groups (level 2). ← backs out one level. A running turn has no closed state: its
-  // line opens and closes.
+  // step groups (level 2), then their calls' output (level 3). ← backs out one level. A
+  // running turn has no closed state: its line opens and closes.
   deeper(cx) {
     const k = this.sel;
     const turn = k ? this.findTurn(k) : null;
@@ -1720,7 +1860,9 @@ export default class Threads extends View {
     const live = this.isLiveKey(k);
     if (!live && !this.open.has(k)) { this.toggle(k, cx); this.lineOpen.add(k); this.lineTouched.add(k); return true; }
     if (!this.lineIsOpen(k, live)) { this.toggleLine(k, live); cx.notify(); return true; }
-    (turn.steps ?? []).forEach((st, i) => { if (st.k === "group") this.groupOpen.add(`${k}:${i}`); });
+    const groups = (turn.steps ?? []).map((st, i) => (st.k === "group" ? `${k}:${i}` : null)).filter(Boolean);
+    if (groups.some((g) => !this.groupOpen.has(g))) { for (const g of groups) this.groupOpen.add(g); cx.notify(); return true; }
+    for (const c of this.openCalls(k, turn)) this.callOpen.add(c);
     cx.notify();
     return true;
   }
@@ -1729,6 +1871,8 @@ export default class Threads extends View {
     const turn = k ? this.findTurn(k) : null;
     if (!turn) return false;
     const live = this.isLiveKey(k);
+    const calls = [...this.callOpen].filter((c) => c.startsWith(`${k}:`) && this.groupOpen.has(c.split(":").slice(0, 3).join(":")));
+    if (calls.length && this.lineIsOpen(k, live)) { for (const c of calls) { this.callOpen.delete(c); this.callAll.delete(c); } cx.notify(); return true; }
     const groups = [...this.groupOpen].filter((g) => g.startsWith(`${k}:`));
     if (groups.length && this.lineIsOpen(k, live)) { for (const g of groups) this.groupOpen.delete(g); cx.notify(); return true; }
     if (this.lineIsOpen(k, live) && (live || this.open.has(k))) { this.toggleLine(k, live); cx.notify(); return true; }
@@ -3047,6 +3191,21 @@ export default class Threads extends View {
       this.sel = rest.slice(0, 2).join(":");
       return cx.notify();
     }
+    // A click on a call opens its output (level 3), or closes it, where its calls are read.
+    if (kind === "cl" && rest[3] !== "more") {
+      const tk = rest.slice(0, 2).join(":");
+      const st = this.findTurn(tk)?.steps?.[Number(rest[2])];
+      if (st?.ids?.[Number(rest[3])] && this.readsCalls(Number(rest[0]), st)) this.toggleCall(rest.slice(0, 4).join(":"));
+      this.sel = tk;
+      return cx.notify();
+    }
+    // A click on an output box shows all its lines, or the first ones again.
+    if (kind === "co") {
+      const c = rest.slice(0, 4).join(":");
+      if (this.callAll.has(c)) this.callAll.delete(c); else this.callAll.add(c);
+      this.sel = rest.slice(0, 2).join(":");
+      return cx.notify();
+    }
     if (["md", "nr", "code", "lh", "sx", "lg", "it", "cl", "ws"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
@@ -4313,6 +4472,7 @@ export default class Threads extends View {
     }
     this.flushCode(cx);
     this.flushImages(cx);
+    this.flushCalls(cx);
     // Scrolls wait until this frame has laid the list out with its new rows, and until every
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
@@ -4874,7 +5034,8 @@ export default class Threads extends View {
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
-      case "call": return CALL_H;
+      case "call": return r.one ? STEP_GAP + GROUP_H : CALL_H;
+      case "cout": return outHeight(r.box, r.all);
       case "wspin": return STEP_GAP + GROUP_H;
       case "stats": {
         const line = this.countsLine(r.turn);
@@ -5812,20 +5973,53 @@ export default class Threads extends View {
         // The agent's interim text, as Markdown at the reading size, between step groups.
         return this.readBlock(div().mt(6)).child(this.mdView(tv(`th-it-${r.key}`), r.md, this.replySelectable()));
       case "grp": {
-        // A step group's line: the tool icon (its calls are not read, so it claims no check),
-        // the spinner while it runs, and a chevron.
+        // A step group's line: the tool icon until its calls are read, then a check, or a red
+        // mark and how many failed; the spinner while it runs (with what runs now, once read);
+        // and a chevron.
         const open = this.groupOpen.has(`${tkey}:${r.gi}`);
+        const g = this.groupInfo(r);
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
-          .child(r.now ? this.liveIcon(this.liveState(t), 12) : svg(ICON("wrench")).size(12).flex_none().text_color(t.dim))
-          .child(div().min_w(0).truncate().child(groupText(r.step.calls, r.step.count, r.now)))
+          .child(r.now ? this.liveIcon(this.liveState(t), 12)
+            : svg(ICON(g.failed ? "circle-x" : g.known ? "check" : "wrench")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
+          .child(div().flex_none().child(groupText(r.step.calls, r.step.count, r.now)))
+          .when(g.failed > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`· ${g.failed} failed`)))
+          .when(Boolean(g.current), (e) => e.child(div().min_w(0).truncate().font_family(mono).text_size(11.5).text_color(t.dim).child(g.current)))
           .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
       }
-      case "call":
-        // One call in an open group: its kind's icon and the tool's name. What it ran and
-        // printed are read when asked for (level 3).
-        return h_flex().h(CALL_H).pl(18).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
-          .child(svg(ICON(r.more ? "plus" : KIND_ICON[toolKind(r.name)])).size(12).flex_none())
-          .child(div().min_w(0).truncate().when(!r.more, (e) => e.font_family(mono)).child(r.more ? `${r.more} more calls` : r.name));
+      case "call": {
+        // One call in an open group: its kind's icon, then what it ran or read once calls.sh
+        // has read it (the tool's name until then), how long it took, and a chevron for its
+        // output (level 3). A failed call's icon is red. A group of one is this row alone.
+        if (r.more) {
+          return h_flex().h(CALL_H).pl(18).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
+            .child(svg(ICON("plus")).size(12).flex_none()).child(div().min_w(0).truncate().child(`${r.more} more calls`));
+        }
+        const c = this.callEntry(r.si, r.id);
+        const time = callTime(c?.inTs, c?.outTs);
+        const open = this.callOpen.has(`${tkey}:${r.gi}:${r.ci}`);
+        const icon = r.now ? this.liveIcon(this.liveState(t), 12)
+          : svg(ICON(c?.err ? "circle-x" : KIND_ICON[toolKind(r.name)])).size(12).flex_none().when(Boolean(c?.err), (e) => e.text_color(t.blocked));
+        return h_flex().when(r.one, (e) => e.mt(STEP_GAP).h(GROUP_H)).when(!r.one, (e) => e.h(CALL_H).pl(18))
+          .gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
+          .child(icon)
+          .child(div().flex_1().min_w(0).truncate().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(callText(r.name, c?.input)))
+          .when(Boolean(time), (e) => e.child(div().flex_none().text_size(11).child(time)))
+          .when(Boolean(r.id), (e) => e.child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none()));
+      }
+      case "cout": {
+        // A call's output (level 3): mono lines, not wrapped, OUT.SHOW of them with the last
+        // ones fading when more are left out, and Show all (up to OUT.MAX) or Show less.
+        const lines = r.box.lines;
+        const note = r.going ? "Running…" : r.st === "wait" ? "Reading…" : r.st === "err" ? "Could not read this call" : r.st === "none" ? "Not in the transcript" : "No output";
+        const fade = (i) => (r.box.cut && i >= lines.length - 3 ? alpha(t.muted, [0.75, 0.5, 0.25][i - (lines.length - 3)]) : t.muted);
+        const more = r.box.cut ? (r.all ? `Showing ${lines.length} of ${r.box.total} lines` : `Show all ${r.box.total} lines`) : r.all && r.box.total > OUT.SHOW ? "Show less" : null;
+        return v_flex().pl(18).pt(2).pb(2).min_w(0).max_w(this.prose())
+          .child(v_flex().px(10).py(OUT.PAD).rounded(6).border_1().border_color(t.border).bg(t.background).min_w(0).overflow_hidden().text_size(11.5)
+            .children(lines.length
+              ? lines.map((l, i) => div().h(OUT.LINE).line_height(`${OUT.LINE}px`).truncate().font_family(mono).text_color(fade(i)).child(l || " "))
+              : [div().h(OUT.LINE).line_height(`${OUT.LINE}px`).text_color(t.dim).child(note)]))
+          .when(Boolean(more), (e) => e.child(div().h(OUT.MORE).line_height(`${OUT.MORE}px`).text_size(11.5).text_color(t.accent).child(more)));
+      }
       case "wspin":
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().text_size(12.5).text_color(t.working)
           .child(this.liveIcon(this.liveState(t), 12)).child("Working…");

@@ -4,7 +4,7 @@
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, mock } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
@@ -5254,4 +5254,187 @@ test("a running turn is open while it runs: its steps arrive in order, the group
   apply(r2.s, { k: "t", t: "Done." });
   apply(r2.s, { k: "d", ms: 900, ts: at(1) });
   expect(r2.v.lineIsOpen(a, false)).toBe(true);
+});
+
+test("level 3: an open group reads its calls from the transcript, in memory; a call opens to its output; a failed call is red; → and ← reach it", async () => {
+  // A small synthetic Claude Code transcript: a command with 30 lines of output, a failed
+  // command, then a group of one read.
+  const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000c.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s, err = false) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: err }] } });
+  const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+  const lines = [use("toolu_a1", "Bash", { command: "bun test cart" }, 1), res("toolu_a1", long, 3),
+    use("toolu_a2", "Bash", { command: "bun run lint" }, 4), res("toolu_a2", "lint: 2 errors", 5, true),
+    use("toolu_a3", "Read", { file_path: "src/cart.ts" }, 7), res("toolu_a3", "export const total = 1;", 7)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000c", file);
+  for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_a1" }, { k: "u", n: "Bash", id: "toolu_a2" },
+    { k: "t", t: "Lint failed; reading the file." }, { k: "u", n: "Read", id: "toolu_a3" },
+    { k: "t", t: "Fixed." }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.action("deeper", cx);
+  // Nothing is read while the groups are closed.
+  await settled();
+  expect(v.calls.size).toBe(0);
+  const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands");
+  // → opens the groups: their calls are read, each row shows what it ran and how long it took.
+  v.action("deeper", cx);
+  await settled();
+  expect([...v.calls.keys()].sort()).toEqual(["toolu_a1", "toolu_a2", "toolu_a3"].map((id) => `${file}#${id}`));
+  expect(detail(`cl:${a}:0:0`)).toBe("call#1 bun test cart · 2s [closed]");
+  expect(detail(`cl:${a}:0:1`)).toBe("call#1 bun run lint · 1s [failed] [closed]");
+  // A failed call marks its group too, in the blocked colour.
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed] [open]");
+  rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `cl:${a}:0:1`)); const c1 = rec; rec = null;
+  if (v.partContent) {
+    expect(c1.some((e) => e[0] === "svg" && String(e[1]).endsWith("circle-x.svg"))).toBe(true);
+    expect(c1.some((e) => e[0] === "text_color" && e[1] === theme.blocked)).toBe(true);
+  }
+  // A group of one, open, is the call's own row, with no group line over it.
+  expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
+  expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · 0.0s [closed]");
+  // A click on a call opens its output: 12 lines, the rest behind Show all.
+  v.click(`cl:${a}:0:0`, cx);
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 12\/30 \+Show all h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
+  const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
+  // A click on the box shows every line, and again the first 12.
+  v.click(`co:${a}:0:0`, cx);
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 \+Show less/);
+  v.click(`co:${a}:0:0`, cx);
+  expect(detail(`co:${a}:0:0`)).toMatch(/lines 12\/30/);
+  // → opens every call's output; ← closes the outputs, then the groups.
+  v.action("deeper", cx);
+  expect(v.rows().filter((r) => r.kind === "cout").length).toBe(3);
+  expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 h\d+ \| lint: 2 errors$/);
+  v.action("shallower", cx);
+  expect(v.rows().some((r) => r.kind === "cout")).toBe(false);
+  expect(v.rows().some((r) => r.kind === "call")).toBe(true);
+  v.action("shallower", cx);
+  expect(v.rows().some((r) => r.kind === "call")).toBe(false);
+  // The reads are kept in memory only: nothing was written beside the transcript.
+  expect(readdirSync(dir)).toEqual(["00000000-0000-4000-8000-00000000000c.jsonl"]);
+  // Agents whose calls are not read yet keep level 2: no output, and a click only selects.
+  const { NOT_A_PLACE } = await import("../mods/agent-threads/pins.js");
+  expect(NOT_A_PLACE.has("co")).toBe(true);
+  draw(v, cx);
+});
+
+test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
+  // Two groups: one with a failed command, one where every call worked.
+  const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000e.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s, err = false) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: err }] } });
+  const lines = [use("toolu_e1", "Bash", { command: "bun test" }, 1), res("toolu_e1", "ok", 2),
+    use("toolu_e2", "Bash", { command: "bun run lint" }, 3), res("toolu_e2", "lint: 2 errors", 4, true),
+    use("toolu_e3", "Bash", { command: "bun run lint --fix" }, 5), res("toolu_e3", "fixed", 6),
+    use("toolu_e4", "Bash", { command: "bun run lint" }, 7), res("toolu_e4", "clean", 8)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000e", file);
+  for (const e of [{ k: "p", o: "human", t: "Fix the lint", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_e1" }, { k: "u", n: "Bash", id: "toolu_e2" },
+    { k: "t", t: "Lint failed; fixing it." }, { k: "u", n: "Bash", id: "toolu_e3" }, { k: "u", n: "Bash", id: "toolu_e4" },
+    { k: "t", t: "Fixed." }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+  const icons = (k) => {
+    rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === k)); const c = rec; rec = null;
+    return { svgs: c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()), red: c.some((e) => e[0] === "text_color" && e[1] === theme.blocked), text: c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]) };
+  };
+  v.sel = a;
+  v.action("deeper", cx);
+  await settled();
+  // Not read yet: the tool icon and "Ran N commands", with no check and nothing red.
+  expect(v.calls.size).toBe(0);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands");
+  if (v.partContent) {
+    for (const k of [`gp:${a}:0`, `gp:${a}:2`]) {
+      const g = icons(k);
+      expect(g.svgs).toContain("wrench.svg");
+      expect(g.svgs).not.toContain("check.svg");
+      expect(g.svgs).not.toContain("circle-x.svg");
+      expect(g.red).toBe(false);
+    }
+  }
+  // Opened, the calls are read: the failed group has the red mark and "1 failed", the other a check.
+  v.action("deeper", cx);
+  await settled();
+  expect(v.calls.size).toBe(4);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed] [open]");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands [ok] [open]");
+  // Closed again, they keep it while the calls stay in memory.
+  v.action("shallower", cx);
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Ran 2 commands · 1 failed [failed]");
+  expect(detail(`gp:${a}:2`)).toBe("grp#1 Ran 2 commands [ok]");
+  if (v.partContent) {
+    const f = icons(`gp:${a}:0`);
+    expect(f.svgs).toContain("circle-x.svg");
+    expect(f.red).toBe(true);
+    expect(f.text).toContain("· 1 failed");
+    const ok = icons(`gp:${a}:2`);
+    expect(ok.svgs).toContain("check.svg");
+    expect(ok.svgs).not.toContain("wrench.svg");
+    expect(ok.red).toBe(false);
+  }
+});
+
+test("level 3 while a turn runs: the running group names what runs now; an open call read before its output reads it again once the session grows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
+  const ts = (s) => new Date(Date.now() - 60000 + s * 1000).toISOString();
+  const use = { type: "assistant", timestamp: ts(1), message: { id: "msg_b1", role: "assistant", content: [{ type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "bun run e2e" } }] } };
+  writeFileSync(file, `${JSON.stringify(use)}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000d", file);
+  apply(s, { k: "p", o: "human", t: "Run the e2e suite", ts: ts(0) });
+  apply(s, { k: "u", n: "Bash", id: "toolu_b1" });
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  v.statusNow = "working";
+  v.status = () => "working";
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  await settled();
+  const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+  // The running turn's line is open: its group says it runs, and what, from the file's end.
+  expect(detail(`gp:${a}:0`)).toBe("grp#1 Running 1 command · bun run e2e");
+  // Opened, the group of one is its call's row, still running, with no output yet.
+  v.click(`gp:${a}:0`, cx);
+  await settled();
+  expect(detail(`cl:${a}:0:0`)).toBe("call#1 one bun run e2e [closed]");
+  v.click(`cl:${a}:0:0`, cx);
+  await settled();
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok running lines 0\/0 /);
+  // Its box says so, not "No output".
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).going).toBe(true);
+  // The output arrives: once the session grows, the open call is read again.
+  const res = { type: "user", timestamp: ts(20), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_b1", content: "12 passed" }] } };
+  writeFileSync(file, `${JSON.stringify(use)}\n${JSON.stringify(res)}\n`);
+  s.version = (s.version ?? 0) + 1;
+  await settled();
+  expect(detail(`cl:${a}:0:0`)).toBe("call#1 one bun run e2e · 19s [open]");
+  expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 1\/1 h\d+ \| 12 passed$/);
+  draw(v, cx);
 });
