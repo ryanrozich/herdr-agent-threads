@@ -242,22 +242,34 @@ test("focusTerminal targets the pane by id and says so", async () => {
   expect(v.toast.text).toBe("t4 is closed");
 });
 
-test("the strip under the reply acts only on each icon", async () => {
+test("the strip under the reply is copy and quote, and acts only on each icon", async () => {
   const { v } = await pane(fixture("--only", "2"));
   v.sel = v.turnKeys(v.rows())[0];
   v.width = 380;
-  // Copy 12–34, Quote 38–60, Select 64–86, Terminal 90–112, at any width.
+  // Copy 12–34, Quote 38–60, at any width. No select or terminal icon: s and t are keys.
   expect(v.barHit(20)).toBe("copy");
   expect(v.barHit(50)).toBe("quote");
-  expect(v.barHit(75)).toBe("select");
-  expect(v.barHit(100)).toBe("terminal");
-  expect(v.barHit(200)).toBe(null);
-  v.width = 240;
-  expect(v.barHit(100)).toBe("terminal");
-  // No pane shows the terminal: no Quote and no Terminal, so Select moves up beside Copy.
-  state.panes = state.panes.filter((p) => p.terminal !== "t4");
-  expect(v.barHit(50)).toBe("select");
   expect(v.barHit(75)).toBe(null);
+  expect(v.barHit(100)).toBe(null);
+  v.width = 240;
+  expect(v.barHit(50)).toBe("quote");
+  expect(v.barHit(100)).toBe(null);
+  const icons = () => { rec = []; v.actsStrip(theme, v.findTurn(v.sel), v.sel, true); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  expect(icons()).toEqual(["copy.svg", "quote.svg"]);
+  // Before Herdr 0.1.13 the formatted reply cannot be selected, so the select icon stays,
+  // after quote, as the way there by mouse.
+  const was = herdrVersion;
+  try {
+    herdrVersion = "0.1.12"; v.selectableMemo = null;
+    expect(v.barHit(75)).toBe("select");
+    expect(v.barHit(100)).toBe(null);
+    expect(icons()).toEqual(["copy.svg", "quote.svg", "text-cursor.svg"]);
+    // No pane shows the terminal: no Quote, so Select moves up beside Copy.
+    state.panes = state.panes.filter((p) => p.terminal !== "t4");
+    expect(v.barHit(50)).toBe("select");
+    expect(v.barHit(75)).toBe(null);
+  } finally { herdrVersion = was; v.selectableMemo = null; }
+  expect(icons()).toEqual(["copy.svg"]);
   expect(readFileSync(join(modDir, "main.js"), "utf8")).toContain("barHit");
 });
 
@@ -271,7 +283,8 @@ test("Select text swaps the formatted reply for a selectable source view, and ba
   let kinds = v.rows().map((r) => r.kind);
   expect(kinds).toContain("seltext");
   expect(kinds).not.toContain("md");
-  expect(v.rowDetail(v.rows().find((r) => r.kind === "copy"))).toContain("select(on)");
+  // Herdr 0.1.13 and later: the strip has no select icon, s is the way in.
+  expect(v.rowDetail(v.rows().find((r) => r.kind === "copy"))).not.toContain("select");
   expect(v.action("escape", cx)).toBe(true);
   expect(v.selecting).toBe(null);
   kinds = v.rows().map((r) => r.kind);
@@ -3499,12 +3512,11 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   expect(rest.slice(clear).some((e) => e[0] === "text_color" && e[1] === theme.dim)).toBe(true);
   expect(rest.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop())).not.toContain("pin.svg");
   // An open turn's strips are items of their own, so each reveals its icons on its own
-  // hover: copy, pin and "#n · time" under the message; copy, quote, select and terminal
-  // under the reply.
+  // hover: copy, pin and "#n · time" under the message; copy and quote under the reply.
   const svgs = (el) => calls(el).filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   expect(svgs(() => v.youStrip(theme, turn, row.key, false, "all"))).toEqual(["copy.svg", "pin.svg"]);
   expect(strings(() => v.youStrip(theme, turn, row.key, false, "all"))).toContain(`#${turn.n} · ${time}`);
-  expect(svgs(() => v.actsStrip(theme, turn, row.key, false, true))).toContain("text-cursor.svg");
+  expect(svgs(() => v.actsStrip(theme, turn, row.key, false, true))).toEqual(["copy.svg", "quote.svg"]);
   expect(strings(() => v.youStrip(theme, turn, row.key, false))).toEqual([]);
   expect(drawn).toContain(v.workText(turn));
   expect(v.workText(turn)).toMatch(/^Worked for \d/);
@@ -3516,10 +3528,11 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   expect(drawn).toContain(`#${turn.n} · ${time}`);
   const sel = calls(() => v.rowItem(theme, row, true));
   expect(sel.some((e) => e[0] === "bg" && e[1] === theme.selected)).toBe(false);
-  // The selected row's two strips draw their icons: copy and pin under the bubble; copy,
-  // quote, select and terminal under the reply.
+  // The selected row's two strips draw their icons: copy and pin under the bubble; copy and
+  // quote under the reply.
   const icons = sel.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  for (const i of ["copy.svg", "pin.svg", "quote.svg", "text-cursor.svg", "square-terminal.svg"]) expect(icons).toContain(i);
+  for (const i of ["copy.svg", "pin.svg", "quote.svg"]) expect(icons).toContain(i);
+  for (const i of ["text-cursor.svg", "square-terminal.svg"]) expect(icons).not.toContain(i);
   // The bubble's width is passed on.
   expect(sel.some((e) => e[0] === "w" && e[1] === row.shape.bubbleW)).toBe(true);
   // Always show time: the time under every bubble, no icons until the turn is selected.

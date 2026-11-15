@@ -287,17 +287,20 @@ test("commandColor: muted where it reads at 4.5:1 on the row's background, else 
   expect(commandColor({ background: "#fff", muted: "nope", foreground: "#000" })).toBe("#000");
 });
 
-test("actsLayout: copy, quote, select and terminal from the reply's left edge, never overlapping", () => {
-  for (const quote of [true, false]) for (const terminal of [true, false]) {
-    const L = actsLayout({ quote, terminal });
-    const boxes = [L.copy, L.quote, L.select, L.terminal].filter(Boolean);
+test("actsLayout: copy and quote from the reply's left edge, select only where asked, never overlapping", () => {
+  for (const quote of [true, false]) for (const select of [true, false]) {
+    const L = actsLayout({ quote, select });
+    const boxes = [L.copy, L.quote, L.select].filter(Boolean);
     for (let i = 1; i < boxes.length; i++) expect(boxes[i][0] - boxes[i - 1][1]).toBe(4);
     expect(Boolean(L.quote)).toBe(quote);
-    expect(Boolean(L.terminal)).toBe(terminal);
+    expect(Boolean(L.select)).toBe(select);
+    expect("terminal" in L).toBe(false);
   }
-  const all = actsLayout();
+  const L = actsLayout();
   // The first 13 px glyph, centred in its 22 px box, sits on the reply's 16 px edge.
-  expect(all.copy[0] + (22 - 13) / 2).toBeCloseTo(16.5, 0);
-  expect(all.terminal).toEqual([12 + 3 * 26, 12 + 3 * 26 + 22]);
+  expect(L.copy[0] + (22 - 13) / 2).toBeCloseTo(16.5, 0);
+  expect(L.quote).toEqual([12 + 26, 12 + 26 + 22]);
+  expect(L.select).toBe(null);
+  expect(actsLayout({ select: true }).select).toEqual([12 + 2 * 26, 12 + 2 * 26 + 22]);
 });
 

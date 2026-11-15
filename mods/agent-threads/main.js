@@ -803,7 +803,7 @@ export default class Threads extends View {
         const L = this.acts(r.turn);
         const on = this.sel === `${r.si}:${r.turn.n}`;
         const selOn = this.selecting === `${r.si}:${r.turn.n}`;
-        const icons = ["copy", "quote", "select", "terminal"].filter((k) => L[k]).map((k) => (k === "select" && selOn ? "select(on)" : k)).join(" ");
+        const icons = ["copy", "quote", "select"].filter((k) => L[k]).map((k) => (k === "select" && selOn ? "select(on)" : k)).join(" ");
         return `copy${n} ${on ? icons : `(empty) hover:${icons}`}`;
       }
       case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
@@ -3178,7 +3178,6 @@ export default class Threads extends View {
       const hit = this.barHit(x, this.findTurn(id));
       this.lastBarHit = { x: x == null ? null : Math.round(x), w: Math.round(w), hit };
       this.sel = id;
-      if (hit === "terminal" && this.pane()) return this.focusTerminal(cx);
       if (hit === "copy") return this.copyReply(id, cx);
       if (hit === "select") return this.toggleSelect(id, cx);
       if (hit === "quote") { this.quote(cx, "button", id); return cx.notify(); }
@@ -3246,13 +3245,13 @@ export default class Threads extends View {
     if (["md", "nr", "code", "lh", "sx", "it", "cl", "ws"].includes(kind)) { this.sel = rest.slice(0, 2).join(":"); return cx.notify(); }
   }
 
-  // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout).
-  // Quote shows when a pane shows a terminal on this computer and the turn has a reply;
-  // Terminal when a pane shows the terminal.
+  // The icons of the strip under a reply, from the left edge of the list (ui.js actsLayout):
+  // copy, and quote when a pane shows a terminal on this computer and the turn has a reply.
+  // Select only on a Herdr whose formatted reply cannot be selected. s and t are keys.
   acts(turn) {
     const pane = Boolean(this.pane());
     const quote = pane && !this.terminal.includes("/") && Boolean(turn && this.replyText(turn));
-    return actsLayout({ quote, terminal: pane });
+    return actsLayout({ quote, select: !this.replySelectable() });
   }
   barGeom(turn = this.sel ? this.findTurn(this.sel) : null) { return this.acts(turn); }
   // Whether a press at x (column px) is on the info icon at the right end of an open line.
@@ -3263,7 +3262,7 @@ export default class Threads extends View {
   }
   barHit(x, turn = this.sel ? this.findTurn(this.sel) : null) {
     if (x == null) return "copy"; // a keyboard or synthetic press
-    return boxHit(this.acts(turn), x, ["copy", "quote", "select", "terminal"]);
+    return boxHit(this.acts(turn), x, ["copy", "quote", "select"]);
   }
 
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
@@ -5645,8 +5644,8 @@ export default class Threads extends View {
       key && this.lineIsOpen(key, false) ? "[open]" : null, this.isPinnedTurn(turn) ? `[pin${pinNo != null ? ` ${pinNo}` : ""}]` : null].filter(Boolean).join(" ");
   }
 
-  // The strip under a reply (ui.js actsLayout): on the selected turn, copy the reply, quote
-  // it, select its text and go to the terminal, as icons (keys c q s t). It keeps its height
+  // The strip under a reply (ui.js actsLayout): on the selected turn, copy the reply and quote
+  // it, as icons (keys c and q; s and t have no icon). It keeps its height
   // when it shows nothing. A collapsed row is one list item and a press on it opens the
   // turn; an open turn's strip is an item of its own, and click() tells its icons apart.
   // With `hover` (an open turn's strip on a turn not selected) it draws the icons in no
@@ -5663,8 +5662,7 @@ export default class Threads extends View {
     return el
       .child(box(copied ? "check" : "copy", copied ? t.ansi2 : ink, has))
       .when(Boolean(L.quote), (e) => e.child(box("quote")))
-      .child(box("text-cursor", this.selecting === key ? t.accent : ink, has))
-      .when(Boolean(L.terminal), (e) => e.child(box("square-terminal")));
+      .when(Boolean(L.select), (e) => e.child(box("text-cursor", this.selecting === key ? t.accent : ink, has)));
   }
 
   // Width left for an agent's sender label on the meta line: the pane less the icon, #n,
