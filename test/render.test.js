@@ -1424,7 +1424,8 @@ test("C1: the counts line is in the stats part's probe entry, at 16 px lines of 
   const { v, cx } = await pane(fixture("--only", "2"));
   const key = v.turnKeys(v.rows())[0];
   v.open = new Set([key]);
-  // The numbers show on i, under the reply.
+  // The numbers show under the open line (level 1).
+  v.lineOpen.add(key);
   v.legendOn = true;
   const line57 = "cache read 1,204,331 · written 12,345 · new input 123,456";
   expect(line57.length).toBe(57);
@@ -1571,6 +1572,7 @@ test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where m
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
+  v.lineOpen.add(`0:${t.n}`);
   v.legendOn = true;
   v.width = 380;
   const colourOf = (calls, text) => {
@@ -5005,4 +5007,73 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.setView("pinned");
   expect(v.railShown()).toBe(false);
   v.setView("all");
+});
+
+test("level 1: a click on an open turn's line opens it to the tool calls by kind and the numbers; i adds the legend there; a stopped turn says how long it ran", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
+    { k: "u", n: "Read" }, { k: "u", n: "Bash" }, { k: "u", n: "Bash" }, { k: "u", n: "Edit" },
+    { k: "t", t: "Fixed the rounding." }, { k: "d", ms: 151000, ts: at(3) },
+    { k: "p", o: "human", t: "And the tax line", ts: at(4) }, { k: "u", n: "Grep" }, { k: "i" },
+    { k: "p", o: "human", t: "Try again", ts: at(6) }, { k: "t", t: "Done." }, { k: "d", ms: 900, ts: at(7) },
+  ]);
+  const a = "0:1";
+  const kinds = (k = a) => v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === k).map((r) => r.kind);
+  v.sel = a;
+  v.action("open", cx);
+  expect(v.open.has(a)).toBe(true);
+  // Closed line: no level 1 parts, a right chevron.
+  expect(kinds()).not.toContain("stats");
+  expect(kinds()).not.toContain("kinds");
+  const lineOf = () => { rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `rhead:${a}`)); const c = rec; rec = null; return c; };
+  const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  if (v.partContent) expect(svgs(lineOf())).toContain("chevron-right.svg");
+  // A click on the line opens it: the kinds, then the numbers, before the reply.
+  v.click(`rhead:${a}`, cx);
+  expect(v.lineOpen.has(a)).toBe(true);
+  const ks = kinds();
+  expect(ks.indexOf("kinds")).toBe(ks.indexOf("rhead") + 1);
+  expect(ks.indexOf("stats")).toBe(ks.indexOf("kinds") + 1);
+  expect(ks.indexOf("md")).toBeGreaterThan(ks.indexOf("stats"));
+  expect(ks).not.toContain("legend");
+  expect(v.rowDetail(v.rows().find((r) => r.key === `kd:${a}`))).toBe("kinds#1 1 read · 2 commands · 1 edit");
+  expect(v.rowDetail(v.rows().find((r) => r.key === `rhead:${a}`))).toMatch(/Worked for 2m 31s \[open\]/);
+  if (v.partContent) expect(svgs(lineOf())).toContain("chevron-down.svg");
+  // i adds the legend under the open line.
+  v.action("legend", cx);
+  expect(kinds()).toContain("legend");
+  v.action("legend", cx);
+  expect(kinds()).not.toContain("legend");
+  expect(kinds()).toContain("stats"); // the line stays open
+  // A second click closes it.
+  v.click(`rhead:${a}`, cx);
+  expect(kinds()).not.toContain("stats");
+  // i on a closed turn opens the turn and its line, with the legend.
+  const b = "0:3";
+  v.sel = b;
+  v.action("legend", cx);
+  expect(v.open.has(b)).toBe(true);
+  expect(v.lineOpen.has(b)).toBe(true);
+  v.legendOn = false;
+  // A stopped turn's line says so, in the blocked colour, with no icon.
+  const stopped = v.findTurn("0:2");
+  expect(stopped.interrupted).toBe(true);
+  expect(v.workText(stopped)).toMatch(/^Stopped( after .+)?$/);
+  rec = []; v.workLine(theme, stopped); const w = rec; rec = null;
+  const i = w.findIndex((e) => e[0] === "child" && e[1] === v.workText(stopped));
+  expect(w.slice(Math.max(0, i - 4), i).some((e) => e[0] === "text_color" && e[1] === theme.blocked)).toBe(true);
+  expect(svgs(w)).toEqual(["chevron-right.svg"]);
+  expect(v.workText(v.findTurn(a))).toBe("Worked for 2m 31s");
+});
+
+test("the running turn's line reads Working for and the clock, then what it has done so far", async () => {
+  const { v, cx } = await scripted([{ k: "p", o: "human", t: "Fix the cart total", ts: new Date(Date.now() - 48000).toISOString() }, { k: "u", n: "Bash" }]);
+  v.statusNow = "working";
+  const st = v.status;
+  v.status = () => "working";
+  rec = []; v.liveLine(theme, v.findTurn("0:1")); const c = rec; rec = null;
+  v.status = st;
+  const text = c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  expect(text).toMatch(/^Working for 0:4\d · 1 tool call so far$/);
+  draw(v, cx);
 });
