@@ -66,9 +66,9 @@ def response_item($l; $p):
   if $p.type == "message" and $p.role == "assistant" then
     ($p.content | blocks_text) as $t
     | if ($t | length) > 0 then {k: "t", t: ($t | cap)} else empty end
-  elif $p.type == "function_call" or $p.type == "custom_tool_call" then {k: "u", n: ($p.name // "tool")}
+  elif $p.type == "function_call" or $p.type == "custom_tool_call" then {k: "u", n: ($p.name // "tool"), id: $p.call_id}
   elif $p.type == "web_search_call" then {k: "u", n: "web_search"}
-  elif $p.type == "local_shell_call" then {k: "u", n: "shell"}
+  elif $p.type == "local_shell_call" then {k: "u", n: "shell", id: $p.call_id}
   # A subagent's message. One a fork copied from its parent is not news to this session.
   elif $p.type == "agent_message" and ($l.metadata.inherited_user_message != true) then
     ($p.content | blocks_text) as $t

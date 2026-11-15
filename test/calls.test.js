@@ -56,6 +56,6 @@ test("calls.sh --tail reads only the file's last 4 MB; bad ids, a missing file a
   expect(run(file, "claude", "").code).toBe(2);
   expect(run(file).code).toBe(2);
   expect(run(`${file}.gone`, "claude", "toolu_x1").code).toBe(3);
-  expect(run(file, "codex", "call_1").code).toBe(4);
+  expect(run(file, "pi", "call_1").code).toBe(4);
   expect(run(file, "claude").lines).toEqual([]);
 });
