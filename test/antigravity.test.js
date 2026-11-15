@@ -162,9 +162,12 @@ test("locate.sh agy-open names the conversation folder a process holds open", as
   const brain = join(data, "brain", ID);
   mkdirSync(join(brain, ".system_generated", "logs"), { recursive: true });
   writeFileSync(join(brain, ".system_generated", "logs", "transcript_full.jsonl"), user("Hi", 0));
-  // A stand-in process whose working folder is the conversation's: lsof lists it like agy's
-  // open folder.
-  const p = spawn("sleep", ["20"], { cwd: brain, stdio: "ignore" });
+  const presence = join(data, "presence");
+  mkdirSync(presence, { recursive: true });
+  const lock = join(presence, `${ID}.lock`);
+  writeFileSync(lock, "");
+  // A stand-in process holding the presence lock open, like agy does.
+  const p = spawn("sh", ["-c", 'exec 3<"$1"; exec sleep 20', "sh", lock], { stdio: "ignore" });
   try {
     await new Promise((r) => setTimeout(r, 300));
     const out = execFileSync("sh", [locator, "agy-open", String(p.pid)], { encoding: "utf8" }).trim();
