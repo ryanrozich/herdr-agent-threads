@@ -1498,11 +1498,12 @@ export function groupText(calls, count = calls?.length ?? 0, live = false) {
 // The icon for a call of this kind in an open group.
 export const KIND_ICON = { command: "square-terminal", read: "file-search", edit: "text-cursor", search: "search", web: "search", agent: "bot", other: "wrench" };
 
-// Level 3: how long a call took, from its input's time to its output's ("0.4s", "12s",
-// "2m 05s"), or "" when either is missing.
-export function callTime(inTs, outTs) {
-  const ms = Date.parse(outTs ?? "") - Date.parse(inTs ?? "");
+// Level 3: how long a call took ("<0.1s", "0.4s", "12s", "2m 05s"): the agent's own count when it
+// records one (Pi's durationMs), else from its input's time to its output's; "" when unknown.
+export function callTime(inTs, outTs, took = null) {
+  const ms = Number.isFinite(took) ? took : Date.parse(outTs ?? "") - Date.parse(inTs ?? "");
   if (!(ms >= 0)) return "";
+  if (ms < 100) return "<0.1s";
   if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;

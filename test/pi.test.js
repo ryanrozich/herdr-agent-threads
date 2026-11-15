@@ -92,7 +92,7 @@ test("builds turns from a Pi session file", () => {
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.tools).toBe(1);
   expect(plain.toolNames).toEqual({ bash: 1 });
-  expect(plain.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["bash"], count: 1 }]);
+  expect(plain.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["bash"], ids: ["call_1"], count: 1 }]);
   expect(plain.model).toBe("stub-1");
   expect(plain.effort).toBe("medium");
   expect(plain.done).toBe(true);
@@ -226,4 +226,36 @@ test("only Pi's temp-folder paste names count, and nothing else is read", () => 
   const s = read(clipSession([mac], "Why?"), 1 << 20);
   expect(s.turns[0].prompt).toBe("[Image #1] Why?");
   expect(existsSync(mac)).toBe(false);
+});
+
+test("level 3: Pi calls carry their ids, and calls.sh reads each one's input, output, error and duration by id", () => {
+  n = 0;
+  second = 0;
+  parent = null;
+  const dir = mkdtempSync(join(tmpdir(), "threads-pi-calls-"));
+  const file = join(dir, NAME);
+  const tc = (id, name, args) => ({ type: "toolCall", id, name, arguments: args });
+  const res = (id, out, isError = false, durationMs = 120) => msg({ role: "toolResult", toolCallId: id, toolName: "bash", content: [text(out)], isError, durationMs });
+  writeFileSync(file, [
+    `${JSON.stringify({ type: "session", version: 3, id: ID, timestamp: ts(), cwd: "/home/dev/shop" })}\n`,
+    user([text("Fix the cart total")]),
+    said([tc("call_r1", "read", { path: "src/cart.ts" }), tc("call_b1|fc_9", "bash", { command: "bun test cart", timeout: 60 })], "toolUse"),
+    res("call_r1", "export const total = 1;", false, 4),
+    res("call_b1|fc_9", "1 fail\nexpected 3", true, 2350),
+    said([text("Fixed.")]),
+  ].join(""));
+  const ev = execFileSync("sh", [extractor, file, "0", String(1 << 20), "pi"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(ev.filter((e) => e.k === "u").map((e) => e.id)).toEqual(["call_r1", "call_b1|fc_9"]);
+  expect(JSON.stringify(ev)).not.toContain("bun test cart");
+  const s = newSession(ID, file);
+  for (const e of ev) apply(s, e);
+  // An id with a | (OpenAI's Responses API through Pi) is kept, and read as plain text.
+  expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["call_r1", "call_b1|fc_9"]);
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), file, "pi", "call_r1", "call_b1|fc_9"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "in").map((x) => x.in)).toEqual(["src/cart.ts", "bun test cart"]);
+  const outs = got.filter((x) => x.k === "out");
+  expect(outs.map((x) => [x.id, x.err, x.ms, x.lines])).toEqual([["call_r1", false, 4, 1], ["call_b1|fc_9", true, 2350, 2]]);
+  expect(outs[1].out).toBe("1 fail\nexpected 3");
+  // | alone is not an id that matches every line.
+  expect(execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), file, "pi", "|"], { encoding: "utf8" })).toBe("");
 });

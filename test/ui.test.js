@@ -805,3 +805,9 @@ test("level 3 helpers: a call's time, its output's lines and box height, and its
   expect(callText("Bash", "")).toBe("Bash");
   expect(callText("Bash", null)).toBe("Bash");
 });
+
+test("callTime prefers the agent's own duration when it records one", () => {
+  expect(callTime("2026-11-01T09:00:00.000Z", "2026-11-01T09:00:00.000Z", 2350)).toBe("2s");
+  expect(callTime(null, null, 40)).toBe("<0.1s");
+  expect(callTime(null, null, null)).toBe("");
+});
