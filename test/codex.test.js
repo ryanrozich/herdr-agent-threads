@@ -100,6 +100,7 @@ test("builds turns from a Codex rollout", () => {
 
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.tools).toBe(1);
+  expect(plain.steps).toEqual([{ k: "text", t: "Looking at the cart test.", cut: false }, { k: "group", calls: ["exec_command"], count: 1 }]);
   expect(plain.model).toBe("gpt-5.5-codex");
   expect(plain.effort).toBe("medium");
   expect(plain.durationMs).toBe(4000);

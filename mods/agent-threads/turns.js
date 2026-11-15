@@ -164,6 +164,10 @@ function newTurn(s, e) {
     followTools: 0,
     wakeTools: 0,
     toolNames: {},
+    // The work before the reply, in order (steps()): the agent's interim text, and groups of
+    // the tool calls in a row between texts, each call by its tool name. The reply is the text
+    // after the last group, so it is not a step.
+    steps: [],
     usage: {},
     // Codex names the model before the prompt it applies to (a "ctx" event).
     model: s.ctx?.m ?? null,
@@ -188,6 +192,29 @@ function newTurn(s, e) {
       : [],
     imgLine: typeof e.u === "string" && /^[0-9A-Za-z_-]{8,80}$/.test(e.u) ? e.u : null,
   };
+}
+
+// Steps (turn.steps): the text said since the last call becomes an interim text step, and the
+// call joins the group of calls in a row, or starts one. Herdr draws nothing for Markdown
+// over 4,096 characters, so a text step keeps STEP_TEXT; a group keeps its first STEP_CALLS
+// names and counts the rest. Past STEP_MAX steps, later text is dropped (counted) and
+// calls join the last group, so a turn of thousands of calls stays small. STEP_TEXT is under
+// ui.js MD_MAX, the size the reply's Markdown blocks are cut to.
+export const STEP_TEXT = 3400;
+export const STEP_CALLS = 200;
+export const STEP_MAX = 300;
+function addStep(turn, name) {
+  const steps = turn.steps;
+  const text = turn.after.join("\n\n").trim();
+  if (text) {
+    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT });
+    else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
+  }
+  // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
+  let g = steps[steps.length - 1];
+  if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; steps.push(g); }
+  if (g.calls.length < STEP_CALLS) g.calls.push(String(name ?? "tool"));
+  g.count++;
 }
 
 // A model turn starts: an "s" estimates its time from here.
@@ -303,7 +330,7 @@ export function apply(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") cur.after = [];
+      if (s.seg === "own") { addStep(cur, e.n); cur.after = []; }
       else cur.latestParts = [];
       return;
     case "m":

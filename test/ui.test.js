@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, toolKinds, toolKindsText,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -748,7 +748,7 @@ test("railLayout: one tick per turn 9 px apart, closing to 3 px, then one tick f
   }
 });
 
-test("toolKinds: each agent's tool names fall into commands, reads, edits, searches, web, agent tasks and other", () => {
+test("toolKind: each agent's tool names fall into commands, reads, edits, searches, web, agent tasks and other", () => {
   // Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity names.
   for (const n of ["Bash", "shell", "exec_command", "local_shell", "bash", "Shell", "run_command"]) expect(toolKind(n)).toBe("command");
   for (const n of ["Read", "read", "read_file", "view_file", "view_image"]) expect(toolKind(n)).toBe("read");
@@ -757,11 +757,20 @@ test("toolKinds: each agent's tool names fall into commands, reads, edits, searc
   for (const n of ["WebSearch", "WebFetch", "web_search", "webfetch", "read_url_content"]) expect(toolKind(n)).toBe("web");
   for (const n of ["Task", "Agent", "task"]) expect(toolKind(n)).toBe("agent");
   for (const n of ["TodoWrite", "update_plan", "ExitPlanMode", "mcp__linear__get_issue", "Skill", "tool", ""]) expect(toolKind(n)).toBe("other");
-  // Counts by kind in the order kinds first appear, other last, in words.
-  const names = { Read: 2, mcp__x__y: 1, Bash: 3, Grep: 1, Edit: 1, Glob: 1 };
-  expect(toolKinds(names)).toEqual([["read", 2], ["command", 3], ["search", 2], ["edit", 1], ["other", 1]]);
-  expect(toolKindsText(names)).toBe("2 reads · 3 commands · 2 searches · 1 edit · 1 other");
-  expect(toolKindsText({ WebSearch: 1, Task: 2 })).toBe("1 web lookup · 2 agent tasks");
-  expect(toolKindsText({})).toBe("");
-  expect(toolKindsText(undefined)).toBe("");
+});
+
+test("groupText: a group's calls by kind as one sentence, past tense when done and present while running", () => {
+  expect(groupText(["Bash", "Bash"])).toBe("Ran 2 commands");
+  expect(groupText(["Read"])).toBe("Read 1 file");
+  expect(groupText(["WebSearch", "WebSearch", "Bash", "Bash", "Bash", "Bash", "Bash"])).toBe("Searched the web 2 times and ran 5 commands");
+  expect(groupText(["Read", "Grep", "Edit"])).toBe("Read 1 file, searched 1 time and edited 1 file");
+  expect(groupText(["Bash", "Bash", "Bash", "Bash"], 4, true)).toBe("Running 4 commands");
+  expect(groupText(["Read", "Bash"], 2, true)).toBe("Reading 1 file and running 1 command");
+  expect(groupText(["Task"])).toBe("Handed off 1 task");
+  expect(groupText(["mcp__x__y", "TodoWrite"])).toBe("Used 2 other tools");
+  // Calls past the names a group keeps.
+  expect(groupText(["Bash"], 5)).toBe("Ran 1 command and 4 more");
+  expect(groupText([], 0)).toBe("Used no tools");
+  expect(groupKinds(["Bash", "Read", "Bash"])).toEqual([["command", 2], ["read", 1]]);
+  for (const k of ["command", "read", "edit", "search", "web", "agent", "other"]) expect(typeof KIND_ICON[k]).toBe("string");
 });

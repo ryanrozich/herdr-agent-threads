@@ -40,6 +40,7 @@ test("assembles turns from the fixture", () => {
   expect(plain.tools).toBe(0);
   expect(reply(plain)).toStartWith("It fires when a test skips logout");
   expect(fix.tools).toBe(3);
+  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false }, { k: "group", calls: ["Read", "Bash", "Edit"], count: 3 }]);
   expect(reply(fix)).toStartWith("The test raced the redirect.");
   expect(reply(fix)).not.toContain("Let me look");
   expect(reply(fix)).not.toContain("background build");
@@ -585,4 +586,39 @@ test("reply() is every text block after the last tool call, joined with a blank 
   expect(s.turns[2].followups).toBe(1);
   // Read in tiny chunks, the replies are the same.
   expect(read(file, 700).turns.map(reply)).toEqual([three, tooled, notified]);
+});
+
+test("steps: interim text and groups of calls in order, the reply apart, and caps on size", async () => {
+  const { STEP_TEXT, STEP_CALLS, STEP_MAX } = await import("../mods/agent-threads/turns.js");
+  const s = newSession("00000000-0000-4000-8000-0000000000aa", "/x.jsonl");
+  const ev = [
+    { k: "p", o: "human", t: "Fix the cart total", ts: "2026-11-01T09:00:00.000Z" },
+    { k: "t", t: "Looking at the cart." }, { k: "u", n: "Read" }, { k: "u", n: "Grep" },
+    { k: "t", t: "Found it. Running the tests." }, { k: "t", t: "Second paragraph." }, { k: "u", n: "Bash" },
+    { k: "u", n: "Bash" }, { k: "t", t: "Fixed the rounding." }, { k: "d", ms: 1000, ts: "2026-11-01T09:01:00.000Z" },
+  ];
+  for (const e of ev) apply(s, e);
+  const t = s.turns[0];
+  expect(t.steps).toEqual([
+    { k: "text", t: "Looking at the cart.", cut: false }, { k: "group", calls: ["Read", "Grep"], count: 2 },
+    { k: "text", t: "Found it. Running the tests.\n\nSecond paragraph.", cut: false }, { k: "group", calls: ["Bash", "Bash"], count: 2 },
+  ]);
+  expect(reply(t)).toBe("Fixed the rounding.");
+  // Caps: a long text keeps STEP_TEXT characters, a long group STEP_CALLS names and its count.
+  const s2 = newSession("00000000-0000-4000-8000-0000000000ab", "/y.jsonl");
+  apply(s2, { k: "p", o: "human", t: "Big", ts: "2026-11-01T09:00:00.000Z" });
+  apply(s2, { k: "t", t: "x".repeat(STEP_TEXT + 50) });
+  for (let i = 0; i < STEP_CALLS + 5; i++) apply(s2, { k: "u", n: "Bash" });
+  const b = s2.turns[0].steps;
+  expect(b[0].t.length).toBe(STEP_TEXT);
+  expect(b[0].cut).toBe(true);
+  expect(b[1].calls.length).toBe(STEP_CALLS);
+  expect(b[1].count).toBe(STEP_CALLS + 5);
+  // Past STEP_MAX steps, text is dropped and counted, and calls join the last group.
+  for (let i = 0; i < STEP_MAX; i++) { apply(s2, { k: "t", t: `step ${i}` }); apply(s2, { k: "u", n: "Read" }); }
+  const c = s2.turns[0];
+  expect(c.steps.length).toBeLessThanOrEqual(STEP_MAX + 1);
+  expect(c.stepsDropped).toBeGreaterThan(0);
+  expect(c.steps.at(-1).k).toBe("group");
+  expect(c.tools).toBe(STEP_CALLS + 5 + STEP_MAX);
 });

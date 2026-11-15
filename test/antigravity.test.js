@@ -91,6 +91,7 @@ test("builds turns from an Antigravity conversation", () => {
   expect(plain.ts).toBe(Date.parse("2026-01-05T15:07:00Z"));
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.toolNames).toEqual({ read_file: 1 });
+  expect(plain.steps).toEqual([{ k: "group", calls: ["read_file"], count: 1 }]);
   expect(plain.done).toBe(true);
   // The turn ran from its prompt to its answer.
   expect(plain.durationMs).toBe(5000);

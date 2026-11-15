@@ -88,6 +88,7 @@ test("2.x: builds a finished turn from session_message", () => {
   expect(t.prompt).toBe("Why does the cart test fail?");
   expect(reply(t)).toBe("It rounds tax per line.");
   expect(t.tools).toBe(1);
+  expect(t.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["shell"], count: 1 }]);
   expect(t.model).toBe("glm-5.3-flash-free");
   expect(t.effort).toBe("high");
   expect(t.by).toBe("build"); // the OpenCode agent that replied

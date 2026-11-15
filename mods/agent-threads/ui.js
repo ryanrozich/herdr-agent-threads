@@ -8,7 +8,7 @@ const KEYS = {
   up: "prev", k: "prev", down: "next", j: "next", home: "first", g: "jump",
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
-  "-": "narrower", "=": "wider", w: "fit", "?": "keys",
+  "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -39,7 +39,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
-      [["i"], "Explain the stats"], [["t"], "Focus the terminal"],
+      [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Explain the stats"], [["t"], "Focus the terminal"],
     ]],
     ["Pins", [
       ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
@@ -1451,10 +1451,9 @@ export function actsLayout({ quote = true, terminal = true } = {}) {
 // The strip under a bubble in a body w wide: copy the prompt, pin, then "#7 · 9:12 AM" in a
 // box as wide as its text. The person's strip ends at the bubble's right edge (w - 16); an
 // agent's starts at its left. Returns { copy, pin, text } as [start, end] and the text width.
-// A turn's tool calls by kind, from their names as each agent records them (Claude Code's
-// Bash and Read, Codex's shell and apply_patch, OpenCode's bash and grep, Cursor's Shell,
-// Antigravity's run_command and view_file). Kinds keep the order they first appear in, with
-// other last. MCP tools, plans and to-do lists are other.
+// A tool call's kind, from its name as each agent records it (Claude Code's Bash and Read,
+// Codex's shell and apply_patch, OpenCode's bash and grep, Cursor's Shell, Antigravity's
+// run_command and view_file). MCP tools, plans and to-do lists are other.
 const TOOL_KINDS = [
   ["other", /^mcp__|todo|plan|skill/i],
   ["web", /web|fetch|brows|url/i],
@@ -1465,16 +1464,39 @@ const TOOL_KINDS = [
   ["read", /^(read|view|cat|open_file)/i],
   ["search", /grep|glob|search|find|^list|^ls$|codebase/i],
 ];
-const KIND_WORD = { command: ["command", "commands"], read: ["read", "reads"], edit: ["edit", "edits"], search: ["search", "searches"], web: ["web lookup", "web lookups"], agent: ["agent task", "agent tasks"], other: ["other", "other"] };
 export function toolKind(name) { return TOOL_KINDS.find(([, re]) => re.test(String(name ?? "")))?.[0] ?? "other"; }
-export function toolKinds(names) {
+
+// A step group's line: its calls by kind, in the order the kinds first appear, joined as a
+// sentence. Done: "Searched the web 2 times and ran 5 commands". Still running (live):
+// "Running 4 commands". count past the names a group keeps is "and N more".
+const PAST = {
+  command: (n) => `ran ${n} command${n === 1 ? "" : "s"}`, read: (n) => `read ${n} file${n === 1 ? "" : "s"}`,
+  edit: (n) => `edited ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searched ${n} time${n === 1 ? "" : "s"}`,
+  web: (n) => `searched the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handed off ${n} task${n === 1 ? "" : "s"}`,
+  other: (n) => `used ${n} other tool${n === 1 ? "" : "s"}`,
+};
+const NOW = {
+  command: (n) => `running ${n} command${n === 1 ? "" : "s"}`, read: (n) => `reading ${n} file${n === 1 ? "" : "s"}`,
+  edit: (n) => `editing ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searching ${n} time${n === 1 ? "" : "s"}`,
+  web: (n) => `searching the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handing off ${n} task${n === 1 ? "" : "s"}`,
+  other: (n) => `using ${n} other tool${n === 1 ? "" : "s"}`,
+};
+export function groupKinds(calls) {
   const counts = new Map();
-  for (const [name, n] of Object.entries(names ?? {})) { const k = toolKind(name); counts.set(k, (counts.get(k) ?? 0) + n); }
-  const out = [...counts].filter(([k]) => k !== "other");
-  if (counts.has("other")) out.push(["other", counts.get("other")]);
-  return out;
+  for (const name of calls ?? []) { const k = toolKind(name); counts.set(k, (counts.get(k) ?? 0) + 1); }
+  return [...counts];
 }
-export function toolKindsText(names) { return toolKinds(names).map(([k, n]) => `${n} ${KIND_WORD[k][n === 1 ? 0 : 1]}`).join(" · "); }
+export function groupText(calls, count = calls?.length ?? 0, live = false) {
+  const words = live ? NOW : PAST;
+  const parts = groupKinds(calls).map(([k, n]) => words[k](n));
+  const more = count - (calls?.length ?? 0);
+  if (more > 0) parts.push(`${more} more`);
+  if (!parts.length) return live ? "Working" : "Used no tools";
+  const text = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+// The icon for a call of this kind in an open group.
+export const KIND_ICON = { command: "square-terminal", read: "file-search", edit: "text-cursor", search: "search", web: "search", agent: "bot", other: "wrench" };
 
 // The rail on the list's right edge, in place of the scrollbar: one tick per turn, 9 px apart
 // and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px

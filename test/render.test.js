@@ -644,7 +644,8 @@ test("the footer is one row of the most-used keys with q quote for a local termi
   const { v, cx } = await quotePane();
   const hints = () => v.footerHints().map(([k, l]) => `${k} ${l}`);
   v.width = 545; // the reading width
-  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "/ filter", "p pin", "o outline", "? keys"]);
+  // → work comes before o outline, which gives way first.
+  expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "/ filter", "p pin", "→ work", "? keys"]);
   v.width = 380;
   expect(hints()).toEqual(["↑↓ move", "↵ open", "c copy", "q quote", "? keys"]);
   v.toggle(v.sel, cx);
@@ -1425,7 +1426,7 @@ test("C1: the counts line is in the stats part's probe entry, at 16 px lines of 
   const key = v.turnKeys(v.rows())[0];
   v.open = new Set([key]);
   // The numbers show under the open line (level 1).
-  v.lineOpen.add(key);
+  v.toggleLine(key);
   v.legendOn = true;
   const line57 = "cache read 1,204,331 · written 12,345 · new input 123,456";
   expect(line57.length).toBe(57);
@@ -1572,7 +1573,7 @@ test("D1: LATEST UPDATE and the counts line draw in muted, or foreground where m
   const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
   const t = v.current().turns.find((x) => x.latest && x.latest !== v.replyText(x));
   v.open = new Set([`0:${t.n}`]);
-  v.lineOpen.add(`0:${t.n}`);
+  v.toggleLine(`0:${t.n}`);
   v.legendOn = true;
   v.width = 380;
   const colourOf = (calls, text) => {
@@ -4564,7 +4565,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 29 * 25 + 4 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 30 * 25 + 4 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -5009,7 +5010,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.setView("all");
 });
 
-test("level 1: a click on an open turn's line opens it to the tool calls by kind and the numbers; i adds the legend there; a stopped turn says how long it ran", async () => {
+test("level 1 and 2: a click on an open turn's line opens it to its steps and the numbers; a group opens to its calls; i adds the legend; a stopped turn says how long it ran", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
     { k: "u", n: "Read" }, { k: "u", n: "Bash" }, { k: "u", n: "Bash" }, { k: "u", n: "Edit" },
@@ -5024,19 +5025,25 @@ test("level 1: a click on an open turn's line opens it to the tool calls by kind
   expect(v.open.has(a)).toBe(true);
   // Closed line: no level 1 parts, a right chevron.
   expect(kinds()).not.toContain("stats");
-  expect(kinds()).not.toContain("kinds");
+  expect(kinds()).not.toContain("grp");
   const lineOf = () => { rec = []; v.partContent?.(theme, v.rows().find((r) => r.key === `rhead:${a}`)); const c = rec; rec = null; return c; };
   const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   if (v.partContent) expect(svgs(lineOf())).toContain("chevron-right.svg");
-  // A click on the line opens it: the kinds, then the numbers, before the reply.
+  // A click on the line opens it: the step group, then the numbers, before the reply.
   v.click(`rhead:${a}`, cx);
-  expect(v.lineOpen.has(a)).toBe(true);
+  expect(v.lineIsOpen(a, false)).toBe(true);
   const ks = kinds();
-  expect(ks.indexOf("kinds")).toBe(ks.indexOf("rhead") + 1);
-  expect(ks.indexOf("stats")).toBe(ks.indexOf("kinds") + 1);
+  expect(ks.indexOf("grp")).toBe(ks.indexOf("rhead") + 1);
+  expect(ks.indexOf("stats")).toBe(ks.indexOf("grp") + 1);
   expect(ks.indexOf("md")).toBeGreaterThan(ks.indexOf("stats"));
   expect(ks).not.toContain("legend");
-  expect(v.rowDetail(v.rows().find((r) => r.key === `kd:${a}`))).toBe("kinds#1 1 read · 2 commands · 1 edit");
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:0`))).toBe("grp#1 Read 1 file, ran 2 commands and edited 1 file");
+  // A click on the group opens it to one row per call (level 2), and closes it again.
+  v.click(`gp:${a}:0`, cx);
+  expect(v.rows().filter((r) => r.kind === "call" && r.key.startsWith(`cl:${a}:`)).map((r) => r.name)).toEqual(["Read", "Bash", "Bash", "Edit"]);
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:0`))).toMatch(/\[open\]$/);
+  v.click(`gp:${a}:0`, cx);
+  expect(kinds()).not.toContain("call");
   expect(v.rowDetail(v.rows().find((r) => r.key === `rhead:${a}`))).toMatch(/Worked for 2m 31s \[open\]/);
   if (v.partContent) expect(svgs(lineOf())).toContain("chevron-down.svg");
   // i adds the legend under the open line.
@@ -5053,7 +5060,7 @@ test("level 1: a click on an open turn's line opens it to the tool calls by kind
   v.sel = b;
   v.action("legend", cx);
   expect(v.open.has(b)).toBe(true);
-  expect(v.lineOpen.has(b)).toBe(true);
+  expect(v.lineIsOpen(b, false)).toBe(true);
   v.legendOn = false;
   // A stopped turn's line says so, in the blocked colour, with no icon.
   const stopped = v.findTurn("0:2");
@@ -5076,4 +5083,104 @@ test("the running turn's line reads Working for and the clock, then what it has 
   const text = c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
   expect(text).toMatch(/^Working for 0:4\d · 1 tool call so far$/);
   draw(v, cx);
+});
+
+test("steps: interim text between groups in order; → opens the turn, its line, then its groups; ← backs out a level at a time", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
+    { k: "t", t: "Looking at the cart." }, { k: "u", n: "Read" }, { k: "u", n: "Grep" },
+    { k: "t", t: "Found it. Running the tests." }, { k: "u", n: "Bash" },
+    { k: "t", t: "Fixed the rounding." }, { k: "d", ms: 40000, ts: at(1) },
+    { k: "p", o: "human", t: "Thanks", ts: at(2) }, { k: "t", t: "You're welcome." }, { k: "d", ms: 900, ts: at(3) },
+  ]);
+  const a = "0:1";
+  const parts = () => v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === a).map((r) => r.kind);
+  v.sel = a;
+  // → on a closed turn opens it and its line.
+  expect(v.action("deeper", cx)).toBe(true);
+  expect(v.open.has(a)).toBe(true);
+  const p1 = parts();
+  const at1 = p1.indexOf("rhead");
+  expect(p1.slice(at1, at1 + 6)).toEqual(["rhead", "itext", "grp", "itext", "grp", "stats"]);
+  const its = v.rows().filter((r) => r.kind === "itext" && r.key.startsWith(`it:${a}:`));
+  expect(its.map((r) => r.src)).toEqual(["Looking at the cart.", "Found it. Running the tests."]);
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:1`))).toBe("grp#1 Read 1 file and searched 1 time");
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:3`))).toBe("grp#1 Ran 1 command");
+  // The interim text is measured like the reply: it is in the probe until measured.
+  expect(v.probeRows.some((r) => r.kind === "itext")).toBe(true);
+  // → again opens every group; ← closes them, then the line, then the turn.
+  v.action("deeper", cx);
+  expect(parts().filter((k) => k === "call").length).toBe(3);
+  v.action("shallower", cx);
+  expect(parts()).not.toContain("call");
+  expect(parts()).toContain("grp");
+  v.action("shallower", cx);
+  expect(parts()).not.toContain("grp");
+  expect(v.open.has(a)).toBe(true);
+  v.action("shallower", cx);
+  expect(v.open.has(a)).toBe(false);
+  // A turn with no tool calls opens to its numbers alone.
+  v.sel = "0:2";
+  v.action("deeper", cx);
+  const p2 = v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === "0:2").map((r) => r.kind);
+  expect(p2).not.toContain("grp");
+  expect(p2).toContain("stats");
+  // Group and call rows are never a pin's reading place.
+  const { NOT_A_PLACE } = await import("../mods/agent-threads/pins.js");
+  for (const k of ["gp", "cl", "ws"]) expect(NOT_A_PLACE.has(k)).toBe(true);
+  draw(v, cx);
+});
+
+test("a running turn is open while it runs: its steps arrive in order, the group still running says so, Working… closes it; it closes when done unless the person chose", async () => {
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { v, s } = await scripted([
+    { k: "p", o: "human", t: "Fix the cart total", ts: at(0) }, { k: "t", t: "Looking at the cart." }, { k: "u", n: "Read" }, { k: "u", n: "Bash" },
+  ]);
+  const a = "0:1";
+  const st = v.status;
+  v.status = () => "working";
+  v.rowsKey = null;
+  v.sel = null;
+  const live = () => v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === a).map((r) => r.kind);
+  expect(live()).toEqual(["wrow", "itext", "grp", "wspin"]);
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:1`))).toBe("grp#1 Reading 1 file and running 1 command");
+  // Selecting the running turn swaps its row for the card, with the steps still after it.
+  v.sel = a;
+  expect(live()).toEqual(["working", "itext", "grp", "wspin"]);
+  v.sel = null;
+  // More text, then a call: the group before is done, a new one runs.
+  apply(s, { k: "t", t: "Now the tests." });
+  apply(s, { k: "u", n: "Bash" });
+  s.version++;
+  expect(live()).toEqual(["wrow", "itext", "grp", "itext", "grp", "wspin"]);
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:1`))).toBe("grp#1 Read 1 file and ran 1 command");
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:3`))).toBe("grp#1 Running 1 command");
+  // Text after the last call: nothing runs, so no group says Running.
+  apply(s, { k: "t", t: "Fixed." });
+  s.version++;
+  expect(v.rowDetail(v.rows().find((r) => r.key === `gp:${a}:3`))).toBe("grp#1 Ran 1 command");
+  // Waiting for the person: no Working… line.
+  v.status = () => "blocked";
+  v.rowsKey = null;
+  expect(live()).not.toContain("wspin");
+  v.status = () => "working";
+  // Done: the line closes, and the turn reads as a finished row.
+  apply(s, { k: "d", ms: 48000, ts: at(1) });
+  s.version++;
+  v.status = st;
+  v.rowsKey = null;
+  expect(live()).toEqual(["turn"]);
+  expect(v.lineIsOpen(a, false)).toBe(false);
+  // A turn the person opened by hand while it ran stays open after; closed stays closed.
+  const r2 = await scripted([{ k: "p", o: "human", t: "Again", ts: at(0) }, { k: "u", n: "Bash" }]);
+  r2.v.status = () => "working";
+  r2.v.sel = a;
+  r2.v.action("shallower", r2.cx);
+  expect(r2.v.lineIsOpen(a, true)).toBe(false);
+  expect(r2.v.rows().filter((r) => r.turn).map((r) => r.kind)).toEqual(["working"]);
+  r2.v.action("deeper", r2.cx);
+  expect(r2.v.lineIsOpen(a, true)).toBe(true);
+  apply(r2.s, { k: "t", t: "Done." });
+  apply(r2.s, { k: "d", ms: 900, ts: at(1) });
+  expect(r2.v.lineIsOpen(a, false)).toBe(true);
 });

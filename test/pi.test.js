@@ -92,6 +92,7 @@ test("builds turns from a Pi session file", () => {
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.tools).toBe(1);
   expect(plain.toolNames).toEqual({ bash: 1 });
+  expect(plain.steps).toEqual([{ k: "text", t: "Looking at it.", cut: false }, { k: "group", calls: ["bash"], count: 1 }]);
   expect(plain.model).toBe("stub-1");
   expect(plain.effort).toBe("medium");
   expect(plain.done).toBe(true);
