@@ -2467,7 +2467,7 @@ const saved0 = () => new Promise((r) => setTimeout(r, 30));
 const pinX = (v, key) => { const L = stripLayout(500, v.stripText(v.findTurn(key), true), !v.findTurn(key).agent); return (L.pin[0] + L.pin[1]) / 2; };
 const copyX = (v, key) => { const L = stripLayout(500, v.stripText(v.findTurn(key), true), !v.findTurn(key).agent); return (L.copy[0] + L.copy[1]) / 2; };
 
-test("the pin in the strip under an open turn's message pins it; copy there copies the prompt; a press elsewhere on it only selects", async () => {
+test("the pin in the strip under an open turn's message pins it; copy there copies the prompt; a press elsewhere on it only selects; its icons act on a turn not selected", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   const a = keys()[0];
   v.toggle(a, cx);
@@ -2486,12 +2486,21 @@ test("the pin in the strip under an open turn's message pins it; copy there copi
   v.click(`us:${a}`, cx);
   expect(v.open.has(a)).toBe(true);
   expect(v.isPinned(a)).toBe(true);
-  // On a turn that is not selected the strip shows nothing, so a press there only selects it.
+  // On a turn that is not selected the strip shows its icons while the pointer is on it, so
+  // a press on the pin acts there too (here it unpins) and selects the turn.
   v.sel = null;
   v.pressX = pinX(v, a);
   v.click(`us:${a}`, cx);
   expect(v.sel).toBe(a);
-  expect(v.isPinned(a)).toBe(true);
+  expect(v.isPinned(a)).toBe(false);
+  expect(v.lastBarHit).toMatchObject({ hit: "pin", strip: "you" });
+  // The same under the reply: copy copies the reply on a turn not selected.
+  v.sel = null;
+  const g = v.barGeom(v.findTurn(a));
+  v.pressX = (g.copy[0] + g.copy[1]) / 2;
+  v.click(`cp:${a}`, cx);
+  expect(v.sel).toBe(a);
+  expect(v.copied?.id).toBe(`reply:${a}`);
   // A click on the turn's top closes it.
   v.click(a, cx);
   expect(v.open.has(a)).toBe(false);
@@ -3241,7 +3250,23 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   let drawn = strings(() => v.rowItem(theme, row, false));
   expect(drawn).not.toContain("You");
   expect(drawn.some((x) => x.includes(`#${turn.n}`))).toBe(false);
-  expect(drawn).not.toContain(time);
+  // The time is drawn for a hover on the message to reveal: the message and its strip are one
+  // element, clear at rest and dim while the pointer is on it. No icons on a closed row that
+  // is not selected, since its one click opens it.
+  expect(drawn).toContain(time);
+  const rest = calls(() => v.rowItem(theme, row, false));
+  const clear = rest.findIndex((e) => e[0] === "text_color" && e[1] === "#00000000");
+  expect(clear).toBeGreaterThan(-1);
+  expect(rest.slice(clear).some((e) => e[0] === "text_color" && e[1] === theme.dim)).toBe(true);
+  expect(rest.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop())).not.toContain("pin.svg");
+  // An open turn's strips are items of their own, so each reveals its icons on its own
+  // hover: copy, pin and "#n · time" under the message; copy, quote, select and terminal
+  // under the reply.
+  const svgs = (el) => calls(el).filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(svgs(() => v.youStrip(theme, turn, row.key, false, "all"))).toEqual(["copy.svg", "pin.svg"]);
+  expect(strings(() => v.youStrip(theme, turn, row.key, false, "all"))).toContain(`#${turn.n} · ${time}`);
+  expect(svgs(() => v.actsStrip(theme, turn, row.key, false, true))).toContain("text-cursor.svg");
+  expect(strings(() => v.youStrip(theme, turn, row.key, false))).toEqual([]);
   expect(drawn).toContain(v.workText(turn));
   expect(v.workText(turn)).toMatch(/^Worked for \d/);
   // No stats line under the reply, and no fill on a selected row.

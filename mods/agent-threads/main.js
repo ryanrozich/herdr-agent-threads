@@ -50,6 +50,8 @@ import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settings
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// A clear colour, for what a hover reveals.
+const CLEAR = "#00000000";
 const SCRIPT = (n) => `${appHome()}/mods/${MOD}/${n}`;
 // An agent's mark on its tile (MARKS in harness.js), size px square, or null for an agent
 // with none. A one-colour mark is drawn white; a full-colour one as it is.
@@ -721,7 +723,7 @@ export default class Threads extends View {
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
-      case "ustrip": return `ustrip${n} ${this.stripText(r.turn, this.sel === `${r.si}:${r.turn.n}`) || "(empty)"}`;
+      case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
         const y = this.youMd(r);
         return `you${n} ${this.youLabel(r.turn)} ${y.hl ? "hl" : "md"} q${y.quotes} code${y.code} links${y.links}${y.more ? ` +${y.more}` : ""} h${this.height(r)}${y.hl ? "" : ` | ${y.md.replace(/\n/g, " ⏎ ").slice(0, 300)}`}`;
@@ -737,7 +739,8 @@ export default class Threads extends View {
         const L = this.acts(r.turn);
         const on = this.sel === `${r.si}:${r.turn.n}`;
         const selOn = this.selecting === `${r.si}:${r.turn.n}`;
-        return `copy${n} ${on ? ["copy", "quote", "select", "terminal"].filter((k) => L[k]).map((k) => (k === "select" && selOn ? "select(on)" : k)).join(" ") : "(empty)"}`;
+        const icons = ["copy", "quote", "select", "terminal"].filter((k) => L[k]).map((k) => (k === "select" && selOn ? "select(on)" : k)).join(" ");
+        return `copy${n} ${on ? icons : `(empty) hover:${icons}`}`;
       }
       case "day": return `day ${r.name}${r.date ? ` ${r.date}` : ""} · ${plural(r.count, "turn")}`;
       case "line": {
@@ -2888,13 +2891,12 @@ export default class Threads extends View {
     }
     if (kind === "cp") {
       // The strip under the reply is one list item. A list item takes one click handler, so
-      // the press position tells its icons apart. A press beside them selects the turn, and
-      // on a turn that was not selected only selects it (the icons were not showing).
+      // the press position tells its icons apart. A press beside them selects the turn. The
+      // icons show while the pointer is on the strip, so a press on one acts on any turn.
       const x = this.pressX ?? this.mouseX;
       const w = this.bodyW ?? this.width;
       this.pressX = null;
-      const shown = this.sel === id;
-      const hit = shown ? this.barHit(x, this.findTurn(id)) : null;
+      const hit = this.barHit(x, this.findTurn(id));
       this.lastBarHit = { x: x == null ? null : Math.round(x), w: Math.round(w), hit };
       this.sel = id;
       if (hit === "terminal" && this.pane()) return this.focusTerminal(cx);
@@ -2909,9 +2911,8 @@ export default class Threads extends View {
       const w = this.bodyW ?? this.width;
       this.pressX = null;
       const turn = this.findTurn(id);
-      const shown = this.sel === id;
       this.sel = id;
-      const text = turn && shown ? this.stripText(turn, true) : "";
+      const text = turn ? this.stripText(turn, true) : "";
       const hit = text ? boxHit(stripLayout(w, text, !turn.agent), x, ["copy", "pin"]) : null;
       this.lastBarHit = { x: x == null ? null : Math.round(x), w: Math.round(w), hit, strip: "you" };
       if (hit === "copy") return this.copyPrompt(id, cx);
@@ -4963,22 +4964,33 @@ export default class Threads extends View {
     return this.prefs.alwaysShowTime ? time : "";
   }
 
+  // Hover reveal: an element whose text and icons are clear at rest and dim while the
+  // pointer is on it. Children that set no colour of their own take it. gpui restyles only
+  // the hovered element itself, so the strip a hover reveals must sit inside that element.
+  reveal(t, el) { return el.text_color(CLEAR).hover((s) => s.text_color(t.dim)); }
+
   // The strip under a bubble (ui.js stripLayout): on the selected turn, copy the prompt, the
   // pin (in the accent colour when the turn is pinned) and "#7 · 9:12 AM", at the bubble's
-  // right edge (an agent's: its left). It keeps its height when it shows nothing.
-  youStrip(t, turn, key, sel, time = fmtTime(turn.ts)) {
-    const text = this.stripText(turn, sel, time);
+  // right edge (an agent's: its left). It keeps its height when it shows nothing. On other
+  // turns `hover` draws what a hover on the element around it reveals, in no colour of its
+  // own: "time" the time alone (a closed row, whose one click opens it), "all" the icons and
+  // "#7 · 9:12 AM" (an open turn's strip, an item of its own, whose icons take a click).
+  youStrip(t, turn, key, sel, hover = null, time = fmtTime(turn.ts)) {
+    const always = this.stripText(turn, false, time);
+    const icons = sel || hover === "all";
+    const text = icons ? this.stripText(turn, true, time) : always || (hover === "time" ? time : "");
+    const lit = sel || Boolean(always);
     const agent = turn.agent;
-    const el = h_flex().h(ROW.META).w_full().items_center().text_size(11.5).text_color(t.dim).min_w(0).when(!agent, (e) => e.justify_end());
+    const el = h_flex().h(ROW.META).w_full().items_center().text_size(11.5).min_w(0).when(!agent, (e) => e.justify_end());
     if (!text) return el;
     const L = stripLayout(this.width, text, !agent);
     const box = (icon, color) => div().flex_none().w(ICON_BOX).h(ROW.META).flex().items_center().justify_center()
-      .child(svg(ICON(icon)).size(13).text_color(color));
+      .child(svg(ICON(icon)).size(13).when(Boolean(color), (e) => e.text_color(color)));
     const copied = this.copied?.id === `prompt:${key}`;
     return el.when(Boolean(agent), (e) => e.ml(-4))
-      .when(sel, (e) => e.child(box(copied ? "check" : "copy", copied ? t.ansi2 : t.dim)).child(div().w(2).flex_none())
-        .child(box("pin", this.isPinnedTurn(turn) ? t.accent : t.dim)).child(div().w(4).flex_none()))
-      .child(div().flex_none().w(L.tw).whitespace_nowrap().overflow_hidden().when(!agent, (e) => e.text_right()).child(text));
+      .when(icons, (e) => e.child(box(copied ? "check" : "copy", copied ? t.ansi2 : sel ? t.dim : null)).child(div().w(2).flex_none())
+        .child(box("pin", sel && this.isPinnedTurn(turn) ? t.accent : sel ? t.dim : null)).child(div().w(4).flex_none()))
+      .child(div().flex_none().w(L.tw).whitespace_nowrap().overflow_hidden().when(lit, (e) => e.text_color(t.dim)).when(!agent, (e) => e.text_right()).child(text));
   }
 
   // The line between the message and the reply: "Worked for 2m 31s" and a chevron, over a
@@ -5011,18 +5023,21 @@ export default class Threads extends View {
   // it, select its text and go to the terminal, as icons (keys c q s t). It keeps its height
   // when it shows nothing. A collapsed row is one list item and a press on it opens the
   // turn; an open turn's strip is an item of its own, and click() tells its icons apart.
-  actsStrip(t, turn, key, show) {
-    const el = h_flex().h(ROW.ACTS).items_center().ml(-4).gap(4).text_color(t.dim);
-    if (!show) return el;
+  // With `hover` (an open turn's strip on a turn not selected) it draws the icons in no
+  // colour of their own, for the hover around it to reveal.
+  actsStrip(t, turn, key, show, hover = false) {
+    const el = h_flex().h(ROW.ACTS).items_center().ml(-4).gap(4).when(show, (e) => e.text_color(t.dim));
+    if (!show && !hover) return el;
     const L = this.acts(turn);
     const copied = this.copied?.id === `reply:${key}`;
     const has = Boolean(this.replyText(turn));
-    const box = (icon, color = t.dim, on = true) => div().flex_none().w(ICON_BOX).h(ROW.ACTS).flex().items_center().justify_center()
-      .when(!on, (e) => e.opacity(0.4)).child(svg(ICON(icon)).size(13).text_color(color));
+    const ink = show ? t.dim : null;
+    const box = (icon, color = ink, on = true) => div().flex_none().w(ICON_BOX).h(ROW.ACTS).flex().items_center().justify_center()
+      .when(!on, (e) => e.opacity(0.4)).child(svg(ICON(icon)).size(13).when(Boolean(color), (e) => e.text_color(color)));
     return el
-      .child(box(copied ? "check" : "copy", copied ? t.ansi2 : t.dim, has))
+      .child(box(copied ? "check" : "copy", copied ? t.ansi2 : ink, has))
       .when(Boolean(L.quote), (e) => e.child(box("quote")))
-      .child(box("text-cursor", this.selecting === key ? t.accent : t.dim, has))
+      .child(box("text-cursor", this.selecting === key ? t.accent : ink, has))
       .when(Boolean(L.terminal), (e) => e.child(box("square-terminal")));
   }
 
@@ -5044,7 +5059,7 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill)
+    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -5144,18 +5159,26 @@ export default class Threads extends View {
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, false, [
       ...(turn.agent ? [this.senderLine(t, turn)] : []),
-      ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
-      this.bubble(t, turn, [
-        this.promptBlock(bt, turn, sh, sel),
-        ...(sh.pMore ? [this.moreLine(bt)] : []),
-      ], sh.bubbleW),
-      this.youStrip(t, turn, key, sel),
+      this.youGroup(t, turn, key, sel, [
+        ...(sh.thumbs ? [this.thumbStrip(t, turn, key)] : []),
+        this.bubble(t, turn, [
+          this.promptBlock(bt, turn, sh, sel),
+          ...(sh.pMore ? [this.moreLine(bt)] : []),
+        ], sh.bubbleW),
+      ]),
       this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn)),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ]);
+  }
+
+  // A closed row's message and the strip under it, as one element, so a hover anywhere on
+  // the message reveals the time under it. The gap is the row's own.
+  youGroup(t, turn, key, sel, kids) {
+    return this.reveal(t, v_flex().id(`yg:${key}`).w_full().gap(ROW.GAP).min_w(0))
+      .children([...kids, this.youStrip(t, turn, key, sel, "time")]);
   }
 
   // A closed pin in the Pinned view (ui.js PIN_ROW): its digit in an accent badge, then
@@ -5296,8 +5319,7 @@ export default class Threads extends View {
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.bubble(t, turn, [this.promptBlock(bt, turn, sh), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW),
-      this.youStrip(t, turn, key, sel),
+      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, turn, sh), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
       this.liveLine(t, turn),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -5489,7 +5511,7 @@ export default class Threads extends View {
             .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
       }
-      case "ustrip": return div().pt(ROW.GAP).child(this.youStrip(t, turn, tkey, this.sel === tkey));
+      case "ustrip": return this.reveal(t, div().id(`ush:${tkey}`).pt(ROW.GAP)).child(this.youStrip(t, turn, tkey, this.sel === tkey, "all"));
       case "rhead":
         // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
@@ -5607,7 +5629,7 @@ export default class Threads extends View {
         return v_flex().mt(6).gap(4).children(this.legendEntries(turn).map(([icon, text]) => h_flex().gap(6).items_start()
           .child(svg(ICON(icon)).size(11).mt(4).flex_none().text_color(t.dim))
           .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.muted).child(text))));
-      case "copy": return div().pt(ROW.GAP).child(this.actsStrip(t, turn, tkey, this.sel === tkey));
+      case "copy": return this.reveal(t, div().id(`cph:${tkey}`).pt(ROW.GAP)).child(this.actsStrip(t, turn, tkey, this.sel === tkey, true));
     }
     return div();
   }
