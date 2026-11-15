@@ -1843,7 +1843,7 @@ test("D1: LATEST UPDATE draws in muted, or foreground where muted is faint; the 
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);
 });
 
-test("the Jump to latest pill, the rail card, the ? sheet and toasts have an opaque fill, at rest and under the pointer", async () => {
+test("the Jump to latest pill, the rail card, the Turn card, the ? sheet and toasts have an opaque fill, at rest and under the pointer", async () => {
   const { v } = await pane(fixture("--only", "2"));
   // Graphite and paper give hover with alpha, and a theme may give popover so.
   for (const th of [
@@ -1868,6 +1868,11 @@ test("the Jump to latest pill, the rail card, the ? sheet and toasts have an opa
     rec = []; v.toastView(th); const tc = rec; rec = null;
     v.toast = null;
     expect(tc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    // The Turn card, opened by i or the pointer on the info icon.
+    const turn = v.current().turns.find((x) => x.done);
+    rec = []; v.detailsCard(th, turn); const dc = rec; rec = null;
+    expect(dc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    expect(dc.some((e) => e[0] === "bg" && e[1] === th.popover)).toBe(th.popover === rest);
   }
   // An opaque popover over an opaque background is itself.
   expect(v.solidFill({ ...theme, background: "#1d1f22", popover: "#25272b" })).toBe("#25272b");
