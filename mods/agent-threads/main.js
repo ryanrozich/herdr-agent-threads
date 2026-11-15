@@ -1024,7 +1024,10 @@ export default class Threads extends View {
   // The pins of every session in the pane, oldest turn first: { pin, s, si, turn, key, state }.
   // Their place in this order is their number (1 to 5) and digit key.
   pinnedAll() {
-    const memoKey = `${this.pinVer}|${this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",")}|${this.status()}|${this.sel}|${this.sel && this.open.has(this.sel) ? 1 : 0}`;
+    // No terminal status in the key: whether a pin's turn is live does not depend on it
+    // (isLive), and reading it here, once per row drawn, read Herdr's panes thousands of
+    // times a draw in a long session.
+    const memoKey = `${this.pinVer}|${this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",")}|${this.sel}|${this.sel && this.open.has(this.sel) ? 1 : 0}`;
     if (this.pinMemoKey === memoKey) return this.pinMemo;
     const out = [];
     this.sessions.forEach((s, si) => {
@@ -1035,7 +1038,7 @@ export default class Threads extends View {
         const turn = ids.get(pin.id) ?? null;
         const key = turn ? `${si}:${turn.n}` : null;
         if (turn) pin.n = turn.n;
-        const live = turn ? this.isLive(s, si, turn.n - 1, this.status()) : false;
+        const live = turn ? this.isLive(s, si, turn.n - 1) : false;
         // An open, selected turn is being read, so nothing in it is new.
         if (turn && !live && key === this.sel && this.open.has(key)) {
           const seen = seenOf(turn);
@@ -4184,8 +4187,16 @@ export default class Threads extends View {
   bindingTip() {
     const s = this.current();
     if (!s) return `Reading ${this.terminal ?? "no terminal"}`;
-    let input = 0, output = 0, cr = 0, cc = 0;
-    for (const t of s.turns) for (const u of Object.values(t.usage)) { input += u.i ?? 0; output += u.o ?? 0; cr += u.cr ?? 0; cc += u.cc ?? 0; }
+    // The session's totals, summed again only when the session changed (every event read
+    // bumps its version): summed on every draw, they took a seventh of Herdr's time for a
+    // draw in a session of 2,000 turns.
+    const v = `${s.id}|${s.version}|${s.turns.length}`;
+    if (this.usageMemo?.v !== v) {
+      let i = 0, o = 0, r = 0, c = 0;
+      for (const t of s.turns) for (const u of Object.values(t.usage)) { i += u.i ?? 0; o += u.o ?? 0; r += u.cr ?? 0; c += u.cc ?? 0; }
+      this.usageMemo = { v, input: i, output: o, cr: r, cc: c };
+    }
+    const { input, output, cr, cc } = this.usageMemo;
     const pct = cachePct(cr, input + cc + cr);
     // The selected turn's own cache counts too (its chip in the card cannot carry a tooltip).
     const sel = this.sel ? this.findTurn(this.sel) : null;
@@ -5273,8 +5284,20 @@ export default class Threads extends View {
   // zoom, becomes the part's list size. A measure is kept under the part's key with a
   // signature of everything that changes its layout.
 
-  partSig(r) {
-    const head = `${Math.round(this.width)}|${this.zoom()}|${settings()?.ui_font ?? ""}|${this.prefs.textSize}|${this.prefs.width}|${r.kind}`;
+  // What every part's signature starts with, read from Herdr's settings once per draw. Every
+  // row's height and every probe part asks for it; read once per part, it took a third of
+  // Herdr's time for a draw in a session of 2,000 turns ("This view could not be
+  // re-rendered", interrupted).
+  sigBase() {
+    const r = this.renders ?? 0, w = Math.round(this.width), P = this.prefs;
+    const m = this.sigMemo;
+    if (m && m.r === r && m.w === w && m.ts === P.textSize && m.pw === P.width) return m.v;
+    const v = `${w}|${this.zoom()}|${settings()?.ui_font ?? ""}|${P.textSize}|${P.width}`;
+    this.sigMemo = { r, w, ts: P.textSize, pw: P.width, v };
+    return v;
+  }
+  partSig(r, base = this.sigBase()) {
+    const head = `${base}|${r.kind}`;
     switch (r.kind) {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
@@ -5329,9 +5352,11 @@ export default class Threads extends View {
   probeDue() {
     const want = [];
     this.probeTries ??= new Map();
+    const base = this.sigBase();
     for (const r of this.probeRows ?? []) {
-      if (this.measured(r) != null) continue;
-      const sig = this.partSig(r);
+      const sig = this.partSig(r, base);
+      const m = this.meas?.get(r.key);
+      if (m && m.h > 0 && m.sig === sig) continue;
       const k = `${r.key}|${sig}`;
       if ((this.probeTries.get(k) ?? 0) >= 3) continue;
       want.push([r, sig, k]);
@@ -6332,29 +6357,42 @@ export default class Threads extends View {
   railShown() {
     return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1;
   }
+  // The ticks are grouped once per list of turns, pane height and set of pins, and only the
+  // selection and the turns on screen are worked out on each draw. Grouping every turn on
+  // every draw, with a pin lookup per turn, took about half of Herdr's time for a draw in a
+  // session of 2,000 turns ("This view could not be re-rendered", interrupted).
   railTicks() {
     const list = this.railTurns ?? [];
-    let days = 0;
-    for (let i = 1; i < list.length; i++) if (list[i].day && list[i].day !== list[i - 1].day) days++;
-    const L = railLayout(list.length, days, Math.max(0, this.listH));
+    this.pinnedAll();
+    const pins = this.pinTurns ?? new Set();
+    const h = Math.max(0, this.listH);
+    let base = this.railMemo;
+    if (!base || base.list !== list || base.h !== h || base.pins !== pins) {
+      let days = 0;
+      for (let i = 1; i < list.length; i++) if (list[i].day && list[i].day !== list[i - 1].day) days++;
+      const L = railLayout(list.length, days, h);
+      const groups = [];
+      const at = new Map();
+      for (let i = 0; i < list.length; i += L.per) {
+        const g = list.slice(i, i + L.per);
+        const first = g[0];
+        const prev = list[i - 1];
+        for (const x of g) at.set(x.key, groups.length);
+        groups.push({
+          key: first.key, last: g[g.length - 1], turns: g,
+          dayStart: L.dayGap && Boolean(prev && first.day && first.day !== prev.day),
+          pinned: g.some((x) => pins.has(x.turn)), live: g.some((x) => x.live), miss: g.every((x) => x.miss),
+        });
+      }
+      base = this.railMemo = { list, h, pins, L, groups, at };
+    }
     // Which turns are on screen, from the range the list last drew.
     const rows = this.rowsMemo ?? [];
     const [a, b] = this.viewRange ?? [0, 0];
     const on = new Set();
-    for (let i = a; i < Math.min(b, rows.length); i++) { const k = rowTurnKey(rows[i]); if (k) on.add(k); }
-    const ticks = [];
-    for (let i = 0; i < list.length; i += L.per) {
-      const g = list.slice(i, i + L.per);
-      const first = g[0];
-      const prev = list[i - 1];
-      ticks.push({
-        key: first.key, last: g[g.length - 1], turns: g,
-        dayStart: L.dayGap && Boolean(prev && first.day && first.day !== prev.day),
-        sel: g.some((x) => x.key === this.sel), pinned: g.some((x) => this.isPinnedTurn(x.turn)),
-        live: g.some((x) => x.live), inView: g.some((x) => on.has(x.key)), miss: g.every((x) => x.miss),
-      });
-    }
-    return { L, ticks };
+    for (let i = a; i < Math.min(b, rows.length); i++) { const k = rowTurnKey(rows[i]); const gi = k ? base.at.get(k) : undefined; if (gi != null) on.add(gi); }
+    const sel = this.sel ? base.at.get(this.sel) : undefined;
+    return { L: base.L, ticks: base.groups.map((g, i) => ({ ...g, sel: i === sel, inView: on.has(i) })) };
   }
   railTip(k) {
     const a = k.turns[0].turn;

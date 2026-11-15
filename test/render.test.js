@@ -63,12 +63,17 @@ const editors = [];
 const scrollHandles = [];
 let focusCalls = 0;
 const never = () => new Promise(() => {});
+// The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
+// test sets this (n) => { start, end }.
+let listWindow = null;
 // What the last v_virtual_list was given: its sizes and item keys.
 let lastList = null;
 // settings(): the person's Herdr settings (zoom, fonts).
 let herdrSettings = { font_family: "Mono" };
 // updates().app.version: Herdr's version.
 let herdrVersion = "0.1.13";
+// Reads of Herdr's settings, panes and terminals, for the draw-time guard.
+const hostReads = { settings: 0, panes: 0, terminals: 0 };
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
 mock.module("gpui-base", () => ({
   v_flex: () => el, h_flex: () => el,
@@ -80,7 +85,7 @@ mock.module("gpui-base", () => ({
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
     lastList = { sizes: [...sizes], keys: [], draw };
     for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
-    draw({ start: 0, end: n });
+    draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
   TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
@@ -119,8 +124,8 @@ function herdrRest() { return {
     return null;
   },
   watchFolder: never,
-  theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => herdrSettings,
-  panes: () => state.panes, terminals: () => state.terminals, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
+  theme: () => theme, themes: () => [{ name: "test", colors: theme }], settings: () => { hostReads.settings++; return herdrSettings; },
+  panes: () => { hostReads.panes++; return state.panes; }, terminals: () => { hostReads.terminals++; return state.terminals; }, spaces: () => [{ tabs: [{ id: "A", name: "work" }] }],
   focused: () => focusNow, props: () => state.props,
   run: (name, args) => { log.push(["run", name, args ?? null]); if (name === "pane.focus") afterFocus(args); return null; },
   shared: (k) => state.shared[k], setShared: (k, v) => { state.shared[k] = v; },
@@ -5686,4 +5691,40 @@ test("level 3 lines draw paths from the terminal's working folder, or from ~, an
   expect(src).toContain(".child(this.short(callText(r.name, c?.input)))");
   expect(src).toContain("current: last?.input ? this.short(callText(");
   expect(src).toContain(".child(this.short(l) || \" \")");
+});
+
+// Herdr stops a draw that runs past its time (about 50 ms on an M-series Mac) and shows "This
+// view could not be re-rendered" until a draw fits. In a session of 2,000 turns every draw
+// came near that, so one click more went over.
+test("draw time: a session of 2,000 turns draws well inside Herdr's time, and reads Herdr's state a few times a draw", { timeout: 120000 }, async () => {
+  const { v, cx } = await pane(fixture("--extra", "2000"));
+  expect(v.current().turns.length).toBeGreaterThan(2000);
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  v.debug = false;
+  const turns = v.current().turns;
+  for (const t of turns.slice(-4, -1)) { const k = `0:${t.n}`; v.open.add(k); v.lineOpen.add(k); v.lineTouched.add(k); }
+  v.sel = `0:${turns.at(-1).n}`;
+  // Frames until every row is shaped and every part measured, as Herdr's next frames do.
+  for (let i = 0; i < 30; i++) {
+    v.render(cx);
+    if (!(v.shapeLeft > 0) && !(v.probeLeft > 0)) break;
+    if (v.shapeLeft > 0) v.rowsKey = null;
+  }
+  // Herdr's reads, per draw with nothing changed: none per turn. (Here the list draws all of
+  // its rows; before the fix this was over 4,000 reads of the settings and 6,000 of panes.)
+  for (const k in hostReads) hostReads[k] = 0;
+  v.render(cx);
+  expect(hostReads.settings).toBeLessThan(100);
+  expect(hostReads.panes + hostReads.terminals).toBeLessThan(100);
+  // Time, as the best of five, against shares of Herdr's 50 ms: a draw with nothing changed
+  // under a fifth, a draw that rebuilds the rows under a half. bun runs this faster than
+  // Herdr does, so these are generous; the reads above are the exact check.
+  // The list draws the rows of one screen at its end, as Herdr does.
+  listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
+  const best = (fn) => { let b = Infinity; for (let i = 0; i < 5; i++) { const a = performance.now(); fn(); b = Math.min(b, performance.now() - a); } return b; };
+  const still = best(() => v.render(cx));
+  const rebuild = best(() => { v.rowsKey = null; v.render(cx); });
+  listWindow = null;
+  expect(still).toBeLessThan(10);
+  expect(rebuild).toBeLessThan(25);
 });
