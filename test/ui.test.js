@@ -442,11 +442,17 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
   }
 });
 
-test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, leaving Threads at least 240", () => {
+test("the Pinned column: from 480 px, 40% of Threads, 340 to 400 px, never under 240 or leaving Threads under 240", () => {
   expect(PIN_SPLIT_MIN).toBe(480);
-  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 240], [600, 240], [700, 252], [800, 288], [960, 320], [1600, 320]]) {
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 258], [571, 331], [580, 340], [700, 340], [820, 340], [900, 360], [960, 384], [1000, 400], [1600, 400]]) {
     expect(pinColumn(w)).toBe(px);
     if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+    // A compact row's text (the column less 54 px) holds about 40 prompt characters from 580 px.
+    if (w >= 580) expect((px - 54) / 6.7).toBeGreaterThanOrEqual(40);
+  }
+  // A width the owner left the column at wins, within 240 to 640 px and Threads at least 240.
+  for (const [w, kept, px] of [[1000, 300, 300], [1000, 460, 460], [600, 500, 360], [571, 300, 300], [1600, 700, 640], [500, 200, 240], [470, 300, null]]) {
+    expect(pinColumn(w, kept)).toBe(px);
   }
   expect(pinColumn(Number.NaN)).toBe(null);
   expect(headerButtonWidth(null)).toBe(24);
