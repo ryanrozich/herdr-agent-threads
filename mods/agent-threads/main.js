@@ -109,6 +109,14 @@ const SHAPE_FIRST = 40;
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
 // interrupted). The rest are measured over the next frames.
 const PROBE_MAX = 16;
+// Herdr stops a draw that runs past its time (about 50 ms) and keeps the last frame that
+// worked, so a draw that never fits would leave the pane blank for good. A row whose draw was
+// stopped is drawn plainly for CUT_MS (its Markdown as plain text), and
+// blank if that is stopped too; the wait doubles each time, up to five minutes. A stopped
+// render draws without reshaping or measuring for CUT_MS.
+const CUT_MS = 5000;
+// Markdown split for TextView, kept for the texts drawn last (mdParts).
+const MD_MEMO = 400;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -2123,7 +2131,7 @@ export default class Threads extends View {
     if (turn.shapeKey === key) return turn.shapeMemo;
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
@@ -3109,7 +3117,7 @@ export default class Threads extends View {
     this.stepLinked ??= new WeakMap();
     const known = this.stepLinked.get(st);
     if (known?.ver === ver) return known.lk;
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       return { md: st.t, links: 0 };
     }
@@ -3974,9 +3982,26 @@ export default class Threads extends View {
 
   // ---- drawing ----
 
+  // A render that did not reach its end was stopped by Herdr (an error is caught and clears the
+  // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
+    if (this.drawingRow) this.rowCut(this.drawingRow);
+    if (this.renderOpen) { this.renderOpen = false; this.cutUntil = now() + CUT_MS; this.renderCuts = (this.renderCuts ?? 0) + 1; }
+    const light = this.cutUntil > now();
+    this.renderOpen = true;
+    let out;
+    try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
+    this.renderOpen = false;
+    return out;
+  }
+
+  // Reshaping time left for this draw: none while a stopped render is being recovered from.
+  shapeMax() { return this.light ? -1 : this.shapeBudget ?? SHAPE_MS; }
+
+  frame(cx, light) {
     if (this.gal) return this.galleryView();
     if (this.launcher) return div();
+    this.light = light;
     this.renders = (this.renders ?? 0) + 1;
     this.monoFont = null;
     if (this.stickStep) this.applyStick();
@@ -3992,7 +4017,7 @@ export default class Threads extends View {
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
     if (this.shapeLeft > 0 && !this.shapeNext) {
       this.shapeNext = true;
-      cx.timer.after(0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
+      cx.timer.after(this.light ? Math.max(0, this.cutUntil - now()) : 0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
     }
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
@@ -4773,7 +4798,7 @@ export default class Threads extends View {
         [this.button(t, "th-show-agents", "Show them", (_e, cx) => { this.setAgents(true, cx); cx.notify(); }, "bot")]);
     }
     const slots = this.slotsMemo;
-    const due = this.probeDue();
+    const due = this.light ? [] : this.probeDue();
     // Parts left for later frames (PROBE_MAX): the parts drawn now report their sizes and
     // ask for a frame, but one that never reports would not, so ask here too.
     if (this.probeLeft > 0 && !this.probeNext) {
@@ -4895,7 +4920,7 @@ export default class Threads extends View {
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
         .on_scroll_wheel((e) => this.listWheel(e))
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
-          .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+          .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
             .track_scroll(this.scroll)
             .on_item_click((key, cx) => this.click(key, cx))
@@ -5104,19 +5129,21 @@ export default class Threads extends View {
   // A reading block: the reading size and line, at most a reading line wide.
   readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
   // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
-  // enough for Herdr to draw (mdChunks). Kept for the text last asked for, as it is redrawn often.
+  // enough for Herdr to draw (mdChunks). Kept for the MD_MEMO texts used last, as they are
+  // redrawn often: the probe walks every turn, and a memo cleared when full made a long reply
+  // on screen split again about once a second.
   mdParts(md) {
     const memo = (this.mdMemo ??= new Map());
     let parts = memo.get(md);
-    if (!parts) {
-      parts = mdChunks(escapeDollars(md));
-      if (memo.size > 300) memo.clear();
-      memo.set(md, parts);
-    }
+    if (parts) { memo.delete(md); memo.set(md, parts); return parts; }
+    parts = mdChunks(escapeDollars(md));
+    memo.set(md, parts);
+    if (memo.size > MD_MEMO) memo.delete(memo.keys().next().value);
     return parts;
   }
   // One TextView, or several stacked a paragraph apart when the Markdown is too long for one.
   mdView(id, md, selectable) {
+    if (this.liteDraw) return div().w_full().text_color(theme().foreground).child(String(md ?? ""));
     const parts = this.mdParts(md);
     if (parts.length === 1) return TextView.markdown(id, parts[0]).selectable(selectable).w_full();
     return v_flex().w_full().gap(this.paraGap()).children(parts.map((p, i) => TextView.markdown(`${id}-${i}`, p).selectable(selectable).w_full()));
@@ -5144,7 +5171,7 @@ export default class Threads extends View {
     if (this.mdHeights?.geo !== geo || this.mdHeights.map.size > 4000) this.mdHeights = { geo, map: new Map() };
     const known = this.mdHeights.map.get(md);
     if (known != null) return known;
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
     }
@@ -5499,6 +5526,7 @@ export default class Threads extends View {
   // until it scrolls or resizes, and Herdr reports nothing, so each item is drawn on its own:
   // one that fails shows as a short error row, and the error is kept for the owner.
   listItems(t, rows, slots, range, focusedPanel, dim) {
+    if (this.drawingRow) this.rowCut(this.drawingRow);
     // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
@@ -5529,12 +5557,43 @@ export default class Threads extends View {
       const x = rows[i];
       const h = slots[i] > 0 ? slots[i] : 1;
       let body;
-      try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+      const cut = x && this.cutRows?.get(x.key);
+      const held = cut && cut.until > now();
+      if (held && cut.blank) body = div();
+      else {
+        this.drawingRow = x ? { key: x.key, lite: Boolean(held) } : null;
+        this.liteDraw = Boolean(held);
+        try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+        this.liteDraw = false;
+        this.drawingRow = null;
+      }
+      // A plain row keeps the slot its Markdown measured, which is taller: it sits at the
+      // slot's foot, so its end is next to the rows below it.
       out.push(v_flex().w_full().h(h).overflow_hidden()
+        .when(Boolean(held), (el) => el.justify_end())
         .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
         .child(body));
     }
     return out;
+  }
+
+  // A row Herdr stopped while it drew (drawingRow still set when the list draws again): drawn
+  // plainly, or blank if it was already plain, for CUT_MS, doubling each time.
+  rowCut(d) {
+    this.drawingRow = null;
+    this.liteDraw = false;
+    const c = (this.cutRows ??= new Map());
+    const n = (c.get(d.key)?.n ?? 0) + 1;
+    c.delete(d.key);
+    c.set(d.key, { n, blank: d.lite, until: now() + Math.min(300000, CUT_MS * 2 ** (n - 1)) });
+    if (c.size > 200) c.delete(c.keys().next().value);
+    this.rowCuts = (this.rowCuts ?? 0) + 1;
+    // Once its row callback is stopped, Herdr's list asks only for the first row again (to
+    // measure), never for the rows on screen, and stays blank. A new id gives a new list,
+    // kept at the place it had: the end when the end was on screen.
+    this.listGen = (this.listGen ?? 0) + 1;
+    if (this.bottomShown) this.toBottom = true;
+    else if (this.topKey != null) this.scrollTo = { key: this.topKey, how: "top" };
   }
 
   // Kept for render(), which publishes it: the drawing pass may not notify or write state.
