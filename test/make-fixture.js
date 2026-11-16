@@ -137,10 +137,11 @@ function assistant(blocks, { stop = "end_turn", out = 120, input = 6, read = 420
     uuid: uid(), timestamp: tick(i === 0 ? secs : 0) }));
   return id;
 }
-function tool(name, input, result, promptId) {
+function tool(name, input, result, promptId, tur = null) {
   const id = `toolu_${String(msg).padStart(6, "0")}_${name}`;
   assistant([{ type: "thinking", thinking: "…" }, { type: "tool_use", id, name, input }], { stop: "tool_use", out: 60 });
-  push({ ...base(), type: "user", promptId, toolUseResult: { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result }] }, uuid: uid(), timestamp: tick(2) });
+  push({ ...base(), type: "user", promptId, toolUseResult: tur ?? { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result }] }, uuid: uid(), timestamp: tick(2) });
+  return id;
 }
 function command(name, args = "", { origin = false, order = "name" } = {}) {
   const n = `<command-name>${name}</command-name>`;
@@ -343,16 +344,27 @@ if (agents) {
   end(6000);
 }
 
-// Subagents (round 5, step 1): three Agent calls between two commands, each answered with
-// Claude Code's launch result (an agent id, no report yet), then the turn's reply.
+// Subagents (round 5, steps 1 and 2): three Agent calls between two commands, each answered
+// with Claude Code's launch result (an agent id and the model it runs on, no report yet).
+// Their task notifications come in while the turn works: two as user lines and one queued
+// (an attachment, the agent being busy); one failed, and one ran on another model. Then the
+// turn's reply.
 if (subagents) {
   const p = prompt("Review the calendar code three ways");
   tool("Bash", { command: "git diff --stat" }, "3 files changed", p);
-  for (const [d, kind] of [["Review range math", "general-purpose"], ["Check time zones", "general-purpose"], ["Audit the tests", "code-reviewer"]]) {
-    tool("Agent", { description: d, prompt: `${d} in src/calendar.`, subagent_type: kind, run_in_background: true },
-      `Async agent launched successfully. agentId: a${String(msg).padStart(16, "0")}`, p);
+  const ids = [];
+  for (const [d, kind, runs] of [["Review range math", "general-purpose", model], ["Check time zones", "general-purpose", model], ["Audit the tests", "code-reviewer", "claude-sonnet-5-5"]]) {
+    const agentId = `a${String(msg).padStart(16, "0")}`;
+    const call = tool("Agent", { description: d, prompt: `${d} in src/calendar.`, subagent_type: kind, run_in_background: true },
+      `Async agent launched successfully. agentId: ${agentId}`, p,
+      { isAsync: true, status: "async_launched", agentId, description: d, prompt: `${d} in src/calendar.`, outputFile: `/tmp/agents/${agentId}.output`, canReadOutputFile: true, resolvedModel: runs });
+    ids.push([agentId, call, d]);
   }
   tool("Bash", { command: "bun test calendar" }, "12 pass", p);
+  const note = ([agentId, call, d], status, ms, tok) => `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${call}</tool-use-id>\n<output-file>/tmp/agents/${agentId}.output</output-file>\n<status>${status}</status>\n<summary>Agent "${d}" ${status}</summary>\n<result>${status === "failed" ? "The agent stopped: the test runner was not found." : "Done, see the report."}</result>\n<usage><subagent_tokens>${tok}</subagent_tokens><tool_uses>9</tool_uses><duration_ms>${ms}</duration_ms></usage>\n</task-notification>`;
+  push({ ...base(), type: "user", origin: { kind: "task-notification" }, message: { role: "user", content: note(ids[0], "completed", 48000, 21000) }, uuid: uid(), timestamp: tick(40) });
+  push({ ...base(), type: "attachment", attachment: { type: "queued_command", prompt: note(ids[1], "completed", 61000, 18500), commandMode: "task-notification", origin: { kind: "task-notification" } }, uuid: uid(), timestamp: tick(10) });
+  push({ ...base(), type: "user", origin: { kind: "task-notification" }, message: { role: "user", content: note(ids[2], "failed", 12000, 4000) }, uuid: uid(), timestamp: tick(10) });
   assistant([{ type: "text", text: "All three reviews are back: the range math and time zones are right, and two tests need a fixed clock." }], { out: 60 });
   end(132000);
 }

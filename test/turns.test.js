@@ -623,6 +623,49 @@ test("steps: interim text and groups of calls in order, the reply apart, and cap
   expect(c.tools).toBe(STEP_CALLS + 5 + STEP_MAX);
 });
 
+test("subagent states: the launch result and the task notification, read from the session file", () => {
+  const file = made("--subagents");
+  const ev = events(file);
+  const r = ev.filter((e) => e.k === "r");
+  const n = ev.filter((e) => e.k === "n");
+  expect(r.map((e) => [e.st, e.m])).toEqual([["async_launched", "claude-opus-5-5"], ["async_launched", "claude-opus-5-5"], ["async_launched", "claude-sonnet-5-5"]]);
+  expect(r.every((e) => /^toolu_/.test(e.id) && /^a\d{16}$/.test(e.a))).toBe(true);
+  // Two from user lines and one queued, by agent id, with the usage block's time and tokens.
+  expect(n.map((e) => [e.a, e.st, e.ms, e.tok])).toEqual([[r[0].a, "completed", 48000, 21000], [r[1].a, "completed", 61000, 18500], [r[2].a, "failed", 12000, 4000]]);
+  const s = newSession("00000000-0000-4000-8000-000000000002", file);
+  for (const e of ev) apply(s, e);
+  expect(r.map((e) => s.agents.get(e.id)).map((a) => [a.st, a.ms, a.m])).toEqual([["completed", 48000, "claude-opus-5-5"], ["completed", 61000, "claude-opus-5-5"], ["failed", 12000, "claude-sonnet-5-5"]]);
+  // Notifications that only settle this turn's subagents while it works are not background
+  // updates.
+  const turn = s.turns.find((t) => t.prompt.startsWith("Review the calendar code"));
+  expect(turn.followups).toBe(0);
+});
+
+test("subagent states: running until its notification; a notification read first is kept; others are not subagents", () => {
+  const s = newSession("00000000-0000-4000-8000-00000000000c", "x.jsonl");
+  apply(s, { k: "p", o: "human", t: "Review it", ts: "2026-11-01T09:00:00.000Z" });
+  apply(s, { k: "u", n: "Agent", id: "toolu_1" });
+  apply(s, { k: "r", id: "toolu_1", a: "a1", m: "claude-opus-4-7", st: "async_launched" });
+  expect(s.agents.get("toolu_1").st).toBe("running");
+  // A background command's notification: kept by its id, not a subagent of any call.
+  apply(s, { k: "n", a: "b9", st: "completed" });
+  apply(s, { k: "p", o: "task-notification", t: null, ts: "2026-11-01T09:01:00.000Z" });
+  expect(s.turns[0].followups).toBe(1);
+  // Settled while the turn works: not counted.
+  apply(s, { k: "n", a: "a1", st: "completed", ms: 30000, tok: 9000 });
+  apply(s, { k: "p", o: "task-notification", t: null, ts: "2026-11-01T09:02:00.000Z" });
+  expect(s.agents.get("toolu_1")).toMatchObject({ st: "completed", ms: 30000, tok: 9000 });
+  expect(s.turns[0].followups).toBe(1);
+  apply(s, { k: "t", t: "Done." });
+  apply(s, { k: "d", ms: 120000, ts: "2026-11-01T09:03:00.000Z" });
+  // A notification read before its launch result keeps its state.
+  apply(s, { k: "p", o: "human", t: "Again", ts: "2026-11-01T09:04:00.000Z" });
+  apply(s, { k: "u", n: "Agent", id: "toolu_2" });
+  apply(s, { k: "n", a: "a2", st: "failed", ms: 5000 });
+  apply(s, { k: "r", id: "toolu_2", a: "a2", m: null, st: "async_launched" });
+  expect(s.agents.get("toolu_2")).toMatchObject({ st: "failed", ms: 5000 });
+});
+
 test("subagent calls make a step group of their own, apart from the commands around them", async () => {
   const { readFileSync } = await import("node:fs");
   const { AGENT_CALL } = await import("../mods/agent-threads/ui.js");

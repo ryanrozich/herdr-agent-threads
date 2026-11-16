@@ -789,13 +789,20 @@ export default class Threads extends View {
       case "itext": return `itext${n} h${this.height(r)} | ${r.src.replace(/\n/g, " ⏎ ").slice(0, 120)}`;
       case "grp": {
         const g = this.groupInfo(r);
-        return `grp${n} ${groupText(r.step.calls, r.step.count, r.now)}${g.current ? ` · ${g.current}` : ""}${g.failed ? ` · ${g.failed} failed [failed]` : g.known ? " [ok]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
+        const ag = this.agentCounts(r);
+        const going = r.now || ag.working > 0;
+        const failed = Math.max(g.failed, ag.failed);
+        const back = ag.known > 0 && ag.known === r.step.count && !ag.working && !ag.stopped;
+        return `grp${n} ${groupText(r.step.calls, r.step.count, going)}${ag.working ? ` · ${ag.working} working` : ""}${g.current ? ` · ${g.current}` : ""}${failed ? ` · ${failed} failed [failed]` : g.known || back ? " [ok]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
       }
       case "call": {
         if (r.more) return `call${n} +${r.more}`;
         const c = this.callEntry(r.si, r.id);
-        const time = this.callTook(r.name, c);
-        return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
+        const a = this.agentOf(r.si, r.id, r.name);
+        const time = this.callTook(r.name, c, a);
+        const mark = a ? ` [${this.agentWorks(r.si, a) ? "working" : a.st === "running" ? "no result" : a.st}]` : "";
+        const pill = a?.m && shortModel(a.m) !== shortModel(r.turn.model) ? ` (${shortModel(a.m)})` : "";
+        return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${pill}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${mark}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
       }
       case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +first" : ""} ${this.outEditorFor(r) ? `editor ${this.outLangOf(r)}` : "plain"} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
       case "wspin": return `wspin${n} Working…`;
@@ -5969,9 +5976,39 @@ export default class Threads extends View {
 
   // How long a call took (callTime). Not for a subagent started in the background: its call
   // ends when it is launched, so the time is the launch, not the work.
-  callTook(name, c) {
+  callTook(name, c, a = null) {
+    // A subagent settled by its notification: the time it took, from the notification.
+    if (a && a.st !== "running" && Number.isFinite(a.ms)) return callTime(null, null, a.ms);
     if (toolKind(name) === "agent" && /^Async agent launched/.test(String(c?.out ?? ""))) return "";
     return callTime(c?.inTs, c?.outTs, c?.ms);
+  }
+  // A subagent call's state from the session file (its launch result and task notification),
+  // or null for another call, or one whose launch result is not read.
+  agentOf(si, id, name) { return id && toolKind(name) === "agent" ? this.sessions[si]?.agents?.get(id) ?? null : null; }
+  // A subagent with no notification yet is working only in the newest session while its
+  // terminal has not ended; otherwise it has no result on record.
+  agentWorks(si, a) { return a?.st === "running" && si === this.sessions.length - 1 && !this.res?.ended; }
+  // A subagent group's states: working, back, failed, and stopped (or no result on record).
+  agentCounts(r) {
+    const c = { working: 0, done: 0, failed: 0, stopped: 0, known: 0 };
+    if (!r.step.agent) return c;
+    (r.step.ids ?? []).forEach((id, i) => {
+      const a = this.agentOf(r.si, id, r.step.calls[i]);
+      if (!a) return;
+      c.known++;
+      if (this.agentWorks(r.si, a)) c.working++;
+      else if (a.st === "completed") c.done++;
+      else if (a.st === "failed") c.failed++;
+      else c.stopped++;
+    });
+    return c;
+  }
+  // A subagent's mark: the spinner while it works, a check once back, a red cross when it
+  // failed, a grey dash when stopped or with no result.
+  agentMark(t, si, a) {
+    if (this.agentWorks(si, a)) return this.liveIcon(this.liveState(t), 12);
+    const failed = a.st === "failed";
+    return svg(ICON(a.st === "completed" ? "check" : failed ? "circle-x" : "minus")).size(12).flex_none().when(failed, (e) => e.text_color(t.blocked));
   }
 
   // Who replied: the name the harness records for the turn (OpenCode's agent) or the session
@@ -6320,11 +6357,18 @@ export default class Threads extends View {
         // and a chevron.
         const open = this.groupOpen.has(`${tkey}:${r.gi}`);
         const g = this.groupInfo(r);
-        return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
-          .child(r.now ? this.liveIcon(this.liveState(t), 12)
-            : svg(ICON(g.failed ? "circle-x" : g.known ? "check" : r.step.agent ? "bot" : "wrench")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
-          .child(div().flex_none().child(groupText(r.step.calls, r.step.count, r.now)))
-          .when(g.failed > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`· ${g.failed} failed`)))
+        // Subagents: present tense and the spinner while any works, after the reply too, and
+        // how many work and how many failed; a check once all are back.
+        const ag = this.agentCounts(r);
+        const going = r.now || ag.working > 0;
+        const failed = Math.max(g.failed, ag.failed);
+        const back = ag.known > 0 && ag.known === r.step.count && !ag.working && !ag.stopped;
+        return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(going ? t.dim : t.muted)
+          .child(going ? this.liveIcon(this.liveState(t), 12)
+            : svg(ICON(failed ? "circle-x" : g.known || back ? "check" : r.step.agent ? "bot" : "wrench")).size(12).flex_none().text_color(failed ? t.blocked : t.dim))
+          .child(div().flex_none().child(groupText(r.step.calls, r.step.count, going)))
+          .when(ag.working > 0, (e) => e.child(div().flex_none().child(`· ${ag.working} working`)))
+          .when(failed > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`· ${failed} failed`)))
           .when(Boolean(g.current), (e) => e.child(div().min_w(0).truncate().font_family(mono).text_size(11.5).text_color(t.dim).child(g.current)))
           .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
       }
@@ -6337,15 +6381,20 @@ export default class Threads extends View {
             .child(svg(ICON("plus")).size(12).flex_none()).child(div().min_w(0).truncate().child(`${r.more} more calls`));
         }
         const c = this.callEntry(r.si, r.id);
-        const time = this.callTook(r.name, c);
+        const a = this.agentOf(r.si, r.id, r.name);
+        const time = this.callTook(r.name, c, a);
         const open = this.callOpen.has(`${tkey}:${r.gi}:${r.ci}`);
-        const icon = r.now ? this.liveIcon(this.liveState(t), 12)
-          : svg(ICON(c?.err ? "circle-x" : KIND_ICON[toolKind(r.name)])).size(12).flex_none().when(Boolean(c?.err), (e) => e.text_color(t.blocked));
+        const icon = r.now && !a ? this.liveIcon(this.liveState(t), 12)
+          : a ? this.agentMark(t, r.si, a)
+            : svg(ICON(c?.err ? "circle-x" : KIND_ICON[toolKind(r.name)])).size(12).flex_none().when(Boolean(c?.err), (e) => e.text_color(t.blocked));
+        // A subagent on another model than the turn's says which.
+        const pill = a?.m && shortModel(a.m) !== shortModel(turn.model) ? shortModel(a.m) : null;
         return h_flex().when(r.one, (e) => e.mt(STEP_GAP).h(GROUP_H)).when(!r.one, (e) => e.h(CALL_H).pl(18))
           .gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12).text_color(t.dim)
           .child(icon)
           // What it ran scrolls sideways when longer than the row, in place of an ellipsis.
           .child(div().id(`th-call-${r.key}`).flex_1().min_w(0).overflow_x_scroll().whitespace_nowrap().font_family(mono).text_color(c?.input != null ? t.muted : t.dim).child(this.short(callText(r.name, c?.input))))
+          .when(Boolean(pill), (e) => e.child(div().flex_none().h(16).px(5).rounded(4).bg(alpha(t.foreground, 0.08)).text_size(10.5).line_height("16px").child(pill)))
           .when(Boolean(time), (e) => e.child(div().flex_none().text_size(11).child(time)))
           .when(Boolean(r.id), (e) => e.child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none()));
       }

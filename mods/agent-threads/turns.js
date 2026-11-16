@@ -40,8 +40,16 @@ export function newSession(id, file) {
     id, file, offset: 0, size: null, head: null, title: null, agentName: null, turns: [], seg: null, startedAt: null,
     open: [], pendingCmd: null, clearAt: null, followActive: false, followSince: null, version: 0,
     ctx: null, settled: 0, anchor: null, clock: null, since: null, guess: null,
+    // Subagents (Claude Code): each one's state by its call's id and by its agent id, from its
+    // launch result ("r") and its task notification ("n"): running, completed, failed,
+    // stopped or killed, with the notification's time and tokens.
+    agents: new Map(), agentIds: new Map(),
   };
 }
+
+// How many task notifications are kept for ids no launch has named yet (background
+// commands and watches send them too).
+const AGENT_KEEP = 2000;
 
 // Cursor records no turn times. The pane gives a prompt and an end of turn it sees arrive the
 // time it saw them ("at", in ms): s.clock (an object, set by the panel) keeps them by turn
@@ -297,7 +305,7 @@ export function apply(s, e) {
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
-  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an") s.pendingCmd = null;
+  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
     case "p": {
@@ -314,8 +322,10 @@ export function apply(s, e) {
       if (OWN_ROW.has(e.o) || !cur) {
         clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
-        // A notification while the row is open: Claude still owes this row its reply.
-        cur.followups++;
+        // A notification while the row is open: Claude still owes this row its reply. One
+        // that only says a subagent of this session is back (its "n" came just before) is
+        // shown on that subagent's row, not counted as a background update.
+        if (!(e.o === "task-notification" && s.noteAt === s.version - 1)) cur.followups++;
       } else {
         cur.followups++;
         cur.latestParts = [];
@@ -356,6 +366,36 @@ export function apply(s, e) {
     case "e":
       if (cur && e.t) cur.errors.push(e.t);
       return;
+    case "r": {
+      // A launch result: a subagent started in the background, or one that ran in the
+      // foreground with its status. A notification read first keeps its settled state.
+      if (typeof e.id !== "string" || typeof e.a !== "string") return;
+      s.agents ??= new Map();
+      s.agentIds ??= new Map();
+      const a = s.agentIds.get(e.a) ?? { st: null, ms: null, tok: null };
+      a.id = e.id;
+      a.m = typeof e.m === "string" ? e.m : null;
+      if (!a.st) a.st = e.st === "async_launched" ? "running" : String(e.st);
+      s.agents.set(e.id, a);
+      s.agentIds.set(e.a, a);
+      return;
+    }
+    case "n": {
+      if (typeof e.a !== "string" || !e.st) return;
+      s.agentIds ??= new Map();
+      let a = s.agentIds.get(e.a);
+      if (!a) {
+        if (s.agentIds.size >= AGENT_KEEP) return;
+        a = { st: null, ms: null, tok: null, id: null, m: null };
+        s.agentIds.set(e.a, a);
+      }
+      a.st = String(e.st);
+      if (Number.isFinite(e.ms)) a.ms = e.ms;
+      if (Number.isFinite(e.tok)) a.tok = e.tok;
+      // For the prompt line that carries it, next ("p"): a launched subagent's notification.
+      s.noteAt = a.id ? s.version : null;
+      return;
+    }
     case "d": {
       if (!cur) return;
       const end = e.ts ? Date.parse(e.ts) : null;
