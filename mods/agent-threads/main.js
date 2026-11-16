@@ -117,7 +117,13 @@ const PROBE_MAX = 16;
 const CUT_MS = 5000;
 // How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
 // for the rows to be built and shaped before it goes ahead with the heights it has.
-const CUT_WATCH_MS = 1500;
+const CUT_WATCH_MS = 250;
+// What a draw should cost. Reshaping and building rows share what the rest of the last draw
+// left of it, each down to its floor, so a machine where the rest of a draw is slow does
+// less of both per frame and stays clear of Herdr's 50 ms stop.
+const FRAME_AIM_MS = 30;
+const SHAPE_MIN_MS = 2;
+const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
@@ -710,6 +716,13 @@ export default class Threads extends View {
     });
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
+      // A render Herdr stopped left renderOpen set (no timer runs during a render), and
+      // Herdr asks for no render after it: ask for one. This timer was set up here, outside
+      // any render, since a timer asked for inside a stopped render may never run.
+      if (this.renderOpen && now() - (this.renderAt ?? 0) >= CUT_WATCH_MS && now() - (this.cutPokeAt ?? 0) >= CUT_WATCH_MS) {
+        this.cutPokeAt = now();
+        cx.notify();
+      }
       // The day pill goes DAY_PILL_MS after the last scroll.
       if (this.scrollSeenAt && Date.now() - this.scrollSeenAt >= DAY_PILL_MS) { this.scrollSeenAt = 0; this.stickyDue = true; }
       if (this.stickyDue) { this.stickyDue = false; cx.notify(); }
@@ -1678,7 +1691,7 @@ export default class Threads extends View {
       // One slice a frame: rows() is asked for more than once in a draw.
       if (job.frame === this.renders) return;
     } else {
-      this.shapeSpent = 0;
+      this.shapeStart();
       this.shapeLeft = 0;
       this.otherLeft = 0;
       this.reshapeDue = false;
@@ -1698,7 +1711,10 @@ export default class Threads extends View {
     }
     this.buildStale = job.stale;
     job.frame = this.renders;
-    const out = this.buildRows(status, job.from, now() + BUILD_MS);
+    const b0 = now();
+    const s0 = this.shapeSpent ?? 0;
+    const out = this.buildRows(status, job.from, b0 + this.buildMax());
+    this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.height(out[i])); job.index.set(out[i].key, i); }
     const res = this.buildInfo.resume;
@@ -1796,7 +1812,7 @@ export default class Threads extends View {
   // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
-    this.shapeSpent = 0;
+    this.shapeStart();
     this.shapeLeft = 0;
     this.otherLeft = 0;
     this.shapeInView(status);
@@ -4236,23 +4252,40 @@ export default class Threads extends View {
       // Counted at once: a render that is stopped too would never reach the end of the frame.
       this.publishCuts();
     }
-    // Herdr asks for no render after one it stopped, so nothing may come until some other
-    // change: one watch at a time asks for the next render if this one never finished.
-    if (!this.cutWatch) {
-      this.cutWatch = true;
-      cx.timer.after(CUT_WATCH_MS, (cx) => { this.cutWatch = false; if (this.renderOpen) cx.notify(); });
-    }
+    // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
     const light = this.cutUntil > now();
+    this.renderAt = now();
+    // One budget a draw; while rows are built over several draws (rowJob), one for them all,
+    // as before.
+    if (!this.rowJob) this.shapeSpent = 0;
+    const spent = this.shapeSpent ?? 0;
+    this.buildSpent = 0;
+    this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
     let out;
     try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
     this.renderOpen = false;
+    // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
+    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
     return out;
   }
 
   // Reshaping time left for this draw: none while a stopped render is being recovered from.
-  shapeMax() { return this.light ? -1 : this.shapeBudget ?? SHAPE_MS; }
+  shapeMax() {
+    if (this.light) return -1;
+    if (this.shapeBudget != null) return this.shapeBudget;
+    return Math.max(SHAPE_MIN_MS, Math.min(SHAPE_MS, this.frameRoom() / 2));
+  }
+  // A slice of a rows build.
+  buildMax() { return Math.max(BUILD_MIN_MS, Math.min(BUILD_MS, this.frameRoom() / 2)); }
+  frameRoom() { return FRAME_AIM_MS - (this.frameBase ?? 0); }
+  // One reshaping budget a draw: rows() can be asked for more than once in a draw, and each
+  // ask used to start the budget again. Outside a render (tests), each ask starts it.
+  shapeStart() {
+    if (this.renderOpen && this.shapeFrame === this.renders) return;
+    this.shapeSpent = 0;
+  }
 
   frame(cx, light) {
     if (this.gal) return this.galleryView();

@@ -4695,27 +4695,67 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
   const { v, cx } = await pane(fixture("--extra", "2"));
   let notes = 0;
   cx.notifyHook = () => { notes++; };
+  // The watch is the 120 ms timer set up with the pane, not a timer asked for in a render,
+  // which may never run when Herdr stops that render.
+  const tick = cx.everies.find((x) => x.ms === 120);
   cx.timers = [];
   v.render(cx);
-  const watch = cx.timers.filter((x) => x.ms === 1500);
-  expect(watch.length).toBe(1);
-  // Finished: the watch asks for nothing.
+  expect(cx.timers.some((x) => x.ms === 1500 || x.ms === 250)).toBe(false);
+  // Finished: the watch asks for nothing (the same timer redraws for the sticky day).
+  v.stickyDue = false;
+  v.scrollSeenAt = 0;
   notes = 0;
-  watch[0].fn(cx);
+  tick.fn(cx);
   expect(notes).toBe(0);
-  // Stopped (renderOpen left set): the watch asks for the next render.
-  cx.timers = [];
+  // Stopped (renderOpen left set): the watch asks for the next render once 250 ms have
+  // gone, and then no more than once each 250 ms.
   v.render(cx);
   v.renderOpen = true;
+  v.stickyDue = false;
+  v.scrollSeenAt = 0;
   notes = 0;
-  cx.timers.find((x) => x.ms === 1500).fn(cx);
+  tick.fn(cx);
+  expect(notes).toBe(0);
+  v.renderAt -= 300;
+  tick.fn(cx);
+  tick.fn(cx);
   expect(notes).toBe(1);
+  v.cutPokeAt -= 300;
+  tick.fn(cx);
+  expect(notes).toBe(2);
   // The next render fails before the end of its frame: the stop is published all the same.
   const frame = v.frame;
   v.frame = () => { throw new Error("interrupted"); };
   expect(() => v.render(cx)).toThrow("interrupted");
   expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1 });
   v.frame = frame;
+});
+
+test("one reshaping budget a draw, and less of it when the rest of the draw is slow", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  // A quick draw leaves the whole budget for reshaping and for a slice of a rows build; a
+  // slow one splits what is left of 30 ms between them, each down to its floor.
+  v.frameBase = 5;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([12, 10]);
+  v.frameBase = 20;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([5, 5]);
+  v.frameBase = 34;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([2, 3]);
+  // Inside a draw, a second ask for the rows keeps what the first spent.
+  v.renderOpen = true;
+  v.shapeFrame = v.renders;
+  v.shapeSpent = 9;
+  v.shapeStart();
+  expect(v.shapeSpent).toBe(9);
+  // Outside a draw (a test asking for rows), each ask starts it again.
+  v.renderOpen = false;
+  v.shapeStart();
+  expect(v.shapeSpent).toBe(0);
+  // A finished draw records its cost apart from reshaping.
+  v.frameBase = null;
+  v.render(cx);
+  expect(v.frameBase).toBeGreaterThanOrEqual(0);
 });
 
 test("a scroll to a place waits for the rows to settle, but not for more than 2 s", async () => {
