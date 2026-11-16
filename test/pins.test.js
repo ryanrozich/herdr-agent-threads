@@ -33,6 +33,29 @@ describe("turn identity", () => {
     for (let i = 0; i < 4; i++) expect(turnId(after, after[i])).toBe(turnId(before, before[i]));
   });
 
+  test("looking up pins hashes only the prompts from the pins' seconds, with the same ids", () => {
+    let reads = 0;
+    const big = (n, ts) => { const t = turn(n, "", ts); let text = `pasted log ${n} `.repeat(20000); Object.defineProperty(t, "prompt", { get: () => { reads++; return text; }, set(x) { text = x; } }); return t; };
+    const a = [turn(1, "go on", T0), big(2, T0 + 60000), turn(3, "go on", T0), turn(4, "fix it", T0 + 120000), big(5, T0 + 180000)];
+    const all = turnIds(a);
+    const want = [turnId(a, a[2]), turnId(a, a[3])];
+    reads = 0;
+    const some = turnIds(a, want);
+    expect(reads).toBe(0);
+    for (const id of want) expect(some.get(id)).toBe(all.get(id));
+    expect(some.size).toBe(3);
+    // Pinning a turn hashes no prompt from another second either.
+    const fresh = [turn(1, "go on", T0), big(2, T0 + 60000), turn(3, "go on", T0)];
+    reads = 0;
+    expect(turnId(fresh, fresh[2])).toBe(want[0]);
+    expect(reads).toBe(0);
+    // A turn with no time is found under "-".
+    const none = [turn(1, "no clock", null), big(2, T0)];
+    reads = 0;
+    expect(turnIds(none, [turnId(none, none[0])]).size).toBe(1);
+    expect(reads).toBe(0);
+  });
+
   test("a turn with no time still has a fingerprint", () => {
     const a = [turn(1, "no clock", null)];
     expect(turnId(a, a[0])).toMatch(/^-\|/);

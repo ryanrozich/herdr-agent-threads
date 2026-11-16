@@ -239,24 +239,24 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
   // Padding 8, bubble 6 + lines + 6, gap 6, the strip under it 16, gap 6, the line 24, gap
   // 6, reply lines, gap 6, the strip under the reply 16, padding 10. No meta line over the
   // bubble and no stats line. Lines are 21 px at the 14 px default.
-  expect(rowHeight(1, 1)).toBe(8 + 12 + 21 + 6 + 16 + 6 + 24 + 6 + 21 + 6 + 16 + 10);
-  expect(rowHeight(4, 6)).toBe(8 + 12 + 84 + 6 + 16 + 6 + 24 + 6 + 126 + 6 + 16 + 10);
+  expect(rowHeight(1, 1)).toBe(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 22 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 12 + 88 + 6 + 16 + 6 + 24 + 6 + 132 + 6 + 16 + 10);
   // An agent's message has its sender's name over the bubble.
-  expect(rowHeight(1, 1, 0, 21, true)).toBe(rowHeight(1, 1) + 16 + 6);
-  expect(rowShape({ prompt: "Short", reply: "Done.", width: 380, promptLines: 2, replyLines: 3, agent: true }).height).toBe(rowHeight(1, 1, 0, 21, true));
+  expect(rowHeight(1, 1, 0, 22, true)).toBe(rowHeight(1, 1) + 16 + 6);
+  expect(rowShape({ prompt: "Short", reply: "Done.", width: 380, promptLines: 2, replyLines: 3, agent: true }).height).toBe(rowHeight(1, 1, 0, 22, true));
   expect(ROW.NAME).toBeUndefined();
   expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
-  expect(rowHeight(1, 1, 0, 24)).toBe(rowHeight(1, 1) + 6);
+  expect(rowHeight(1, 1, 0, 25)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
   expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
 });
 
-test("reading type: 14 px on 21 px lines by default, and a line of about 70 characters at any width", () => {
+test("reading type: 14 px on 22 px lines by default, and a line of about 70 characters at any width", () => {
   const d = readType();
-  expect([d.size, d.line, d.small]).toEqual([14, 21, 13.5]);
-  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8).
-  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.43);
-  expect(readType(16).line).toBe(24);
+  expect([d.size, d.line, d.small]).toEqual([14, 22, 13.5]);
+  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8), about 1.57.
+  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.53);
+  expect(readType(16).line).toBe(25);
   expect(readType(40).size).toBe(18);
   expect(readType(Number.NaN).size).toBe(14);
   // The reading line is MEASURE characters of prose: 461 px at 14 px, 527 at 16.
@@ -280,7 +280,7 @@ test("reading type: 14 px on 21 px lines by default, and a line of about 70 char
   const big = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4, size: 18 });
   const base = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4 });
   expect(big.reply[0].length).toBeLessThan(base.reply[0].length);
-  expect(big.height).toBe(rowHeight(1, 4, 1, 27));
+  expect(big.height).toBe(rowHeight(1, 4, 1, 28));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {
@@ -496,10 +496,10 @@ test("a collapsed reply as Markdown: whole source lines within the line budget, 
   expect(mdPreview("", 6, 70).md).toBe("");
 });
 
-test("the reading width Threads opens at: 545 px at 14 px, scaled with Text size", () => {
-  expect(fitWidth()).toBe(545);
-  expect(fitWidth(12)).toBe(479);
-  expect(fitWidth(18)).toBe(676);
+test("the reading width Threads opens at: 573 px at 14 px, scaled with Text size", () => {
+  expect(fitWidth()).toBe(573);
+  expect(fitWidth(12)).toBe(507);
+  expect(fitWidth(18)).toBe(704);
 });
 
 test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside fenced code", () => {
@@ -517,6 +517,65 @@ test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside f
   const lp = mdChunks(long, 500);
   expect(lp.every((p) => Buffer.byteLength(p) <= 500)).toBe(true);
   expect(lp.join("")).toBe(long);
+});
+
+// mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
+// by measuring each whole chunk again for every piece.
+function mdChunksBefore(md, max = MD_MAX) {
+  const len = (x) => { let n = 0; for (const ch of x) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; } return n; };
+  const packed = (pieces, sep) => { const out = []; let acc = ""; for (const p of pieces) { const next = acc ? `${acc}${sep}${p}` : p; if (acc && len(next) > max) { out.push(acc); acc = p; } else acc = next; } if (acc) out.push(acc); return out; };
+  const text = String(md ?? "");
+  if (len(text) <= max) return [text];
+  const blocks = [];
+  let cur = [];
+  let fence = null;
+  for (const line of text.split("\n")) {
+    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    else if (!fence && !line.trim()) { if (cur.length) blocks.push(cur.join("\n")); cur = []; continue; }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join("\n"));
+  const pieces = blocks.flatMap((b) => (len(b) <= max ? [b] : packed(b.split("\n").flatMap((l) => (len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], ""))), "\n")));
+  return packed(pieces, "\n\n");
+}
+
+test("mdChunks: a reply with long tables splits as before, counted in UTF-8 bytes, surrogates included", () => {
+  const table = (k) => `### Table ${k}\n\n| Area | File | Before | After |\n|---|---|---|---|\n${Array.from({ length: 40 }, (_, i) => `| checkout ${i} | src/cart/part${i}.ts | ${i * 13} ms | ${i * 7} ms |`).join("\n")}`;
+  const reply = Array.from({ length: 6 }, (_, k) => `${table(k)}\n\nThe subtotal is rounded once. `.repeat(2)).join("\n\n");
+  const odd = ["", "a", "\n\n\n", "é".repeat(5000), "😀".repeat(3000), "\uD800x".repeat(2000), "x\uDC00".repeat(2000), "日本 ".repeat(3000),
+    `\`\`\`\n${"code line\n".repeat(800)}\`\`\`\n\nafter`, `| a | b |\n|---|---|\n${"| 日本 | 😀 |\n".repeat(600)}`];
+  // A long table or fenced block now splits apart (the next test); everything else as before.
+  const whole = (md, max) => !mdChunksBefore(md, max).some((c) => /^\|/.test(c) || /^```/.test(c) !== /```$/.test(c));
+  for (const md of [reply, ...odd]) {
+    for (const max of [MD_MAX, 500, 7]) if (whole(md, max)) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
+  }
+  const parts = mdChunks(reply);
+  expect(parts.length).toBeGreaterThan(3);
+  expect(parts.every((p) => Buffer.byteLength(p) <= MD_MAX)).toBe(true);
+  expect(mdChunks("😀 ".repeat(3000), 400).every((p) => Buffer.byteLength(p) <= 400)).toBe(true);
+});
+
+test("mdChunks: each piece of a long table starts with its header rows, each piece of long code is fenced", () => {
+  const rows = Array.from({ length: 80 }, (_, i) => `| checkout ${i} | src/cart/part${i}.ts | ${i * 13} ms | rounding moved to the subtotal step for case ${i} |`);
+  const head = "| Area | File | Time | Note |\n|---|:---:|---|---|";
+  const code = Array.from({ length: 300 }, (_, i) => `const total${i} = sum(items, ${i});`);
+  const md = `### Table\nThe numbers:\n${head}\n${rows.join("\n")}\nAfter the table.\n\n\`\`\`ts\n${code.join("\n")}\n\`\`\`\n\nThe end.`;
+  const parts = mdChunks(md, 3500);
+  expect(parts.every((p) => Buffer.byteLength(p) <= 3500)).toBe(true);
+  const tables = parts.filter((p) => p.includes("| checkout"));
+  expect(tables.length).toBeGreaterThan(1);
+  for (const t of tables) expect(t.slice(t.indexOf("| Area"))).toStartWith(`${head}\n| checkout`);
+  // Every row once, in order.
+  expect(tables.flatMap((t) => t.split("\n").filter((l) => l.startsWith("| checkout")))).toEqual(rows);
+  expect(parts[0]).toStartWith("### Table\nThe numbers:");
+  expect(parts.join("\n\n")).toContain("After the table.");
+  const fenced = parts.filter((p) => p.includes("const total"));
+  expect(fenced.length).toBeGreaterThan(1);
+  for (const f of fenced) { const at = f.indexOf("```ts\n"); expect(at).toBeGreaterThanOrEqual(0); expect(f.slice(at)).toMatch(/\n```(\n\nThe end\.)?$/); }
+  expect(fenced.flatMap((f) => f.split("\n").filter((l) => l.startsWith("const total")))).toEqual(code);
+  // Room too small for the header twice: split as other text.
+  expect(mdChunks(`${head}\n${rows.slice(0, 4).join("\n")}`, 60).some((p) => p.startsWith("| checkout"))).toBe(true);
 });
 
 test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
@@ -624,7 +683,7 @@ test("o is the outline key, Enter and Space still open, and o stays a letter the
   expect(outlineText("one two three four five six seven eight nine ten eleven twelve\nthe retry path", "retry")).toMatch(/^….*retry path$/);
   expect(outlineText("retry first", "retry")).toBe("retry first");
   expect(outlineHeight(14)).toBe(30);
-  expect(outlineHeight(18)).toBe(35);
+  expect(outlineHeight(18)).toBe(36);
   expect(outlineHeight(12)).toBe(30);
   expect(outlineNumW(9)).toBeLessThan(outlineNumW(10));
   expect(outlineNumW(999)).toBe(Math.ceil(4 * 7.2) + 6);
@@ -825,13 +884,35 @@ test("callTime prefers the agent's own duration when it records one", () => {
   expect(callTime(null, null, null)).toBe("");
 });
 
+test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column between them, and the rail's ticks", async () => {
+  const { gutter, columnWidth, railLook, GUTTER } = await import("../mods/agent-threads/ui.js");
+  expect(GUTTER).toEqual({ PCT: 0.08, MIN: 24, MAX: 56 });
+  expect([200, 300, 500, 700, 960].map(gutter)).toEqual([24, 24, 40, 56, 56]);
+  // The column is the text and 16 px each side; the side gutter is what is left, split evenly.
+  const side = (w, size, chars) => (w - columnWidth(w, size, chars)) / 2 + 16;
+  // At the kept width the text is one reading line with 56 px each side.
+  expect(columnWidth(573)).toBe(461 + 32);
+  expect(side(573)).toBe(56);
+  expect(side(704, 14, 90)).toBe(56);
+  // Narrower, 8% of the pane; never under 24 px.
+  expect(side(400)).toBe(32);
+  expect(side(250)).toBe(24);
+  // Full: the pane less its gutters.
+  expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
+  // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
+  // 8, 12 and 6.
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6 });
+});
+
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
   const { readType, fitWidth, widthChars, WIDTH_NAMES } = await import("../mods/agent-threads/ui.js");
   expect(WIDTH_NAMES).toEqual(["comfortable", "wide", "full"]);
   expect(widthChars("nope")).toBe(70);
   const at = (w, size) => [readType(size, widthChars(w)).measure, fitWidth(size, widthChars(w))];
-  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 479], [461, 545], [592, 676]]);
-  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 592], [592, 676], [761, 845]]);
+  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 507], [461, 573], [592, 704]]);
+  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 620], [592, 704], [761, 873]]);
   expect(at("full", 14)).toEqual([Infinity, Infinity]);
   // A bubble's line stops at Wide's in Full.
   expect(readType(14, Infinity).bubble).toBe(592);
