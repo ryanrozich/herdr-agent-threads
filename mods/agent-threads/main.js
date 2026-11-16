@@ -613,6 +613,9 @@ export default class Threads extends View {
     this.lineOpen = new Set();
     this.lineTouched = new Set();
     this.groupOpen = new Set();
+    // A running turn's subagent groups are open until the person opens or closes one
+    // (groupTouched); then their choice stays, as with the work line.
+    this.groupTouched = new Set();
     // Level 3: each call's input and output, read from the transcript when its group opens
     // (calls.sh) and kept in memory only, at most CALLS_MAX, by "<file>#<call id>". Calls
     // whose output box is open, and boxes showing every line, by "<turn>:<step>:<call>".
@@ -793,7 +796,7 @@ export default class Threads extends View {
         const going = r.now || ag.working > 0;
         const failed = Math.max(g.failed, ag.failed);
         const back = ag.known > 0 && ag.known === r.step.count && !ag.working && !ag.stopped;
-        return `grp${n} ${groupText(r.step.calls, r.step.count, going)}${ag.working ? ` · ${ag.working} working` : ""}${g.current ? ` · ${g.current}` : ""}${failed ? ` · ${failed} failed [failed]` : g.known || back ? " [ok]" : ""}${this.groupOpen.has(`${r.si}:${r.turn.n}:${r.gi}`) ? " [open]" : ""}`;
+        return `grp${n} ${groupText(r.step.calls, r.step.count, going)}${ag.working ? ` · ${ag.working} working` : ""}${g.current ? ` · ${g.current}` : ""}${failed ? ` · ${failed} failed [failed]` : g.known || back ? " [ok]" : ""}${r.open ? " [open]" : ""}`;
       }
       case "call": {
         if (r.more) return `call${n} +${r.more}`;
@@ -1596,7 +1599,7 @@ export default class Threads extends View {
     const P = this.prefs;
     const key = [
       this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
-      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
+      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), [...this.groupTouched].join(","), this.filterText(), status,
       [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
       Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
@@ -1773,11 +1776,11 @@ export default class Threads extends View {
       // The running group's newest call is read from the transcript's tail, so its line can
       // name what runs now.
       if (now && read && st.ids?.at(-1)) this.wantCalls(item.si, [st.ids.at(-1)], true);
-      const open = this.groupOpen.has(`${key}:${i}`);
+      const open = this.groupIsOpen(`${key}:${i}`, live && Boolean(st.agent));
       if (open && read) this.wantCalls(item.si, st.ids);
       // A group of one call, once open, is that call's own row.
       const one = open && read && st.count === 1;
-      if (!one) out.push({ ...item, live: false, kind: "grp", key: `gp:${key}:${i}`, gi: i, step: st, now, read });
+      if (!one) out.push({ ...item, live: false, kind: "grp", key: `gp:${key}:${i}`, gi: i, step: st, now, read, open });
       if (!open) return;
       st.calls.forEach((name, j) => {
         const id = read ? st.ids[j] : null;
@@ -1794,6 +1797,16 @@ export default class Threads extends View {
     });
   }
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
+  // A step group is open by the person's choice, else when it is a running turn's subagents.
+  groupIsOpen(g, auto) { return this.groupTouched.has(g) ? this.groupOpen.has(g) : auto; }
+  groupShown(k, i, turn, live) {
+    const st = turn?.steps?.[i];
+    return st?.k === "group" && this.groupIsOpen(`${k}:${i}`, live && Boolean(st.agent));
+  }
+  setGroup(g, open) {
+    if (open) this.groupOpen.add(g); else this.groupOpen.delete(g);
+    this.groupTouched.add(g);
+  }
   isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
 
   // Level 3's data. Calls are read for every agent but Cursor, which records no calls' ids or
@@ -1885,7 +1898,9 @@ export default class Threads extends View {
   pruneCalls() {
     if (this.calls.size <= CALLS_MAX) return;
     const keep = new Set();
-    for (const g of this.groupOpen) {
+    const groups = new Set(this.groupOpen);
+    for (const r of this.baseRows ?? []) if (r.live && r.turn) (r.turn.steps ?? []).forEach((st, i) => { if (st.agent) groups.add(`${r.key}:${i}`); });
+    for (const g of groups) {
       const [si, n, i] = g.split(":");
       const file = this.sessions[Number(si)]?.file;
       for (const id of this.findTurn(`${si}:${n}`)?.steps?.[Number(i)]?.ids ?? []) if (id) keep.add(`${file}#${id}`);
@@ -1902,9 +1917,10 @@ export default class Threads extends View {
   // The open groups' calls that can show output, by "<turn>:<step>:<call>".
   openCalls(k, turn) {
     const si = Number(k.split(":")[0]);
+    const live = this.isLiveKey(k);
     const out = [];
     (turn.steps ?? []).forEach((st, i) => {
-      if (st.k !== "group" || !this.groupOpen.has(`${k}:${i}`) || !this.readsCalls(si, st)) return;
+      if (!this.groupShown(k, i, turn, live) || !this.readsCalls(si, st)) return;
       st.ids.forEach((id, j) => { if (id) out.push(`${k}:${i}:${j}`); });
     });
     return out;
@@ -1920,8 +1936,8 @@ export default class Threads extends View {
     const live = this.isLiveKey(k);
     if (!live && !this.open.has(k)) { this.toggle(k, cx); this.lineOpen.add(k); this.lineTouched.add(k); return true; }
     if (!this.lineIsOpen(k, live)) { this.toggleLine(k, live); cx.notify(); return true; }
-    const groups = (turn.steps ?? []).map((st, i) => (st.k === "group" ? `${k}:${i}` : null)).filter(Boolean);
-    if (groups.some((g) => !this.groupOpen.has(g))) { for (const g of groups) this.groupOpen.add(g); cx.notify(); return true; }
+    const groups = (turn.steps ?? []).map((st, i) => (st.k === "group" ? i : null)).filter((i) => i != null);
+    if (groups.some((i) => !this.groupShown(k, i, turn, live))) { for (const i of groups) this.setGroup(`${k}:${i}`, true); cx.notify(); return true; }
     for (const c of this.openCalls(k, turn)) this.callOpen.add(c);
     cx.notify();
     return true;
@@ -1931,10 +1947,10 @@ export default class Threads extends View {
     const turn = k ? this.findTurn(k) : null;
     if (!turn) return false;
     const live = this.isLiveKey(k);
-    const calls = [...this.callOpen].filter((c) => c.startsWith(`${k}:`) && this.groupOpen.has(c.split(":").slice(0, 3).join(":")));
+    const calls = [...this.callOpen].filter((c) => c.startsWith(`${k}:`) && this.groupShown(k, Number(c.split(":")[2]), turn, live));
     if (calls.length && this.lineIsOpen(k, live)) { for (const c of calls) { this.callOpen.delete(c); this.callAll.delete(c); } cx.notify(); return true; }
-    const groups = [...this.groupOpen].filter((g) => g.startsWith(`${k}:`));
-    if (groups.length && this.lineIsOpen(k, live)) { for (const g of groups) this.groupOpen.delete(g); cx.notify(); return true; }
+    const groups = (turn.steps ?? []).map((_, i) => i).filter((i) => this.groupShown(k, i, turn, live));
+    if (groups.length && this.lineIsOpen(k, live)) { for (const i of groups) this.setGroup(`${k}:${i}`, false); cx.notify(); return true; }
     if (this.lineIsOpen(k, live) && (live || this.open.has(k))) { this.toggleLine(k, live); cx.notify(); return true; }
     if (!live && this.open.has(k)) { this.toggle(k, cx); return true; }
     return false;
@@ -3301,9 +3317,9 @@ export default class Threads extends View {
     }
     // A click on a step group's line opens it to its calls (level 2), or closes it.
     if (kind === "gp") {
-      const g = `${rest.slice(0, 2).join(":")}:${rest[2]}`;
-      if (this.groupOpen.has(g)) this.groupOpen.delete(g); else this.groupOpen.add(g);
-      this.sel = rest.slice(0, 2).join(":");
+      const k = rest.slice(0, 2).join(":");
+      this.setGroup(`${k}:${rest[2]}`, !this.groupShown(k, Number(rest[2]), this.findTurn(k), this.isLiveKey(k)));
+      this.sel = k;
       return cx.notify();
     }
     // A click on a call opens its output (level 3), or closes it, where its calls are read.
@@ -6355,7 +6371,7 @@ export default class Threads extends View {
         // A step group's line: the tool icon until its calls are read, then a check, or a red
         // mark and how many failed; the spinner while it runs (with what runs now, once read);
         // and a chevron.
-        const open = this.groupOpen.has(`${tkey}:${r.gi}`);
+        const open = r.open;
         const g = this.groupInfo(r);
         // Subagents: present tense and the spinner while any works, after the reply too, and
         // how many work and how many failed; a check once all are back.
