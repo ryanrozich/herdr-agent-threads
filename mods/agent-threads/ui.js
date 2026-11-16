@@ -1773,8 +1773,8 @@ export function columnResize(c, m, d) {
 // Herdr takes the column's room from the terminal beside it. A pane from
 // PIN_SPLIT_MIN (480 px, so a pane set to 500 that measures a pixel or two less still
 // counts) gets the column; narrower, Pinned shows in the same pane. Herdr takes the column's
-// room from the pane's neighbours as well as from Threads. A width the owner set by dragging
-// the column or with - and = (kept), within the same limits, wins. Returns the column's
+// room from the pane's neighbours as well as from Threads. A width the owner set with - and =
+// (kept), up to 640 px with Threads at least PIN_MAIN_MIN, wins. Returns the column's
 // width, or null.
 export const PIN_COL = Object.freeze([240, 400]);
 export const PIN_COL_WANT = 340;

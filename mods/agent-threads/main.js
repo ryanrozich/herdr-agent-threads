@@ -154,7 +154,8 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
-// The Pinned column's width as the owner last left it, by a drag or - and =: { px }, Herdr's
+// The Pinned column's width as the owner last left it, with - and = (a drag on its divider
+// resizes Threads, ui.js columnResize) or any other way Herdr resizes it: { px }, Herdr's
 // px size (the measured width and the frame). "hold" until a time: the pane's own resize
 // (fitToReading) is under way and is not the owner's choice.
 const PIN_W_KEY = "threads.pinWidth";
