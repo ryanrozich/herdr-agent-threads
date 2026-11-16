@@ -57,7 +57,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, splitTables, tableNeed, tableCells, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -2607,11 +2607,12 @@ export default class Threads extends View {
         // so a drag can select across the paragraphs in one item but not across items, and
         // the list draws only the items in view. Link rules run on the text shown; heights use
         // the text as written. A return to a pin lands at the start of its item.
-        const parts = mdChunks(md);
-        parts.forEach((src, j) => {
+        // A table is an item of its own ("table"), so it can run wider than the reading line.
+        const parts = mdChunks(md).flatMap((src) => splitTables(src));
+        parts.forEach(({ text: src, table }, j) => {
           const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
-          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}) });
+          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
       } else {
         used += seg.text.length;
@@ -5296,7 +5297,7 @@ export default class Threads extends View {
       .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
         .on_scroll_wheel((e) => this.listWheel(e))
-        .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
+        .child(h_flex().size_full().justify_center().child(div().h_full().w_full()
           .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
             .track_scroll(this.scroll)
@@ -5502,6 +5503,41 @@ export default class Threads extends View {
   rt() { return readType(this.prefs.textSize); }
   charW(at13) { return at13 * (this.rt().size / 13); }
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
+  // A table may run wider than the reading line, as wide as its columns want (ui.js
+  // tableNeed), centred on the line, up to the pane less the column's gutter on each side:
+  // the px it takes past the reading line. For a table item (r.table), or a closed turn's
+  // reply that holds tables (its widest); 0 otherwise, or when the pane has no room.
+  tableExtra(r) {
+    const md = r?.table ? (r.src ?? r.md) : r?.kind === "cmd" ? r.md : r?.kind === "turn" ? r.shape?.md : null;
+    if (!md?.includes("|")) return 0;
+    const memo = (this.tableMemo ??= new Map());
+    let need = memo.get(md);
+    if (need == null) {
+      need = 0;
+      for (const p of r.table ? [{ text: md, table: true }] : splitTables(md)) if (p.table) need = Math.max(need, tableNeed(p.text, this.charW(MD_CHAR)));
+      memo.set(md, need);
+      if (memo.size > 200) memo.delete(memo.keys().next().value);
+    }
+    // The reply's line starts at the column's left plus its gutter; each side may grow out to
+    // the pane's edge less the same gutter, and less the rail's lane on both sides (it is on
+    // one, and the table stays centred on the line).
+    const lane = this.railShown() ? RAIL.LANE : 0;
+    const left = this.colLeft() - lane;
+    const right = this.pw() - this.colLeft() - 2 * ROW.PAD_X - this.prose() - lane;
+    const half = Math.floor(Math.max(0, Math.min(left, right, (need - this.prose()) / 2)));
+    return 2 * half;
+  }
+  // A table drawn extra px wider than the reading line, half of it on each side.
+  tableBlock(el, extra) { return extra > 0 ? div().flex_none().w(this.prose() + extra).ml(-extra / 2).child(el) : el; }
+  // A table's height before it is measured: Herdr gives its columns equal widths and wraps
+  // each cell, so each row is as tall as its longest cell's lines, plus the cell padding.
+  tableHeight(r) {
+    const rows = tableCells(r.src ?? r.md);
+    const cols = Math.max(1, ...rows.map((x) => x.length));
+    const { line } = this.rt();
+    const per = Math.max(1, Math.floor(((this.prose() + this.tableExtra(r)) / cols - 16) / this.charW(MD_CHAR)));
+    return rows.reduce((h, x) => h + 16 + line * Math.max(1, ...x.map((c) => Math.ceil(c.length / per))), 0);
+  }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
   readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
@@ -5761,7 +5797,7 @@ export default class Threads extends View {
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
-      case "md": return (r.gap ?? 6) + this.mdHeight(r.src ?? r.md);
+      case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r) + (r.caption ? 24 : 0);
@@ -5801,8 +5837,8 @@ export default class Threads extends View {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}`;
-      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
+      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
@@ -5979,10 +6015,16 @@ export default class Threads extends View {
       }
       // A plain row keeps the slot its Markdown measured, which is taller: it sits at the
       // slot's foot, so its end is next to the rows below it.
-      out.push(v_flex().w_full().h(h).overflow_hidden()
-        .when(Boolean(held), (el) => el.justify_end())
-        .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
-        .child(body));
+      // The list spans the pane and each item sits in the reading column, centred. An item
+      // with a wide table (tableExtra) is wider by it, padded by half on each side, so its
+      // other parts stay in the column and the table reaches past it (tableBlock). Herdr
+      // clips an item on both axes, even with overflow_y_hidden.
+      const ex = this.tableExtra(x);
+      out.push(h_flex().w_full().h(h).justify_center()
+        .child(v_flex().w_full().max_w(this.width + ex).when(ex > 0, (el) => el.px(ex / 2)).h_full().overflow_hidden()
+          .when(Boolean(held), (el) => el.justify_end())
+          .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
+          .child(body)));
     }
     return out;
   }
@@ -6359,7 +6401,7 @@ export default class Threads extends View {
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
-        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -6439,8 +6481,13 @@ export default class Threads extends View {
 
   // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
   // a click on the row opens the turn.
-  cmdBlock(md, id) {
-    return this.readBlock(div()).child(this.mdView(id, md, false));
+  // Its tables may run wider than the reading line (tableBlock), each its own Markdown view.
+  cmdBlock(md, id, extra = 0) {
+    if (!(extra > 0)) return this.readBlock(div()).child(this.mdView(id, md, false));
+    const parts = splitTables(md);
+    return this.readBlock(v_flex()).gap(this.paraGap()).children(parts.map((p, i) => p.table
+      ? this.tableBlock(this.mdView(`${id}-t${i}`, p.text, false), extra)
+      : this.mdView(`${id}-p${i}`, p.text, false)));
   }
 
   // Whether the turn's session has replies from more than one named agent (turn.by), counting
@@ -6772,7 +6819,7 @@ export default class Threads extends View {
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
       case "cmd":
-        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`));
+        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`), this.tableExtra(r));
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
@@ -6784,7 +6831,7 @@ export default class Threads extends View {
             .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
           .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
         return this.readBlock(div().mt(r.gap ?? 6))
-          .child(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()));
+          .child(this.tableBlock(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()), this.tableExtra(r)));
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)
