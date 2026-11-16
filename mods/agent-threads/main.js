@@ -119,6 +119,11 @@ const PROBE_MAX = 16;
 const CUT_MS = 5000;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
+// Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
+const BAND_MARK = 100;
+// One slice of a rows build: past this, buildRows stops at the next turn and the next frame
+// goes on (buildStep).
+const BUILD_MS = 10;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -1602,30 +1607,22 @@ export default class Threads extends View {
   rows() {
     const status = this.status();
     const P = this.prefs;
-    const key = [
-      this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
+    const sess = this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",");
+    const rest = [
       [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
       [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
-      Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
+      Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
+      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
-    if (this.rowsKey !== key || !this.baseRows) {
-      this.shapeSpent = 0;
-      this.shapeLeft = 0;
-      this.shapeInView(status);
-      this.baseRows = this.buildRows(status);
-      this.baseSizes = this.baseRows.map((r) => this.height(r));
-      this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
-      this.probeRows = this.baseRows.filter((r) => PROBED.has(r.kind));
-      for (const r of this.baseRows) if (r.kind === "turn" && r.shape?.md != null) this.probeRows.push(this.cmdRow(r));
-      this.rowsKey = key;
-      this.fitKey = null;
-      // The selection is on a turn the list no longer shows: agent turns were hidden, or a
-      // hidden agent turn that showed while it was live has finished.
-      if (this.reselect || this.selHidden()) this.reselectVisible();
+    const key = `${sess}|${rest}`;
+    // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
+    if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
+      this.reshapeDue = false;
+      if (!this.reshapeStale(status)) this.rowsKey = null;
     }
+    if (this.rowsKey !== key || !this.baseRows) this.buildStep(status, key, rest);
     // Only the running turn depends on the selection (one-line row, or the card when
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
     // The running turn's own row: last, or followed by its open steps.
@@ -1638,7 +1635,9 @@ export default class Threads extends View {
     }
     const z = this.zoom();
     const gap = this.floating() ? TOP_BAND : 0;
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}`;
+    // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
+    // as part of the rows' key it rebuilt every row after each stopped draw.
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -1656,6 +1655,7 @@ export default class Threads extends View {
         sizes = [gap, ...sizes];
       }
       this.rowsMemo = rows;
+      this.indexedRows = rows;
       this.sizesMemo = sizes;
       // What the list is given: whole design px. v_virtual_list scales item sizes by zoom
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
@@ -1669,6 +1669,169 @@ export default class Threads extends View {
     return this.rowsMemo;
   }
 
+  // One slice of a rows build (buildRows with BUILD_MS). The rows on screen stay until the
+  // new ones are all built; a build that only gained turns at the end since its last slice
+  // goes on where it stopped. Building every row of a 6,000-turn session in one draw took
+  // longer than Herdr's time for a draw, which stopped it every time.
+  buildStep(status, key, rest) {
+    let job = this.rowJob;
+    if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    if (job) {
+      job.key = key;
+      // One slice a frame: rows() is asked for more than once in a draw.
+      if (job.frame === this.renders) return;
+    } else {
+      this.shapeSpent = 0;
+      this.shapeLeft = 0;
+      this.otherLeft = 0;
+      this.reshapeDue = false;
+      this.shapeInView(status);
+      // Only the newest turns changed (a turn came in, the running one grew, the next piece
+      // of a long session was read): the rows before them are kept (keptFrom).
+      const from = this.rowsKey != null && this.baseRows?.length ? this.keptFrom(rest) : null;
+      const index = from ? new Map(this.baseIndex) : new Map();
+      if (from) for (let i = from.row; i < this.baseRows.length; i++) index.delete(this.baseRows[i].key);
+      job = this.rowJob = {
+        key, rest, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
+        from: from ? { ...from, rows: this.baseRows, railRows: this.railTurns } : null,
+        stale: from ? (this.staleRows ?? []).filter((i) => i < from.row) : [],
+        sizes: from ? this.baseSizes.slice(0, from.row) : [],
+        index,
+      };
+    }
+    this.buildStale = job.stale;
+    job.frame = this.renders;
+    const out = this.buildRows(status, job.from, now() + BUILD_MS);
+    if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
+    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.height(out[i])); job.index.set(out[i].key, i); }
+    const res = this.buildInfo.resume;
+    if (res) {
+      job.from = { ...res, rows: out, railRows: this.buildRail, own: true };
+      job.vers = this.sessions.map((x) => x.version);
+      job.lens = this.sessions.map((x) => x.turns.length);
+      this.buildsLeft = (this.buildsLeft ?? 0) + 1;
+      if (!this.baseRows) { this.baseRows = []; this.baseSizes = []; this.baseIndex = new Map(); this.probeList(); this.fitKey = null; }
+      return;
+    }
+    this.rowJob = null;
+    this.baseRows = out;
+    this.railTurns = this.buildRail;
+    this.baseSizes = job.sizes;
+    this.baseIndex = job.index;
+    this.staleRows = job.stale;
+    this.probeList();
+    this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks };
+    this.rowsKey = key;
+    this.fitKey = null;
+    // The selection is on a turn the list no longer shows: agent turns were hidden, or a
+    // hidden agent turn that showed while it was live has finished.
+    if (this.reselect || this.selHidden()) this.reselectVisible();
+  }
+
+  // Whether a build stopped between slices can go on: the same sessions, earlier ones as they
+  // were, and in the newest only turns at or after the place it stopped have changed.
+  jobGoesOn(job) {
+    if (!job.from?.own || !job.lens) return false;
+    const S = this.sessions;
+    const L = S.length - 1;
+    if (S.length !== job.sessions.length) return false;
+    for (let i = 0; i <= L; i++) {
+      if (S[i] !== job.sessions[i]) return false;
+      if (i < L && (S[i].version !== job.vers[i] || S[i].turns.length !== job.lens[i])) return false;
+    }
+    if (job.from.si !== L) return false;
+    const turns = S[L].turns;
+    if (turns.length < job.lens[L]) return false;
+    let safe = job.lens[L] - 1;
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    return job.from.ti <= safe;
+  }
+
+  // Where the kept rows end, or null for a full rebuild: only when nothing but the newest
+  // session changed, and in it only turns at or after a turn with its reply. A turn with no
+  // reply yet can still change (it is open, a later turn answers it, or it is the newest), so
+  // the rebuild starts at the last mark (a day band, or every BAND_MARK turns in one) before
+  // the first such turn.
+  keptFrom(rest) {
+    const b = this.rowBuild;
+    if (!b || b.rest !== rest || !b.multi || this.view === "pinned" || this.outlined() || this.filterText()) return null;
+    const S = this.sessions;
+    const L = S.length - 1;
+    if (L < 0 || S.length !== b.sessions.length) return null;
+    for (let i = 0; i <= L; i++) {
+      if (S[i] !== b.sessions[i]) return null;
+      if (i < L && (S[i].version !== b.vers[i] || S[i].turns.length !== b.lens[i])) return null;
+    }
+    const turns = S[L].turns;
+    const was = b.lens[L];
+    if (turns.length < was || was < 2) return null;
+    let safe = was - 1;
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    for (let k = b.marks.length - 1; k >= 0; k--) {
+      const m = b.marks[k];
+      if (m.ti <= safe) return { ...m, marks: b.marks.slice(0, k) };
+    }
+    return null;
+  }
+
+  // A closed row's reply block as a probe part (cmdRow), made once per row object.
+  cmdFor(r) {
+    this.cmdOf ??= new WeakMap();
+    let c = this.cmdOf.get(r);
+    if (!c) { c = this.cmdRow(r); this.cmdOf.set(r, c); }
+    return c;
+  }
+
+  // The parts the probe measures changed (probeDue finds them from the rows as it walks).
+  probeList() { this.probeVer = (this.probeVer ?? 0) + 1; }
+  // Every part the probe measures: the probed rows, then each closed row's reply block. Made
+  // when asked; nothing draws from it.
+  get probeRows() {
+    const probed = [];
+    const cmds = [];
+    for (const r of this.baseRows ?? []) {
+      if (PROBED.has(r.kind)) probed.push(r);
+      else if (r.kind === "turn" && r.shape?.md != null) cmds.push(this.cmdFor(r));
+    }
+    return probed.concat(cmds);
+  }
+
+  // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
+  // are. False when one changes what the row is made of (pasted images), for a full rebuild.
+  reshapeStale(status) {
+    this.shapeSpent = 0;
+    this.shapeLeft = 0;
+    this.otherLeft = 0;
+    this.shapeInView(status);
+    const left = [];
+    for (const i of this.staleRows ?? []) {
+      const r = this.baseRows[i];
+      if (r?.kind !== "turn" || !r.turn) continue;
+      const sh = this.shape(r.turn);
+      if (this.shapeStale) { left.push(i); continue; }
+      if (sh === r.shape) continue;
+      if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
+      const nr = { ...r, shape: sh };
+      this.baseRows[i] = nr;
+      this.baseSizes[i] = this.height(nr);
+    }
+    this.staleRows = left;
+    this.probeList();
+    this.fitKey = null;
+    return true;
+  }
+
+  // The index of a list item in rowsMemo, from baseIndex (the list adds a spacer or a gap
+  // first): a search over every row for each one drawn took 1 ms a row in a long session.
+  rowIndex(key) {
+    const rows = this.rowsMemo ?? [];
+    const off = rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0;
+    const i = this.baseIndex?.get(key);
+    if (i != null && rows[i + off]?.key === key) return i + off;
+    if (key !== "spacer" && key !== "gap" && key !== "tail" && rows === this.indexedRows) return -1;
+    return rows.findIndex((r) => r.key === key);
+  }
+
   // Whether turn ti of session si is the live newest turn (Working or Needs you): only one
   // still owed its reply. A done turn the agent woke up for again (a background task's
   // notification) keeps its reply, with an Updating line under it (waking).
@@ -1679,64 +1842,105 @@ export default class Threads extends View {
     return si === this.sessions.length - 1 && ti === s.turns.length - 1 && s.turns[ti].done && s.followActive && status === "working";
   }
 
-  buildRows(status) {
-    if (this.view === "pinned") return this.pinnedRows(status);
-    const out = [];
+  // The rows, from the start or from a place (from: a mark from keptFrom, or where an earlier
+  // slice stopped), whose rows and rail before it are kept. With until, it stops at a turn
+  // once that time has passed and says where (buildInfo.resume), so a long session's rows are
+  // built over several frames, each inside Herdr's time for a draw.
+  buildRows(status, from = null, until = 0) {
+    this.buildInfo = { multi: false, marks: [], resume: null };
+    if (this.view === "pinned") { const rows = this.pinnedRows(status); this.buildRail = this.railTurns; return rows; }
+    const out = !from ? [] : from.own ? from.rows : from.rows.slice(0, from.row);
     // The rail's turns: every shown turn, with the ones a search leaves out marked.
-    const rail = [];
-    this.railTurns = rail;
+    const rail = !from ? [] : from.own ? from.railRows : from.railRows.slice(0, from.rail);
+    this.buildRail = rail;
+    const marks = from ? from.marks.slice() : [];
+    const lastSi = this.sessions.length - 1;
     const outline = this.outlined();
     let maxN = 1;
     if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
-    this.sessions.forEach((s, si) => {
-      if (si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
-      if (s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
-      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
+    const fromSi = from ? from.si ?? lastSi : 0;
+    for (let si = fromSi; si < this.sessions.length; si++) {
+      const s = this.sessions[si];
+      const first = Boolean(from) && si === fromSi;
+      const t0 = first ? from.ti : 0;
+      if (!first && si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
+      if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
+      // The live newest turn (isLive), found once for the session.
+      const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
+      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi });
       // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
-      s.turns.forEach((t, ti) => {
+      for (let ti = t0; ti < s.turns.length; ti++) {
+        const t = s.turns[ti];
         const d = t.day === undefined ? (t.day = dayKey(t.ts)) : t.day;
-        if (!d || !shown(t, ti)) return;
+        if (!d || !shown(t, ti)) continue;
         const r = days.get(d) ?? { ts: t.ts, count: 0 };
         r.count++;
         days.set(d, r);
-      });
-      let day = null;
-      let unmatched = 0;
+      }
+      const multi = first ? from.multi ?? true : days.size > 1;
+      if (si === lastSi) this.buildInfo.multi = multi;
+      let day = first ? from.day ?? (from.before ? from.d : null) : null;
+      // Shown turns so far in the day band, and the band's day item, for the marks.
+      let band = first ? from.before ?? 0 : 0;
+      let dayRow = first && from.before ? from.dayRow : null;
+      let unmatched = first ? from.unmatched ?? 0 : 0;
       const flush = () => { if (unmatched) out.push({ kind: "hidden", key: `hid:${si}:${out.length}`, n: unmatched }); unmatched = 0; };
-      s.turns.forEach((turn, ti) => {
+      for (let ti = t0; ti < s.turns.length; ti++) {
+        if (until && ti > t0 && (ti & 15) === 0 && now() > until) {
+          this.buildInfo.resume = { si, ti, row: out.length, rail: rail.length, before: band, d: day, day, dayRow, multi, unmatched, marks };
+          this.buildInfo.marks = marks;
+          return out;
+        }
+        const turn = s.turns[ti];
         const key = `${si}:${turn.n}`;
+        const railAt = rail.length;
         // Agent turns while they are hidden: skipped, and counted in the header instead.
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
-        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: this.isLive(s, si, ti, status), miss: Boolean(miss) });
-        if (off && !visit) return;
-        if (miss && !visit) { unmatched++; return; }
+        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
+        if (off && !visit) continue;
+        if (miss && !visit) { unmatched++; continue; }
+        const d = turn.day;
+        const newDay = multi && !q && d && d !== day;
+        // Where a later rebuild can start (keptFrom): before a day band, and every BAND_MARK
+        // shown turns inside one.
+        if (si === lastSi && !q && !outline && (newDay || (band && band % BAND_MARK === 0))) {
+          marks.push(newDay ? { ti, row: out.length, rail: railAt, before: 0, d, dayRow: null } : { ti, row: out.length, rail: railAt, before: band, d: day, dayRow });
+        }
         flush();
         if (visit && (off || miss)) out.push({ kind: "note", key: `visit:${key}`, text: visitNote(miss) });
-        const d = turn.day;
-        if (days.size > 1 && !q && d && d !== day) {
+        if (newDay) {
           day = d;
+          band = 0;
+          dayRow = out.length;
           const r = days.get(d);
           out.push({ kind: "day", key: `day:${si}:${d}`, ...dayParts(r.ts), count: r.count });
         }
+        if (!off) band++;
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
-        const live = this.isLive(s, si, ti, status);
+        const live = ti === liveTi;
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
-        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); return; }
+        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
         const item = { kind: "turn", key, turn, s, si, last, live };
         if (live) this.liveRows(item, out);
         else if (this.open.has(key)) this.expanded(item, out);
         else this.closedRows(item, out);
         if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
-      });
+      }
       flush();
-    });
+      // Built from inside a day band: the band's day item, kept, counts its turns again.
+      if (first && from.before && from.dayRow != null) {
+        const dd = from.day ?? from.d;
+        out[from.dayRow] = { ...out[from.dayRow], count: from.before + (days.get(dd)?.count ?? 0) };
+      }
+    }
+    this.buildInfo.marks = marks;
     return out;
   }
 
@@ -1746,6 +1950,7 @@ export default class Threads extends View {
   // line ("split").
   closedRows(item, out) {
     const shape = this.shape(item.turn);
+    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (shape.thumbs ? 1 : 0));
     if (!shape.thumbs) { out.push({ ...item, shape }); return; }
     out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, shape, split: true });
@@ -1802,7 +2007,7 @@ export default class Threads extends View {
     });
   }
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
-  isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
+  isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
 
   // Level 3's data. Calls are read for every agent but Cursor, which records no calls' ids or
   // output: the group must carry its calls' ids.
@@ -2130,21 +2335,41 @@ export default class Threads extends View {
   // What a collapsed row shows: its prompt and reply lines at the pane width, kept on the
   // turn until any of its inputs change.
   shape(turn, live = false) {
+    // The memo is checked field by field: building its key string for every turn on every
+    // rebuild cost 3 µs a turn, 18 ms at 6,000 turns.
+    const look = this.shapeLook();
+    const text = this.replyText(turn);
+    const f = turn.shapeFast;
+    this.shapeStale = false;
+    if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
+      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const text = this.replyText(turn);
     const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
-    if (turn.shapeKey === key) return turn.shapeMemo;
+    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0 };
+    if (turn.shapeKey === key) { turn.shapeFast = fast; return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
+    turn.shapeFast = fast;
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // What every row's shape depends on besides its turn, as one string kept while they stay.
+  shapeLook() {
+    const P = this.prefs;
+    const q = this.filterText();
+    const w = Math.round(this.width);
+    const m = this.lookMemo;
+    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === P.width && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
+    const s = `${w}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
+    this.lookMemo = { w, q, a: P.textSize, b: P.width, c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
+    return s;
   }
   // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
   // reply at the pane's width and text size.
@@ -3126,6 +3351,7 @@ export default class Threads extends View {
     if (known?.ver === ver) return known.lk;
     if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
       return { md: st.t, links: 0 };
     }
     const t0 = now();
@@ -3993,7 +4219,16 @@ export default class Threads extends View {
   // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
     if (this.drawingRow) this.rowCut(this.drawingRow);
-    if (this.renderOpen) { this.renderOpen = false; this.cutUntil = now() + CUT_MS; this.renderCuts = (this.renderCuts ?? 0) + 1; }
+    if (this.renderOpen) {
+      this.renderOpen = false;
+      this.cutUntil = now() + CUT_MS;
+      this.renderCuts = (this.renderCuts ?? 0) + 1;
+      // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
+      // is asked for again: it was taken before the list was drawn.
+      if (this.renderWant?.toBottom) this.toBottom = true;
+      if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
+    }
+    this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
     const light = this.cutUntil > now();
     this.renderOpen = true;
     let out;
@@ -4023,9 +4258,20 @@ export default class Threads extends View {
     this.rows();
     this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
-    if (this.shapeLeft > 0 && !this.shapeNext) {
+    // A rows build left for later slices (buildStep): the next frame goes on with it.
+    if (this.rowJob && !this.buildNext) {
+      this.buildNext = true;
+      cx.timer.after(0, (cx) => { this.buildNext = false; cx.notify(); });
+    }
+    if ((this.shapeLeft > 0 || this.staleRows?.length) && !this.shapeNext) {
       this.shapeNext = true;
-      cx.timer.after(this.light ? Math.max(0, this.cutUntil - now()) : 0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
+      cx.timer.after(this.light ? Math.max(0, this.cutUntil - now()) : 0, (cx) => {
+        this.shapeNext = false;
+        // Closed rows are reshaped where they are; interim texts and estimates left out of
+        // time are in open turns, which a rebuild brings back.
+        if (this.otherLeft) this.rowsKey = null; else this.reshapeDue = true;
+        cx.notify();
+      });
     }
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
@@ -4328,11 +4574,19 @@ export default class Threads extends View {
     // The session's totals, summed again only when the session changed (every event read
     // bumps its version): summed on every draw, they took a seventh of Herdr's time for a
     // draw in a session of 2,000 turns.
+    // Done turns before the newest are summed once (kept while the turn at their end is the
+    // same object), and only the turns after them again.
     const v = `${s.id}|${s.version}|${s.turns.length}`;
     if (this.usageMemo?.v !== v) {
-      let i = 0, o = 0, r = 0, c = 0;
-      for (const t of s.turns) for (const u of Object.values(t.usage)) { i += u.i ?? 0; o += u.o ?? 0; r += u.cr ?? 0; c += u.cc ?? 0; }
-      this.usageMemo = { v, input: i, output: o, cr: r, cc: c };
+      const u = this.usageMemo;
+      const keep = u && u.s === s && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+      const base = keep ? [...u.base] : [0, 0, 0, 0];
+      const add = (acc, t) => { for (const x of Object.values(t.usage)) { acc[0] += x.i ?? 0; acc[1] += x.o ?? 0; acc[2] += x.cr ?? 0; acc[3] += x.cc ?? 0; } };
+      let k = keep ? u.stable : 0;
+      while (k < s.turns.length - 1 && s.turns[k].done) add(base, s.turns[k++]);
+      const sum = [...base];
+      for (let j = k; j < s.turns.length; j++) add(sum, s.turns[j]);
+      this.usageMemo = { v, s, stable: k, mark: s.turns[k - 1] ?? null, base, input: sum[0], output: sum[1], cr: sum[2], cc: sum[3] };
     }
     const { input, output, cr, cc } = this.usageMemo;
     const pct = cachePct(cr, input + cc + cr);
@@ -4821,7 +5075,7 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
-    if ((this.toBottom || this.scrollTo) && this.shapeLeft > 0) {
+    if ((this.toBottom || this.scrollTo) && (this.shapeLeft > 0 || this.staleRows?.length || this.rowJob)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
     } else if (this.toBottom && rows.length) {
@@ -5196,6 +5450,7 @@ export default class Threads extends View {
     if (known != null) return known;
     if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
       return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
     }
     const t0 = now();
@@ -5351,7 +5606,7 @@ export default class Threads extends View {
   // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
     if (r.kind === "turn" && r.shape?.md != null) {
-      const m = this.measured(this.cmdRow(r));
+      const m = this.measured(this.cmdFor(r));
       return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r);
     }
     if (PROBED.has(r.kind)) {
@@ -5458,13 +5713,17 @@ export default class Threads extends View {
     if (part?.kind === "md" && part.key === key && !this.mdBroken?.has(key) && h <= (part.gap ?? 6) + 2 && (part.src ?? part.md ?? "").trim()) {
       (this.mdBroken ??= new Set()).add(key);
       this.meas.delete(key);
+      this.measVer = (this.measVer ?? 0) + 1;
       cx.notify();
       return;
     }
     const was = this.meas.get(key);
     if (was?.sig === sig && was.h === h) return;
-    if (this.meas.size > 2000) this.meas.clear();
+    // Every closed row's reply block is measured: a cap under the turns a long session has
+    // made the probe measure the same parts again and again.
+    if (this.meas.size > 20000) this.meas.clear();
     this.meas.set(key, { sig, h });
+    this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
     const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
@@ -5477,26 +5736,40 @@ export default class Threads extends View {
 
   // The parts still to measure, each drawn in the probe for at most three frames: a part
   // that never reports keeps its estimate (the debug report says "measured: none").
+  // The parts to measure this frame: at most PROBE_MAX, nearest the top of the pane first,
+  // found by walking out from the top row both ways and stopping once there are enough (a
+  // pass over every part each frame cost 5 to 13 ms in a 6,000-turn session while its rows
+  // were measured). probeLeft is above 0 while parts may be left.
   probeDue() {
     const want = [];
     this.probeTries ??= new Map();
     const base = this.sigBase();
-    for (const r of this.probeRows ?? []) {
-      const sig = this.partSig(r, base);
-      const m = this.meas?.get(r.key);
-      if (m && m.h > 0 && m.sig === sig) continue;
-      const k = `${r.key}|${sig}`;
-      if ((this.probeTries.get(k) ?? 0) >= 3) continue;
-      want.push([r, sig, k]);
-    }
-    if (want.length > PROBE_MAX) {
-      const top = (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0;
-      const at = (r) => this.baseIndex?.get(r.kind === "cmd" ? r.key.slice(4) : r.key) ?? 0;
-      want.sort((a, b) => Math.abs(at(a[0]) - top) - Math.abs(at(b[0]) - top));
+    // Nothing was due and nothing it depends on changed: every part was measured, or tried.
+    const qm = this.probeQuiet;
+    if (qm && qm.ver === (this.probeVer ?? 0) && qm.base === base && qm.mv === (this.measVer ?? 0) && qm.broken === (this.mdBroken?.size ?? 0)) { this.probeLeft = 0; return want; }
+    const rows = this.baseRows ?? [];
+    const n = rows.length;
+    const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
+    const visit = (r) => {
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
+      if (!part) return;
+      const sig = this.partSig(part, base);
+      const m = this.meas?.get(part.key);
+      if (m && m.h > 0 && m.sig === sig) return;
+      const k = `${part.key}|${sig}`;
+      if ((this.probeTries.get(k) ?? 0) >= 3) return;
+      want.push([part, sig, k]);
+    };
+    let more = false;
+    for (let d = 0; d < n; d++) {
+      if (top + d < n) visit(rows[top + d]);
+      if (d > 0 && top - d >= 0) visit(rows[top - d]);
+      if (want.length >= PROBE_MAX) { more = top + d + 1 < n || top - d - 1 >= 0; break; }
     }
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
-    this.probeLeft = want.length - out.length;
+    this.probeLeft = more || want.length > out.length ? 1 : 0;
+    this.probeQuiet = want.length ? null : { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 };
     if (this.probeTries.size > 4000) this.probeTries.clear();
     return out.map(([r, sig]) => [r, sig]);
   }
@@ -5784,14 +6057,13 @@ export default class Threads extends View {
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
     const rows = this.rowsMemo ?? this.rows();
-    if (rows.some((r) => r.key === `rhead:${key}`)) return `rhead:${key}`;
-    const row = rows.find((r) => r.key === key);
+    if (this.rowIndex(`rhead:${key}`) >= 0) return `rhead:${key}`;
+    const row = rows[this.rowIndex(key)];
     return row && row.kind === "turn" && !row.live && !row.running && !row.compact ? key : null;
   }
   // Whether a list item was in the range the list last drew.
   onScreen(key) {
-    const rows = this.rowsMemo ?? [];
-    const i = rows.findIndex((r) => r.key === key);
+    const i = this.rowIndex(key);
     const [a, b] = this.viewRange ?? [0, 0];
     return i >= a && i < b;
   }
@@ -6591,7 +6863,7 @@ export default class Threads extends View {
   detailsDir(itemKey, turn) {
     const rows = this.rowsMemo ?? [];
     const sizes = this.sizesMemo ?? [];
-    const i = rows.findIndex((r) => r.key === itemKey);
+    const i = this.rowIndex(itemKey);
     const [a, b] = this.viewRange ?? [0, 0];
     if (i < a || i >= b) return "down";
     let all = 0;

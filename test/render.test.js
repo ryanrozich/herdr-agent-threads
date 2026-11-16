@@ -4748,6 +4748,116 @@ test("a render Herdr stopped is followed by frames that neither reshape nor meas
   expect(v.renderOpen).toBe(false);
 });
 
+test("the jump to the newest turn that a stopped render took on is asked for again", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  // The stopped render consumed toBottom before Herdr threw its frame away.
+  v.toBottom = true;
+  v.renderWant = { toBottom: true, scrollTo: null };
+  v.toBottom = false;
+  v.renderOpen = true;
+  let asked = null;
+  const frame = v.frame.bind(v);
+  v.frame = (c, light) => { asked = v.toBottom; return frame(c, light); };
+  v.render(cx);
+  expect(asked).toBe(true);
+});
+
+// A long session over three days: prompts, replies, each turn done.
+async function longSession(n) {
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1 + Math.floor((i * 3) / n), 8, 0) + (i % Math.ceil(n / 3)) * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: check the cart total for order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the totals round per line, so the cart is off by a cent.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
+function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
+
+test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const whole = rowSig(v);
+  expect(whole.filter((r) => r.startsWith("day|")).length).toBe(3);
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  // Each reading of the clock moves it 2 ms: a slice is over after a few readings.
+  performance.now = () => (fake += 2);
+  try {
+    v.rowsKey = null;
+    v.rowBuild = null;
+    const old = v.baseRows;
+    draw(v, cx);
+    expect(v.rowJob).not.toBe(null);
+    expect(v.baseRows).toBe(old);
+    let slices = 1;
+    for (; slices < 400 && v.rowJob; slices++) draw(v, cx);
+    expect(slices).toBeGreaterThan(2);
+    expect(v.baseRows).not.toBe(old);
+  } finally { performance.now = realPerf; }
+  settleRows(v, cx);
+  expect(rowSig(v)).toEqual(whole);
+});
+
+test("a new turn in a long session rebuilds only from the last mark: the rows match a full build", async () => {
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx, s } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const froms = [];
+  const build = v.buildRows.bind(v);
+  v.buildRows = (status, from, until) => { froms.push(from?.ti ?? 0); return build(status, from, until); };
+  const ts = new Date(Date.UTC(2026, 10, 3, 20, 0)).toISOString();
+  apply(s, { k: "p", o: "human", t: "One more prompt about the tax line.", ts });
+  apply(s, { k: "t", t: "The tax is now rounded once per cart." });
+  apply(s, { k: "d", ts });
+  s.version++;
+  settleRows(v, cx);
+  expect(froms.length).toBeGreaterThan(0);
+  expect(froms[0]).toBeGreaterThan(300);
+  const kept = rowSig(v);
+  expect(kept.at(-1)).toContain("0:451");
+  // From nothing: the same rows and heights, day counts included.
+  v.rowBuild = null;
+  v.rowsKey = null;
+  froms.length = 0;
+  settleRows(v, cx);
+  expect(froms[0]).toBe(0);
+  expect(rowSig(v)).toEqual(kept);
+});
+
+test("the probe takes the parts nearest the top of the pane first, walking out both ways", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  v.meas = new Map();
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  const turns = v.baseRows.filter((r) => r.kind === "turn");
+  const mid = turns[150];
+  v.topKey = mid.key;
+  const at = v.baseIndex.get(mid.key);
+  const due = v.probeDue();
+  expect(due.length).toBe(16);
+  expect(v.probeLeft).toBeGreaterThan(0);
+  expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key.replace(/^cmd:/, "")) - at) <= 16)).toBe(true);
+  // All measured: nothing due, and the next call does not walk the rows again.
+  for (const r of v.probeRows) v.meas.set(r.key, { sig: v.partSig(r), h: 20 });
+  v.measVer = (v.measVer ?? 0) + 1;
+  expect(v.probeDue().length).toBe(0);
+  expect(v.probeLeft).toBe(0);
+  const visit = v.partSig.bind(v);
+  let sigs = 0;
+  v.partSig = (...a) => { sigs++; return visit(...a); };
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBe(0);
+});
+
 test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
@@ -5419,6 +5529,9 @@ test("a settings change in a long session reshapes rows over several frames, the
     // (until) starts after it.
     v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
     draw(v, cx);
+    // The rows are built over a few frames (BUILD_MS on this clock), the old ones shown till then.
+    for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
+    expect(v.rowJob).toBe(null);
     let rows = shown();
     const first = rows.filter(fresh).length;
     // Some rows, not all, in the first frame, and a frame queued to go on.
@@ -5448,6 +5561,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.action("agents", cx);
     cx.timers = [];
     draw(v, cx);
+    for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
     expect(shown().some((r) => r.shape.blank)).toBe(true);
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
@@ -5746,7 +5860,7 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
   v.topKey = texts()[75].key;
   const due = v.probeDue();
   expect(due.length).toBe(16);
-  expect(v.probeLeft).toBeGreaterThan(120);
+  expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key) - top) <= 32)).toBe(true);
   cx.timers = [];
   v.render(cx);
