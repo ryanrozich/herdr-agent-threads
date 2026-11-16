@@ -3137,9 +3137,13 @@ export default class Threads extends View {
     const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
     if (!reply) return { refuse: "No reply to quote." };
     if (this.selecting === key) {
+      // Herdr 0.1.16 and later: the editor's highlight itself, with no ⌘C first.
+      const lit = this.highlight();
+      if (lit?.trim()) return { text: lit, source: "selection", how: "editor" };
       const clip = readClip(cx);
-      if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection" };
-      return { refuse: `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
+      if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection", how: "clipboard" };
+      const say = lit != null ? `Nothing highlighted: select text, then ${this.quoteKey}` : `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`;
+      return { refuse: say, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
     const part = this.copiedPart(cx);
     if (part?.key === key) return { text: part.text, source: "selection" };
@@ -3266,7 +3270,7 @@ export default class Threads extends View {
         panelOpen: this.settingsOpen || this.choosing, remote, exists: Boolean(this.term()), ended: this.res.ended,
         pane: Boolean(pane), moved: Boolean(me && p && p.tab !== me.tab), fg: foreground(info, p), status: this.status(),
       });
-      const base = { source: q.source, lines: out.lines, capped: out.capped, cut: out.cut, chars: out.text.length, gate: gate.ok ? (gate.busy ? "busy" : "ok") : gate.why };
+      const base = { source: q.source, how: q.how ?? null, lines: out.lines, capped: out.capped, cut: out.cut, chars: out.text.length, gate: gate.ok ? (gate.busy ? "busy" : "ok") : gate.why };
       if (!gate.ok) {
         if (gate.why === "panel") { record({ ...base, pasted: false }); return; }
         cx.write_to_clipboard(out.text);
@@ -6813,7 +6817,25 @@ export default class Threads extends View {
 
   // The Select view's hint line.
   selectHint() {
+    if (this.canReadHighlight()) return this.narrow() ? `${this.quoteKey} quotes the highlight · s returns` : `Select text, then ${this.quoteKey} quotes it · s or Esc returns`;
     return this.narrow() ? `⌘C, then ${this.quoteKey} quotes it · s returns` : `Select text, ⌘C, then ${this.quoteKey} quotes it · s or Esc returns`;
+  }
+  // Whether Select view's editor tells its highlight (EditorState.selected_range, Herdr 0.1.16):
+  // before that a mod could not read it, and ⌘C put it on the clipboard for q.
+  canReadHighlight() { return typeof this.selEditor?.st?.selected_range === "function"; }
+  // The text highlighted in Select view's editor: "" when nothing is, null when the editor
+  // cannot say. Its offsets are UTF-16, as slice() takes them, into the text it was given.
+  highlight() {
+    if (!this.canReadHighlight()) return null;
+    try {
+      const r = this.selEditor.st.selected_range();
+      const text = this.selEditor.text.slice(0, SELECT_CHARS);
+      const a = Math.max(0, Math.min(r?.start ?? 0, r?.end ?? 0));
+      const b = Math.min(text.length, Math.max(r?.start ?? 0, r?.end ?? 0));
+      return b > a ? text.slice(a, b) : "";
+    } catch {
+      return null;
+    }
   }
 
   // The settings panel's line on the keys the file sets by hand.
