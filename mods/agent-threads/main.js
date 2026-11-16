@@ -117,6 +117,10 @@ const PROBE_MAX = 16;
 // blank if that is stopped too; the wait doubles each time, up to five minutes. A stopped
 // render draws without reshaping or measuring for CUT_MS.
 const CUT_MS = 5000;
+// How soon a render Herdr stopped is asked for again, and how long a scroll waits for the rows
+// to be built and shaped before it goes ahead with the heights it has.
+const CUT_WATCH_MS = 1500;
+const SCROLL_WAIT_MS = 2000;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
 // Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
@@ -4227,6 +4231,14 @@ export default class Threads extends View {
       // is asked for again: it was taken before the list was drawn.
       if (this.renderWant?.toBottom) this.toBottom = true;
       if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
+      // Counted at once: a render that is stopped too would never reach the end of the frame.
+      this.publishCuts();
+    }
+    // Herdr asks for no render after one it stopped, so nothing may come until some other
+    // change: one watch at a time asks for the next render if this one never finished.
+    if (!this.cutWatch) {
+      this.cutWatch = true;
+      cx.timer.after(CUT_WATCH_MS, (cx) => { this.cutWatch = false; if (this.renderOpen) cx.notify(); });
     }
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
     const light = this.cutUntil > now();
@@ -5075,7 +5087,12 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
-    if ((this.toBottom || this.scrollTo) && (this.shapeLeft > 0 || this.staleRows?.length || this.rowJob)) {
+    const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
+    if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
+    else if (!this.scrollWait) this.scrollWait = Date.now();
+    // Not forever: while renders keep being stopped the rows never settle, and the list stayed
+    // at the oldest turn. Following, the view keeps to the end as the rows settle (stickCheck).
+    if ((this.toBottom || this.scrollTo) && unsettled && Date.now() - this.scrollWait < SCROLL_WAIT_MS) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
     } else if (this.toBottom && rows.length) {
