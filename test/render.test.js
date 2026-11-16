@@ -5682,6 +5682,9 @@ test("a settings change in a long session reshapes rows over several frames, the
     const before = shown();
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
+    // The reshaping time a draw gets follows the last draw's cost on the real clock: start
+    // from a quick one, so the counts below do not depend on how busy the machine is.
+    v.frameBase = 0;
     cx.timers = [];
     // A scroll asked for now waits for the reshaping, and a return's wait for the probe
     // (until) starts after it.
