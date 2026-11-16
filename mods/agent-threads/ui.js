@@ -241,10 +241,55 @@ export function mdChunks(md, max = MD_MAX) {
     cur.push(line);
   }
   if (cur.length) blocks.push(cur.join("\n"));
-  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b]
-    : packed(b.split("\n").flatMap((l) => (utf8Len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", max))), "\n", max)));
+  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b] : splitBlock(b, max) ?? packed(wordsIn(b.split("\n"), max), "\n", max)));
   return packed(pieces, "\n\n", max);
 }
+
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const PIPE_ROW = /^\s*\|/;
+// A block too long for one chunk that holds a table or fenced code, split so that every chunk
+// still draws as one: each later piece of a table starts with its header and rule rows again,
+// and each piece of a fenced block is closed and opened again with the same fence line. The
+// lines before and after it split as other text. Null for a block with neither, or when the
+// repeated lines would take half the room.
+function splitBlock(b, max) {
+  const ls = b.split("\n");
+  let at = -1;
+  let end = -1;
+  let head;
+  let foot = "";
+  for (let i = 0; i < ls.length && at < 0; i++) {
+    if (PIPE_ROW.test(ls[i]) && i + 1 < ls.length && TABLE_RULE.test(ls[i + 1]) && ls[i + 1].includes("-")) {
+      at = i;
+      end = i + 2;
+      while (end < ls.length && PIPE_ROW.test(ls[end])) end++;
+      head = `${ls[i]}\n${ls[i + 1]}`;
+    }
+    const f = ls[i].match(FENCE);
+    if (f) {
+      let j = i + 1;
+      while (j < ls.length && ls[j].match(FENCE)?.[1][0] !== f[1][0]) j++;
+      if (j >= ls.length) return null;
+      at = i;
+      end = j + 1;
+      head = ls[i];
+      foot = `\n${ls[j]}`;
+    }
+  }
+  if (at < 0) return null;
+  const top = head.split("\n").length;
+  const body = ls.slice(at + top, foot ? end - 1 : end);
+  const extra = utf8Len(head) + 1 + utf8Len(foot);
+  if (extra * 2 > max || !body.length) return null;
+  const room = max - extra;
+  const pre = ls.slice(0, at);
+  const tail = ls.slice(end);
+  const rest = (part) => (part.length ? packed(wordsIn(part, max), "\n", max) : []);
+  const own = packed(wordsIn(body, room), "\n", room).map((part) => `${head}\n${part}${foot}`);
+  return [...rest(pre), ...own, ...(tail.length ? splitBlock(tail.join("\n"), max) ?? rest(tail) : [])];
+}
+// Lines, with any line longer than the room split at words.
+function wordsIn(ls, room) { return ls.flatMap((l) => (utf8Len(l) <= room ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", room))); }
 
 // Herdr's Markdown reads $…$ as inline math and shows the text between as written, so a
 // **bold** span between two prices keeps its asterisks. Dollar signs outside code are
