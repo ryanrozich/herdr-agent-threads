@@ -55,7 +55,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -4053,18 +4053,19 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
-  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
-  // wider than fitWidth a centred column that wide, so a reply's reading line and the
-  // bubbles stay together instead of leaving a gutter between them. Before the pane has
-  // measured itself (and in tests that set width) both are this.width.
+  // The pane's own width, and the column the turns are laid out in (ui.js columnWidth): the
+  // text, at most a reading line, with the side gutters left and right of it, centred. Before
+  // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = Math.min(this.paneW, this.readingPx());
+    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
     if (Math.abs(w - this.width) > 0.5) this.width = w;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // From the pane's edge to the text: the side gutter.
+  side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
   // reading width shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
@@ -6600,13 +6601,14 @@ export default class Threads extends View {
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(RAIL.W).justify_center().items_end()
+    const look = railLook(this.side());
+    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
       .children(ticks.map((k, i) => {
         const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
         const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
+        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(mark);
