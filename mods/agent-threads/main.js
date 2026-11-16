@@ -39,6 +39,8 @@ const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
+// window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
+import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -183,6 +185,11 @@ const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line l
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
 const NO_CUT = 100000;
+// Round 6: messages and replies in the system face while Herdr's interface font is its own
+// Geist, on macOS, where gpui names that face SYSTEM_FACE; reply prose at READ_INK strength
+// (opacity on its block, which TextView follows: 238 to 208 on graphite, tested on the rig).
+const SYSTEM_FACE = ".SystemUIFont";
+const READ_INK = 0.86;
 const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -3869,7 +3876,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -3958,7 +3965,7 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
     };
-    const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
+    const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(lines.map(line))
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
@@ -5103,7 +5110,21 @@ export default class Threads extends View {
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
-  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
+  // The face for messages and replies (SYSTEM_FACE), or null where the text keeps Herdr's
+  // interface font: off macOS, and when the person set an interface font of their own, which
+  // is followed. Read once per draw.
+  readFace() {
+    const r = this.renders ?? 0;
+    if (this.faceMemo?.r === r) return this.faceMemo.v;
+    const s = settings() ?? {};
+    const ui = s.ui_font ?? s.ui_font_family;
+    const v = this.platform() === "macos" && (!ui || ui === "Geist") ? SYSTEM_FACE : null;
+    this.faceMemo = { r, v };
+    return v;
+  }
+  readFont(el) { const f = this.readFace(); return f ? el.font_family(f) : el; }
+  platform() { return herdrNs.window?.()?.platform ?? null; }
   // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
   // enough for Herdr to draw (mdChunks). Kept for the text last asked for, as it is redrawn often.
   mdParts(md) {
@@ -5762,7 +5783,7 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
+    const box = this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6203,7 +6224,7 @@ export default class Threads extends View {
         // sender), as wide as its widest line.
         const agent = turn.agent;
         return h_flex().w_full().when(!agent, (el) => el.justify_end())
-          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+          .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
             .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
