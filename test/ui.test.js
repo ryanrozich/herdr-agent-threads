@@ -239,24 +239,24 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
   // Padding 8, bubble 6 + lines + 6, gap 6, the strip under it 16, gap 6, the line 24, gap
   // 6, reply lines, gap 6, the strip under the reply 16, padding 10. No meta line over the
   // bubble and no stats line. Lines are 21 px at the 14 px default.
-  expect(rowHeight(1, 1)).toBe(8 + 12 + 21 + 6 + 16 + 6 + 24 + 6 + 21 + 6 + 16 + 10);
-  expect(rowHeight(4, 6)).toBe(8 + 12 + 84 + 6 + 16 + 6 + 24 + 6 + 126 + 6 + 16 + 10);
+  expect(rowHeight(1, 1)).toBe(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 22 + 6 + 16 + 10);
+  expect(rowHeight(4, 6)).toBe(8 + 12 + 88 + 6 + 16 + 6 + 24 + 6 + 132 + 6 + 16 + 10);
   // An agent's message has its sender's name over the bubble.
-  expect(rowHeight(1, 1, 0, 21, true)).toBe(rowHeight(1, 1) + 16 + 6);
-  expect(rowShape({ prompt: "Short", reply: "Done.", width: 380, promptLines: 2, replyLines: 3, agent: true }).height).toBe(rowHeight(1, 1, 0, 21, true));
+  expect(rowHeight(1, 1, 0, 22, true)).toBe(rowHeight(1, 1) + 16 + 6);
+  expect(rowShape({ prompt: "Short", reply: "Done.", width: 380, promptLines: 2, replyLines: 3, agent: true }).height).toBe(rowHeight(1, 1, 0, 22, true));
   expect(ROW.NAME).toBeUndefined();
   expect(rowHeight(1, 1, 2)).toBe(rowHeight(1, 1) + 36);
-  expect(rowHeight(1, 1, 0, 24)).toBe(rowHeight(1, 1) + 6);
+  expect(rowHeight(1, 1, 0, 25)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
   expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
 });
 
-test("reading type: 14 px on 21 px lines by default, and a line of about 70 characters at any width", () => {
+test("reading type: 14 px on 22 px lines by default, and a line of about 70 characters at any width", () => {
   const d = readType();
-  expect([d.size, d.line, d.small]).toEqual([14, 21, 13.5]);
-  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8).
-  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.43);
-  expect(readType(16).line).toBe(24);
+  expect([d.size, d.line, d.small]).toEqual([14, 22, 13.5]);
+  // At least 1.5 times the size at every setting (WCAG 2.2 SC 1.4.8), about 1.57.
+  for (let px = 12; px <= 18; px++) expect(readType(px).line / px).toBeGreaterThanOrEqual(1.53);
+  expect(readType(16).line).toBe(25);
   expect(readType(40).size).toBe(18);
   expect(readType(Number.NaN).size).toBe(14);
   // The reading line is MEASURE characters of prose: 461 px at 14 px, 527 at 16.
@@ -280,7 +280,7 @@ test("reading type: 14 px on 21 px lines by default, and a line of about 70 char
   const big = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4, size: 18 });
   const base = rowShape({ prompt: "x", reply: words, width: 380, promptLines: 1, replyLines: 4 });
   expect(big.reply[0].length).toBeLessThan(base.reply[0].length);
-  expect(big.height).toBe(rowHeight(1, 4, 1, 27));
+  expect(big.height).toBe(rowHeight(1, 4, 1, 28));
 });
 
 test("command rows: the chip takes width from the first line and long names cut in the middle", () => {
@@ -496,10 +496,10 @@ test("a collapsed reply as Markdown: whole source lines within the line budget, 
   expect(mdPreview("", 6, 70).md).toBe("");
 });
 
-test("the reading width Threads opens at: 545 px at 14 px, scaled with Text size", () => {
-  expect(fitWidth()).toBe(545);
-  expect(fitWidth(12)).toBe(479);
-  expect(fitWidth(18)).toBe(676);
+test("the reading width Threads opens at: 573 px at 14 px, scaled with Text size", () => {
+  expect(fitWidth()).toBe(573);
+  expect(fitWidth(12)).toBe(507);
+  expect(fitWidth(18)).toBe(704);
 });
 
 test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside fenced code", () => {
@@ -683,7 +683,7 @@ test("o is the outline key, Enter and Space still open, and o stays a letter the
   expect(outlineText("one two three four five six seven eight nine ten eleven twelve\nthe retry path", "retry")).toMatch(/^….*retry path$/);
   expect(outlineText("retry first", "retry")).toBe("retry first");
   expect(outlineHeight(14)).toBe(30);
-  expect(outlineHeight(18)).toBe(35);
+  expect(outlineHeight(18)).toBe(36);
   expect(outlineHeight(12)).toBe(30);
   expect(outlineNumW(9)).toBeLessThan(outlineNumW(10));
   expect(outlineNumW(999)).toBe(Math.ceil(4 * 7.2) + 6);
@@ -881,13 +881,35 @@ test("callTime prefers the agent's own duration when it records one", () => {
   expect(callTime(null, null, null)).toBe("");
 });
 
+test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column between them, and the rail's ticks", async () => {
+  const { gutter, columnWidth, railLook, GUTTER } = await import("../mods/agent-threads/ui.js");
+  expect(GUTTER).toEqual({ PCT: 0.08, MIN: 24, MAX: 56 });
+  expect([200, 300, 500, 700, 960].map(gutter)).toEqual([24, 24, 40, 56, 56]);
+  // The column is the text and 16 px each side; the side gutter is what is left, split evenly.
+  const side = (w, size, chars) => (w - columnWidth(w, size, chars)) / 2 + 16;
+  // At the kept width the text is one reading line with 56 px each side.
+  expect(columnWidth(573)).toBe(461 + 32);
+  expect(side(573)).toBe(56);
+  expect(side(704, 14, 90)).toBe(56);
+  // Narrower, 8% of the pane; never under 24 px.
+  expect(side(400)).toBe(32);
+  expect(side(250)).toBe(24);
+  // Full: the pane less its gutters.
+  expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
+  // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
+  // 8, 12 and 6.
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6 });
+});
+
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
   const { readType, fitWidth, widthChars, WIDTH_NAMES } = await import("../mods/agent-threads/ui.js");
   expect(WIDTH_NAMES).toEqual(["comfortable", "wide", "full"]);
   expect(widthChars("nope")).toBe(70);
   const at = (w, size) => [readType(size, widthChars(w)).measure, fitWidth(size, widthChars(w))];
-  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 479], [461, 545], [592, 676]]);
-  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 592], [592, 676], [761, 845]]);
+  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 507], [461, 573], [592, 704]]);
+  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 620], [592, 704], [761, 873]]);
   expect(at("full", 14)).toEqual([Infinity, Infinity]);
   // A bubble's line stops at Wide's in Full.
   expect(readType(14, Infinity).bubble).toBe(592);

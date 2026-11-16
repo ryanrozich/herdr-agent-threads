@@ -39,6 +39,8 @@ const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
+// window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
+import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -55,7 +57,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -115,6 +117,16 @@ const PROBE_MAX = 16;
 // blank if that is stopped too; the wait doubles each time, up to five minutes. A stopped
 // render draws without reshaping or measuring for CUT_MS.
 const CUT_MS = 5000;
+// How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
+// for the rows to be built and shaped before it goes ahead with the heights it has.
+const CUT_WATCH_MS = 250;
+// What a draw should cost. Reshaping and building rows share what the rest of the last draw
+// left of it, each down to its floor, so a machine where the rest of a draw is slow does
+// less of both per frame and stays clear of Herdr's 50 ms stop.
+const FRAME_AIM_MS = 30;
+const SHAPE_MIN_MS = 2;
+const BUILD_MIN_MS = 3;
+const SCROLL_WAIT_MS = 2000;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
 // Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
@@ -196,6 +208,11 @@ const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line l
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
 const NO_CUT = 100000;
+// Round 6: messages and replies in the system face while Herdr's interface font is its own
+// Geist, on macOS, where gpui names that face SYSTEM_FACE; reply prose at READ_INK strength
+// (opacity on its block, which TextView follows: 238 to 208 on graphite, tested on the rig).
+const SYSTEM_FACE = ".SystemUIFont";
+const READ_INK = 0.86;
 const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -706,6 +723,13 @@ export default class Threads extends View {
     });
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
+      // A render Herdr stopped left renderOpen set (no timer runs during a render), and
+      // Herdr asks for no render after it: ask for one. This timer was set up here, outside
+      // any render, since a timer asked for inside a stopped render may never run.
+      if (this.renderOpen && now() - (this.renderAt ?? 0) >= CUT_WATCH_MS && now() - (this.cutPokeAt ?? 0) >= CUT_WATCH_MS) {
+        this.cutPokeAt = now();
+        cx.notify();
+      }
       // The day pill goes DAY_PILL_MS after the last scroll.
       if (this.scrollSeenAt && Date.now() - this.scrollSeenAt >= DAY_PILL_MS) { this.scrollSeenAt = 0; this.stickyDue = true; }
       if (this.stickyDue) { this.stickyDue = false; cx.notify(); }
@@ -1053,7 +1077,7 @@ export default class Threads extends View {
     this.sessions.forEach((s, si) => {
       const pins = this.pinStore.sessions[this.sessionKey(s)]?.pins ?? [];
       if (!pins.length) return;
-      const ids = turnIds(s.turns);
+      const ids = turnIds(s.turns, pins.map((p) => p.id));
       for (const pin of pins) {
         const turn = ids.get(pin.id) ?? null;
         const key = turn ? `${si}:${turn.n}` : null;
@@ -1674,7 +1698,7 @@ export default class Threads extends View {
       // One slice a frame: rows() is asked for more than once in a draw.
       if (job.frame === this.renders) return;
     } else {
-      this.shapeSpent = 0;
+      this.shapeStart();
       this.shapeLeft = 0;
       this.otherLeft = 0;
       this.reshapeDue = false;
@@ -1694,7 +1718,10 @@ export default class Threads extends View {
     }
     this.buildStale = job.stale;
     job.frame = this.renders;
-    const out = this.buildRows(status, job.from, now() + BUILD_MS);
+    const b0 = now();
+    const s0 = this.shapeSpent ?? 0;
+    const out = this.buildRows(status, job.from, b0 + this.buildMax());
+    this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.height(out[i])); job.index.set(out[i].key, i); }
     const res = this.buildInfo.resume;
@@ -1792,12 +1819,18 @@ export default class Threads extends View {
   // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
-    this.shapeSpent = 0;
+    this.shapeStart();
     this.shapeLeft = 0;
     this.otherLeft = 0;
     this.shapeInView(status);
     const left = [];
-    for (const i of this.staleRows ?? []) {
+    // Nearest the newest first when following, where the view is. Once this draw's time is
+    // spent the rest wait as they are, without a look at each.
+    const stale = this.staleRows ?? [];
+    const order = this.follow ? stale.slice().reverse() : stale;
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
+      if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
       const r = this.baseRows[i];
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
@@ -2336,6 +2369,9 @@ export default class Threads extends View {
     this.shapeStale = false;
     if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
+    // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
+    // waiting after renders were stopped through a whole load).
+    if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
@@ -4103,7 +4139,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -4192,7 +4228,7 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
     };
-    const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
+    const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(lines.map(line))
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
@@ -4220,18 +4256,43 @@ export default class Threads extends View {
       // is asked for again: it was taken before the list was drawn.
       if (this.renderWant?.toBottom) this.toBottom = true;
       if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
+      // Counted at once: a render that is stopped too would never reach the end of the frame.
+      this.publishCuts();
     }
+    // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
     const light = this.cutUntil > now();
+    this.renderAt = now();
+    // One budget a draw; while rows are built over several draws (rowJob), one for them all,
+    // as before.
+    if (!this.rowJob) this.shapeSpent = 0;
+    const spent = this.shapeSpent ?? 0;
+    this.buildSpent = 0;
+    this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
     let out;
     try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
     this.renderOpen = false;
+    // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
+    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
     return out;
   }
 
   // Reshaping time left for this draw: none while a stopped render is being recovered from.
-  shapeMax() { return this.light ? -1 : this.shapeBudget ?? SHAPE_MS; }
+  shapeMax() {
+    if (this.light) return -1;
+    if (this.shapeBudget != null) return this.shapeBudget;
+    return Math.max(SHAPE_MIN_MS, Math.min(SHAPE_MS, this.frameRoom() / 2));
+  }
+  // A slice of a rows build.
+  buildMax() { return Math.max(BUILD_MIN_MS, Math.min(BUILD_MS, this.frameRoom() / 2)); }
+  frameRoom() { return FRAME_AIM_MS - (this.frameBase ?? 0); }
+  // One reshaping budget a draw: rows() can be asked for more than once in a draw, and each
+  // ask used to start the budget again. Outside a render (tests), each ask starts it.
+  shapeStart() {
+    if (this.renderOpen && this.shapeFrame === this.renders) return;
+    this.shapeSpent = 0;
+  }
 
   frame(cx, light) {
     if (this.gal) return this.galleryView();
@@ -4325,18 +4386,19 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
-  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
-  // wider than fitWidth a centred column that wide, so a reply's reading line and the
-  // bubbles stay together instead of leaving a gutter between them. Before the pane has
-  // measured itself (and in tests that set width) both are this.width.
+  // The pane's own width, and the column the turns are laid out in (ui.js columnWidth): the
+  // text, at most a reading line, with the side gutters left and right of it, centred. Before
+  // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = Math.min(this.paneW, this.readingPx());
+    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
     if (Math.abs(w - this.width) > 0.5) this.width = w;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // From the pane's edge to the text: the side gutter.
+  side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
   // reading width shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
@@ -5067,9 +5129,23 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
-    if ((this.toBottom || this.scrollTo) && (this.shapeLeft > 0 || this.staleRows?.length || this.rowJob)) {
+    const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
+    if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
+    else if (!this.scrollWait) this.scrollWait = Date.now();
+    // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
+    // settle. The end is held to in every frame while they do (below).
+    const bottomHeld = this.toBottom && !this.scrollTo;
+    if ((this.toBottom || this.scrollTo) && unsettled && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
+      // To the end in this frame, every frame while they settle: rows reshaped above the view
+      // push it up, since the list keeps its offset in px, and a scroll a frame later showed
+      // the view jumping up and back. Before, the list stayed at the oldest turn when renders
+      // were stopped through a load and the rows never settled.
+      if (bottomHeld && rows.length) {
+        this.pinningUntil = Date.now() + 1000;
+        this.scroll.scroll_to_bottom();
+      }
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
@@ -5382,7 +5458,21 @@ export default class Threads extends View {
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
-  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
+  // The face for messages and replies (SYSTEM_FACE), or null where the text keeps Herdr's
+  // interface font: off macOS, and when the person set an interface font of their own, which
+  // is followed. Read once per draw.
+  readFace() {
+    const r = this.renders ?? 0;
+    if (this.faceMemo?.r === r) return this.faceMemo.v;
+    const s = settings() ?? {};
+    const ui = s.ui_font ?? s.ui_font_family;
+    const v = this.platform() === "macos" && (!ui || ui === "Geist") ? SYSTEM_FACE : null;
+    this.faceMemo = { r, v };
+    return v;
+  }
+  readFont(el) { const f = this.readFace(); return f ? el.font_family(f) : el; }
+  platform() { return herdrNs.window?.()?.platform ?? null; }
   // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
   // enough for Herdr to draw (mdChunks). Kept for the MD_MEMO texts used last, as they are
   // redrawn often: the probe walks every turn, and a memo cleared when full made a long reply
@@ -6102,7 +6192,7 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
+    const box = this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6543,7 +6633,7 @@ export default class Threads extends View {
         // sender), as wide as its widest line.
         const agent = turn.agent;
         return h_flex().w_full().when(!agent, (el) => el.justify_end())
-          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+          .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
             .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6813,7 +6903,7 @@ export default class Threads extends View {
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
     return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
-      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .rounded(10).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
         .child(this.kbd(t, "i"))
@@ -6941,13 +7031,14 @@ export default class Threads extends View {
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(RAIL.W).justify_center().items_end()
+    const look = railLook(this.side());
+    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
       .children(ticks.map((k, i) => {
         const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
         const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
+        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(mark);
