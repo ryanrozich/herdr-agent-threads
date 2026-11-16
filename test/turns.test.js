@@ -622,3 +622,18 @@ test("steps: interim text and groups of calls in order, the reply apart, and cap
   expect(c.steps.at(-1).k).toBe("group");
   expect(c.tools).toBe(STEP_CALLS + 5 + STEP_MAX);
 });
+
+test("subagent calls make a step group of their own, apart from the commands around them", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { AGENT_CALL } = await import("../mods/agent-threads/ui.js");
+  // turns.js keeps its own copy of ui.js's pattern: the two must be the same.
+  expect(readFileSync(new URL("../mods/agent-threads/turns.js", import.meta.url), "utf8")).toContain(`const AGENT_CALL = ${AGENT_CALL};`);
+  const s = newSession("00000000-0000-4000-8000-00000000000b", "x.jsonl");
+  apply(s, { k: "p", o: "human", t: "Check the calendar code", ts: "2026-11-01T09:00:00.000Z" });
+  for (const n of ["Bash", "Read", "Agent", "Agent", "Agent", "Bash", "TaskCreate", "Task"]) apply(s, { k: "u", n, id: `toolu_${n}` });
+  const groups = s.turns[0].steps.filter((x) => x.k === "group");
+  expect(groups.map((g) => [g.calls, Boolean(g.agent)])).toEqual([
+    [["Bash", "Read"], false], [["Agent", "Agent", "Agent"], true], [["Bash", "TaskCreate"], false], [["Task"], true],
+  ]);
+  expect(groups.map((g) => g.count)).toEqual([2, 3, 2, 1]);
+});

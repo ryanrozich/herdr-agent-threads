@@ -203,6 +203,8 @@ function newTurn(s, e) {
 export const STEP_TEXT = 3400;
 export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
+// A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
+const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 function addStep(turn, name, id = null) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
@@ -211,8 +213,11 @@ function addStep(turn, name, id = null) {
     else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
+  // Subagent calls make a group of their own, apart from the commands and reads around them.
+  const agent = AGENT_CALL.test(String(name ?? ""));
   let g = steps[steps.length - 1];
-  if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; steps.push(g); }
+  if (g?.k === "group" && Boolean(g.agent) !== agent && steps.length < STEP_MAX) g = null;
+  if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; if (agent) g.agent = true; steps.push(g); }
   if (g.calls.length < STEP_CALLS) {
     g.calls.push(String(name ?? "tool"));
     // The call's id in the transcript, for calls.sh to find its input and output on demand.
