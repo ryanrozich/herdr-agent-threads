@@ -7237,7 +7237,10 @@ export default class Threads extends View {
         const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
         // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
         // peak can be wider than the lane leaves beside the inset.
-        const mark = div().absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
+        // Herdr slides a change of width over 90 ms by itself (round 7, the slide): the draw
+        // only sets the new width, and no timer runs in the mod.
+        const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
+          .transition("width", { duration: RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
         const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
