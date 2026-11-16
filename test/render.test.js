@@ -4691,6 +4691,47 @@ test("a render Herdr stopped is followed by frames that neither reshape nor meas
   expect(v.renderOpen).toBe(false);
 });
 
+test("a render Herdr stopped is asked for again, and counted even when the next one is stopped too", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  let notes = 0;
+  cx.notifyHook = () => { notes++; };
+  cx.timers = [];
+  v.render(cx);
+  const watch = cx.timers.filter((x) => x.ms === 1500);
+  expect(watch.length).toBe(1);
+  // Finished: the watch asks for nothing.
+  notes = 0;
+  watch[0].fn(cx);
+  expect(notes).toBe(0);
+  // Stopped (renderOpen left set): the watch asks for the next render.
+  cx.timers = [];
+  v.render(cx);
+  v.renderOpen = true;
+  notes = 0;
+  cx.timers.find((x) => x.ms === 1500).fn(cx);
+  expect(notes).toBe(1);
+  // The next render fails before the end of its frame: the stop is published all the same.
+  const frame = v.frame;
+  v.frame = () => { throw new Error("interrupted"); };
+  expect(() => v.render(cx)).toThrow("interrupted");
+  expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1 });
+  v.frame = frame;
+});
+
+test("the jump to the newest turn waits for the rows to settle, but not for more than 2 s", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.toBottom = true;
+  cx.timers = [];
+  v.render(cx);
+  expect(v.toBottom).toBe(true);
+  v.scrollWait = Date.now() - 2100;
+  v.render(cx);
+  expect(v.toBottom).toBe(false);
+  expect(cx.timers.some((x) => x.ms === 16)).toBe(true);
+});
+
 test("the jump to the newest turn that a stopped render took on is asked for again", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.render(cx);
