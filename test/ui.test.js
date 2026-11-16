@@ -901,9 +901,9 @@ test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column b
   expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
   // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
   // 8, 12 and 6.
-  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14 });
-  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6 });
-  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6 });
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6, peak: 16 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16 });
 });
 
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
@@ -940,4 +940,19 @@ test("level 3 paths: relative to the working folder inside it, from ~ elsewhere,
   // A folder given with a trailing slash, and a root or empty folder, which shortens nothing.
   expect(shortPaths("/home/dev/acme-web/a.ts", "/home/dev/acme-web/", home)).toBe("a.ts");
   expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
+});
+
+test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
+  const { railDay, railSwell, flattenMd, RAIL } = await import("../mods/agent-threads/ui.js");
+  const now = new Date(2026, 10, 16, 12).getTime();
+  expect(railDay(now, now)).toBe("Today");
+  expect(railDay(now - 86400000, now)).toBe("Yesterday");
+  expect(railDay(new Date(2026, 10, 13, 11, 20).getTime(), now)).toBe("Fri 13 Nov");
+  expect(railDay(new Date(2025, 11, 28, 14, 5).getTime(), now)).toBe("Sun 28 Dec 2025");
+  expect(railDay(null, now)).toBe(null);
+  expect([0, 9, 18, 27, 36, 50].map((d) => railSwell(10, RAIL.PEAK, d))).toEqual([24, 18, 13.5, 11, 10, 10]);
+  expect(railSwell(8, RAIL.PEAK_SMALL, 0)).toBe(16);
+  expect(RAIL.CARD_W).toBe(300);
+  expect(flattenMd("Here:\n\n| Step | State | Takes |\n|---|:--:|---|\n| build | **ok** | 2s |\n\nDone.")).toBe("Here: Step · State · Takes · build · ok · 2s Done.");
+  expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
 });

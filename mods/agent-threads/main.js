@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -3712,7 +3712,12 @@ export default class Threads extends View {
       case "outline": return this.setOutline(!this.outlined());
       case "outline:on": return this.setOutline(true);
       case "outline:off": return this.setOutline(false);
-      case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
+      // While a rail card is open, p pins the card's turn, not the selected one.
+      case "pin": {
+        const card = Popup && this.railHover && this.railShown() ? this.railHover : null;
+        if (card || this.sel) this.togglePin(card ?? this.sel, cx);
+        return true;
+      }
       case "undoUnpin": return this.undoUnpin(cx);
       case "pinned": return this.openPinned(cx);
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
@@ -3720,6 +3725,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
+      case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
       case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
@@ -3753,7 +3759,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -4905,6 +4911,7 @@ export default class Threads extends View {
           .child(toggle(Boolean(P.alwaysShowTime))))
         .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.alwaysShowTime ? "Each message's time shows under its bubble." : "A message's time shows when its turn is selected.")))
       .child(this.widthRow(t, label))
+      .child(this.railSideRow(t, label))
       .child(h_flex().id("th-set-width").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keepWidth", cx); cx.notify(); })
         .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
@@ -4975,6 +4982,21 @@ export default class Threads extends View {
             .child(names[w])))))
       .when(same, (el) => el.child(div().pl(19).text_size(11.5).text_color(t.dim)
         .child(`This pane is narrower than Comfortable (${narrowPx} px), so all three look the same here.`)));
+  }
+
+  // Rail side: Right (the default) or Left, as the Width row's segments.
+  railSideRow(t, label) {
+    const cur = this.railLeft() ? "left" : "right";
+    return h_flex().gap(6).items_center()
+      .child(svg(ICON("panel-right")).size(13).flex_none().text_color(t.muted))
+      .child(label("Rail side"))
+      .child(h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
+        .children(["right", "left"].map((w) => div().id(`th-rail-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
+          .flex().items_center().cursor_pointer().text_size(12)
+          .bg(w === cur ? t.hover : alpha(t.hover, 0)).text_color(w === cur ? t.foreground : t.muted)
+          .hover((st) => st.bg(t.hover))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`railSide:${w}`, cx); cx.notify(); })
+          .child(w === "right" ? "Right" : "Left"))));
   }
 
   // A bubble colour setting: its name and the colour's name, then a swatch for each preset
@@ -7106,46 +7128,93 @@ export default class Threads extends View {
     const cut = text.length > 60 ? `${text.slice(0, 59)}…` : text;
     return [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null, cut || null].filter(Boolean).join(" · ");
   }
-  // The rail card (Herdr 0.1.15, Popup): a tick's turn on two lines, its number and time over
-  // its prompt, at most two lines of it. A tick that stands for several turns names the range.
+  // The rail card (Herdr 0.1.15, Popup): a first line with the day, the time and the number
+  // ("Yesterday · 3:48 PM · #7", the running turn "Today · now · #149") and a pin when the turn
+  // is pinned; the prompt on two lines; the reply on three, flattened (a table's cells joined
+  // with a middle dot, code as "[code]"), or "Working · 0:48" for the running turn. A turn with
+  // no reply shows its prompt alone. A tick that stands for several turns names the range.
+  // The reply is flattened once per hovered turn (railReplyMemo), from its first 600
+  // characters.
   railCard(k) {
     const a = k.turns[0].turn;
-    const head = k.turns.length > 1 ? `#${a.n} to #${k.last.turn.n}`
-      : [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null].filter(Boolean).join(" · ");
-    const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
-    return { head, body: clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text };
+    // The person's own words, as the Pinned rows show them: a quoted line is not the prompt.
+    const text = pinPromptText(String(a.prompt ?? "")).replace(/\s+/g, " ").trim();
+    const body = clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text;
+    if (k.turns.length > 1) return { day: null, rest: `#${a.n} to #${k.last.turn.n}`, pinned: false, body, reply: null };
+    let reply = null;
+    if (k.live) reply = `Working${a.ts ? ` · ${fmtClock(Date.now() - a.ts)}` : ""}`;
+    else {
+      const m = this.railReplyMemo;
+      if (m?.turn === a) reply = m.text;
+      else {
+        const flat = flattenMd(String(this.replyText(a) ?? "").slice(0, 600), 200);
+        reply = flat ? clipPrompt(flat, 3, RAIL.REPLY_CHARS, 200).text : null;
+        this.railReplyMemo = { turn: a, text: reply };
+      }
+    }
+    return { day: railDay(a.ts), rest: [k.live ? "now" : fmtTime(a.ts), `#${a.n}`].join(" · "), pinned: k.pinned, body, reply };
   }
+  // The rail's side: "right" (the default) or "left" (settings railSide). Only the lane, the
+  // side the ticks grow toward and the side the card opens on move.
+  railLeft() { return this.prefs.railSide === "left"; }
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
     const look = railLook(this.side());
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
+    const left = this.railLeft();
+    // The peak: each tick's width from its distance in px to the hovered tick, set in the draw
+    // that opens the card. Distances count the day gaps.
+    const hi = this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
+    let ys = null;
+    if (hi >= 0) {
+      ys = [];
+      let y = 0;
+      ticks.forEach((k, i) => { if (i && k.dayStart) y += RAIL.DAY; ys.push(y); y += L.pitch; });
+    }
+    const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center();
+    return (left ? rail.left(0).items_start() : rail.right(0).items_end())
       .children(ticks.map((k, i) => {
-        const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
-        const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
+        const hot = i === hi;
+        const color = k.live ? busy : k.pinned ? t.accent : k.sel || hot ? t.foreground : k.inView ? t.muted : t.dim;
+        const op = k.miss && !hot ? 0.16 : k.live || k.pinned || k.sel || k.inView || hot ? 1 : 0.5;
+        const own = k.sel ? look.sel : look.mark;
+        const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
+        // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
+        // peak can be wider than the lane leaves beside the inset.
+        const mark = div().absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
-          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
+        const tick = div().id(`th-tick-${i}`).flex_none().relative().w(look.lane).h(L.pitch)
+          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
-          .child(mark);
-        // On Herdr 0.1.15 a hovered tick shows the card beside it, to its left; before that,
-        // the one-line tooltip.
+          .child(left ? mark.left(look.right) : mark.right(look.right));
+        // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
+        // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
-        const open = this.railHover === k.key;
         return Popup.new(`th-tick-card-${i}`, tick.on_hover((on, cx) => {
           if (on) this.railHover = k.key;
           else if (this.railHover === k.key) this.railHover = null;
           cx.notify();
-        })).anchor("right_center").when(open, (el) => el.content(this.railCardView(t, k)));
+        })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k)));
       }));
   }
   railCardView(t, k) {
     const c = this.railCard(k);
-    return v_flex().id("th-rail-card").mr(RAIL.CARD_GAP).w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
-      .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
-      .child(div().text_size(11).line_height("15px").text_color(t.dim).child(c.head))
-      .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().text_color(t.foreground).child(c.body)));
+    const card = v_flex().id("th-rail-card").w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
+      .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md();
+    // Clear of the peak, which reaches past the lane by what it outgrows the room beside the
+    // inset (6 px at the usual 32 px lane and 14 px inset). Padding on a box around the card,
+    // since the Popup pins the card's outer corner and a margin on that side is not counted.
+    const look = railLook(this.side());
+    const gap = RAIL.CARD_GAP + Math.max(0, look.peak + look.right - look.lane);
+    const box = div().flex_none();
+    return (this.railLeft() ? box.pl(gap) : box.pr(gap)).child(card
+      .child(h_flex().h(15).gap(4).items_center().text_size(11).line_height("15px").min_w(0)
+        .when(Boolean(c.day), (el) => el.child(div().flex_none().text_color(t.muted).child(c.day)).child(div().flex_none().text_color(t.dim).child("·")))
+        .child(div().min_w(0).truncate().text_color(t.dim).child(c.rest))
+        .child(div().flex_1())
+        .when(c.pinned, (el) => el.child(svg(ICON("pin")).size(11).flex_none().text_color(t.accent))))
+      .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().font_medium().text_color(t.foreground).child(c.body)))
+      .when(Boolean(c.reply), (el) => el.child(div().text_size(12).line_height("17px").max_h(51).overflow_hidden().text_color(t.muted).child(c.reply))));
   }
   railJump(key, cx) {
     this.toList();
