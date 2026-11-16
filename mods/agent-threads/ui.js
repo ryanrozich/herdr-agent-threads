@@ -192,20 +192,40 @@ export function wrappedLines(text, per) {
 // blocks of at most MD_MAX bytes, split at blank lines outside fenced code, else at lines,
 // else at words.
 export const MD_MAX = 3500;
+// UTF-8 bytes in a string, by UTF-16 unit: four for a surrogate pair, three for a lone
+// surrogate, as TextEncoder counts. A for...of walk over the string cost 36 ms for a 34 KB
+// reply in Herdr's QuickJS.
 function utf8Len(s) {
-  let n = 0;
-  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; }
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) continue;
+    if (c < 0x800) { n += 1; continue; }
+    if (c >= 0xd800 && c < 0xdc00) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d < 0xe000) { n += 2; i++; continue; }
+    }
+    n += 2;
+  }
   return n;
 }
 const FENCE = /^\s*(`{3,}|~{3,})/;
+// Pieces joined by sep into runs of at most max UTF-8 bytes (a longer piece alone). Each run's
+// length is kept as it grows: measuring the whole run again for every piece made a reply with
+// long tables cost more than Herdr's time for a draw.
 function packed(pieces, sep, max) {
   const out = [];
-  let acc = "";
+  const sepLen = utf8Len(sep);
+  let chunk = [];
+  let len = 0;
   for (const p of pieces) {
-    const next = acc ? `${acc}${sep}${p}` : p;
-    if (acc && utf8Len(next) > max) { out.push(acc); acc = p; } else acc = next;
+    const pLen = utf8Len(p);
+    if (!len) { chunk = [p]; len = pLen; }
+    else if (len + sepLen + pLen > max) { out.push(chunk.join(sep)); chunk = [p]; len = pLen; }
+    else { chunk.push(p); len += sepLen + pLen; }
   }
-  if (acc) out.push(acc);
+  const last = chunk.join(sep);
+  if (last) out.push(last);
   return out;
 }
 export function mdChunks(md, max = MD_MAX) {

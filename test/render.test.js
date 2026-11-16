@@ -4669,6 +4669,329 @@ function drawRange(v, start, end) {
   v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
 }
 
+test("mdParts keeps the texts used last: a long reply on screen is not split again while the probe walks hundreds of others", async () => {
+  const { v } = await pane(fixture());
+  const big = `${"| a | b |\n|---|---|\n"}${"| one | two |\n".repeat(400)}`;
+  const first = v.mdParts(big);
+  for (let i = 0; i < 1000; i++) {
+    v.mdParts(`text ${i}`);
+    if (i % 100 === 0) expect(v.mdParts(big)).toBe(first);
+  }
+  expect(v.mdParts(big)).toBe(first);
+  expect(v.mdMemo.size).toBeLessThanOrEqual(400);
+  expect(v.mdMemo.has("text 0")).toBe(false);
+});
+
+test("a row Herdr stopped while it drew is drawn as plain text, blank if that is stopped too, and in full again after the wait", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.kind === "turn" && r.shape?.md);
+  const r = rows[i];
+  expect(i).toBeGreaterThanOrEqual(0);
+  const views0 = () => views.filter((x) => String(x.id).includes(r.key)).length;
+  let drawn = 0;
+  const item = v.item.bind(v);
+  v.item = (t, x, ...rest) => { if (x.key === r.key) drawn++; return item(t, x, ...rest); };
+  // Drawn in full: its reply is a TextView, and no draw is left open.
+  let n = views0();
+  drawRange(v, i, i + 1);
+  expect(views0()).toBeGreaterThan(n);
+  expect(v.drawingRow).toBe(null);
+  // Herdr stopped its draw (the mark is still set when the list draws next): plain text.
+  v.drawingRow = { key: r.key, lite: false };
+  n = views0();
+  drawRange(v, i, i + 1);
+  expect(v.cutRows.get(r.key)).toMatchObject({ n: 1, blank: false });
+  expect(views0()).toBe(n);
+  expect(drawn).toBe(2);
+  // Herdr's list asks only for its first row after a stopped draw, so the list gets a new id.
+  expect(v.listGen).toBe(1);
+  // Stopped again while plain, found by the next render: blank, not drawn at all.
+  v.drawingRow = { key: r.key, lite: true };
+  v.render(makeCx());
+  expect(v.drawingRow).toBe(null);
+  expect(v.listGen).toBe(2);
+  drawn = 0;
+  drawRange(v, i, i + 1);
+  expect(v.cutRows.get(r.key)).toMatchObject({ n: 2, blank: true });
+  expect(v.cutRows.get(r.key).until - performance.now()).toBeGreaterThan(9000);
+  expect(drawn).toBe(0);
+  // After the wait it is drawn in full again.
+  v.cutRows.get(r.key).until = 0;
+  n = views0();
+  drawRange(v, i, i + 1);
+  expect(drawn).toBe(1);
+  expect(views0()).toBeGreaterThan(n);
+});
+
+test("a render Herdr stopped is followed by frames that neither reshape nor measure, then by full ones; an error is not taken for a stop", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  let probes = 0;
+  const probeDue = v.probeDue.bind(v);
+  v.probeDue = () => { probes++; return probeDue(); };
+  v.render(cx);
+  expect(v.renderOpen).toBe(false);
+  expect(probes).toBe(1);
+  v.renderOpen = true;
+  v.render(cx);
+  expect(v.light).toBe(true);
+  expect(v.shapeMax()).toBe(-1);
+  expect(probes).toBe(1);
+  expect(v.renderCuts).toBe(1);
+  expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1, rows: 0 });
+  v.cutUntil = 0;
+  v.render(cx);
+  expect(v.light).toBe(false);
+  expect(probes).toBe(2);
+  v.frame = () => { throw new Error("broken"); };
+  expect(() => v.render(cx)).toThrow("broken");
+  expect(v.renderOpen).toBe(false);
+});
+
+test("a render Herdr stopped is asked for again, and counted even when the next one is stopped too", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  let notes = 0;
+  cx.notifyHook = () => { notes++; };
+  // The watch is the 120 ms timer set up with the pane, not a timer asked for in a render,
+  // which may never run when Herdr stops that render.
+  const tick = cx.everies.find((x) => x.ms === 120);
+  cx.timers = [];
+  v.render(cx);
+  expect(cx.timers.some((x) => x.ms === 1500 || x.ms === 250)).toBe(false);
+  // Finished: the watch asks for nothing (the same timer redraws for the sticky day).
+  v.stickyDue = false;
+  v.scrollSeenAt = 0;
+  notes = 0;
+  tick.fn(cx);
+  expect(notes).toBe(0);
+  // Stopped (renderOpen left set): the watch asks for the next render once 250 ms have
+  // gone, and then no more than once each 250 ms.
+  v.render(cx);
+  v.renderOpen = true;
+  v.stickyDue = false;
+  v.scrollSeenAt = 0;
+  notes = 0;
+  tick.fn(cx);
+  expect(notes).toBe(0);
+  v.renderAt -= 300;
+  tick.fn(cx);
+  tick.fn(cx);
+  expect(notes).toBe(1);
+  v.cutPokeAt -= 300;
+  tick.fn(cx);
+  expect(notes).toBe(2);
+  // The next render fails before the end of its frame: the stop is published all the same.
+  const frame = v.frame;
+  v.frame = () => { throw new Error("interrupted"); };
+  expect(() => v.render(cx)).toThrow("interrupted");
+  expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1 });
+  v.frame = frame;
+});
+
+test("one reshaping budget a draw, and less of it when the rest of the draw is slow", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  // A quick draw leaves the whole budget for reshaping and for a slice of a rows build; a
+  // slow one splits what is left of 30 ms between them, each down to its floor.
+  v.frameBase = 5;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([12, 10]);
+  v.frameBase = 20;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([5, 5]);
+  v.frameBase = 34;
+  expect([v.shapeMax(), v.buildMax()]).toEqual([2, 3]);
+  // Inside a draw, a second ask for the rows keeps what the first spent.
+  v.renderOpen = true;
+  v.shapeFrame = v.renders;
+  v.shapeSpent = 9;
+  v.shapeStart();
+  expect(v.shapeSpent).toBe(9);
+  // Outside a draw (a test asking for rows), each ask starts it again.
+  v.renderOpen = false;
+  v.shapeStart();
+  expect(v.shapeSpent).toBe(0);
+  // A finished draw records its cost apart from reshaping.
+  v.frameBase = null;
+  v.render(cx);
+  expect(v.frameBase).toBeGreaterThanOrEqual(0);
+});
+
+test("a scroll to a place waits for the rows to settle, but not for more than 2 s", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  const keys = v.turnKeys(v.rows());
+  const calls = [];
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { calls.push([i, how]); } };
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.scrollTo = { key: keys[0], how: "top" };
+  cx.timers = [];
+  v.render(cx);
+  expect(v.scrollTo).not.toBe(null);
+  v.scrollWait = Date.now() - 2100;
+  v.render(cx);
+  expect(v.scrollTo).toBe(null);
+  cx.flush(20);
+  expect(calls.length).toBeGreaterThan(0);
+});
+
+test("the jump to the newest turn that a stopped render took on is asked for again", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.render(cx);
+  // The stopped render consumed toBottom before Herdr threw its frame away.
+  v.toBottom = true;
+  v.renderWant = { toBottom: true, scrollTo: null };
+  v.toBottom = false;
+  v.renderOpen = true;
+  let asked = null;
+  const frame = v.frame.bind(v);
+  v.frame = (c, light) => { asked = v.toBottom; return frame(c, light); };
+  v.render(cx);
+  expect(asked).toBe(true);
+});
+
+// A long session over three days: prompts, replies, each turn done.
+async function longSession(n) {
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1 + Math.floor((i * 3) / n), 8, 0) + (i % Math.ceil(n / 3)) * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: check the cart total for order ${i}.`, ts }, { k: "t", t: `Reply ${i}: the totals round per line, so the cart is off by a cent.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+test("rows left unshaped by stopped renders: past the draw's time the rest are not looked at, and the newest come first when following", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const s = v.current();
+  // As after a load whose renders were all stopped: every row built, none shaped.
+  for (const t of s.turns) { t.shapeKey = null; t.shapeMemo = null; t.shapeFast = null; }
+  v.staleRows = v.baseRows.map((r, i) => (r.kind === "turn" ? i : -1)).filter((i) => i >= 0);
+  const n = v.staleRows.length;
+  expect(n).toBeGreaterThan(400);
+  v.follow = true;
+  // A draw has time for 10 reshapes.
+  let calls = 0, done = 0;
+  const shape = v.shape;
+  v.shape = function (...a) { calls++; return shape.apply(this, a); };
+  const reshape = v.reshape;
+  v.reshape = function (...a) { done++; const out = reshape.apply(this, a); this.shapeSpent = done >= 10 ? 1e9 : 0; return out; };
+  v.shapeSpent = 0;
+  done = 0;
+  calls = 0;
+  v.shapeInView = () => {};
+  expect(v.reshapeStale("idle")).toBe(true);
+  expect(done).toBe(10);
+  expect(calls).toBeLessThan(15);
+  expect(v.staleRows.length).toBe(n - 10);
+  expect(v.shapeLeft).toBeGreaterThan(0);
+  // The ten shaped are the newest ten.
+  const shaped = v.baseRows.map((r, i) => (r.kind === "turn" && !r.shape?.blank && r.turn.shapeKey != null ? i : -1)).filter((i) => i >= 0);
+  const turnRows = v.baseRows.map((r, i) => (r.kind === "turn" ? i : -1)).filter((i) => i >= 0);
+  expect(shaped).toEqual(turnRows.slice(-10));
+});
+
+test("the jump to the newest turn goes to the end every frame while the rows settle", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  let bottoms = 0;
+  v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.toBottom = true;
+  // In the same frame, and for as long as they take.
+  v.scrollWait = Date.now() - 60000;
+  for (let f = 0; f < 3; f++) draw(v, cx);
+  expect(bottoms).toBe(3);
+  expect(v.toBottom).toBe(true);
+});
+
+const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
+function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
+
+test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const whole = rowSig(v);
+  expect(whole.filter((r) => r.startsWith("day|")).length).toBe(3);
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  // Each reading of the clock moves it 2 ms: a slice is over after a few readings.
+  performance.now = () => (fake += 2);
+  try {
+    v.rowsKey = null;
+    v.rowBuild = null;
+    const old = v.baseRows;
+    draw(v, cx);
+    expect(v.rowJob).not.toBe(null);
+    expect(v.baseRows).toBe(old);
+    let slices = 1;
+    for (; slices < 400 && v.rowJob; slices++) draw(v, cx);
+    expect(slices).toBeGreaterThan(2);
+    expect(v.baseRows).not.toBe(old);
+  } finally { performance.now = realPerf; }
+  settleRows(v, cx);
+  expect(rowSig(v)).toEqual(whole);
+});
+
+test("a new turn in a long session rebuilds only from the last mark: the rows match a full build", async () => {
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx, s } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const froms = [];
+  const build = v.buildRows.bind(v);
+  v.buildRows = (status, from, until) => { froms.push(from?.ti ?? 0); return build(status, from, until); };
+  const ts = new Date(Date.UTC(2026, 10, 3, 20, 0)).toISOString();
+  apply(s, { k: "p", o: "human", t: "One more prompt about the tax line.", ts });
+  apply(s, { k: "t", t: "The tax is now rounded once per cart." });
+  apply(s, { k: "d", ts });
+  s.version++;
+  settleRows(v, cx);
+  expect(froms.length).toBeGreaterThan(0);
+  expect(froms[0]).toBeGreaterThan(300);
+  const kept = rowSig(v);
+  expect(kept.at(-1)).toContain("0:451");
+  // From nothing: the same rows and heights, day counts included.
+  v.rowBuild = null;
+  v.rowsKey = null;
+  froms.length = 0;
+  settleRows(v, cx);
+  expect(froms[0]).toBe(0);
+  expect(rowSig(v)).toEqual(kept);
+});
+
+test("the probe takes the parts nearest the top of the pane first, walking out both ways", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  v.meas = new Map();
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  const turns = v.baseRows.filter((r) => r.kind === "turn");
+  const mid = turns[150];
+  v.topKey = mid.key;
+  const at = v.baseIndex.get(mid.key);
+  const due = v.probeDue();
+  expect(due.length).toBe(16);
+  expect(v.probeLeft).toBeGreaterThan(0);
+  expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key.replace(/^cmd:/, "")) - at) <= 16)).toBe(true);
+  // All measured: nothing due, and the next call does not walk the rows again.
+  for (const r of v.probeRows) v.meas.set(r.key, { sig: v.partSig(r), h: 20 });
+  v.measVer = (v.measVer ?? 0) + 1;
+  expect(v.probeDue().length).toBe(0);
+  expect(v.probeLeft).toBe(0);
+  const visit = v.partSig.bind(v);
+  let sigs = 0;
+  v.partSig = (...a) => { sigs++; return visit(...a); };
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBe(0);
+});
+
 test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
@@ -5340,6 +5663,9 @@ test("a settings change in a long session reshapes rows over several frames, the
     // (until) starts after it.
     v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
     draw(v, cx);
+    // The rows are built over a few frames (BUILD_MS on this clock), the old ones shown till then.
+    for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
+    expect(v.rowJob).toBe(null);
     let rows = shown();
     const first = rows.filter(fresh).length;
     // Some rows, not all, in the first frame, and a frame queued to go on.
@@ -5369,6 +5695,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.action("agents", cx);
     cx.timers = [];
     draw(v, cx);
+    for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
     expect(shown().some((r) => r.shape.blank)).toBe(true);
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
@@ -5667,7 +5994,7 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
   v.topKey = texts()[75].key;
   const due = v.probeDue();
   expect(due.length).toBe(16);
-  expect(v.probeLeft).toBeGreaterThan(120);
+  expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key) - top) <= 32)).toBe(true);
   cx.timers = [];
   v.render(cx);

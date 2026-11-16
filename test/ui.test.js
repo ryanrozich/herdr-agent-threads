@@ -519,6 +519,41 @@ test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside f
   expect(lp.join("")).toBe(long);
 });
 
+// mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
+// by measuring each whole chunk again for every piece.
+function mdChunksBefore(md, max = MD_MAX) {
+  const len = (x) => { let n = 0; for (const ch of x) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; } return n; };
+  const packed = (pieces, sep) => { const out = []; let acc = ""; for (const p of pieces) { const next = acc ? `${acc}${sep}${p}` : p; if (acc && len(next) > max) { out.push(acc); acc = p; } else acc = next; } if (acc) out.push(acc); return out; };
+  const text = String(md ?? "");
+  if (len(text) <= max) return [text];
+  const blocks = [];
+  let cur = [];
+  let fence = null;
+  for (const line of text.split("\n")) {
+    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    else if (!fence && !line.trim()) { if (cur.length) blocks.push(cur.join("\n")); cur = []; continue; }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join("\n"));
+  const pieces = blocks.flatMap((b) => (len(b) <= max ? [b] : packed(b.split("\n").flatMap((l) => (len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], ""))), "\n")));
+  return packed(pieces, "\n\n");
+}
+
+test("mdChunks: a reply with long tables splits as before, counted in UTF-8 bytes, surrogates included", () => {
+  const table = (k) => `### Table ${k}\n\n| Area | File | Before | After |\n|---|---|---|---|\n${Array.from({ length: 40 }, (_, i) => `| checkout ${i} | src/cart/part${i}.ts | ${i * 13} ms | ${i * 7} ms |`).join("\n")}`;
+  const reply = Array.from({ length: 6 }, (_, k) => `${table(k)}\n\nThe subtotal is rounded once. `.repeat(2)).join("\n\n");
+  const odd = ["", "a", "\n\n\n", "é".repeat(5000), "😀".repeat(3000), "\uD800x".repeat(2000), "x\uDC00".repeat(2000), "日本 ".repeat(3000),
+    `\`\`\`\n${"code line\n".repeat(800)}\`\`\`\n\nafter`, `| a | b |\n|---|---|\n${"| 日本 | 😀 |\n".repeat(600)}`];
+  for (const md of [reply, ...odd]) {
+    for (const max of [MD_MAX, 500, 7]) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
+  }
+  const parts = mdChunks(reply);
+  expect(parts.length).toBeGreaterThan(3);
+  expect(parts.every((p) => Buffer.byteLength(p) <= MD_MAX)).toBe(true);
+  expect(mdChunks("😀 ".repeat(3000), 400).every((p) => Buffer.byteLength(p) <= 400)).toBe(true);
+});
+
 test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
   expect(escapeDollars("The $41.250 total includes **4,180 look-ups at $0.009 each**."))
     .toBe("The \\$41.250 total includes **4,180 look-ups at \\$0.009 each**.");
