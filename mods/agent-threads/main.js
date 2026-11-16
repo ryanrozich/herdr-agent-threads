@@ -7135,14 +7135,18 @@ export default class Threads extends View {
       const gi = k ? base.at.get(k) : undefined;
       if (gi != null) { on.add(gi); lo = Math.min(lo, gi); hi = Math.max(hi, gi); }
     }
-    // The window stays where it is while the pointer is on the rail (railOn), and after a dot
-    // brought a turn into it until the list moves (railHeld); otherwise it follows the list.
+    // The window stays where it is while the pointer is on the rail (railOn) or its card
+    // (railCardOn), and after a dot brought a turn into it until the list moves (railHeld);
+    // otherwise it follows the list.
     const range = `${a}:${b}`;
     if (this.railHeld && this.railHeld !== range) this.railHeld = null;
-    const held = Boolean(this.railOn || this.railHeld);
+    // A card that closed (its tick left the window) without telling the pointer left it.
+    if (!this.railHover) this.railCardOn = false;
+    const held = Boolean(this.railOn || this.railCardOn || this.railHeld);
     const day = (i) => all[i].dayStart;
     const W = railWindow(n, day, Math.max(0, this.listH), this.railTop ?? 0, held || hi < 0 ? null : [lo, hi], !held && Boolean(this.follow));
     this.railTop = W.top;
+    this.railCut = W.cut;
     const end = W.top + W.count;
     const sel = this.sel ? base.at.get(this.sel) : undefined;
     const ticks = [];
@@ -7162,6 +7166,28 @@ export default class Threads extends View {
       return pin >= 0 ? { i: pin, live: false } : null;
     };
     return { L: { pitch: RAIL.MAX, mark: 2 }, ticks, n, cut: W.cut, top: W.top, dotTop: W.cut ? past(true) : null, dotBottom: W.cut ? past(false) : null };
+  }
+  // The wheel on the rail moves its window a tick at a time (9 px of a touchpad's travel, or a
+  // line from a wheel that counts lines) and the list stays: the rail is drawn over the list,
+  // so its handler runs first and stops the event there. A window that is not cut has nothing
+  // to move, and the wheel goes on to the list.
+  railWheel(e, cx) {
+    if (!this.railCut) return;
+    cx.stop_propagation();
+    const lines = Number(e?.delta_lines?.y) || 0;
+    let steps;
+    if (lines) steps = Math.sign(lines) * Math.max(1, Math.round(Math.abs(lines)));
+    else {
+      this.railAcc = (this.railAcc ?? 0) + (Number(e?.delta?.y) || 0);
+      steps = Math.trunc(this.railAcc / RAIL.MAX);
+      this.railAcc -= steps * RAIL.MAX;
+    }
+    if (e?.touch_phase === "ended" || e?.touch_phase === "cancelled") this.railAcc = 0;
+    if (!steps) return;
+    // Up (a positive delta, as for the list) shows earlier turns.
+    this.railTop = Math.max(0, (this.railTop ?? 0) - steps);
+    this.railOn = true;
+    cx.notify();
   }
   // A press on an end's dot: its turn comes into the window, and the list stays where it is.
   railReveal(i, cx) {
@@ -7223,7 +7249,8 @@ export default class Threads extends View {
     }
     // The pointer on the rail holds its window (railTicks).
     const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center()
-      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } });
+      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
+      .on_scroll_wheel((e, cx) => this.railWheel(e, cx));
     // A cut end has a 9 px row past it, holding a dot for a pin or the running turn that lies
     // that way; a press brings it into the window.
     const endRow = (id, d, above) => {
@@ -7257,9 +7284,15 @@ export default class Threads extends View {
         if (!Popup) return tick.tooltip(this.railTip(k));
         return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
           if (on) this.railHover = k.key;
-          else if (this.railHover === k.key) this.railHover = null;
+          else if (this.railHover === k.key && !this.railCardOn) this.railHover = null;
           cx.notify();
-        })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k)));
+        })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k).id("th-rail-card-box")
+          .on_hover((on, cx) => {
+            // The pointer on the card keeps it open and holds the window.
+            this.railCardOn = Boolean(on);
+            if (on) this.railHover = k.key;
+            else if (this.railHover === k.key && !this.railOn) { this.railHover = null; cx.notify(); }
+          })));
       }))
       .when(cut, (el) => el.child(endRow("th-rail-down", dotBottom, false)));
   }
