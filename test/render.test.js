@@ -4669,6 +4669,85 @@ function drawRange(v, start, end) {
   v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start, end: end ?? rows.length }, true, false);
 }
 
+test("mdParts keeps the texts used last: a long reply on screen is not split again while the probe walks hundreds of others", async () => {
+  const { v } = await pane(fixture());
+  const big = `${"| a | b |\n|---|---|\n"}${"| one | two |\n".repeat(400)}`;
+  const first = v.mdParts(big);
+  for (let i = 0; i < 1000; i++) {
+    v.mdParts(`text ${i}`);
+    if (i % 100 === 0) expect(v.mdParts(big)).toBe(first);
+  }
+  expect(v.mdParts(big)).toBe(first);
+  expect(v.mdMemo.size).toBeLessThanOrEqual(400);
+  expect(v.mdMemo.has("text 0")).toBe(false);
+});
+
+test("a row Herdr stopped while it drew is drawn as plain text, blank if that is stopped too, and in full again after the wait", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.kind === "turn" && r.shape?.md);
+  const r = rows[i];
+  expect(i).toBeGreaterThanOrEqual(0);
+  const views0 = () => views.filter((x) => String(x.id).includes(r.key)).length;
+  let drawn = 0;
+  const item = v.item.bind(v);
+  v.item = (t, x, ...rest) => { if (x.key === r.key) drawn++; return item(t, x, ...rest); };
+  // Drawn in full: its reply is a TextView, and no draw is left open.
+  let n = views0();
+  drawRange(v, i, i + 1);
+  expect(views0()).toBeGreaterThan(n);
+  expect(v.drawingRow).toBe(null);
+  // Herdr stopped its draw (the mark is still set when the list draws next): plain text.
+  v.drawingRow = { key: r.key, lite: false };
+  n = views0();
+  drawRange(v, i, i + 1);
+  expect(v.cutRows.get(r.key)).toMatchObject({ n: 1, blank: false });
+  expect(views0()).toBe(n);
+  expect(drawn).toBe(2);
+  // Herdr's list asks only for its first row after a stopped draw, so the list gets a new id.
+  expect(v.listGen).toBe(1);
+  // Stopped again while plain, found by the next render: blank, not drawn at all.
+  v.drawingRow = { key: r.key, lite: true };
+  v.render(makeCx());
+  expect(v.drawingRow).toBe(null);
+  expect(v.listGen).toBe(2);
+  drawn = 0;
+  drawRange(v, i, i + 1);
+  expect(v.cutRows.get(r.key)).toMatchObject({ n: 2, blank: true });
+  expect(v.cutRows.get(r.key).until - performance.now()).toBeGreaterThan(9000);
+  expect(drawn).toBe(0);
+  // After the wait it is drawn in full again.
+  v.cutRows.get(r.key).until = 0;
+  n = views0();
+  drawRange(v, i, i + 1);
+  expect(drawn).toBe(1);
+  expect(views0()).toBeGreaterThan(n);
+});
+
+test("a render Herdr stopped is followed by frames that neither reshape nor measure, then by full ones; an error is not taken for a stop", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  let probes = 0;
+  const probeDue = v.probeDue.bind(v);
+  v.probeDue = () => { probes++; return probeDue(); };
+  v.render(cx);
+  expect(v.renderOpen).toBe(false);
+  expect(probes).toBe(1);
+  v.renderOpen = true;
+  v.render(cx);
+  expect(v.light).toBe(true);
+  expect(v.shapeMax()).toBe(-1);
+  expect(probes).toBe(1);
+  expect(v.renderCuts).toBe(1);
+  expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1, rows: 0 });
+  v.cutUntil = 0;
+  v.render(cx);
+  expect(v.light).toBe(false);
+  expect(probes).toBe(2);
+  v.frame = () => { throw new Error("broken"); };
+  expect(() => v.render(cx)).toThrow("broken");
+  expect(v.renderOpen).toBe(false);
+});
+
 test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
