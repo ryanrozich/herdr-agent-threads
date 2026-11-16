@@ -506,7 +506,7 @@ test("a turn answered together with a later one: its line says so, and its note 
   v.goToAnswer(t1);
   expect(v.sel).toBe("0:2");
   expect(v.open.has("0:2")).toBe(true);
-  expect(v.scrollTo).toMatchObject({ key: "md:0:2:0", how: "top" });
+  expect(v.scrollTo).toMatchObject({ key: "md:0:2:0", how: "land" });
   draw(v, cx);
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
@@ -558,6 +558,7 @@ test("no list row registers an event handler: Herdr throws on one inside the ite
   v.click(`nr:${ks[1]}`, cx);
   expect(v.sel).toBe(`${ks[1].split(":")[0]}:${t1.n + 1}`);
   expect(v.scrollTo?.key).toBe(`md:${v.sel}:0`);
+  expect(v.scrollTo?.how).toBe("land");
   v.click(`nr:${ks[3]}`, cx);
   expect(v.sel).toBe(`${ks[3].split(":")[0]}:${t2.n + 1}`);
 });
