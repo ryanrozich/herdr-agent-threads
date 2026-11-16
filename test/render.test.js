@@ -6699,3 +6699,59 @@ test("the rail's window: 9 px a tick in a long session, at most 540 px, followin
   v.railOn = false;
   expect(v.railTicks().top).toBe(0);
 });
+
+test("the wheel on the rail moves its window a tick at a time and stops there, so the list stays; the pointer on the card holds it too", async () => {
+  const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
+  v.listH = 900;
+  draw(v, cx);
+  const ks = keys();
+  v.sel = ks.at(-1);
+  v.follow = true;
+  const w = v.railTicks();
+  const top = w.top;
+  let stopped = 0;
+  const wcx = { ...cx, stop_propagation() { stopped++; }, notify() {} };
+  // The rail's handler is the one after its hover report.
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  const wheel = r.find((e) => e[0] === "on_scroll_wheel")[1];
+  // 9 px of upward travel is one tick earlier; 4 px is not yet one, and the rest carries.
+  wheel({ delta: { x: 0, y: 4 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  wheel({ delta: { x: 0, y: 5 }, touch_phase: "moved" }, wcx);
+  expect(v.railOn).toBe(true);
+  expect(v.railTicks().top).toBe(top - 1);
+  wheel({ delta: { x: 0, y: 27 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 4);
+  // A wheel that counts lines: a line a tick, down towards later turns.
+  wheel({ delta: { x: 0, y: -40 }, delta_lines: { x: 0, y: -2 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 2);
+  expect(stopped).toBe(4);
+  // The list did not move or stop following.
+  expect(v.follow).toBe(true);
+  // It never goes past either end.
+  wheel({ delta: { x: 0, y: 9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(0);
+  wheel({ delta: { x: 0, y: -9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  // Off the rail the window follows the list again.
+  v.railOn = false;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // The pointer on a card holds the window, and the tick's hover leaving does not close it.
+  v.railHover = ks[140];
+  v.railCardOn = true;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top - 10);
+  v.railCardOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // A short session has nothing to move: the wheel goes on to the list.
+  const short = await pinPane("--extra", "6");
+  short.v.listH = 600;
+  draw(short.v, short.cx);
+  short.v.railTicks();
+  stopped = 0;
+  short.v.railWheel({ delta: { x: 0, y: 30 }, touch_phase: "moved" }, wcx);
+  expect(stopped).toBe(0);
+});
