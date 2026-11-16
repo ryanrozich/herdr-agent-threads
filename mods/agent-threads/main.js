@@ -39,6 +39,8 @@ const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
+// window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
+import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -55,7 +57,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -206,6 +208,11 @@ const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line l
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
 const NO_CUT = 100000;
+// Round 6: messages and replies in the system face while Herdr's interface font is its own
+// Geist, on macOS, where gpui names that face SYSTEM_FACE; reply prose at READ_INK strength
+// (opacity on its block, which TextView follows: 238 to 208 on graphite, tested on the rig).
+const SYSTEM_FACE = ".SystemUIFont";
+const READ_INK = 0.86;
 const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -4132,7 +4139,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -4221,7 +4228,7 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
     };
-    const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
+    const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(lines.map(line))
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
@@ -4379,18 +4386,19 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
-  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
-  // wider than fitWidth a centred column that wide, so a reply's reading line and the
-  // bubbles stay together instead of leaving a gutter between them. Before the pane has
-  // measured itself (and in tests that set width) both are this.width.
+  // The pane's own width, and the column the turns are laid out in (ui.js columnWidth): the
+  // text, at most a reading line, with the side gutters left and right of it, centred. Before
+  // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = Math.min(this.paneW, this.readingPx());
+    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
     if (Math.abs(w - this.width) > 0.5) this.width = w;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // From the pane's edge to the text: the side gutter.
+  side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
   // reading width shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
@@ -5450,7 +5458,21 @@ export default class Threads extends View {
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
-  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
+  // The face for messages and replies (SYSTEM_FACE), or null where the text keeps Herdr's
+  // interface font: off macOS, and when the person set an interface font of their own, which
+  // is followed. Read once per draw.
+  readFace() {
+    const r = this.renders ?? 0;
+    if (this.faceMemo?.r === r) return this.faceMemo.v;
+    const s = settings() ?? {};
+    const ui = s.ui_font ?? s.ui_font_family;
+    const v = this.platform() === "macos" && (!ui || ui === "Geist") ? SYSTEM_FACE : null;
+    this.faceMemo = { r, v };
+    return v;
+  }
+  readFont(el) { const f = this.readFace(); return f ? el.font_family(f) : el; }
+  platform() { return herdrNs.window?.()?.platform ?? null; }
   // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
   // enough for Herdr to draw (mdChunks). Kept for the MD_MEMO texts used last, as they are
   // redrawn often: the probe walks every turn, and a memo cleared when full made a long reply
@@ -6170,7 +6192,7 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
+    const box = this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6611,7 +6633,7 @@ export default class Threads extends View {
         // sender), as wide as its widest line.
         const agent = turn.agent;
         return h_flex().w_full().when(!agent, (el) => el.justify_end())
-          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+          .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
             .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6881,7 +6903,7 @@ export default class Threads extends View {
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
     return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
-      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .rounded(10).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
         .child(this.kbd(t, "i"))
@@ -7009,13 +7031,14 @@ export default class Threads extends View {
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(RAIL.W).justify_center().items_end()
+    const look = railLook(this.side());
+    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
       .children(ticks.map((k, i) => {
         const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
         const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
+        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(mark);

@@ -70,6 +70,8 @@ let listWindow = null;
 let lastList = null;
 // settings(): the person's Herdr settings (zoom, fonts).
 let herdrSettings = { font_family: "Mono" };
+// What Herdr's window() reports as the platform (round 6 face).
+let hostPlatform = "linux";
 // updates().app.version: Herdr's version.
 let herdrVersion = "0.1.13";
 // Reads of Herdr's settings, panes and terminals, for the draw-time guard.
@@ -114,6 +116,7 @@ function execReal(cmd, args) {
 }
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
+  window: () => ({ platform: hostPlatform, titlebar: "system", buttons: false, maximized: false, fullscreen: false, active: true }),
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
@@ -137,7 +140,7 @@ function herdrRest() { return {
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
-const { thumbSize, tileRow, bubbleMax, ROW, fitWidth, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
+const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -346,7 +349,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 });
 
 // F3: the selected running turn's working card is sized with the line heights it draws.
-test("the working card's estimate uses the 21 px prompt and 20 px note lines it draws", async () => {
+test("the working card's estimate uses the 22 px prompt and 20 px note lines it draws", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
   let seen = 0;
   for (const width of [240, 380, 640]) {
@@ -358,17 +361,17 @@ test("the working card's estimate uses the 21 px prompt and 20 px note lines it 
     const est = v.estimate(r);
     // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
     // the live line, one note line, padding.
-    expect(est).toBeGreaterThanOrEqual(8 + 12 + 21 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
+    expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
     // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
     const g = v.workingGeom(r.turn);
-    expect(est).toBe(8 + 12 + g.lines * 21 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+    expect(est).toBe(8 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
     const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
     expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
     rec = null;
-    expect(lh).toContain("21px");
+    expect(lh).toContain("22px");
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -1327,7 +1330,7 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
       const z = run(0.9, w * 0.9);
       // The pane's width in design px, and the column the turns use: at most fitWidth.
       expect(z.pane).toBeCloseTo(w, 6);
-      expect(z.width).toBeCloseTo(Math.min(w, fitWidth()), 6);
+      expect(z.width).toBeCloseTo(columnWidth(w), 6);
       expect(z.listH).toBeCloseTo(700, 6);
       expect(z.rows).toEqual(one.rows);
       expect(z.est).toEqual(one.est);
@@ -1360,7 +1363,7 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
       rec = null;
       // A pane wider than fitWidth centres a column that wide; a press is read in its px.
-      const c = Math.min(w, fitWidth());
+      const c = columnWidth(w);
       expect(v.width).toBeCloseTo(c, 6);
       const left = (w - c) / 2;
       const g = v.barGeom(v.findTurn(key));
@@ -1529,31 +1532,31 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
       herdrSettings = { font_family: "Mono", zoom };
       v.forcedWidth = null; v.meas = new Map(); v.probeTries = new Map();
       handlerAfterId(frame(v, cx), "threads-root", "on_size_change")({ width: reported, height: 800 }, cx);
-      expect(v.width).toBeCloseTo(380, 6);
+      expect(v.width).toBeCloseTo(columnWidth(380), 6);
       const lt = v.rows().find((r) => r.kind === "latest");
       let calls = frame(v, cx);
       // The probe measures the block at the card's design text width.
       const at = calls.findIndex(([n, x]) => n === "id" && String(x).startsWith(`th-probe-${lt.key}-`));
       expect(calls.slice(at, at + 4).some(([n, x]) => n === "w" && x === v.inner())).toBe(true);
-      expect(v.inner()).toBe(348);
+      expect(v.inner()).toBe(columnWidth(380) - 32);
       // One text child, not one per line.
       expect(calls.filter(([n, x]) => n === "child" && x === lt.text).length).toBe(2); // the list and the probe
-      const feed = (lines) => probeEntries(calls).get(lt.key)({ width: 348 * zoom, height: lines * 21 * zoom }, cx);
+      const feed = (lines) => probeEntries(calls).get(lt.key)({ width: v.inner() * zoom, height: lines * 22 * zoom }, cx);
       feed(4);
-      expect(v.latestBox(lt)).toBe(84);
+      expect(v.latestBox(lt)).toBe(88);
       expect(v.latestCut(lt)).toBe(false);
-      expect(v.height(lt)).toBe(6 + 84);
+      expect(v.height(lt)).toBe(6 + 88);
       calls = frame(v, cx);
       expect(calls.some(([n, x]) => n === "child" && x === "Show all")).toBe(false);
       v.meas = new Map(); v.probeTries = new Map();
       calls = frame(v, cx);
       feed(9);
-      expect(v.latestBox(lt)).toBe(126);
+      expect(v.latestBox(lt)).toBe(132);
       expect(v.latestCut(lt)).toBe(true);
-      expect(v.height(lt)).toBe(6 + 126 + 22);
+      expect(v.height(lt)).toBe(6 + 132 + 22);
       calls = frame(v, cx);
       expect(calls.some(([n, x]) => n === "child" && x === "Show all")).toBe(true);
-      expect(calls.some(([n, x]) => n === "h" && x === 126)).toBe(true);
+      expect(calls.some(([n, x]) => n === "h" && x === 132)).toBe(true);
       // A click on it shows all.
       v.click(lt.key, cx);
       expect(v.full.has(`l:${key}`)).toBe(true);
@@ -1843,7 +1846,7 @@ test("D1: LATEST UPDATE draws in muted, or foreground where muted is faint; the 
   expect(state.shared["threads.debug"].t4.contrast[0]).toMatch(/ card label muted \([\d.]+ on raised\) /);
 });
 
-test("the Jump to latest pill, the rail card, the ? sheet and toasts have an opaque fill, at rest and under the pointer", async () => {
+test("the Jump to latest pill, the rail card, the Turn card, the ? sheet and toasts have an opaque fill, at rest and under the pointer", async () => {
   const { v } = await pane(fixture("--only", "2"));
   // Graphite and paper give hover with alpha, and a theme may give popover so.
   for (const th of [
@@ -1868,6 +1871,11 @@ test("the Jump to latest pill, the rail card, the ? sheet and toasts have an opa
     rec = []; v.toastView(th); const tc = rec; rec = null;
     v.toast = null;
     expect(tc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    // The Turn card, opened by i or the pointer on the info icon.
+    const turn = v.current().turns.find((x) => x.done);
+    rec = []; v.detailsCard(th, turn); const dc = rec; rec = null;
+    expect(dc.some((e) => e[0] === "bg" && e[1] === rest)).toBe(true);
+    expect(dc.some((e) => e[0] === "bg" && e[1] === th.popover)).toBe(th.popover === rest);
   }
   // An opaque popover over an opaque background is itself.
   expect(v.solidFill({ ...theme, background: "#1d1f22", popover: "#25272b" })).toBe("#25272b");
@@ -2103,7 +2111,7 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(card).toMatchObject({ kind: "working", split: true });
   expect(rows[at(key) - 1].kind).toBe("wtop");
   const g = v.workingGeom(last);
-  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 21 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
   draw(v, cx);
   // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
   overlays.length = 0;
@@ -3040,7 +3048,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   state.shared["threads.width"] = { p2: 543, p3: 290 };
   log = [];
   v.key(keyEv("-"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 545 }]);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 573 }]);
   // The column's footer: the same one row, ? keys last (- and = are on the sheet).
   expect(w.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "? keys"]);
   // Threads closes: the column closes too, once.
@@ -3691,13 +3699,59 @@ test("an agent message keeps its sender's name over the bubble, and a reply row 
   v.toggle(quiet.key, cx);
   const md = v.rows().find((r) => r.kind === "turn" && !r.turn.agent && r.shape.md != null);
   expect(md.shape.mdBase).toBe(rowHeight(md.shape.p, 0, (md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
-  expect(md.shape.mdBase).toBe(8 + 12 + md.shape.p * 21 + 6 + 16 + 6 + 24 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
+  expect(md.shape.mdBase).toBe(8 + 12 + md.shape.p * 22 + 6 + 16 + 6 + 24 + 6 + 6 + 16 + 10 + 18 * ((md.shape.pMore ? 1 : 0) + (md.shape.rMore ? 1 : 0)));
   // An agent's message is taller by its sender line.
   const am = msgs[0];
   expect(am.shape.height).toBeGreaterThan(0);
 });
 
-test("reading type: message and reply text at the Text size on 1.5 lines, a reading line wide at 960 px, labels unchanged", async () => {
+test("round 6: on macOS, messages and replies take the system face while Herdr's interface font is Geist; reply prose is at 86% strength; the person's own font is followed", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  // Other test files mock "herdr" without window(), and the last mock wins in a full run.
+  v.platform = () => hostPlatform;
+  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const faces = (c) => c.filter((x) => x[0] === "font_family").map((x) => x[1]);
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const open = () => { v.open = new Set([row.key]); const rows = v.rows(); v.open = new Set(); return rows; };
+  const draw = () => {
+    v.renders = (v.renders ?? 0) + 1;
+    const rows = open();
+    const md = rows.find((r) => r.kind === "md");
+    const you = rows.find((r) => r.kind === "you");
+    v.open = new Set([row.key]);
+    const out = { closed: calls(() => v.rowItem(theme, row, true)), md: calls(() => v.partContent(theme, md, false)), you: calls(() => v.partContent(theme, you, false)) };
+    v.open = new Set();
+    return out;
+  };
+  const saved = { ...herdrSettings };
+  try {
+    // Not macOS: Herdr's interface font stays; the reply is still at 86%.
+    hostPlatform = "linux";
+    let d = draw();
+    for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
+    expect(d.md).toContainEqual(["opacity", 0.86]);
+    // macOS with Herdr's own Geist (unset or named): the system face on the closed row's
+    // bubble and reply, the open message and the open reply.
+    hostPlatform = "macos";
+    for (const ui of [undefined, "Geist"]) {
+      herdrSettings = { ...saved, ui_font: ui };
+      d = draw();
+      for (const c of Object.values(d)) expect(faces(c)).toContain(".SystemUIFont");
+      expect(d.md).toContainEqual(["opacity", 0.86]);
+      // The person's bubble is not dimmed.
+      expect(d.you).not.toContainEqual(["opacity", 0.86]);
+    }
+    // A font the person set is followed: no face of ours.
+    herdrSettings = { ...saved, ui_font: "Inter" };
+    d = draw();
+    for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
+  } finally {
+    herdrSettings = saved;
+    hostPlatform = "linux";
+  }
+});
+
+test("reading type: message and reply text at the Text size on 1.57 lines, a reading line wide at 960 px, labels unchanged", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
   const sizes = (c) => c.filter((x) => x[0] === "text_size").map((x) => x[1]);
@@ -3706,7 +3760,7 @@ test("reading type: message and reply text at the Text size on 1.5 lines, a read
   const c = calls(() => v.rowItem(theme, row, true));
   // The message and the reply at 14 px on 21 px lines; the name, the date and the stats stay small.
   expect(sizes(c)).toEqual(expect.arrayContaining([14, 11.5]));
-  expect(c.some((x) => x[0] === "h" && x[1] === 21)).toBe(true);
+  expect(c.some((x) => x[0] === "h" && x[1] === 22)).toBe(true);
   // The reply stops at the reading line, about 70 characters, not across the pane.
   const prose = v.prose();
   expect(prose).toBeLessThan(500);
@@ -3716,12 +3770,12 @@ test("reading type: message and reply text at the Text size on 1.5 lines, a read
   v.open = new Set([row.key]);
   const md = v.rows().find((r) => r.kind === "md");
   const m = calls(() => v.partContent(theme, md, false));
-  expect(m).toEqual(expect.arrayContaining([["max_w", prose], ["text_size", 14], ["line_height", "21px"]]));
+  expect(m).toEqual(expect.arrayContaining([["max_w", prose], ["text_size", 14], ["line_height", "22px"]]));
   // Text size: the stepper goes to 18 and no further, and Reset brings 14 back.
   for (let i = 0; i < 6; i++) v.action("textSize:+", cx);
   expect(v.prefs.textSize).toBe(18);
   expect(v.action("textSize:+", cx)).toBe(false);
-  expect(v.rt().line).toBe(27);
+  expect(v.rt().line).toBe(28);
   expect(v.prose()).toBeGreaterThan(prose);
   const big = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   expect(big.shape.height).toBeGreaterThan(row.shape.height);
@@ -3731,7 +3785,7 @@ test("reading type: message and reply text at the Text size on 1.5 lines, a read
 });
 
 test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fitWidth once, a narrower one keeps its width", async () => {
-  for (const [measured, size, want] of [[900, 14, 545], [900, 18, 676], [480, 14, null]]) {
+  for (const [measured, size, want] of [[900, 14, 573], [900, 18, 704], [480, 14, null]]) {
     const { v, cx } = await pane(fixture("--extra", "2"));
     v.prefs = { ...v.prefs, textSize: size };
     state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -3753,7 +3807,7 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
   log = [];
   v.poll(cx);
   v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
   // Herdr left it wide (a pane alone in its tab): no second ask at the same width; a new
   // width (a drag) asks again.
   log = [];
@@ -3761,13 +3815,13 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   v.paneW = 960;
   v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
   // The header offers the fit button while it is wider; w fits Threads and an open column.
   expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
   log = [];
   v.key(keyEv("w"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
-  v.paneW = 543;
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
+  v.paneW = 571;
   expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
   // Off: a wide pane stays as it is.
   v.prefs = { ...v.prefs, readingWidth: false };
@@ -3779,7 +3833,9 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
 
 test("a pane wider than the reading width lays the turns out in a centred column that wide, scaled with Text size", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
-  for (const [paneW, size, col] of [[960, 14, 545], [960, 18, 676], [500, 14, 500], [300, 14, 300]]) {
+  // The text is at most a reading line with gutters of 8% of the pane each side (24 to 56 px),
+  // and the rows pad 16 px inside the column: 461 + 32 at 14 px, 592 + 32 at 18.
+  for (const [paneW, size, col] of [[960, 14, 493], [960, 18, 624], [500, 14, 452], [300, 14, 284]]) {
     v.prefs = { ...v.prefs, textSize: size };
     v.paneW = paneW;
     draw(v, cx);
@@ -3798,8 +3854,9 @@ test("a pane wider than the reading width lays the turns out in a centred column
 test("width: Comfortable, Wide and Full set the column and the reading line; choosing one resizes the pane while it is kept at its width, and Full turns that off", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
-  // The column a wide pane lays its turns out in: 545, 676, then the whole pane.
-  for (const [w, col, prose] of [["comfortable", 545, 461], ["wide", 676, 592], ["full", 960, 928]]) {
+  // The column a wide pane lays its turns out in: the line and 16 px each side, and in Full
+  // the pane less its 56 px gutters.
+  for (const [w, col, prose] of [["comfortable", 493, 461], ["wide", 624, 592], ["full", 880, 848]]) {
     v.prefs = { ...v.prefs, textSize: 14, width: w };
     v.paneW = 960;
     draw(v, cx);
@@ -3809,18 +3866,18 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   // A bubble stops at Wide's line even in Full.
   expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
   // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
-  // back to 545; Full leaves it alone and turns the switch off.
+  // back to 573; Full leaves it alone and turns the switch off.
   v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
-  v.paneW = 545;
+  v.paneW = 573;
   log = [];
   expect(v.action("width:wide", cx)).toBe(true);
   expect(v.prefs.width).toBe("wide");
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 676 }]);
-  v.paneW = 676;
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
+  v.paneW = 704;
   log = [];
   v.action("width:comfortable", cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 545 }]);
-  v.paneW = 545;
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
+  v.paneW = 573;
   log = [];
   v.action("width:full", cx);
   expect(v.prefs).toMatchObject({ width: "full", readingWidth: false });
@@ -3843,7 +3900,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full"]));
   const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(texts).toContain("Keep the pane at this width");
-  expect(texts).toContain("This pane is narrower than Comfortable (545 px), so all three look the same here.");
+  expect(texts).toContain("This pane is narrower than Comfortable (573 px), so all three look the same here.");
 });
 
 test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
@@ -5700,7 +5757,6 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
-  const { RAIL } = await import("../mods/agent-threads/ui.js");
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.listH = 600;
   draw(v, cx);
@@ -5725,7 +5781,15 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(ticks[1].pinned).toBe(true);
   expect(ticks[2].sel).toBe(true);
   rec = []; v.railView(theme); const r = rec; rec = null;
-  expect(r.some((e) => e[0] === "w" && e[1] === RAIL.SEL)).toBe(true);
+  expect(r.some((e) => e[0] === "w" && e[1] === railLook(v.side()).sel)).toBe(true);
+  // The ticks take their size from the side gutter: in a 960 px pane the text sits well in,
+  // so the ticks are 10 px (16 selected), 14 px in, in a 32 px lane.
+  v.paneW = 960;
+  draw(v, cx);
+  expect(v.side()).toBeGreaterThan(56);
+  rec = []; v.railView(theme); const wide = rec; rec = null;
+  expect(wide.filter((e) => e[0] === "w").map((e) => e[1])).toEqual(expect.arrayContaining([32, 10, 16]));
+  expect(wide.some((e) => e[0] === "pr" && e[1] === 14)).toBe(true);
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
