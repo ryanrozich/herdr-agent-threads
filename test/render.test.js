@@ -600,6 +600,52 @@ test("busy: the paste still goes in, Claude queues it, and the toast says so for
   expect(late.v.lastQuote.tries).toBeGreaterThan(0);
 });
 
+test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘C, and says so when nothing is highlighted", async () => {
+  const { v, cx } = await quotePane();
+  const key = v.sel;
+  v.toggleSelect(key, cx);
+  const st = v.selEditor.st;
+  // 0.1.16's EditorState tells its highlight, in UTF-16 offsets into the text it was given.
+  let range = { start: 0, end: 0 };
+  st.selected_range = () => range;
+  expect(v.selectHint()).toBe("Select text, then q quotes it · s or Esc returns");
+  const text = v.selEditor.text;
+  const part = text.split(/\s+/).slice(1, 4).join(" ");
+  const at = text.indexOf(part);
+  range = { start: at + part.length, end: at }; // dragged right to left
+  cx.clip = "rm -rf / from some other window";
+  log = [];
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", how: "editor", selectView: true, pasted: true });
+  // Nothing highlighted, and nothing from the reply on the clipboard: nothing is pasted.
+  range = { start: 5, end: 5 };
+  cx.clip = "";
+  log = [];
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // An editor that throws falls back to the clipboard as before.
+  st.selected_range = () => { throw new Error("released"); };
+  cx.clip = part;
+  log = [];
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ how: "clipboard", pasted: true });
+  v.width = 240;
+  st.selected_range = () => range;
+  expect(v.selectHint()).toBe("q quotes the highlight · s returns");
+});
+
 test("in Select view q quotes what ⌘C copied from the reply, and never the whole reply", async () => {
   const { v, cx } = await quotePane();
   const key = v.sel;
