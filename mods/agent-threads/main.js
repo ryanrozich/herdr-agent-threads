@@ -6473,7 +6473,7 @@ export default class Threads extends View {
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
     return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
-      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .rounded(10).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
         .child(this.kbd(t, "i"))
