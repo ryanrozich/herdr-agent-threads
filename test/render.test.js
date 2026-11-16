@@ -3540,6 +3540,30 @@ test("a coloured bubble draws the open message as plain text in its ink, quotes 
   draw(v, cx);
 });
 
+test("a selected turn has no bar on its left: closed, open, or in the outline", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  draw(v, cx);
+  // The bar was a 2 px element down the left edge: absolute, top(0), bottom(0), w(2).
+  const bars = () => {
+    rec = [];
+    v.render(cx);
+    const c = rec;
+    rec = null;
+    let n = 0;
+    for (let i = 1; i < c.length; i++) if (c[i][0] === "w" && c[i][1] === 2 && c[i - 1][0] === "bottom" && c[i - 1][1] === 0) n++;
+    return n;
+  };
+  const keys = v.turnKeys(v.rows());
+  v.sel = keys[keys.length - 1];
+  expect(bars()).toBe(0);
+  v.open.add(v.sel);
+  v.rowsKey = null;
+  expect(bars()).toBe(0);
+  v.action("outline:on", cx);
+  expect(v.outlined()).toBe(true);
+  expect(bars()).toBe(0);
+});
+
 test("the quiet turn: no meta line over the bubble; the strip under it shows #n and the time on the selected turn, the time on all with alwaysShowTime", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const strings = (el) => { rec = []; el(); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
