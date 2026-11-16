@@ -3572,10 +3572,8 @@ test("the person's bubble is plain and an agent's plum by default, and the panel
   expect(you().style.fill).toBe("#e6e6e614");
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
-  v.action("youName:Sam", cx);
-  expect(v.prefs.youName).toBe("Sam");
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -3685,8 +3683,8 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   draw(v, cx);
 });
 
-test("names: yours over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+test("names: none over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
@@ -3721,33 +3719,12 @@ test("names: yours over your message, none over a reply (one agent), who replied
   expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
   v.current().agentName = null;
   expect(v.agentName(row.turn)).toBe("Agent");
-  // The settings panel's field: typing names you, Esc gives the keys back.
-  const field = v.nameInput;
-  expect(field.value()).toBe("You");
-  field.handlers.focus({}, cx);
-  expect(v.naming).toBe(true);
-  const pins = v.pinnedAll().length;
-  expect(v.key(keyEv("p"), cx)).toBeUndefined(); // the field types it; no pin
-  expect(v.pinnedAll().length).toBe(pins);
-  field.set_value("  Sam ");
-  field.handlers.change({}, cx);
-  expect(v.prefs.youName).toBe("Sam");
-  // Your name heads the turn in the image viewer; the list draws no name over your message.
-  expect(drawn(row)).not.toContain("Sam");
-  expect(v.key(keyEv("escape"), cx)).toBe(true);
-  expect(v.naming).toBe(false);
-  expect(field.value()).toBe("Sam");
-  // A cleared field shows the name in use again when it loses the keys.
-  field.handlers.focus({}, cx);
-  field.set_value("");
-  field.handlers.change({}, cx);
-  field.handlers.blur({}, cx);
-  expect(field.value()).toBe("Sam");
+  // There is no name setting: the settings panel has no name field, and the image viewer
+  // heads your turn "You".
   v.settingsOpen = true;
-  draw(v, cx);
-  v.action("resetSettings", cx);
-  expect(field.value()).toBe("You");
-  await new Promise((r) => setTimeout(r, 20));
+  rec = []; v.settingsPanel(theme); const panel = rec; rec = null;
+  expect(panel).not.toContainEqual(["child", "Your name"]);
+  expect(v.viewerTurn(row.turn).who).toBe("You");
 });
 
 

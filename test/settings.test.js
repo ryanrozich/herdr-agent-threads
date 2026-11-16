@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false };
+const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -138,13 +138,14 @@ test("alwaysShowTime is a boolean, false by default", () => {
   expect(v({ alwaysShowTime: "yes" })).toBe(false);
 });
 
-test("your name is one line of 1 to 40 characters, and anything else is You", () => {
-  const v = (j) => parseSettings(JSON.stringify(j)).values.youName;
-  expect(v({ youName: "  Sam  " })).toBe("Sam");
-  expect(v({ youName: "Sam\nLee" })).toBe("Sam Lee");
-  expect(v({ youName: "x".repeat(60) })).toBe("x".repeat(40));
-  for (const bad of ["", "   ", 7, null, ["Sam"]]) expect(v({ youName: bad })).toBe("You");
-  expect(JSON.parse(settingsText({ youName: "Sam" }, null))).toMatchObject({ youName: "Sam" });
+test("a file that still names you (youName, now gone) loads without a note, and a save leaves the key as written", () => {
+  const text = JSON.stringify({ youName: "Sam", textSize: 15 });
+  const r = parseSettings(text);
+  expect(r.error).toBe(null);
+  expect(r.values.youName).toBeUndefined();
+  expect(r.values.textSize).toBe(15);
+  expect(parseExtras(text).notes).toEqual([]);
+  expect(JSON.parse(settingsText({ ...r.values, textSize: 16 }, text))).toMatchObject({ youName: "Sam", textSize: 16 });
 });
 
 test("width is comfortable, wide or full; anything else reads as comfortable", () => {
