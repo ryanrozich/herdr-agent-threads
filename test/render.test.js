@@ -4681,6 +4681,7 @@ test("a render Herdr stopped is followed by frames that neither reshape nor meas
   expect(v.shapeMax()).toBe(-1);
   expect(probes).toBe(1);
   expect(v.renderCuts).toBe(1);
+  expect(state.shared["threads.cuts"]).toMatchObject({ renders: 1, rows: 0 });
   v.cutUntil = 0;
   v.render(cx);
   expect(v.light).toBe(false);

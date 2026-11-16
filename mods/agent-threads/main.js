@@ -4012,6 +4012,7 @@ export default class Threads extends View {
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
+    this.publishCuts();
     this.rows();
     this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
@@ -5613,6 +5614,15 @@ export default class Threads extends View {
 
   // A row that failed to draw: saved to shared("threads.drawError"), which an agent on the
   // owner's machine can read, and said once in a toast.
+  // How many draws Herdr stopped, for an agent on the owner's machine: shared("threads.cuts"),
+  // counts and times only, written when they change.
+  publishCuts() {
+    const k = `${this.renderCuts ?? 0}|${this.rowCuts ?? 0}`;
+    if (k === "0|0" || k === this.cutsSent) return;
+    this.cutsSent = k;
+    try { setShared("threads.cuts", { renders: this.renderCuts ?? 0, rows: this.rowCuts ?? 0, at: new Date().toISOString() }); } catch { /* counts only */ }
+  }
+
   publishDrawError(cx) {
     const d = this.drawError;
     if (!d || d.sent) return;
