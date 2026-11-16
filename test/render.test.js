@@ -70,6 +70,8 @@ let listWindow = null;
 let lastList = null;
 // settings(): the person's Herdr settings (zoom, fonts).
 let herdrSettings = { font_family: "Mono" };
+// What Herdr's window() reports as the platform (round 6 face).
+let hostPlatform = "linux";
 // updates().app.version: Herdr's version.
 let herdrVersion = "0.1.13";
 // Reads of Herdr's settings, panes and terminals, for the draw-time guard.
@@ -114,6 +116,7 @@ function execReal(cmd, args) {
 }
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
+  window: () => ({ platform: hostPlatform, titlebar: "system", buttons: false, maximized: false, fullscreen: false, active: true }),
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
@@ -3700,6 +3703,52 @@ test("an agent message keeps its sender's name over the bubble, and a reply row 
   // An agent's message is taller by its sender line.
   const am = msgs[0];
   expect(am.shape.height).toBeGreaterThan(0);
+});
+
+test("round 6: on macOS, messages and replies take the system face while Herdr's interface font is Geist; reply prose is at 86% strength; the person's own font is followed", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  // Other test files mock "herdr" without window(), and the last mock wins in a full run.
+  v.platform = () => hostPlatform;
+  const calls = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  const faces = (c) => c.filter((x) => x[0] === "font_family").map((x) => x[1]);
+  const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
+  const open = () => { v.open = new Set([row.key]); const rows = v.rows(); v.open = new Set(); return rows; };
+  const draw = () => {
+    v.renders = (v.renders ?? 0) + 1;
+    const rows = open();
+    const md = rows.find((r) => r.kind === "md");
+    const you = rows.find((r) => r.kind === "you");
+    v.open = new Set([row.key]);
+    const out = { closed: calls(() => v.rowItem(theme, row, true)), md: calls(() => v.partContent(theme, md, false)), you: calls(() => v.partContent(theme, you, false)) };
+    v.open = new Set();
+    return out;
+  };
+  const saved = { ...herdrSettings };
+  try {
+    // Not macOS: Herdr's interface font stays; the reply is still at 86%.
+    hostPlatform = "linux";
+    let d = draw();
+    for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
+    expect(d.md).toContainEqual(["opacity", 0.86]);
+    // macOS with Herdr's own Geist (unset or named): the system face on the closed row's
+    // bubble and reply, the open message and the open reply.
+    hostPlatform = "macos";
+    for (const ui of [undefined, "Geist"]) {
+      herdrSettings = { ...saved, ui_font: ui };
+      d = draw();
+      for (const c of Object.values(d)) expect(faces(c)).toContain(".SystemUIFont");
+      expect(d.md).toContainEqual(["opacity", 0.86]);
+      // The person's bubble is not dimmed.
+      expect(d.you).not.toContainEqual(["opacity", 0.86]);
+    }
+    // A font the person set is followed: no face of ours.
+    herdrSettings = { ...saved, ui_font: "Inter" };
+    d = draw();
+    for (const c of Object.values(d)) expect(faces(c)).not.toContain(".SystemUIFont");
+  } finally {
+    herdrSettings = saved;
+    hostPlatform = "linux";
+  }
 });
 
 test("reading type: message and reply text at the Text size on 1.57 lines, a reading line wide at 960 px, labels unchanged", async () => {
