@@ -2671,13 +2671,23 @@ export default class Threads extends View {
   }
   // From a row cut off to the row that has its answer. An open filter stays: threadMatches
   // lists that row whenever it lists this one.
+  // A turn answered together with a later one (answeredBy) goes to that turn the same way:
+  // opened, with the start of its reply at the top of the pane.
   goToAnswer(turn) {
     const si = this.sessions.findIndex((x) => x.turns[turn.n - 1] === turn);
-    if (si < 0 || !turn.answeredIn) return;
-    const key = `${si}:${turn.answeredIn}`;
+    const n = turn.answeredIn ?? turn.answeredBy;
+    if (si < 0 || !n) return;
+    const key = `${si}:${n}`;
+    if (turn.answeredIn) {
+      this.sel = key;
+      this.follow = false;
+      this.scrollTo = { key, how: "center" };
+      return;
+    }
+    if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
-    this.scrollTo = { key, how: "center" };
+    this.scrollTo = { key: `md:${key}:0`, how: "top", or: [`md:${key}:0.0`, `cc:${key}:0`, key] };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
@@ -5910,7 +5920,7 @@ export default class Threads extends View {
   noReplyText(turn) {
     if (turn.answeredIn) return `Answered in #${turn.answeredIn}. This turn itself ended with: ${turn.errors.at(-1)}`;
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
-      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
+      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}. Go to that reply` : "No final reply.");
   }
 
   // The list's items for the range on screen. An error thrown here blanks the whole list
@@ -6109,7 +6119,9 @@ export default class Threads extends View {
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(5).items_center().text_size(12).min_w(0)
-        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
+        // On a narrow line the agent's name gives way (it shrinks and truncates); the time after
+        // it never does, so "Worked for" is never shown without its time.
+        .when(Boolean(name), (el) => el.child(div().min_w(0).max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
         .child(div().flex_none().text_color(bad ? t.blocked : t.dim).child(this.workText(turn)))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim))
         .child(div().flex_1())
@@ -6117,6 +6129,9 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
+  // "hover" leaves the icon clear for the line's hover style to colour; "lit" is the same
+  // icon while the pointer is on its line, coloured here, since that style does not reach the
+  // icon inside the HoverCard's trigger.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
       .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
@@ -6142,11 +6157,19 @@ export default class Threads extends View {
   // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
   // the pointer is on the line).
   infoState(key) {
-    if (this.sel !== key) return "hover";
+    if (this.sel !== key) return this.lineHot === key ? "lit" : "hover";
     return this.detailsOpen ? "on" : "sel";
   }
   // A line on a turn not selected shows its info icon while the pointer is on it.
-  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
+  // The pointer on that line is noted (lineHot), so its info icon shows (infoState "lit").
+  lineInfo(t, key, el) {
+    if (this.sel === key) return el;
+    return this.reveal(t, el.id(`rh:${key}`)).on_hover((on, cx) => {
+      const was = this.lineHot ?? null;
+      this.lineHot = on ? key : was === key ? null : was;
+      if (this.lineHot !== was) cx.notify();
+    });
+  }
   // The list item whose Worked for line the card opens beside: an open turn's line, or a
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
@@ -6166,6 +6189,9 @@ export default class Threads extends View {
     const d = turn.durationMs ? fmtDuration(turn.durationMs) : null;
     if (turn.interrupted) return d ? `Stopped after ${d}` : "Stopped";
     if (this.failed(turn)) return d ? `Failed after ${d}` : "Failed";
+    // A turn the agent answered together with a later one has no time of its own: the line
+    // says where its answer is, not a bare "Worked".
+    if (!d && turn.answeredBy) return `Answered with #${turn.answeredBy}`;
     return d ? `Worked for ${d}` : "Worked";
   }
   toggleLine(key, live = false) {
@@ -6735,7 +6761,7 @@ export default class Threads extends View {
           .when(this.latestCut(r), (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show all")));
       }
       case "noreply":
-        if (turn.answeredIn && !probe) {
+        if ((turn.answeredIn || turn.answeredBy) && !probe) {
           return div().id(`th-answer-${r.key}`).mt(6).text_size(12.5).text_color(t.accent).cursor_pointer()
             .on_click((_e, cx) => { cx.stop_propagation(); this.goToAnswer(turn); cx.notify(); })
             .child(this.noReplyText(turn));

@@ -479,6 +479,59 @@ test("a prompt answered together with a hidden agent message borrows its reply (
   expect(v.shape(t1).reply.join(" ")).toBe("Answered together with #2");
 });
 
+test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "First question", ts: at(0) },
+    { k: "p", o: "human", t: "A second thought", ts: at(1) },
+    { k: "t", t: "An answer to both." },
+    { k: "d", ms: 2000, ts: at(2) },
+  ]);
+  const t1 = v.current().turns[0];
+  expect(t1.answeredBy).toBe(2);
+  // No time of its own: not a bare "Worked".
+  expect(v.workText(t1)).toBe("Answered with #2");
+  expect(v.workText(v.current().turns[1])).toBe("Worked for 2s");
+  // Opened, its note is a link (in the accent colour, with a click).
+  v.sel = "0:1";
+  v.action("open", cx);
+  const note = v.rows().find((r) => r.kind === "noreply" && r.key.includes("0:1"));
+  expect(note).toBeTruthy();
+  rec = [];
+  v.partContent(theme, note, false);
+  const drawn = rec;
+  rec = null;
+  expect(drawn).toContainEqual(["text_color", theme.accent]);
+  expect(v.noReplyText(t1)).toContain("Go to that reply");
+  // The link opens the answering turn with the start of its reply at the top.
+  v.goToAnswer(t1);
+  expect(v.sel).toBe("0:2");
+  expect(v.open.has("0:2")).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: "md:0:2:0", how: "top" });
+  draw(v, cx);
+  expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
+});
+
+test("the info icon on a turn not selected shows while the pointer is on its line", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const keys = v.turnKeys(v.rows());
+  const [a, b] = keys.slice(-2);
+  v.sel = b;
+  expect(v.infoState(a)).toBe("hover");
+  v.lineHot = a;
+  expect(v.infoState(a)).toBe("lit");
+  rec = [];
+  v.infoIcon(theme, "lit");
+  const lit = rec;
+  rec = [];
+  v.infoIcon(theme, "hover");
+  const clear = rec;
+  rec = null;
+  expect(lit).toContainEqual(["text_color", theme.dim]);
+  expect(clear).not.toContainEqual(["text_color", theme.dim]);
+  // The selected turn keeps its own state.
+  expect(v.infoState(b)).toBe("sel");
+});
+
 test("an agent row's sender label leaves room for the time and #n at 240 px (R6)", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "<hc from=\"a-very-long-terminal-name-for-review\">Report: done</hc>", ts: at(0) },
