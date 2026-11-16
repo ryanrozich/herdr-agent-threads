@@ -1,0 +1,112 @@
+<title>Reading Face and Ink</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --fg: #1b1e24; --muted: #5b6270; --line: #d9dce2; --accent: #3d6fd8;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #121418; --surface: #1a1d23; --fg: #e4e6ea; --muted: #9aa1ad; --line: #2c3038; --accent: #7aa2f7; color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--sans); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+header { display: grid; gap: 10px; max-width: 75ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0; font-weight: 600; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; }
+.lede { color: var(--muted); }
+a { color: var(--accent); overflow-wrap: anywhere; }
+code { font: 13px var(--mono); overflow-wrap: anywhere; }
+kbd { font: 500 12px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--surface); }
+.list { display: grid; gap: 14px; }
+.list ol, .list ul { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; }
+.group { display: grid; gap: 28px; }
+.pair { display: grid; gap: 10px; padding-top: 22px; border-top: 1px solid var(--line); }
+.note { color: var(--muted); max-width: 80ch; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.one { display: grid; grid-template-columns: minmax(0, 560px); }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+figcaption { font: 12px var(--mono); color: var(--muted); }
+.shot { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+.count { display: grid; gap: 8px; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--surface); max-width: 80ch; }
+.count .num { font: 600 40px/1 var(--sans); }
+.count ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 22px 16px; align-items: start; }
+.steps .wide { grid-column: 1 / -1; max-width: 980px; }
+.step { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.how { font: 500 13px var(--sans); }
+.how b { display: inline-block; font: 600 12px var(--mono); color: var(--accent); margin-right: 6px; letter-spacing: .04em; text-transform: uppercase; }
+.what { color: var(--muted); font-size: 14px; }
+[hidden] { display: none !important; }
+.lb { position: fixed; inset: 0; background: rgba(8,9,12,.92); display: grid; grid-template-rows: auto 1fr; z-index: 20;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.lb-bar { display: flex; gap: 10px; align-items: center; padding: 10px 14px; color: #e4e6ea; font: 13px var(--sans); }
+.lb-bar span { flex: 1; min-width: 0; }
+.lb button { font: 500 13px var(--sans); color: #e4e6ea; background: #2a2e36; border: 1px solid #3a3f49; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.lb button:focus-visible { outline: 2px solid #7aa2f7; }
+.lb-img { overflow: auto; display: grid; place-items: center; padding: 0 12px 12px; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+
+.rec { display: grid; gap: 8px; max-width: 980px; }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Agent Threads · round 6, steps 4 and 5 · draft PR 54</div>
+  <h1>Messages and replies in the system face, reply prose at 86%</h1>
+  <p class="lede">Round 6 steps 4 and 5, built after their two tests passed on the test window. Real frames from Herdr 0.1.15 in an isolated test window on the mini (macOS, Herdr's interface font left at Geist), on a synthetic session, before (main f4915c4) and after. This PR is on main, so the margins of PR 52 are not in these frames. Click any frame to open it full size. The arrow keys step through them and Esc closes.</p>
+</header>
+<section class="group"><h2>The recordings</h2><div class="duo">
+<figure class="step"><div class="how"><b>Before</b>main</div><button class="shot" type="button"><img src="before.gif" alt="Recording before: Geist at full strength" loading="lazy"></button><figcaption class="what">The latest turns, turn #8 closed, turn #7 open, then the light theme.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>PR 54</div><button class="shot" type="button"><img src="after.gif" alt="Recording after: the system face, reply prose at 86%" loading="lazy"></button><figcaption class="what">The same steps.</figcaption></figure>
+</div></section>
+<section class="group"><h2>The two tests</h2><div class="steps">
+<figure class="step"><div class="how"><b>Test</b>Font family on the reply block</div><button class="shot" type="button"><img src="faces-test.png" alt="Test: the same reply in Geist, .SystemUIFont, system-ui, SF Pro Text and Courier New" loading="lazy"></button><figcaption class="what">Top to bottom: Geist (as today), ".SystemUIFont" (San Francisco), "system-ui" and "SF Pro Text" (not found, a fallback face), Courier New (proof the family reaches the TextView).</figcaption></figure>
+<figure class="step"><div class="how"><b>Test</b>One line, before over after</div><button class="shot" type="button"><img src="zoom.png" alt="Test: one reply line in Geist over the same line in the system face at 86%" loading="lazy"></button><figcaption class="what">The open reply's first line: Geist at full strength over San Francisco at 86%. The line is 1.4% wider in San Francisco, and its brightest ink drops from 238 to 208.</figcaption></figure>
+</div></section>
+<section class="group"><h2>Frame by frame</h2><div class="steps">
+<figure class="step"><div class="how"><b>Before</b>Closed turn #8</div><button class="shot" type="button"><img src="dmain-1.png" alt="Before: turn 8 closed, Geist" loading="lazy"></button><figcaption class="what">Geist at full strength.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>Closed turn #8</div><button class="shot" type="button"><img src="dnew-1.png" alt="After: turn 8 closed, the system face" loading="lazy"></button><figcaption class="what">San Francisco: the reply wraps a little sooner, and its prose is softer than the bubble.</figcaption></figure>
+<figure class="step"><div class="how"><b>Before</b>Turn #7 open</div><button class="shot" type="button"><img src="dmain-2.png" alt="Before: turn 7 open, Geist" loading="lazy"></button><figcaption class="what">The message and the reply in Geist.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>Turn #7 open</div><button class="shot" type="button"><img src="dnew-2.png" alt="After: turn 7 open, the system face, reply at 86%" loading="lazy"></button><figcaption class="what">The bubble at full strength, the reply at 86%. The code block keeps its colours.</figcaption></figure>
+<figure class="step"><div class="how"><b>Before</b>Paper</div><button class="shot" type="button"><img src="wmain-1.png" alt="Before: the light theme" loading="lazy"></button><figcaption class="what">Geist, full strength.</figcaption></figure>
+<figure class="step"><div class="how"><b>After</b>Paper</div><button class="shot" type="button"><img src="wnew-1.png" alt="After: the light theme, reply at 86%" loading="lazy"></button><figcaption class="what">On paper the darkest reply ink goes from 27 to 59, which is 86% ink on white.</figcaption></figure>
+</div></section>
+<section class="list"><h2>What changed</h2><ul>
+<li>On macOS, messages and replies are in the system face while Herdr's interface font is unset or Geist. gpui names that face ".SystemUIFont". An interface font the person set in Herdr is followed.</li>
+<li>Labels, step rows, the key bar and code stay as they are.</li>
+<li>Reply prose is drawn at 86% strength, with its links and inline code. The person's bubble and code blocks stay at full strength.</li>
+<li>No new setting, notice or hint.</li>
+</ul></section>
+<section class="list"><h2>Left for the owner to check by hand</h2><ul>
+<li>Read a long reply at their text size 16 and say whether the softer reply and the system face read better.</li>
+</ul></section>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <div class="lb-bar"><button id="lb-prev" aria-label="Previous">&larr;</button><button id="lb-next" aria-label="Next">&rarr;</button><span id="lb-cap"></span><button id="lb-close">Close</button></div>
+  <div class="lb-img"><img id="lb-pic" alt=""></div>
+</div>
+<script>
+const shots = [...document.querySelectorAll('.shot')];
+const lb = document.getElementById('lb'), pic = document.getElementById('lb-pic'), cap = document.getElementById('lb-cap');
+let at = 0, opener = null;
+function show(i) { at = (i + shots.length) % shots.length; const im = shots[at].querySelector('img'); pic.src = im.src; pic.alt = im.alt; cap.textContent = im.alt + ' (' + (at + 1) + ' of ' + shots.length + ')'; }
+function open(i) { opener = shots[i]; show(i); lb.hidden = false; document.getElementById('lb-close').focus(); }
+function close() { lb.hidden = true; opener?.focus(); }
+shots.forEach((b, i) => b.addEventListener('click', () => open(i)));
+document.getElementById('lb-prev').onclick = () => show(at - 1);
+document.getElementById('lb-next').onclick = () => show(at + 1);
+document.getElementById('lb-close').onclick = close;
+lb.addEventListener('click', (e) => { if (e.target === lb || e.target.classList.contains('lb-img')) close(); });
+document.addEventListener('keydown', (e) => {
+  if (lb.hidden) return;
+  if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(at - 1); else if (e.key === 'ArrowRight') show(at + 1);
+});
+</script>
