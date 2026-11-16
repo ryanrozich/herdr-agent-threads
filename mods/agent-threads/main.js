@@ -61,7 +61,7 @@ import {
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -669,17 +669,6 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
-    // The settings panel's name field: while it has the keyboard, keys type (this.naming).
-    this.nameInput = InputState.new({ placeholder: DEFAULTS.youName, value: DEFAULTS.youName });
-    this.naming = false;
-    this.nameInput.on("focus", (_e, cx) => { this.naming = true; cx.notify(); });
-    this.nameInput.on("blur", (_e, cx) => { this.endNaming(cx); });
-    this.nameInput.on("submit", (_e, cx) => { this.endNaming(cx); this.h.focus(); });
-    this.nameInput.on("change", (_e, cx) => {
-      const v = nameValue(this.nameInput.value());
-      if (v && v !== this.prefs.youName) this.changePrefs({ youName: v }, cx);
-      cx.notify();
-    });
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -955,18 +944,8 @@ export default class Threads extends View {
   setPrefs(values) {
     const was = this.prefs;
     this.prefs = values;
-    // The name field shows the name in use, except while the person is typing in it.
-    if (!this.naming && this.nameInput && this.nameInput.value() !== values.youName) this.nameInput.set_value(values.youName);
     // Hiding agent turns: a hidden selected turn hands the selection to the turn before it.
     if (was.agentTurns && !values.agentTurns) this.reselect = true;
-  }
-
-  // The name field gives the keyboard back and shows the name in use, trimmed. A cleared
-  // field changed nothing, so it shows the name it had.
-  endNaming(cx) {
-    this.naming = false;
-    if (this.nameInput.value() !== this.prefs.youName) this.nameInput.set_value(this.prefs.youName);
-    cx?.notify();
   }
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
@@ -3667,15 +3646,7 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
-    const name = keyAction(e, this.filtering || this.naming, this.quoteKey);
-    // In the name field Esc gives the keyboard back to the list; other keys type.
-    if (this.naming) {
-      if (name !== "escape") return;
-      this.endNaming(cx);
-      this.h.focus();
-      cx.stop_propagation();
-      return true;
-    }
+    const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -3788,7 +3759,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -3823,11 +3794,6 @@ export default class Threads extends View {
     }
     // "width:wide": the reading width (settings width), for every pane.
     if (name.startsWith("width:")) return this.chooseWidth(name.slice(6), cx);
-    // "youName:Sam": the name over the person's messages; an empty one is the default.
-    if (name.startsWith("youName:")) {
-      this.changePrefs({ youName: nameValue(name.slice(8)) ?? DEFAULTS.youName }, cx);
-      return true;
-    }
     // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
@@ -3947,7 +3913,7 @@ export default class Threads extends View {
     const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
     const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
     return {
-      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : this.prefs.youName,
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "You",
       when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
       running: !turn.done, asOf: fmtTime(Date.now()),
       cmd: commandParts(turn)?.name ?? null,
@@ -4390,7 +4356,7 @@ export default class Threads extends View {
       });
     }
     const t = theme();
-    const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
+    const focusedPanel = this.h.is_focused() || this.input && this.filtering;
     if (this.debug) this.measure();
     const floating = this.floating();
     const banners = this.banners(t);
@@ -4960,11 +4926,6 @@ export default class Threads extends View {
         .child(stepper("promptLines", "Prompt lines"))
         .child(stepper("replyLines", "Reply lines")))
       .child(stepper("textSize", "Text size"))
-      .child(h_flex().gap(6).items_center()
-        .child(label("Your name"))
-        .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
-          .border_color(this.naming ? t.accent : t.border).bg(t.background).items_center()
-          .child(Input.new(this.nameInput).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))))
       .child(this.swatches(t, "bubbleColor", "Your messages"))
       .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
