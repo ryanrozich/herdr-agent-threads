@@ -545,13 +545,37 @@ test("mdChunks: a reply with long tables splits as before, counted in UTF-8 byte
   const reply = Array.from({ length: 6 }, (_, k) => `${table(k)}\n\nThe subtotal is rounded once. `.repeat(2)).join("\n\n");
   const odd = ["", "a", "\n\n\n", "é".repeat(5000), "😀".repeat(3000), "\uD800x".repeat(2000), "x\uDC00".repeat(2000), "日本 ".repeat(3000),
     `\`\`\`\n${"code line\n".repeat(800)}\`\`\`\n\nafter`, `| a | b |\n|---|---|\n${"| 日本 | 😀 |\n".repeat(600)}`];
+  // A long table or fenced block now splits apart (the next test); everything else as before.
+  const whole = (md, max) => !mdChunksBefore(md, max).some((c) => /^\|/.test(c) || /^```/.test(c) !== /```$/.test(c));
   for (const md of [reply, ...odd]) {
-    for (const max of [MD_MAX, 500, 7]) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
+    for (const max of [MD_MAX, 500, 7]) if (whole(md, max)) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
   }
   const parts = mdChunks(reply);
   expect(parts.length).toBeGreaterThan(3);
   expect(parts.every((p) => Buffer.byteLength(p) <= MD_MAX)).toBe(true);
   expect(mdChunks("😀 ".repeat(3000), 400).every((p) => Buffer.byteLength(p) <= 400)).toBe(true);
+});
+
+test("mdChunks: each piece of a long table starts with its header rows, each piece of long code is fenced", () => {
+  const rows = Array.from({ length: 80 }, (_, i) => `| checkout ${i} | src/cart/part${i}.ts | ${i * 13} ms | rounding moved to the subtotal step for case ${i} |`);
+  const head = "| Area | File | Time | Note |\n|---|:---:|---|---|";
+  const code = Array.from({ length: 300 }, (_, i) => `const total${i} = sum(items, ${i});`);
+  const md = `### Table\nThe numbers:\n${head}\n${rows.join("\n")}\nAfter the table.\n\n\`\`\`ts\n${code.join("\n")}\n\`\`\`\n\nThe end.`;
+  const parts = mdChunks(md, 3500);
+  expect(parts.every((p) => Buffer.byteLength(p) <= 3500)).toBe(true);
+  const tables = parts.filter((p) => p.includes("| checkout"));
+  expect(tables.length).toBeGreaterThan(1);
+  for (const t of tables) expect(t.slice(t.indexOf("| Area"))).toStartWith(`${head}\n| checkout`);
+  // Every row once, in order.
+  expect(tables.flatMap((t) => t.split("\n").filter((l) => l.startsWith("| checkout")))).toEqual(rows);
+  expect(parts[0]).toStartWith("### Table\nThe numbers:");
+  expect(parts.join("\n\n")).toContain("After the table.");
+  const fenced = parts.filter((p) => p.includes("const total"));
+  expect(fenced.length).toBeGreaterThan(1);
+  for (const f of fenced) { const at = f.indexOf("```ts\n"); expect(at).toBeGreaterThanOrEqual(0); expect(f.slice(at)).toMatch(/\n```(\n\nThe end\.)?$/); }
+  expect(fenced.flatMap((f) => f.split("\n").filter((l) => l.startsWith("const total")))).toEqual(code);
+  // Room too small for the header twice: split as other text.
+  expect(mdChunks(`${head}\n${rows.slice(0, 4).join("\n")}`, 60).some((p) => p.startsWith("| checkout"))).toBe(true);
 });
 
 test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
