@@ -39,6 +39,8 @@ const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
+// window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
+import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -55,7 +57,7 @@ import {
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -109,6 +111,29 @@ const SHAPE_FIRST = 40;
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
 // interrupted). The rest are measured over the next frames.
 const PROBE_MAX = 16;
+// Herdr stops a draw that runs past its time (about 50 ms) and keeps the last frame that
+// worked, so a draw that never fits would leave the pane blank for good. A row whose draw was
+// stopped is drawn plainly for CUT_MS (its Markdown as plain text), and
+// blank if that is stopped too; the wait doubles each time, up to five minutes. A stopped
+// render draws without reshaping or measuring for CUT_MS.
+const CUT_MS = 5000;
+// How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
+// for the rows to be built and shaped before it goes ahead with the heights it has.
+const CUT_WATCH_MS = 250;
+// What a draw should cost. Reshaping and building rows share what the rest of the last draw
+// left of it, each down to its floor, so a machine where the rest of a draw is slow does
+// less of both per frame and stays clear of Herdr's 50 ms stop.
+const FRAME_AIM_MS = 30;
+const SHAPE_MIN_MS = 2;
+const BUILD_MIN_MS = 3;
+const SCROLL_WAIT_MS = 2000;
+// Markdown split for TextView, kept for the texts drawn last (mdParts).
+const MD_MEMO = 400;
+// Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
+const BAND_MARK = 100;
+// One slice of a rows build: past this, buildRows stops at the next turn and the next frame
+// goes on (buildStep).
+const BUILD_MS = 10;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -183,6 +208,11 @@ const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line l
 // The line limit of a collapsed row's prompt and reply when long messages are not shortened
 // (truncate off, the default): no message reaches it, so nothing is cut.
 const NO_CUT = 100000;
+// Round 6: messages and replies in the system face while Herdr's interface font is its own
+// Geist, on macOS, where gpui names that face SYSTEM_FACE; reply prose at READ_INK strength
+// (opacity on its block, which TextView follows: 238 to 208 on graphite, tested on the rig).
+const SYSTEM_FACE = ".SystemUIFont";
+const READ_INK = 0.86;
 const LATEST_LINES = 6;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
@@ -693,6 +723,13 @@ export default class Threads extends View {
     });
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
+      // A render Herdr stopped left renderOpen set (no timer runs during a render), and
+      // Herdr asks for no render after it: ask for one. This timer was set up here, outside
+      // any render, since a timer asked for inside a stopped render may never run.
+      if (this.renderOpen && now() - (this.renderAt ?? 0) >= CUT_WATCH_MS && now() - (this.cutPokeAt ?? 0) >= CUT_WATCH_MS) {
+        this.cutPokeAt = now();
+        cx.notify();
+      }
       // The day pill goes DAY_PILL_MS after the last scroll.
       if (this.scrollSeenAt && Date.now() - this.scrollSeenAt >= DAY_PILL_MS) { this.scrollSeenAt = 0; this.stickyDue = true; }
       if (this.stickyDue) { this.stickyDue = false; cx.notify(); }
@@ -1047,7 +1084,7 @@ export default class Threads extends View {
     this.sessions.forEach((s, si) => {
       const pins = this.pinStore.sessions[this.sessionKey(s)]?.pins ?? [];
       if (!pins.length) return;
-      const ids = turnIds(s.turns);
+      const ids = turnIds(s.turns, pins.map((p) => p.id));
       for (const pin of pins) {
         const turn = ids.get(pin.id) ?? null;
         const key = turn ? `${si}:${turn.n}` : null;
@@ -1594,30 +1631,22 @@ export default class Threads extends View {
   rows() {
     const status = this.status();
     const P = this.prefs;
-    const key = [
-      this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(","),
+    const sess = this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",");
+    const rest = [
       [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), this.filterText(), status,
       [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
-      Math.round(this.width), Math.round(this.listH), Boolean(this.res.ended),
+      Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", Math.round(this.rootH), this.resumeAt() ?? "",
+      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
-    if (this.rowsKey !== key || !this.baseRows) {
-      this.shapeSpent = 0;
-      this.shapeLeft = 0;
-      this.shapeInView(status);
-      this.baseRows = this.buildRows(status);
-      this.baseSizes = this.baseRows.map((r) => this.height(r));
-      this.baseIndex = new Map(this.baseRows.map((r, i) => [r.key, i]));
-      this.probeRows = this.baseRows.filter((r) => PROBED.has(r.kind));
-      for (const r of this.baseRows) if (r.kind === "turn" && r.shape?.md != null) this.probeRows.push(this.cmdRow(r));
-      this.rowsKey = key;
-      this.fitKey = null;
-      // The selection is on a turn the list no longer shows: agent turns were hidden, or a
-      // hidden agent turn that showed while it was live has finished.
-      if (this.reselect || this.selHidden()) this.reselectVisible();
+    const key = `${sess}|${rest}`;
+    // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
+    if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
+      this.reshapeDue = false;
+      if (!this.reshapeStale(status)) this.rowsKey = null;
     }
+    if (this.rowsKey !== key || !this.baseRows) this.buildStep(status, key, rest);
     // Only the running turn depends on the selection (one-line row, or the card when
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
     // The running turn's own row: last, or followed by its open steps.
@@ -1630,7 +1659,9 @@ export default class Threads extends View {
     }
     const z = this.zoom();
     const gap = this.floating() ? TOP_BAND : 0;
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}`;
+    // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
+    // as part of the rows' key it rebuilt every row after each stopped draw.
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -1648,6 +1679,7 @@ export default class Threads extends View {
         sizes = [gap, ...sizes];
       }
       this.rowsMemo = rows;
+      this.indexedRows = rows;
       this.sizesMemo = sizes;
       // What the list is given: whole design px. v_virtual_list scales item sizes by zoom
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
@@ -1661,6 +1693,178 @@ export default class Threads extends View {
     return this.rowsMemo;
   }
 
+  // One slice of a rows build (buildRows with BUILD_MS). The rows on screen stay until the
+  // new ones are all built; a build that only gained turns at the end since its last slice
+  // goes on where it stopped. Building every row of a 6,000-turn session in one draw took
+  // longer than Herdr's time for a draw, which stopped it every time.
+  buildStep(status, key, rest) {
+    let job = this.rowJob;
+    if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    if (job) {
+      job.key = key;
+      // One slice a frame: rows() is asked for more than once in a draw.
+      if (job.frame === this.renders) return;
+    } else {
+      this.shapeStart();
+      this.shapeLeft = 0;
+      this.otherLeft = 0;
+      this.reshapeDue = false;
+      this.shapeInView(status);
+      // Only the newest turns changed (a turn came in, the running one grew, the next piece
+      // of a long session was read): the rows before them are kept (keptFrom).
+      const from = this.rowsKey != null && this.baseRows?.length ? this.keptFrom(rest) : null;
+      const index = from ? new Map(this.baseIndex) : new Map();
+      if (from) for (let i = from.row; i < this.baseRows.length; i++) index.delete(this.baseRows[i].key);
+      job = this.rowJob = {
+        key, rest, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
+        from: from ? { ...from, rows: this.baseRows, railRows: this.railTurns } : null,
+        stale: from ? (this.staleRows ?? []).filter((i) => i < from.row) : [],
+        sizes: from ? this.baseSizes.slice(0, from.row) : [],
+        index,
+      };
+    }
+    this.buildStale = job.stale;
+    job.frame = this.renders;
+    const b0 = now();
+    const s0 = this.shapeSpent ?? 0;
+    const out = this.buildRows(status, job.from, b0 + this.buildMax());
+    this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
+    if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
+    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.height(out[i])); job.index.set(out[i].key, i); }
+    const res = this.buildInfo.resume;
+    if (res) {
+      job.from = { ...res, rows: out, railRows: this.buildRail, own: true };
+      job.vers = this.sessions.map((x) => x.version);
+      job.lens = this.sessions.map((x) => x.turns.length);
+      this.buildsLeft = (this.buildsLeft ?? 0) + 1;
+      if (!this.baseRows) { this.baseRows = []; this.baseSizes = []; this.baseIndex = new Map(); this.probeList(); this.fitKey = null; }
+      return;
+    }
+    this.rowJob = null;
+    this.baseRows = out;
+    this.railTurns = this.buildRail;
+    this.baseSizes = job.sizes;
+    this.baseIndex = job.index;
+    this.staleRows = job.stale;
+    this.probeList();
+    this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks };
+    this.rowsKey = key;
+    this.fitKey = null;
+    // The selection is on a turn the list no longer shows: agent turns were hidden, or a
+    // hidden agent turn that showed while it was live has finished.
+    if (this.reselect || this.selHidden()) this.reselectVisible();
+  }
+
+  // Whether a build stopped between slices can go on: the same sessions, earlier ones as they
+  // were, and in the newest only turns at or after the place it stopped have changed.
+  jobGoesOn(job) {
+    if (!job.from?.own || !job.lens) return false;
+    const S = this.sessions;
+    const L = S.length - 1;
+    if (S.length !== job.sessions.length) return false;
+    for (let i = 0; i <= L; i++) {
+      if (S[i] !== job.sessions[i]) return false;
+      if (i < L && (S[i].version !== job.vers[i] || S[i].turns.length !== job.lens[i])) return false;
+    }
+    if (job.from.si !== L) return false;
+    const turns = S[L].turns;
+    if (turns.length < job.lens[L]) return false;
+    let safe = job.lens[L] - 1;
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    return job.from.ti <= safe;
+  }
+
+  // Where the kept rows end, or null for a full rebuild: only when nothing but the newest
+  // session changed, and in it only turns at or after a turn with its reply. A turn with no
+  // reply yet can still change (it is open, a later turn answers it, or it is the newest), so
+  // the rebuild starts at the last mark (a day band, or every BAND_MARK turns in one) before
+  // the first such turn.
+  keptFrom(rest) {
+    const b = this.rowBuild;
+    if (!b || b.rest !== rest || !b.multi || this.view === "pinned" || this.outlined() || this.filterText()) return null;
+    const S = this.sessions;
+    const L = S.length - 1;
+    if (L < 0 || S.length !== b.sessions.length) return null;
+    for (let i = 0; i <= L; i++) {
+      if (S[i] !== b.sessions[i]) return null;
+      if (i < L && (S[i].version !== b.vers[i] || S[i].turns.length !== b.lens[i])) return null;
+    }
+    const turns = S[L].turns;
+    const was = b.lens[L];
+    if (turns.length < was || was < 2) return null;
+    let safe = was - 1;
+    while (safe > 0 && !(turns[safe - 1].done && turns[safe - 1].after?.length)) safe--;
+    for (let k = b.marks.length - 1; k >= 0; k--) {
+      const m = b.marks[k];
+      if (m.ti <= safe) return { ...m, marks: b.marks.slice(0, k) };
+    }
+    return null;
+  }
+
+  // A closed row's reply block as a probe part (cmdRow), made once per row object.
+  cmdFor(r) {
+    this.cmdOf ??= new WeakMap();
+    let c = this.cmdOf.get(r);
+    if (!c) { c = this.cmdRow(r); this.cmdOf.set(r, c); }
+    return c;
+  }
+
+  // The parts the probe measures changed (probeDue finds them from the rows as it walks).
+  probeList() { this.probeVer = (this.probeVer ?? 0) + 1; }
+  // Every part the probe measures: the probed rows, then each closed row's reply block. Made
+  // when asked; nothing draws from it.
+  get probeRows() {
+    const probed = [];
+    const cmds = [];
+    for (const r of this.baseRows ?? []) {
+      if (PROBED.has(r.kind)) probed.push(r);
+      else if (r.kind === "turn" && r.shape?.md != null) cmds.push(this.cmdFor(r));
+    }
+    return probed.concat(cmds);
+  }
+
+  // Closed rows built with an old or blank shape (out of SHAPE_MS) get their shape where they
+  // are. False when one changes what the row is made of (pasted images), for a full rebuild.
+  reshapeStale(status) {
+    this.shapeStart();
+    this.shapeLeft = 0;
+    this.otherLeft = 0;
+    this.shapeInView(status);
+    const left = [];
+    // Nearest the newest first when following, where the view is. Once this draw's time is
+    // spent the rest wait as they are, without a look at each.
+    const stale = this.staleRows ?? [];
+    const order = this.follow ? stale.slice().reverse() : stale;
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
+      if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
+      const r = this.baseRows[i];
+      if (r?.kind !== "turn" || !r.turn) continue;
+      const sh = this.shape(r.turn);
+      if (this.shapeStale) { left.push(i); continue; }
+      if (sh === r.shape) continue;
+      if (Boolean(sh.thumbs) !== Boolean(r.shape?.thumbs)) return false;
+      const nr = { ...r, shape: sh };
+      this.baseRows[i] = nr;
+      this.baseSizes[i] = this.height(nr);
+    }
+    this.staleRows = left;
+    this.probeList();
+    this.fitKey = null;
+    return true;
+  }
+
+  // The index of a list item in rowsMemo, from baseIndex (the list adds a spacer or a gap
+  // first): a search over every row for each one drawn took 1 ms a row in a long session.
+  rowIndex(key) {
+    const rows = this.rowsMemo ?? [];
+    const off = rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0;
+    const i = this.baseIndex?.get(key);
+    if (i != null && rows[i + off]?.key === key) return i + off;
+    if (key !== "spacer" && key !== "gap" && key !== "tail" && rows === this.indexedRows) return -1;
+    return rows.findIndex((r) => r.key === key);
+  }
+
   // Whether turn ti of session si is the live newest turn (Working or Needs you): only one
   // still owed its reply. A done turn the agent woke up for again (a background task's
   // notification) keeps its reply, with an Updating line under it (waking).
@@ -1671,64 +1875,105 @@ export default class Threads extends View {
     return si === this.sessions.length - 1 && ti === s.turns.length - 1 && s.turns[ti].done && s.followActive && status === "working";
   }
 
-  buildRows(status) {
-    if (this.view === "pinned") return this.pinnedRows(status);
-    const out = [];
+  // The rows, from the start or from a place (from: a mark from keptFrom, or where an earlier
+  // slice stopped), whose rows and rail before it are kept. With until, it stops at a turn
+  // once that time has passed and says where (buildInfo.resume), so a long session's rows are
+  // built over several frames, each inside Herdr's time for a draw.
+  buildRows(status, from = null, until = 0) {
+    this.buildInfo = { multi: false, marks: [], resume: null };
+    if (this.view === "pinned") { const rows = this.pinnedRows(status); this.buildRail = this.railTurns; return rows; }
+    const out = !from ? [] : from.own ? from.rows : from.rows.slice(0, from.row);
     // The rail's turns: every shown turn, with the ones a search leaves out marked.
-    const rail = [];
-    this.railTurns = rail;
+    const rail = !from ? [] : from.own ? from.railRows : from.railRows.slice(0, from.rail);
+    this.buildRail = rail;
+    const marks = from ? from.marks.slice() : [];
+    const lastSi = this.sessions.length - 1;
     const outline = this.outlined();
     let maxN = 1;
     if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
-    this.sessions.forEach((s, si) => {
-      if (si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
-      if (s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
-      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
+    const fromSi = from ? from.si ?? lastSi : 0;
+    for (let si = fromSi; si < this.sessions.length; si++) {
+      const s = this.sessions[si];
+      const first = Boolean(from) && si === fromSi;
+      const t0 = first ? from.ti : 0;
+      if (!first && si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
+      if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
+      // The live newest turn (isLive), found once for the session.
+      const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
+      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi });
       // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
-      s.turns.forEach((t, ti) => {
+      for (let ti = t0; ti < s.turns.length; ti++) {
+        const t = s.turns[ti];
         const d = t.day === undefined ? (t.day = dayKey(t.ts)) : t.day;
-        if (!d || !shown(t, ti)) return;
+        if (!d || !shown(t, ti)) continue;
         const r = days.get(d) ?? { ts: t.ts, count: 0 };
         r.count++;
         days.set(d, r);
-      });
-      let day = null;
-      let unmatched = 0;
+      }
+      const multi = first ? from.multi ?? true : days.size > 1;
+      if (si === lastSi) this.buildInfo.multi = multi;
+      let day = first ? from.day ?? (from.before ? from.d : null) : null;
+      // Shown turns so far in the day band, and the band's day item, for the marks.
+      let band = first ? from.before ?? 0 : 0;
+      let dayRow = first && from.before ? from.dayRow : null;
+      let unmatched = first ? from.unmatched ?? 0 : 0;
       const flush = () => { if (unmatched) out.push({ kind: "hidden", key: `hid:${si}:${out.length}`, n: unmatched }); unmatched = 0; };
-      s.turns.forEach((turn, ti) => {
+      for (let ti = t0; ti < s.turns.length; ti++) {
+        if (until && ti > t0 && (ti & 15) === 0 && now() > until) {
+          this.buildInfo.resume = { si, ti, row: out.length, rail: rail.length, before: band, d: day, day, dayRow, multi, unmatched, marks };
+          this.buildInfo.marks = marks;
+          return out;
+        }
+        const turn = s.turns[ti];
         const key = `${si}:${turn.n}`;
+        const railAt = rail.length;
         // Agent turns while they are hidden: skipped, and counted in the header instead.
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
-        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: this.isLive(s, si, ti, status), miss: Boolean(miss) });
-        if (off && !visit) return;
-        if (miss && !visit) { unmatched++; return; }
+        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
+        if (off && !visit) continue;
+        if (miss && !visit) { unmatched++; continue; }
+        const d = turn.day;
+        const newDay = multi && !q && d && d !== day;
+        // Where a later rebuild can start (keptFrom): before a day band, and every BAND_MARK
+        // shown turns inside one.
+        if (si === lastSi && !q && !outline && (newDay || (band && band % BAND_MARK === 0))) {
+          marks.push(newDay ? { ti, row: out.length, rail: railAt, before: 0, d, dayRow: null } : { ti, row: out.length, rail: railAt, before: band, d: day, dayRow });
+        }
         flush();
         if (visit && (off || miss)) out.push({ kind: "note", key: `visit:${key}`, text: visitNote(miss) });
-        const d = turn.day;
-        if (days.size > 1 && !q && d && d !== day) {
+        if (newDay) {
           day = d;
+          band = 0;
+          dayRow = out.length;
           const r = days.get(d);
           out.push({ kind: "day", key: `day:${si}:${d}`, ...dayParts(r.ts), count: r.count });
         }
+        if (!off) band++;
         const last = si === this.sessions.length - 1 && ti === s.turns.length - 1;
-        const live = this.isLive(s, si, ti, status);
+        const live = ti === liveTi;
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
-        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); return; }
+        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
         const item = { kind: "turn", key, turn, s, si, last, live };
         if (live) this.liveRows(item, out);
         else if (this.open.has(key)) this.expanded(item, out);
         else this.closedRows(item, out);
         if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
-      });
+      }
       flush();
-    });
+      // Built from inside a day band: the band's day item, kept, counts its turns again.
+      if (first && from.before && from.dayRow != null) {
+        const dd = from.day ?? from.d;
+        out[from.dayRow] = { ...out[from.dayRow], count: from.before + (days.get(dd)?.count ?? 0) };
+      }
+    }
+    this.buildInfo.marks = marks;
     return out;
   }
 
@@ -1738,6 +1983,7 @@ export default class Threads extends View {
   // line ("split").
   closedRows(item, out) {
     const shape = this.shape(item.turn);
+    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (shape.thumbs ? 1 : 0));
     if (!shape.thumbs) { out.push({ ...item, shape }); return; }
     out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, shape, split: true });
@@ -1794,7 +2040,7 @@ export default class Threads extends View {
     });
   }
   lineIsOpen(key, live) { return this.lineTouched.has(key) ? this.lineOpen.has(key) : live; }
-  isLiveKey(key) { return Boolean(this.baseRows?.some((r) => r.key === key && r.live)); }
+  isLiveKey(key) { const i = this.baseIndex?.get(key); return i != null && Boolean(this.baseRows?.[i]?.live); }
 
   // Level 3's data. Calls are read for every agent but Cursor, which records no calls' ids or
   // output: the group must carry its calls' ids.
@@ -2122,21 +2368,44 @@ export default class Threads extends View {
   // What a collapsed row shows: its prompt and reply lines at the pane width, kept on the
   // turn until any of its inputs change.
   shape(turn, live = false) {
+    // The memo is checked field by field: building its key string for every turn on every
+    // rebuild cost 3 µs a turn, 18 ms at 6,000 turns.
+    const look = this.shapeLook();
+    const text = this.replyText(turn);
+    const f = turn.shapeFast;
+    this.shapeStale = false;
+    if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
+      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
+    // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
+    // waiting after renders were stopped through a whole load).
+    if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const text = this.replyText(turn);
     const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
-    if (turn.shapeKey === key) return turn.shapeMemo;
+    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0 };
+    if (turn.shapeKey === key) { turn.shapeFast = fast; return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; return turn.shapeMemo ?? this.blankShape(); }
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
+    turn.shapeFast = fast;
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // What every row's shape depends on besides its turn, as one string kept while they stay.
+  shapeLook() {
+    const P = this.prefs;
+    const q = this.filterText();
+    const w = Math.round(this.width);
+    const m = this.lookMemo;
+    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === P.width && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
+    const s = `${w}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
+    this.lookMemo = { w, q, a: P.textSize, b: P.width, c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
+    return s;
   }
   // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
   // reply at the pane's width and text size.
@@ -2875,9 +3144,13 @@ export default class Threads extends View {
     const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
     if (!reply) return { refuse: "No reply to quote." };
     if (this.selecting === key) {
+      // Herdr 0.1.16 and later: the editor's highlight itself, with no ⌘C first.
+      const lit = this.highlight();
+      if (lit?.trim()) return { text: lit, source: "selection", how: "editor" };
       const clip = readClip(cx);
-      if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection" };
-      return { refuse: `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
+      if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection", how: "clipboard" };
+      const say = lit != null ? `Nothing highlighted: select text, then ${this.quoteKey}` : `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`;
+      return { refuse: say, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
     const part = this.copiedPart(cx);
     if (part?.key === key) return { text: part.text, source: "selection" };
@@ -3004,7 +3277,7 @@ export default class Threads extends View {
         panelOpen: this.settingsOpen || this.choosing, remote, exists: Boolean(this.term()), ended: this.res.ended,
         pane: Boolean(pane), moved: Boolean(me && p && p.tab !== me.tab), fg: foreground(info, p), status: this.status(),
       });
-      const base = { source: q.source, lines: out.lines, capped: out.capped, cut: out.cut, chars: out.text.length, gate: gate.ok ? (gate.busy ? "busy" : "ok") : gate.why };
+      const base = { source: q.source, how: q.how ?? null, lines: out.lines, capped: out.capped, cut: out.cut, chars: out.text.length, gate: gate.ok ? (gate.busy ? "busy" : "ok") : gate.why };
       if (!gate.ok) {
         if (gate.why === "panel") { record({ ...base, pasted: false }); return; }
         cx.write_to_clipboard(out.text);
@@ -3116,8 +3389,9 @@ export default class Threads extends View {
     this.stepLinked ??= new WeakMap();
     const known = this.stepLinked.get(st);
     if (known?.ver === ver) return known.lk;
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
       return { md: st.t, links: 0 };
     }
     const t0 = now();
@@ -3876,7 +4150,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full()))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -3965,7 +4239,7 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
     };
-    const body = v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`)
+    const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(lines.map(line))
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
@@ -3981,9 +4255,60 @@ export default class Threads extends View {
 
   // ---- drawing ----
 
+  // A render that did not reach its end was stopped by Herdr (an error is caught and clears the
+  // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
+    if (this.drawingRow) this.rowCut(this.drawingRow);
+    if (this.renderOpen) {
+      this.renderOpen = false;
+      this.cutUntil = now() + CUT_MS;
+      this.renderCuts = (this.renderCuts ?? 0) + 1;
+      // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
+      // is asked for again: it was taken before the list was drawn.
+      if (this.renderWant?.toBottom) this.toBottom = true;
+      if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
+      // Counted at once: a render that is stopped too would never reach the end of the frame.
+      this.publishCuts();
+    }
+    // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
+    this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
+    const light = this.cutUntil > now();
+    this.renderAt = now();
+    // One budget a draw; while rows are built over several draws (rowJob), one for them all,
+    // as before.
+    if (!this.rowJob) this.shapeSpent = 0;
+    const spent = this.shapeSpent ?? 0;
+    this.buildSpent = 0;
+    this.shapeFrame = (this.renders ?? 0) + 1;
+    this.renderOpen = true;
+    let out;
+    try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
+    this.renderOpen = false;
+    // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
+    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
+    return out;
+  }
+
+  // Reshaping time left for this draw: none while a stopped render is being recovered from.
+  shapeMax() {
+    if (this.light) return -1;
+    if (this.shapeBudget != null) return this.shapeBudget;
+    return Math.max(SHAPE_MIN_MS, Math.min(SHAPE_MS, this.frameRoom() / 2));
+  }
+  // A slice of a rows build.
+  buildMax() { return Math.max(BUILD_MIN_MS, Math.min(BUILD_MS, this.frameRoom() / 2)); }
+  frameRoom() { return FRAME_AIM_MS - (this.frameBase ?? 0); }
+  // One reshaping budget a draw: rows() can be asked for more than once in a draw, and each
+  // ask used to start the budget again. Outside a render (tests), each ask starts it.
+  shapeStart() {
+    if (this.renderOpen && this.shapeFrame === this.renders) return;
+    this.shapeSpent = 0;
+  }
+
+  frame(cx, light) {
     if (this.gal) return this.galleryView();
     if (this.launcher) return div();
+    this.light = light;
     this.renders = (this.renders ?? 0) + 1;
     this.monoFont = null;
     if (this.stickStep) this.applyStick();
@@ -3994,12 +4319,24 @@ export default class Threads extends View {
     if (this.pinResume && this.sel !== this.pinResume.key) this.pinResume = null;
     if (this.pinAgain && this.sel !== this.pinAgain) this.pinAgain = null;
     this.publishDrawError(cx);
+    this.publishCuts();
     this.rows();
     this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
-    if (this.shapeLeft > 0 && !this.shapeNext) {
+    // A rows build left for later slices (buildStep): the next frame goes on with it.
+    if (this.rowJob && !this.buildNext) {
+      this.buildNext = true;
+      cx.timer.after(0, (cx) => { this.buildNext = false; cx.notify(); });
+    }
+    if ((this.shapeLeft > 0 || this.staleRows?.length) && !this.shapeNext) {
       this.shapeNext = true;
-      cx.timer.after(0, (cx) => { this.shapeNext = false; this.rowsKey = null; cx.notify(); });
+      cx.timer.after(this.light ? Math.max(0, this.cutUntil - now()) : 0, (cx) => {
+        this.shapeNext = false;
+        // Closed rows are reshaped where they are; interim texts and estimates left out of
+        // time are in open turns, which a rebuild brings back.
+        if (this.otherLeft) this.rowsKey = null; else this.reshapeDue = true;
+        cx.notify();
+      });
     }
     const t = theme();
     const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
@@ -4060,18 +4397,19 @@ export default class Threads extends View {
   }
 
   narrow() { return this.width < 300; }
-  // The pane's own width, and the column the turns are laid out in: the pane, or in a pane
-  // wider than fitWidth a centred column that wide, so a reply's reading line and the
-  // bubbles stay together instead of leaving a gutter between them. Before the pane has
-  // measured itself (and in tests that set width) both are this.width.
+  // The pane's own width, and the column the turns are laid out in (ui.js columnWidth): the
+  // text, at most a reading line, with the side gutters left and right of it, centred. Before
+  // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = Math.min(this.paneW, this.readingPx());
+    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
     if (Math.abs(w - this.width) > 0.5) this.width = w;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
+  // From the pane's edge to the text: the side gutter.
+  side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
   // reading width shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
@@ -4301,11 +4639,19 @@ export default class Threads extends View {
     // The session's totals, summed again only when the session changed (every event read
     // bumps its version): summed on every draw, they took a seventh of Herdr's time for a
     // draw in a session of 2,000 turns.
+    // Done turns before the newest are summed once (kept while the turn at their end is the
+    // same object), and only the turns after them again.
     const v = `${s.id}|${s.version}|${s.turns.length}`;
     if (this.usageMemo?.v !== v) {
-      let i = 0, o = 0, r = 0, c = 0;
-      for (const t of s.turns) for (const u of Object.values(t.usage)) { i += u.i ?? 0; o += u.o ?? 0; r += u.cr ?? 0; c += u.cc ?? 0; }
-      this.usageMemo = { v, input: i, output: o, cr: r, cc: c };
+      const u = this.usageMemo;
+      const keep = u && u.s === s && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+      const base = keep ? [...u.base] : [0, 0, 0, 0];
+      const add = (acc, t) => { for (const x of Object.values(t.usage)) { acc[0] += x.i ?? 0; acc[1] += x.o ?? 0; acc[2] += x.cr ?? 0; acc[3] += x.cc ?? 0; } };
+      let k = keep ? u.stable : 0;
+      while (k < s.turns.length - 1 && s.turns[k].done) add(base, s.turns[k++]);
+      const sum = [...base];
+      for (let j = k; j < s.turns.length; j++) add(sum, s.turns[j]);
+      this.usageMemo = { v, s, stable: k, mark: s.turns[k - 1] ?? null, base, input: sum[0], output: sum[1], cr: sum[2], cc: sum[3] };
     }
     const { input, output, cr, cc } = this.usageMemo;
     const pct = cachePct(cr, input + cc + cr);
@@ -4780,7 +5126,7 @@ export default class Threads extends View {
         [this.button(t, "th-show-agents", "Show them", (_e, cx) => { this.setAgents(true, cx); cx.notify(); }, "bot")]);
     }
     const slots = this.slotsMemo;
-    const due = this.probeDue();
+    const due = this.light ? [] : this.probeDue();
     // Parts left for later frames (PROBE_MAX): the parts drawn now report their sizes and
     // ask for a frame, but one that never reports would not, so ask here too.
     if (this.probeLeft > 0 && !this.probeNext) {
@@ -4794,9 +5140,23 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
-    if ((this.toBottom || this.scrollTo) && this.shapeLeft > 0) {
+    const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
+    if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
+    else if (!this.scrollWait) this.scrollWait = Date.now();
+    // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
+    // settle. The end is held to in every frame while they do (below).
+    const bottomHeld = this.toBottom && !this.scrollTo;
+    if ((this.toBottom || this.scrollTo) && unsettled && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
+      // To the end in this frame, every frame while they settle: rows reshaped above the view
+      // push it up, since the list keeps its offset in px, and a scroll a frame later showed
+      // the view jumping up and back. Before, the list stayed at the oldest turn when renders
+      // were stopped through a load and the rows never settled.
+      if (bottomHeld && rows.length) {
+        this.pinningUntil = Date.now() + 1000;
+        this.scroll.scroll_to_bottom();
+      }
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
@@ -4902,7 +5262,7 @@ export default class Threads extends View {
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
         .on_scroll_wheel((e) => this.listWheel(e))
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
-          .child(v_virtual_list("threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+          .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
             .track_scroll(this.scroll)
             .on_item_click((key, cx) => this.click(key, cx))
@@ -5109,21 +5469,37 @@ export default class Threads extends View {
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
-  readBlock(el) { const { size, line } = this.rt(); return el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`); }
+  readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
+  // The face for messages and replies (SYSTEM_FACE), or null where the text keeps Herdr's
+  // interface font: off macOS, and when the person set an interface font of their own, which
+  // is followed. Read once per draw.
+  readFace() {
+    const r = this.renders ?? 0;
+    if (this.faceMemo?.r === r) return this.faceMemo.v;
+    const s = settings() ?? {};
+    const ui = s.ui_font ?? s.ui_font_family;
+    const v = this.platform() === "macos" && (!ui || ui === "Geist") ? SYSTEM_FACE : null;
+    this.faceMemo = { r, v };
+    return v;
+  }
+  readFont(el) { const f = this.readFace(); return f ? el.font_family(f) : el; }
+  platform() { return herdrNs.window?.()?.platform ?? null; }
   // Markdown for TextView: dollar signs escaped (escapeDollars), and split into blocks short
-  // enough for Herdr to draw (mdChunks). Kept for the text last asked for, as it is redrawn often.
+  // enough for Herdr to draw (mdChunks). Kept for the MD_MEMO texts used last, as they are
+  // redrawn often: the probe walks every turn, and a memo cleared when full made a long reply
+  // on screen split again about once a second.
   mdParts(md) {
     const memo = (this.mdMemo ??= new Map());
     let parts = memo.get(md);
-    if (!parts) {
-      parts = mdChunks(escapeDollars(md));
-      if (memo.size > 300) memo.clear();
-      memo.set(md, parts);
-    }
+    if (parts) { memo.delete(md); memo.set(md, parts); return parts; }
+    parts = mdChunks(escapeDollars(md));
+    memo.set(md, parts);
+    if (memo.size > MD_MEMO) memo.delete(memo.keys().next().value);
     return parts;
   }
   // One TextView, or several stacked a paragraph apart when the Markdown is too long for one.
   mdView(id, md, selectable) {
+    if (this.liteDraw) return div().w_full().text_color(theme().foreground).child(String(md ?? ""));
     const parts = this.mdParts(md);
     if (parts.length === 1) return TextView.markdown(id, parts[0]).selectable(selectable).w_full();
     return v_flex().w_full().gap(this.paraGap()).children(parts.map((p, i) => TextView.markdown(`${id}-${i}`, p).selectable(selectable).w_full()));
@@ -5151,8 +5527,9 @@ export default class Threads extends View {
     if (this.mdHeights?.geo !== geo || this.mdHeights.map.size > 4000) this.mdHeights = { geo, map: new Map() };
     const known = this.mdHeights.map.get(md);
     if (known != null) return known;
-    if ((this.shapeSpent ?? 0) > (this.shapeBudget ?? SHAPE_MS)) {
+    if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+      this.otherLeft = (this.otherLeft ?? 0) + 1;
       return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
     }
     const t0 = now();
@@ -5308,7 +5685,7 @@ export default class Threads extends View {
   // row with a Markdown reply adds its block's measure to the rest of the row.
   height(r) {
     if (r.kind === "turn" && r.shape?.md != null) {
-      const m = this.measured(this.cmdRow(r));
+      const m = this.measured(this.cmdFor(r));
       return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r);
     }
     if (PROBED.has(r.kind)) {
@@ -5415,13 +5792,17 @@ export default class Threads extends View {
     if (part?.kind === "md" && part.key === key && !this.mdBroken?.has(key) && h <= (part.gap ?? 6) + 2 && (part.src ?? part.md ?? "").trim()) {
       (this.mdBroken ??= new Set()).add(key);
       this.meas.delete(key);
+      this.measVer = (this.measVer ?? 0) + 1;
       cx.notify();
       return;
     }
     const was = this.meas.get(key);
     if (was?.sig === sig && was.h === h) return;
-    if (this.meas.size > 2000) this.meas.clear();
+    // Every closed row's reply block is measured: a cap under the turns a long session has
+    // made the probe measure the same parts again and again.
+    if (this.meas.size > 20000) this.meas.clear();
     this.meas.set(key, { sig, h });
+    this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
     const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
@@ -5434,26 +5815,40 @@ export default class Threads extends View {
 
   // The parts still to measure, each drawn in the probe for at most three frames: a part
   // that never reports keeps its estimate (the debug report says "measured: none").
+  // The parts to measure this frame: at most PROBE_MAX, nearest the top of the pane first,
+  // found by walking out from the top row both ways and stopping once there are enough (a
+  // pass over every part each frame cost 5 to 13 ms in a 6,000-turn session while its rows
+  // were measured). probeLeft is above 0 while parts may be left.
   probeDue() {
     const want = [];
     this.probeTries ??= new Map();
     const base = this.sigBase();
-    for (const r of this.probeRows ?? []) {
-      const sig = this.partSig(r, base);
-      const m = this.meas?.get(r.key);
-      if (m && m.h > 0 && m.sig === sig) continue;
-      const k = `${r.key}|${sig}`;
-      if ((this.probeTries.get(k) ?? 0) >= 3) continue;
-      want.push([r, sig, k]);
-    }
-    if (want.length > PROBE_MAX) {
-      const top = (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0;
-      const at = (r) => this.baseIndex?.get(r.kind === "cmd" ? r.key.slice(4) : r.key) ?? 0;
-      want.sort((a, b) => Math.abs(at(a[0]) - top) - Math.abs(at(b[0]) - top));
+    // Nothing was due and nothing it depends on changed: every part was measured, or tried.
+    const qm = this.probeQuiet;
+    if (qm && qm.ver === (this.probeVer ?? 0) && qm.base === base && qm.mv === (this.measVer ?? 0) && qm.broken === (this.mdBroken?.size ?? 0)) { this.probeLeft = 0; return want; }
+    const rows = this.baseRows ?? [];
+    const n = rows.length;
+    const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
+    const visit = (r) => {
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
+      if (!part) return;
+      const sig = this.partSig(part, base);
+      const m = this.meas?.get(part.key);
+      if (m && m.h > 0 && m.sig === sig) return;
+      const k = `${part.key}|${sig}`;
+      if ((this.probeTries.get(k) ?? 0) >= 3) return;
+      want.push([part, sig, k]);
+    };
+    let more = false;
+    for (let d = 0; d < n; d++) {
+      if (top + d < n) visit(rows[top + d]);
+      if (d > 0 && top - d >= 0) visit(rows[top - d]);
+      if (want.length >= PROBE_MAX) { more = top + d + 1 < n || top - d - 1 >= 0; break; }
     }
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
-    this.probeLeft = want.length - out.length;
+    this.probeLeft = more || want.length > out.length ? 1 : 0;
+    this.probeQuiet = want.length ? null : { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 };
     if (this.probeTries.size > 4000) this.probeTries.clear();
     return out.map(([r, sig]) => [r, sig]);
   }
@@ -5506,6 +5901,7 @@ export default class Threads extends View {
   // until it scrolls or resizes, and Herdr reports nothing, so each item is drawn on its own:
   // one that fails shows as a short error row, and the error is kept for the owner.
   listItems(t, rows, slots, range, focusedPanel, dim) {
+    if (this.drawingRow) this.rowCut(this.drawingRow);
     // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
@@ -5536,12 +5932,43 @@ export default class Threads extends View {
       const x = rows[i];
       const h = slots[i] > 0 ? slots[i] : 1;
       let body;
-      try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+      const cut = x && this.cutRows?.get(x.key);
+      const held = cut && cut.until > now();
+      if (held && cut.blank) body = div();
+      else {
+        this.drawingRow = x ? { key: x.key, lite: Boolean(held) } : null;
+        this.liteDraw = Boolean(held);
+        try { body = x ? this.item(t, x, focusedPanel, h) : div(); } catch (e) { this.drawFailed(e, x); body = this.drawErrorRow(t, e); }
+        this.liteDraw = false;
+        this.drawingRow = null;
+      }
+      // A plain row keeps the slot its Markdown measured, which is taller: it sits at the
+      // slot's foot, so its end is next to the rows below it.
       out.push(v_flex().w_full().h(h).overflow_hidden()
+        .when(Boolean(held), (el) => el.justify_end())
         .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
         .child(body));
     }
     return out;
+  }
+
+  // A row Herdr stopped while it drew (drawingRow still set when the list draws again): drawn
+  // plainly, or blank if it was already plain, for CUT_MS, doubling each time.
+  rowCut(d) {
+    this.drawingRow = null;
+    this.liteDraw = false;
+    const c = (this.cutRows ??= new Map());
+    const n = (c.get(d.key)?.n ?? 0) + 1;
+    c.delete(d.key);
+    c.set(d.key, { n, blank: d.lite, until: now() + Math.min(300000, CUT_MS * 2 ** (n - 1)) });
+    if (c.size > 200) c.delete(c.keys().next().value);
+    this.rowCuts = (this.rowCuts ?? 0) + 1;
+    // Once its row callback is stopped, Herdr's list asks only for the first row again (to
+    // measure), never for the rows on screen, and stays blank. A new id gives a new list,
+    // kept at the place it had: the end when the end was on screen.
+    this.listGen = (this.listGen ?? 0) + 1;
+    if (this.bottomShown) this.toBottom = true;
+    else if (this.topKey != null) this.scrollTo = { key: this.topKey, how: "top" };
   }
 
   // Kept for render(), which publishes it: the drawing pass may not notify or write state.
@@ -5561,6 +5988,15 @@ export default class Threads extends View {
 
   // A row that failed to draw: saved to shared("threads.drawError"), which an agent on the
   // owner's machine can read, and said once in a toast.
+  // How many draws Herdr stopped, for an agent on the owner's machine: shared("threads.cuts"),
+  // counts and times only, written when they change.
+  publishCuts() {
+    const k = `${this.renderCuts ?? 0}|${this.rowCuts ?? 0}`;
+    if (k === "0|0" || k === this.cutsSent) return;
+    this.cutsSent = k;
+    try { setShared("threads.cuts", { renders: this.renderCuts ?? 0, rows: this.rowCuts ?? 0, at: new Date().toISOString() }); } catch { /* counts only */ }
+  }
+
   publishDrawError(cx) {
     const d = this.drawError;
     if (!d || d.sent) return;
@@ -5592,11 +6028,10 @@ export default class Threads extends View {
   }
 
   // The frame of a collapsed exchange: 16 px in from each side, its parts 6 px apart (ui.js
-  // rowHeight). The selected exchange has a 2 px bar on its left edge, in the accent colour
-  // while the pane has the keyboard, and no fill, so a text selection in it always shows.
-  rowFrame(t, sel, focusedPanel, _live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
+  // rowHeight). The selected exchange has no mark on the row itself (the owner found the bar
+  // on its left too distracting) and no fill, so a text selection in it always shows.
+  rowFrame(_t, _sel, _focusedPanel, _live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
     return v_flex().w_full().relative().px(ROW.PAD_X).pt(top).pb(bottom).gap(ROW.GAP).min_w(0)
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .children(kids);
   }
 
@@ -5700,14 +6135,13 @@ export default class Threads extends View {
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
     const rows = this.rowsMemo ?? this.rows();
-    if (rows.some((r) => r.key === `rhead:${key}`)) return `rhead:${key}`;
-    const row = rows.find((r) => r.key === key);
+    if (this.rowIndex(`rhead:${key}`) >= 0) return `rhead:${key}`;
+    const row = rows[this.rowIndex(key)];
     return row && row.kind === "turn" && !row.live && !row.running && !row.compact ? key : null;
   }
   // Whether a list item was in the range the list last drew.
   onScreen(key) {
-    const rows = this.rowsMemo ?? [];
-    const i = rows.findIndex((r) => r.key === key);
+    const i = this.rowIndex(key);
     const [a, b] = this.viewRange ?? [0, 0];
     return i >= a && i < b;
   }
@@ -5768,7 +6202,7 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
+    const box = this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
       .when(style.outline, (el) => el.border_1().border_color(t.border))
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -5895,7 +6329,7 @@ export default class Threads extends View {
   // A closed pin in the Pinned view (ui.js PIN_ROW): its digit in an accent badge, then
   // "#7 · 9:12 AM" with a dot at the right while the turn has a reply not read yet, two lines
   // of the prompt and one of the reply. Selected, it has the list's fill and bar.
-  pinRow(t, r, focusedPanel) {
+  pinRow(t, r, _focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const sh = r.shape;
@@ -5909,7 +6343,6 @@ export default class Threads extends View {
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
       .child(v_flex().flex_1().min_w(0).gap(P.GAP)
@@ -5934,10 +6367,10 @@ export default class Threads extends View {
   }
 
   // An outline row: "#12  8:43 AM  First line of the prompt  📌 2", one line at the reading
-  // size, with the selected turn's fill and bar. An agent's message leads with its sender's
+  // size, with the selected turn's fill. An agent's message leads with its sender's
   // icon and is muted; a stopped or failed turn leads with its icon; the running turn says
   // "now". Under 300 px the time gives way to the prompt.
-  lineItem(t, r, focusedPanel) {
+  lineItem(t, r, _focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const rt = this.rt();
@@ -5946,7 +6379,7 @@ export default class Threads extends View {
     const icon = turn.agent ? svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))
       : turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
     return h_flex().w_full().h(outlineHeight(this.prefs.textSize)).relative().px(ROW.PAD_X).gap(8).items_center().min_w(0)
-      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .when(sel, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().w(r.numW).text_size(11.5).font_family(this.mono()).text_color(sel ? t.muted : t.dim).child(`#${turn.n}`))
       .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
@@ -6180,11 +6613,11 @@ export default class Threads extends View {
 
   // The line a return to a pin puts over a place further down the turn: the prompt and the
   // start of the reply are above it. A click shows the turn from its head. It carries the
-  // turn's fill and bar when selected, like the turn's other slices.
+  // turn's fill when selected.
   resumeItem(t, r, size) {
     const sel = this.sel === r.key.slice("resume:".length);
     return v_flex().h(size).w_full().relative().justify_center().px(ROW.PAD_X)
-      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(this.h.is_focused() ? t.accent : t.border)))
+      .when(sel, (el) => el.bg(t.selected))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
         .child(svg(ICON("chevron-up")).size(12).flex_none())
         .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`)));
@@ -6192,16 +6625,11 @@ export default class Threads extends View {
 
   // One slice of an open turn: exactly its slot's height, 16 px in from each side like a
   // closed exchange. The first part has the 8 px top padding and the last the 10 px bottom
-  // padding. The selected turn's slices carry its fill and the bar on the left, so they
-  // read as one exchange with no seam.
+  // padding, with no seam between them.
   cardPart(t, r, size) {
-    const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
-    const sel = this.sel === tkey;
-    const focusedPanel = this.h.is_focused();
     return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
       .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
       .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(this.partContent(t, r, false));
   }
 
@@ -6246,7 +6674,7 @@ export default class Threads extends View {
         // sender), as wide as its widest line.
         const agent = turn.agent;
         return h_flex().w_full().when(!agent, (el) => el.justify_end())
-          .child(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4)
+          .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
             .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
@@ -6438,7 +6866,25 @@ export default class Threads extends View {
 
   // The Select view's hint line.
   selectHint() {
+    if (this.canReadHighlight()) return this.narrow() ? `${this.quoteKey} quotes the highlight · s returns` : `Select text, then ${this.quoteKey} quotes it · s or Esc returns`;
     return this.narrow() ? `⌘C, then ${this.quoteKey} quotes it · s returns` : `Select text, ⌘C, then ${this.quoteKey} quotes it · s or Esc returns`;
+  }
+  // Whether Select view's editor tells its highlight (EditorState.selected_range, Herdr 0.1.16):
+  // before that a mod could not read it, and ⌘C put it on the clipboard for q.
+  canReadHighlight() { return typeof this.selEditor?.st?.selected_range === "function"; }
+  // The text highlighted in Select view's editor: "" when nothing is, null when the editor
+  // cannot say. Its offsets are UTF-16, as slice() takes them, into the text it was given.
+  highlight() {
+    if (!this.canReadHighlight()) return null;
+    try {
+      const r = this.selEditor.st.selected_range();
+      const text = this.selEditor.text.slice(0, SELECT_CHARS);
+      const a = Math.max(0, Math.min(r?.start ?? 0, r?.end ?? 0));
+      const b = Math.min(text.length, Math.max(r?.start ?? 0, r?.end ?? 0));
+      return b > a ? text.slice(a, b) : "";
+    } catch {
+      return null;
+    }
   }
 
   // The settings panel's line on the keys the file sets by hand.
@@ -6528,7 +6974,7 @@ export default class Threads extends View {
         .when(Boolean(under), (el) => el.child(div().text_size(11.5).line_height("16px").font_family(this.mono()).text_color(this.labelInk(t, t.popover)).child(under)))
         .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(what)));
     return v_flex().id(hover ? "th-details-hover" : "th-details").w(this.cardW()).when(up, (el) => el.mb(4)).when(!up, (el) => el.mt(4))
-      .rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .rounded(10).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
       .child(h_flex().flex_none().h(34).px(12).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(`Turn #${turn.n}`))
         .child(this.kbd(t, "i"))
@@ -6556,7 +7002,7 @@ export default class Threads extends View {
   detailsDir(itemKey, turn) {
     const rows = this.rowsMemo ?? [];
     const sizes = this.sizesMemo ?? [];
-    const i = rows.findIndex((r) => r.key === itemKey);
+    const i = this.rowIndex(itemKey);
     const [a, b] = this.viewRange ?? [0, 0];
     if (i < a || i >= b) return "down";
     let all = 0;
@@ -6656,13 +7102,14 @@ export default class Threads extends View {
   railView(t) {
     const { L, ticks } = this.railTicks();
     const busy = this.liveState(t).color;
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(RAIL.W).justify_center().items_end()
+    const look = railLook(this.side());
+    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
       .children(ticks.map((k, i) => {
         const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
         const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? RAIL.SEL : RAIL.MARK).h(L.mark).rounded(1).bg(color).opacity(op)
+        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(RAIL.W).h(L.pitch).flex().items_center().justify_end().pr(RAIL.RIGHT)
+        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(mark);
