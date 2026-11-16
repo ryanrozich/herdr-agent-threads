@@ -117,8 +117,8 @@ const PROBE_MAX = 16;
 // blank if that is stopped too; the wait doubles each time, up to five minutes. A stopped
 // render draws without reshaping or measuring for CUT_MS.
 const CUT_MS = 5000;
-// How soon a render Herdr stopped is asked for again, and how long a scroll waits for the rows
-// to be built and shaped before it goes ahead with the heights it has.
+// How soon a render Herdr stopped is asked for again, and how long a scroll to a place waits
+// for the rows to be built and shaped before it goes ahead with the heights it has.
 const CUT_WATCH_MS = 1500;
 const SCROLL_WAIT_MS = 2000;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
@@ -1808,7 +1808,13 @@ export default class Threads extends View {
     this.otherLeft = 0;
     this.shapeInView(status);
     const left = [];
-    for (const i of this.staleRows ?? []) {
+    // Nearest the newest first when following, where the view is. Once this draw's time is
+    // spent the rest wait as they are, without a look at each.
+    const stale = this.staleRows ?? [];
+    const order = this.follow ? stale.slice().reverse() : stale;
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
+      if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
       const r = this.baseRows[i];
       if (r?.kind !== "turn" || !r.turn) continue;
       const sh = this.shape(r.turn);
@@ -2347,6 +2353,9 @@ export default class Threads extends View {
     this.shapeStale = false;
     if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
+    // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
+    // waiting after renders were stopped through a whole load).
+    if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
@@ -5090,11 +5099,20 @@ export default class Threads extends View {
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
-    // Not forever: while renders keep being stopped the rows never settle, and the list stayed
-    // at the oldest turn. Following, the view keeps to the end as the rows settle (stickCheck).
-    if ((this.toBottom || this.scrollTo) && unsettled && Date.now() - this.scrollWait < SCROLL_WAIT_MS) {
+    // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
+    // settle. The end is held to in every frame while they do (below).
+    const bottomHeld = this.toBottom && !this.scrollTo;
+    if ((this.toBottom || this.scrollTo) && unsettled && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
+      // To the end in this frame, every frame while they settle: rows reshaped above the view
+      // push it up, since the list keeps its offset in px, and a scroll a frame later showed
+      // the view jumping up and back. Before, the list stayed at the oldest turn when renders
+      // were stopped through a load and the rows never settled.
+      if (bottomHeld && rows.length) {
+        this.pinningUntil = Date.now() + 1000;
+        this.scroll.scroll_to_bottom();
+      }
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;

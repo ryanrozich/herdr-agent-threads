@@ -4775,18 +4775,22 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
   v.frame = frame;
 });
 
-test("the jump to the newest turn waits for the rows to settle, but not for more than 2 s", async () => {
+test("a scroll to a place waits for the rows to settle, but not for more than 2 s", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.render(cx);
+  const keys = v.turnKeys(v.rows());
+  const calls = [];
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { calls.push([i, how]); } };
   Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
-  v.toBottom = true;
+  v.scrollTo = { key: keys[0], how: "top" };
   cx.timers = [];
   v.render(cx);
-  expect(v.toBottom).toBe(true);
+  expect(v.scrollTo).not.toBe(null);
   v.scrollWait = Date.now() - 2100;
   v.render(cx);
-  expect(v.toBottom).toBe(false);
-  expect(cx.timers.some((x) => x.ms === 16)).toBe(true);
+  expect(v.scrollTo).toBe(null);
+  cx.flush(20);
+  expect(calls.length).toBeGreaterThan(0);
 });
 
 test("the jump to the newest turn that a stopped render took on is asked for again", async () => {
@@ -4813,6 +4817,55 @@ async function longSession(n) {
   }
   return scripted(ev);
 }
+test("rows left unshaped by stopped renders: past the draw's time the rest are not looked at, and the newest come first when following", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const s = v.current();
+  // As after a load whose renders were all stopped: every row built, none shaped.
+  for (const t of s.turns) { t.shapeKey = null; t.shapeMemo = null; t.shapeFast = null; }
+  v.staleRows = v.baseRows.map((r, i) => (r.kind === "turn" ? i : -1)).filter((i) => i >= 0);
+  const n = v.staleRows.length;
+  expect(n).toBeGreaterThan(400);
+  v.follow = true;
+  // A draw has time for 10 reshapes.
+  let calls = 0, done = 0;
+  const shape = v.shape;
+  v.shape = function (...a) { calls++; return shape.apply(this, a); };
+  const reshape = v.reshape;
+  v.reshape = function (...a) { done++; const out = reshape.apply(this, a); this.shapeSpent = done >= 10 ? 1e9 : 0; return out; };
+  v.shapeSpent = 0;
+  done = 0;
+  calls = 0;
+  v.shapeInView = () => {};
+  expect(v.reshapeStale("idle")).toBe(true);
+  expect(done).toBe(10);
+  expect(calls).toBeLessThan(15);
+  expect(v.staleRows.length).toBe(n - 10);
+  expect(v.shapeLeft).toBeGreaterThan(0);
+  // The ten shaped are the newest ten.
+  const shaped = v.baseRows.map((r, i) => (r.kind === "turn" && !r.shape?.blank && r.turn.shapeKey != null ? i : -1)).filter((i) => i >= 0);
+  const turnRows = v.baseRows.map((r, i) => (r.kind === "turn" ? i : -1)).filter((i) => i >= 0);
+  expect(shaped).toEqual(turnRows.slice(-10));
+});
+
+test("the jump to the newest turn goes to the end every frame while the rows settle", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  let bottoms = 0;
+  v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+  Object.defineProperty(v, "shapeLeft", { get: () => 5, set() {}, configurable: true });
+  v.toBottom = true;
+  // In the same frame, and for as long as they take.
+  v.scrollWait = Date.now() - 60000;
+  for (let f = 0; f < 3; f++) draw(v, cx);
+  expect(bottoms).toBe(3);
+  expect(v.toBottom).toBe(true);
+});
+
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
 function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
 
