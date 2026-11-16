@@ -5683,6 +5683,43 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.setView("all");
 });
 
+test("subagents: their calls are a group of their own, Ran 3 subagents with the bot icon, apart from the commands", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Check the calendar code", ts: at(0) },
+    { k: "u", n: "Bash" }, { k: "u", n: "Agent" }, { k: "u", n: "Agent" }, { k: "u", n: "Agent" }, { k: "u", n: "Bash" },
+    { k: "t", t: "All three are back." }, { k: "d", ms: 132000, ts: at(3) },
+  ]);
+  const a = "0:1";
+  v.sel = a;
+  v.action("open", cx);
+  v.click(`rhead:${a}`, cx);
+  const grps = v.rows().filter((r) => r.kind === "grp" && r.key.startsWith(`gp:${a}:`));
+  expect(grps.map((r) => v.rowDetail(r).replace(/^grp#\d+ /, ""))).toEqual(["Ran 1 command", "Ran 3 subagents", "Ran 1 command"]);
+  const icons = (r) => { rec = []; v.partContent(theme, r); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  expect(icons(grps[1])[0]).toBe("bot.svg");
+  expect(icons(grps[0])[0]).toBe("wrench.svg");
+  // Opened, one row per subagent with the bot icon.
+  v.click(grps[1].key, cx);
+  const calls = v.rows().filter((r) => r.kind === "call" && r.key.startsWith(`cl:${a}:1:`));
+  expect(calls.map((r) => r.name)).toEqual(["Agent", "Agent", "Agent"]);
+  expect(icons(calls[0])).toContain("bot.svg");
+  draw(v, cx);
+  // A subagent started in the background has no time: its call ended at the launch. One that
+  // ran in the foreground returned its report, so its time is the work's.
+  const c = { inTs: "2026-11-01T09:00:00.000Z", outTs: "2026-11-01T09:00:02.000Z" };
+  expect(v.callTook("Agent", { ...c, out: "Async agent launched successfully. agentId: a1" })).toBe("");
+  expect(v.callTook("Agent", { ...c, out: "The range math is right." })).toBe("2s");
+  expect(v.callTook("Bash", { ...c, out: "Async agent launched" })).toBe("2s");
+});
+
+test("subagents: the synthetic fixture's three Agent calls read as their own group", async () => {
+  const { v } = await pane(fixture("--subagents"));
+  const turn = v.current().turns.find((t) => t.prompt.startsWith("Review the calendar code"));
+  expect(turn.steps.filter((x) => x.k === "group").map((g) => [g.calls, Boolean(g.agent)])).toEqual([
+    [["Bash"], false], [["Agent", "Agent", "Agent"], true], [["Bash"], false],
+  ]);
+});
+
 test("level 1 and 2: a click on an open turn's line opens it to its steps; a group opens to its calls; i opens the Turn card and nothing in the list; a stopped turn says how long it ran", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },

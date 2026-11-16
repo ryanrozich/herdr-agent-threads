@@ -814,8 +814,9 @@ test("toolKind: each agent's tool names fall into commands, reads, edits, search
   for (const n of ["Edit", "Write", "MultiEdit", "apply_patch", "edit", "write", "replace_file_content", "write_to_file", "NotebookEdit"]) expect(toolKind(n)).toBe("edit");
   for (const n of ["Grep", "Glob", "grep", "glob", "list", "LS", "codebase_search", "find_by_name", "grep_search"]) expect(toolKind(n)).toBe("search");
   for (const n of ["WebSearch", "WebFetch", "web_search", "webfetch", "read_url_content"]) expect(toolKind(n)).toBe("web");
-  for (const n of ["Task", "Agent", "task"]) expect(toolKind(n)).toBe("agent");
-  for (const n of ["TodoWrite", "update_plan", "ExitPlanMode", "mcp__linear__get_issue", "Skill", "tool", ""]) expect(toolKind(n)).toBe("other");
+  for (const n of ["Task", "Agent", "task", "spawn_agent", "subagent"]) expect(toolKind(n)).toBe("agent");
+  // Claude Code's task list tools are not subagents.
+  for (const n of ["TodoWrite", "update_plan", "ExitPlanMode", "mcp__linear__get_issue", "Skill", "tool", "", "TaskCreate", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop", "AgentTool"]) expect(toolKind(n)).toBe("other");
 });
 
 test("groupText: a group's calls by kind as one sentence, past tense when done and present while running", () => {
@@ -825,7 +826,9 @@ test("groupText: a group's calls by kind as one sentence, past tense when done a
   expect(groupText(["Read", "Grep", "Edit"])).toBe("Read 1 file, searched 1 time and edited 1 file");
   expect(groupText(["Bash", "Bash", "Bash", "Bash"], 4, true)).toBe("Running 4 commands");
   expect(groupText(["Read", "Bash"], 2, true)).toBe("Reading 1 file and running 1 command");
-  expect(groupText(["Task"])).toBe("Handed off 1 task");
+  expect(groupText(["Task"])).toBe("Ran 1 subagent");
+  expect(groupText(["Agent", "Agent", "Agent", "Agent"])).toBe("Ran 4 subagents");
+  expect(groupText(["Agent", "Agent", "Agent", "Agent"], 4, true)).toBe("Running 4 subagents");
   expect(groupText(["mcp__x__y", "TodoWrite"])).toBe("Used 2 other tools");
   // Calls past the names a group keeps.
   expect(groupText(["Bash"], 5)).toBe("Ran 1 command and 4 more");
