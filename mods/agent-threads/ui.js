@@ -1537,10 +1537,13 @@ export function actsLayout({ quote = true, select = false } = {}) {
 // A tool call's kind, from its name as each agent records it (Claude Code's Bash and Read,
 // Codex's shell and apply_patch, OpenCode's bash and grep, Cursor's Shell, Antigravity's
 // run_command and view_file). MCP tools, plans and to-do lists are other.
+export const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 const TOOL_KINDS = [
   ["other", /^mcp__|todo|plan|skill/i],
   ["web", /web|fetch|brows|url/i],
-  ["agent", /^(task|agent|subagent|spawn|delegate)/i],
+  // A subagent: Claude Code's Task or Agent, OpenCode's task, Codex's spawn calls. Exact names,
+  // since Claude Code's task list tools (TaskCreate, TaskUpdate, TaskOutput) start with Task.
+  ["agent", AGENT_CALL],
   // "exe" for exec_command: the read-only test flags the bare program word in the mod's code.
   ["command", /^(bash|shell|exe|local_shell|run_command|run_terminal|terminal|command)/i],
   ["edit", /edit|write|patch|replace|create_file|notebook/i],
@@ -1555,13 +1558,13 @@ export function toolKind(name) { return TOOL_KINDS.find(([, re]) => re.test(Stri
 const PAST = {
   command: (n) => `ran ${n} command${n === 1 ? "" : "s"}`, read: (n) => `read ${n} file${n === 1 ? "" : "s"}`,
   edit: (n) => `edited ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searched ${n} time${n === 1 ? "" : "s"}`,
-  web: (n) => `searched the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handed off ${n} task${n === 1 ? "" : "s"}`,
+  web: (n) => `searched the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `ran ${n} subagent${n === 1 ? "" : "s"}`,
   other: (n) => `used ${n} other tool${n === 1 ? "" : "s"}`,
 };
 const NOW = {
   command: (n) => `running ${n} command${n === 1 ? "" : "s"}`, read: (n) => `reading ${n} file${n === 1 ? "" : "s"}`,
   edit: (n) => `editing ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searching ${n} time${n === 1 ? "" : "s"}`,
-  web: (n) => `searching the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handing off ${n} task${n === 1 ? "" : "s"}`,
+  web: (n) => `searching the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `running ${n} subagent${n === 1 ? "" : "s"}`,
   other: (n) => `using ${n} other tool${n === 1 ? "" : "s"}`,
 };
 export function groupKinds(calls) {

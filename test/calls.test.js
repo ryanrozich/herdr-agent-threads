@@ -1,7 +1,7 @@
 // calls.sh: one step group's calls, read from a transcript by id, for level 3.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,4 +58,16 @@ test("calls.sh --tail reads only the file's last 4 MB; bad ids, a missing file a
   expect(run(`${file}.gone`, "claude", "toolu_x1").code).toBe(3);
   expect(run(file, "cursor", "call_1").code).toBe(4);
   expect(run(file, "claude").lines).toEqual([]);
+});
+
+test("calls.sh reads a subagent call's task name from its description, from the synthetic fixture", () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-calls-agents-"));
+  const file = join(dir, "f.jsonl");
+  spawnSync("bun", [join(import.meta.dir, "make-fixture.js"), file, "00000000-0000-4000-8000-000000000009", "/tmp/threads-demo", "--subagents"], { encoding: "utf8" });
+  const ids = [...readFileSync(file, "utf8").matchAll(/"id":"(toolu_\d+_Agent)"/g)].map((m) => m[1]);
+  expect(ids.length).toBe(3);
+  const r = run(file, "claude", ...ids);
+  expect(r.code).toBe(0);
+  expect(r.lines.filter((l) => l.k === "in").map((l) => l.in)).toEqual(["Review range math", "Check time zones", "Audit the tests"]);
+  expect(r.lines.filter((l) => l.k === "out").every((l) => l.out.startsWith("Async agent launched successfully."))).toBe(true);
 });

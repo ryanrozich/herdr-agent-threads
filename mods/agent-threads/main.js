@@ -831,7 +831,7 @@ export default class Threads extends View {
       case "call": {
         if (r.more) return `call${n} +${r.more}`;
         const c = this.callEntry(r.si, r.id);
-        const time = callTime(c?.inTs, c?.outTs, c?.ms);
+        const time = this.callTook(r.name, c);
         return `call${n}${r.one ? " one" : ""} ${c?.input != null ? callText(r.name, c.input) : r.name}${time ? ` · ${time}` : ""}${c?.err ? " [failed]" : ""}${r.id ? (this.callOpen.has(`${r.si}:${r.turn.n}:${r.gi}:${r.ci}`) ? " [open]" : " [closed]") : ""}`;
       }
       case "cout": return `cout${n} ${r.st}${r.going ? " running" : ""} lines ${r.box.lines.length}/${r.box.total}${r.box.cut ? " +first" : ""} ${this.outEditorFor(r) ? `editor ${this.outLangOf(r)}` : "plain"} h${this.height(r)}${r.box.lines.length ? ` | ${r.box.lines.slice(0, 3).join(" ⏎ ").slice(0, 160)}` : ""}`;
@@ -6398,6 +6398,13 @@ export default class Threads extends View {
     return false;
   }
 
+  // How long a call took (callTime). Not for a subagent started in the background: its call
+  // ends when it is launched, so the time is the launch, not the work.
+  callTook(name, c) {
+    if (toolKind(name) === "agent" && /^Async agent launched/.test(String(c?.out ?? ""))) return "";
+    return callTime(c?.inTs, c?.outTs, c?.ms);
+  }
+
   // Who replied: the name the harness records for the turn (OpenCode's agent) or the session
   // (Claude Code's agent name, a Codex subagent's nickname), else "Agent".
   agentName(turn) {
@@ -6746,7 +6753,7 @@ export default class Threads extends View {
         const g = this.groupInfo(r);
         return h_flex().mt(STEP_GAP).h(GROUP_H).gap(6).items_center().min_w(0).max_w(this.prose()).text_size(12.5).text_color(r.now ? t.dim : t.muted)
           .child(r.now ? this.liveIcon(this.liveState(t), 12)
-            : svg(ICON(g.failed ? "circle-x" : g.known ? "check" : "wrench")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
+            : svg(ICON(g.failed ? "circle-x" : g.known ? "check" : r.step.agent ? "bot" : "wrench")).size(12).flex_none().text_color(g.failed ? t.blocked : t.dim))
           .child(div().flex_none().child(groupText(r.step.calls, r.step.count, r.now)))
           .when(g.failed > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`· ${g.failed} failed`)))
           .when(Boolean(g.current), (e) => e.child(div().min_w(0).truncate().font_family(mono).text_size(11.5).text_color(t.dim).child(g.current)))
@@ -6761,7 +6768,7 @@ export default class Threads extends View {
             .child(svg(ICON("plus")).size(12).flex_none()).child(div().min_w(0).truncate().child(`${r.more} more calls`));
         }
         const c = this.callEntry(r.si, r.id);
-        const time = callTime(c?.inTs, c?.outTs, c?.ms);
+        const time = this.callTook(r.name, c);
         const open = this.callOpen.has(`${tkey}:${r.gi}:${r.ci}`);
         const icon = r.now ? this.liveIcon(this.liveState(t), 12)
           : svg(ICON(c?.err ? "circle-x" : KIND_ICON[toolKind(r.name)])).size(12).flex_none().when(Boolean(c?.err), (e) => e.text_color(t.blocked));
