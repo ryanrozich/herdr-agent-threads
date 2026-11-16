@@ -1057,7 +1057,7 @@ export default class Threads extends View {
     this.sessions.forEach((s, si) => {
       const pins = this.pinStore.sessions[this.sessionKey(s)]?.pins ?? [];
       if (!pins.length) return;
-      const ids = turnIds(s.turns);
+      const ids = turnIds(s.turns, pins.map((p) => p.id));
       for (const pin of pins) {
         const turn = ids.get(pin.id) ?? null;
         const key = turn ? `${si}:${turn.n}` : null;
