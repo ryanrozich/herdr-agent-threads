@@ -154,6 +154,10 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
+// The Pinned column's width as the owner last left it, by a drag or - and =: { px }, Herdr's
+// px size (the measured width and the frame). "hold" until a time: the pane's own resize
+// (fitToReading) is under way and is not the owner's choice.
+const PIN_W_KEY = "threads.pinWidth";
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -2262,7 +2266,7 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    const px = pinColumn(this.pw());
+    const px = pinColumn(this.pw(), this.keptPinWidth());
     if (!me || !px) {
       if (auto) return false;
       this.setView("pinned");
@@ -2289,12 +2293,25 @@ export default class Threads extends View {
     } else if (Date.now() > a.until) this.splitAsk = null;
   }
 
-  // This pane's width, for its partner (resizeColumn).
+  // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that
+  // changes after the pane has settled (1.5 s from its first measure, past the split's own
+  // resize) is the owner's: kept for the next time the column opens (keptPinWidth).
   shareWidth() {
     const me = this.me();
     if (!me || this.paneW == null) return;
     const map = shared(WIDTH_KEY) ?? {};
     if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
+    if (!this.pinnedPane) return;
+    const now = Date.now();
+    this.firstSizeAt ??= now;
+    const kept = shared(PIN_W_KEY) ?? {};
+    if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
+    const px = Math.round(this.paneW) + PANE_FRAME;
+    if (kept.px !== px) setShared(PIN_W_KEY, { px });
+  }
+  keptPinWidth() {
+    const px = shared(PIN_W_KEY)?.px;
+    return Number.isFinite(px) && px > 0 ? px : null;
   }
 
   // - and =, in the column or in Threads while the column is open: the column 40 px
@@ -2313,6 +2330,7 @@ export default class Threads extends View {
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
+    setShared(PIN_W_KEY, { px: next.column });
     return true;
   }
 
@@ -4482,7 +4500,10 @@ export default class Threads extends View {
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     run("layout.resize", { id: main.pane, px });
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
-    if (col) run("layout.resize", { id: col.pane, px: pinColumn(px) ?? PIN_COL[0] });
+    if (col) {
+      setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
+      run("layout.resize", { id: col.pane, px: pinColumn(px, this.keptPinWidth()) ?? PIN_COL[0] });
+    }
     this.capAsked = null;
     this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
     return true;
