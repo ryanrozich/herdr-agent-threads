@@ -6119,7 +6119,9 @@ export default class Threads extends View {
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(5).items_center().text_size(12).min_w(0)
-        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
+        // On a narrow line the agent's name gives way (it shrinks and truncates); the time after
+        // it never does, so "Worked for" is never shown without its time.
+        .when(Boolean(name), (el) => el.child(div().min_w(0).max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
         .child(div().flex_none().text_color(bad ? t.blocked : t.dim).child(this.workText(turn)))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim))
         .child(div().flex_1())
