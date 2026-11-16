@@ -6158,6 +6158,57 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
   draw(v, cx);
 });
 
+test("subagents open while the turn runs: their rows show without a press, the person's close stays, and the finished turn folds them into one line", async () => {
+  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { v, s, cx } = await scripted([
+    { k: "p", o: "human", t: "Review the calendar code", ts: at(0) },
+    { k: "u", n: "Bash", id: "toolu_b" },
+    { k: "u", n: "Agent", id: "toolu_a" }, { k: "r", id: "toolu_a", a: "a1", m: null, st: "async_launched" },
+    { k: "u", n: "Agent", id: "toolu_c" }, { k: "r", id: "toolu_c", a: "a2", m: null, st: "async_launched" },
+  ]);
+  const a = "0:1";
+  const st = v.status;
+  v.status = () => "working";
+  v.rowsKey = null;
+  v.sel = null;
+  // The turn's own row is first: "wrow", or "working" once a click selects it.
+  const live = () => v.rows().filter((r) => r.turn && `${r.si}:${r.turn.n}` === a).map((r) => r.kind).slice(1);
+  // The command group stays one line; the subagents' rows show, then Working….
+  expect(live()).toEqual(["grp", "grp", "call", "call", "wspin"]);
+  const grp = () => v.rows().find((r) => r.kind === "grp" && r.step.agent);
+  expect(v.rowDetail(grp()).replace(/^grp#\d+ /, "")).toBe("Running 2 subagents · 2 working [open]");
+  // One more starts: its row joins the block.
+  apply(s, { k: "u", n: "Agent", id: "toolu_d" });
+  s.version++;
+  expect(live()).toEqual(["grp", "grp", "call", "call", "call", "wspin"]);
+  // The person closes it: it stays closed while the turn runs.
+  v.click(grp().key, cx);
+  expect(live()).toEqual(["grp", "grp", "wspin"]);
+  apply(s, { k: "n", a: "a1", st: "completed", ms: 3000 });
+  s.version++;
+  expect(live()).toEqual(["grp", "grp", "wspin"]);
+  // Opened again by the person, and closed by ←.
+  v.click(grp().key, cx);
+  expect(live()).toContain("call");
+  v.sel = a;
+  v.shallower(cx);
+  expect(live()).not.toContain("call");
+  // Done: a finished turn's work is closed, and opened, its subagent block is one line.
+  apply(s, { k: "t", t: "Started three reviews." });
+  apply(s, { k: "d", ms: 9000, ts: at(1) });
+  s.version++;
+  v.status = st;
+  v.rowsKey = null;
+  // The person's choices above would stay; forget them to see the finished turn's default.
+  v.groupTouched.clear();
+  v.groupOpen.clear();
+  v.sel = a;
+  if (!v.open.has(a)) v.action("open", cx);
+  v.click(`rhead:${a}`, cx);
+  expect(live().filter((k) => k === "call")).toEqual([]);
+  expect(v.rowDetail(grp())).not.toContain("[open]");
+});
+
 test("a running turn is open while it runs: its steps arrive in order, the group still running says so, Working… closes it; it closes when done unless the person chose", async () => {
   const { apply } = await import("../mods/agent-threads/turns.js");
   const { v, s } = await scripted([
