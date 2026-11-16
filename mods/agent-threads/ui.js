@@ -228,6 +228,52 @@ function packed(pieces, sep, max) {
   if (last) out.push(last);
   return out;
 }
+// A Markdown table: lines that start with "|", the second of them a rule (TABLE_RULE).
+const tableLine = (l) => l.trim().startsWith("|");
+// A Markdown block split into its tables and the text around them, in order:
+// [{ text, table }]. A table is its own part so the list can let it run wider than the
+// reading line (tableNeed). Empty parts are dropped; text keeps its own blank lines.
+export function splitTables(md) {
+  const lines = String(md ?? "").split("\n");
+  const out = [];
+  let buf = [];
+  const flush = (table) => {
+    const text = buf.join("\n").replace(/^\n+|\n+$/g, "");
+    if (text.trim()) out.push({ text, table });
+    buf = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (tableLine(lines[i]) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && tableLine(lines[i + 1])) {
+      flush(false);
+      let j = i;
+      while (j < lines.length && tableLine(lines[j])) buf.push(lines[j++]);
+      flush(true);
+      i = j - 1;
+    } else buf.push(lines[i]);
+  }
+  flush(false);
+  return out.length ? out : [{ text: String(md ?? ""), table: false }];
+}
+// A table's cells, row by row, without the rule line.
+export function tableCells(md) {
+  return String(md ?? "").split("\n").filter((l) => tableLine(l) && !TABLE_RULE.test(l))
+    .map((l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()));
+}
+// The width a table would like, in px: each column as wide as its longest cell, up to
+// TABLE_COL_CHARS characters (a longer cell wraps), plus Herdr's cell padding.
+export const TABLE_COL_CHARS = 40;
+export const TABLE_CELL_PAD = 26;
+export function tableNeed(md, charW) {
+  const rows = tableCells(md);
+  const cols = Math.max(0, ...rows.map((r) => r.length));
+  let w = 0;
+  for (let c = 0; c < cols; c++) {
+    const most = Math.max(1, ...rows.map((r) => Math.min(TABLE_COL_CHARS, (r[c] ?? "").length)));
+    w += most * charW + TABLE_CELL_PAD;
+  }
+  return Math.ceil(w);
+}
+
 export function mdChunks(md, max = MD_MAX) {
   const text = String(md ?? "");
   if (utf8Len(text) <= max) return [text];
