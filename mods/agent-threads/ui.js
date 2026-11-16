@@ -670,16 +670,17 @@ export const ROW = Object.freeze({
 // ---- reading type ----
 // Message and reply text is set for reading, a step above the pane's 11.5 to 12.5 px labels
 // (names, dates, the stats line and Show more keep those): settings textSize, 14 px by
-// default, 12 to 18. Its lines are 1.5 times the size apart (WCAG 2.2 SC 1.4.8 asks for at
-// least 1.5), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
+// default, 12 to 18. Its lines are LINE_RATIO times the size apart, 22 px at 14 (WCAG 2.2 SC 1.4.8
+// asks for at least 1.5; Orca's chat uses 1.54), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
 // more than 80; Bringhurst: 45 to 75, 66 the ideal). PROSE_EM is an average character of
 // English prose in the system sans, in em, so MEASURE * PROSE_EM em is the line's width.
 export const TEXT_SIZE = 14;
+export const LINE_RATIO = 1.57;
 export const TEXT_RANGE = Object.freeze([12, 18]);
 export const MEASURE = 70;
 export const PROSE_EM = 0.47;
 // settings width: how long a reading line may be, in characters. Comfortable is MEASURE
-// (the width the owner found right, 545 px of pane at 14 px), Wide is 90 (the top of
+// (the line the owner found right, 461 px at 14 px), Wide is 90 (the top of
 // Butterick's 45 to 90), Full has no limit. A bubble stops at Wide's line even in Full.
 export const WIDTHS = Object.freeze({ comfortable: MEASURE, wide: 90, full: Infinity });
 export const WIDTH_NAMES = Object.freeze(Object.keys(WIDTHS));
@@ -690,7 +691,7 @@ export function readType(size = TEXT_SIZE, chars = MEASURE) {
   const n = chars > 0 ? chars : MEASURE;
   const line = (c) => (Number.isFinite(c) ? Math.round(c * PROSE_EM * px) : Infinity);
   return Object.freeze({
-    size: px, small: px - 0.5, line: Math.round(px * 1.5),
+    size: px, small: px - 0.5, line: Math.round(px * LINE_RATIO),
     prompt: ROW.PROMPT_CHAR * k, agent: ROW.AGENT_CHAR * k, reply: ROW.REPLY_CHAR * k,
     measure: line(n), bubble: line(Math.min(n, WIDTHS.wide)),
   });
@@ -707,13 +708,20 @@ export function rowTextWidth(width, _agent = false, size = TEXT_SIZE, chars = ME
 // at most one reading line.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
 export function readWidth(width, size = TEXT_SIZE, chars = MEASURE) { return Math.min(replyWidth(width), readType(size, chars).measure); }
-// The width that fits a reading line: the line, 16 px each side, and 52 px more for the
-// bubbles' left gap and the header's buttons. 545 px at 14 px, the width the owner found
-// right; it scales with Text size (479 at 12, 676 at 18). Cmd-Shift-T opens Threads at
-// this width, and a wider pane centres a column this wide. Wide makes it 676 at 14 px; Full
-// has none (Infinity), so the column is the pane.
-export const FIT_EXTRA = 52;
-export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(size, chars).measure + 2 * ROW.PAD_X + FIT_EXTRA; }
+// Side gutters: GUTTER.PCT of the pane each side, never under MIN or over MAX px. The column
+// holds the text, at most one reading line, and the turns' rows pad ROW.PAD_X inside it, so
+// columnWidth is the text plus 2 * ROW.PAD_X; a pane wider than that centres it, which
+// splits the spare room evenly. Bubbles and replies end at the same edge.
+export const GUTTER = Object.freeze({ PCT: 0.08, MIN: 24, MAX: 56 });
+export function gutter(paneW) { return Math.max(GUTTER.MIN, Math.min(GUTTER.MAX, Math.round(paneW * GUTTER.PCT))); }
+export function columnWidth(paneW, size = TEXT_SIZE, chars = MEASURE) {
+  const text = Math.max(60, Math.min(readType(size, chars).measure, paneW - 2 * gutter(paneW)));
+  return Math.min(paneW, text + 2 * ROW.PAD_X);
+}
+// The width that fits a reading line: the line and GUTTER.MAX each side. 573 px at 14 px
+// (Wide 704); it scales with Text size (505 at 12, 704 at 18). Cmd-Shift-T opens Threads at
+// this width and "Keep the pane at this width" holds it there. Full has none (Infinity).
+export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(size, chars).measure + 2 * GUTTER.MAX; }
 
 // ---- pasted images over a message ----
 // Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
@@ -1591,7 +1599,14 @@ export function callText(name, input) {
 // the first.
 // The card beside a hovered tick: at most CARD_W wide, CARD_GAP px left of the tick, its prompt
 // clipped to two lines of about CARD_CHARS characters.
-export const RAIL = { W: 24, PAD: 6, MAX: 9, MIN: 3, DAY: 7, MARK: 7, SEL: 13, RIGHT: 5, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
+// The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
+// tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
+// the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
+export function railLook(side) {
+  const small = side < 40;
+  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14 };
+}
 export function railLayout(count, days, h) {
   const fit = (gaps) => {
     const room = Math.max(RAIL.MIN, h - 2 * RAIL.PAD - gaps * RAIL.DAY);
