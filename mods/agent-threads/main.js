@@ -6017,11 +6017,10 @@ export default class Threads extends View {
   }
 
   // The frame of a collapsed exchange: 16 px in from each side, its parts 6 px apart (ui.js
-  // rowHeight). The selected exchange has a 2 px bar on its left edge, in the accent colour
-  // while the pane has the keyboard, and no fill, so a text selection in it always shows.
-  rowFrame(t, sel, focusedPanel, _live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
+  // rowHeight). The selected exchange has no mark on the row itself (the owner found the bar
+  // on its left too distracting) and no fill, so a text selection in it always shows.
+  rowFrame(_t, _sel, _focusedPanel, _live, kids, top = ROW.PAD_T, bottom = ROW.PAD_B) {
     return v_flex().w_full().relative().px(ROW.PAD_X).pt(top).pb(bottom).gap(ROW.GAP).min_w(0)
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .children(kids);
   }
 
@@ -6319,7 +6318,7 @@ export default class Threads extends View {
   // A closed pin in the Pinned view (ui.js PIN_ROW): its digit in an accent badge, then
   // "#7 · 9:12 AM" with a dot at the right while the turn has a reply not read yet, two lines
   // of the prompt and one of the reply. Selected, it has the list's fill and bar.
-  pinRow(t, r, focusedPanel) {
+  pinRow(t, r, _focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const sh = r.shape;
@@ -6333,7 +6332,6 @@ export default class Threads extends View {
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
       .child(v_flex().flex_1().min_w(0).gap(P.GAP)
@@ -6358,10 +6356,10 @@ export default class Threads extends View {
   }
 
   // An outline row: "#12  8:43 AM  First line of the prompt  📌 2", one line at the reading
-  // size, with the selected turn's fill and bar. An agent's message leads with its sender's
+  // size, with the selected turn's fill. An agent's message leads with its sender's
   // icon and is muted; a stopped or failed turn leads with its icon; the running turn says
   // "now". Under 300 px the time gives way to the prompt.
-  lineItem(t, r, focusedPanel) {
+  lineItem(t, r, _focusedPanel) {
     const { turn, key } = r;
     const sel = this.sel === key;
     const rt = this.rt();
@@ -6370,7 +6368,7 @@ export default class Threads extends View {
     const icon = turn.agent ? svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(this.agentColor(t))
       : turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
     return h_flex().w_full().h(outlineHeight(this.prefs.textSize)).relative().px(ROW.PAD_X).gap(8).items_center().min_w(0)
-      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
+      .when(sel, (el) => el.bg(t.selected))
       .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().w(r.numW).text_size(11.5).font_family(this.mono()).text_color(sel ? t.muted : t.dim).child(`#${turn.n}`))
       .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
@@ -6574,11 +6572,11 @@ export default class Threads extends View {
 
   // The line a return to a pin puts over a place further down the turn: the prompt and the
   // start of the reply are above it. A click shows the turn from its head. It carries the
-  // turn's fill and bar when selected, like the turn's other slices.
+  // turn's fill when selected.
   resumeItem(t, r, size) {
     const sel = this.sel === r.key.slice("resume:".length);
     return v_flex().h(size).w_full().relative().justify_center().px(ROW.PAD_X)
-      .when(sel, (el) => el.bg(t.selected).child(div().absolute().left(0).top(0).bottom(0).w(2).bg(this.h.is_focused() ? t.accent : t.border)))
+      .when(sel, (el) => el.bg(t.selected))
       .child(h_flex().gap(6).items_center().text_size(12).text_color(t.accent).min_w(0)
         .child(svg(ICON("chevron-up")).size(12).flex_none())
         .child(div().min_w(0).truncate().child(`#${r.turn.n} starts above · show the prompt`)));
@@ -6586,16 +6584,11 @@ export default class Threads extends View {
 
   // One slice of an open turn: exactly its slot's height, 16 px in from each side like a
   // closed exchange. The first part has the 8 px top padding and the last the 10 px bottom
-  // padding. The selected turn's slices carry its fill and the bar on the left, so they
-  // read as one exchange with no seam.
+  // padding, with no seam between them.
   cardPart(t, r, size) {
-    const tkey = r.kind === "head" ? r.key : r.key.split(":").slice(1, 3).join(":");
-    const sel = this.sel === tkey;
-    const focusedPanel = this.h.is_focused();
     return v_flex().h(size).w_full().relative().overflow_hidden().px(ROW.PAD_X)
       .when(r.part === "top", (el) => el.pt(ROW.PAD_T))
       .when(r.part === "bottom", (el) => el.pb(ROW.PAD_B))
-      .when(sel, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(focusedPanel ? t.accent : t.border)))
       .child(this.partContent(t, r, false));
   }
 
