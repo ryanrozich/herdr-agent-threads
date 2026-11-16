@@ -1692,7 +1692,7 @@ export function callText(name, input) {
 // most WIN_PCT of the list's height and WIN_MAX px (60 ticks); it keeps the turns on screen
 // SPARE ticks from its ends, and the FADE ticks before a cut end fade. A pin or the running
 // turn past an end shows as a DOT px dot in a 9 px row there.
-export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36, WIN_PCT: 0.6, WIN_MAX: 540, SPARE: 3, FADE: [0.25, 0.5, 0.75], DOT: 4 };
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36, WIN_PCT: 0.6, WIN_MAX: 540, SPARE: 3, FADE: [0.25, 0.5, 0.75], DOT: 4, CARD_KEEP_MS: 200 };
 // The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
 // tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
 // the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
