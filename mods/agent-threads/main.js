@@ -7202,3 +7202,52 @@ export default class Threads extends View {
         .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
   }
 }
+
+// ---- trace build only (not for main): per-render timings by function, and load state, in shared("threads.trace").
+// Function names, row keys (session:turn numbers), times in ms and counts. No text from the session.
+const __ring = [];
+const __head = [];
+let __seq = 0, __r = null, __lastPub = 0;
+const __T0 = now();
+const __pub = (force) => { const t = now(); if (!force && t - __lastPub < 500) return; __lastPub = t; try { setShared("threads.trace", __head.concat(["--"], __ring).join("\n")); } catch {} };
+const __push = (s, force = false) => { const l = `${++__seq}\t${(now() - __T0).toFixed(0)}\t${s}`; if (__head.length < 150) __head.push(l); else { __ring.push(l); if (__ring.length > 150) __ring.shift(); } __pub(force); };
+const __acc = {};
+for (const n of ["rows", "buildRows", "buildStep", "reshapeStale", "shapeInView", "probeList", "probeDue", "probe", "railView", "railTicks", "body", "listItems", "syncOutEditors", "banners", "turnKeys", "bindingTip", "flushCode", "flushImages", "flushCalls", "publishCuts", "pinTray", "pillView", "stickyDay", "floatTop", "header", "footer"]) {
+  const f = Threads.prototype[n]; if (typeof f !== "function") continue;
+  Threads.prototype[n] = function (...a) { const t0 = now(); try { return f.apply(this, a); } finally { __acc[n] = (__acc[n] ?? 0) + (now() - t0); } };
+}
+const __reshape = Threads.prototype.reshape;
+Threads.prototype.reshape = function (turn, ...a) {
+  const t0 = now();
+  const mark = { n: turn?.n, p: turn?.prompt?.length ?? 0, t: (a[4] ?? "").length, end: -1, t0 };
+  const prev = __r?.shaping; if (__r) __r.shaping = mark;
+  try { return __reshape.call(this, turn, ...a); } finally {
+    const d = now() - t0; __acc.reshape = (__acc.reshape ?? 0) + d; __acc.reshapes = (__acc.reshapes ?? 0) + 1;
+    if (__r) { __r.shaping = prev; if (!__r.worst || d > __r.worst.d) __r.worst = { n: mark.n, p: mark.p, t: mark.t, d }; }
+  }
+};
+let __restarts = 0;
+const __restart = Threads.prototype.restart;
+Threads.prototype.restart = function (...a) { __restarts++; return __restart.apply(this, a); };
+const __state = (v) => { try { return __stateOf(v); } catch { return "st none"; } };
+const __stateOf = (v) => {
+  const s = v.current?.();
+  const job = v.rowJob ? `job ${v.rowJob.from?.si ?? 0}:${v.rowJob.from?.ti ?? 0}` : "nojob";
+  const top = v.topKey != null ? v.baseIndex?.get?.(v.topKey) ?? -1 : -1;
+  return `st loaded ${s?.loaded ? 1 : 0} read ${s ? Math.round((100 * (s.offset ?? 0)) / Math.max(1, s.size ?? 1)) : -1}% turns ${s?.turns?.length ?? 0} sess ${v.sessions?.length ?? 0} rows ${v.baseRows?.length ?? 0} ${job} stale ${v.staleRows?.length ?? 0} left ${v.shapeLeft ?? 0} probe ${v.probeLeft ?? 0} top ${top} bottom ${v.toBottom ? 1 : 0} follow ${v.follow ? 1 : 0} light ${v.light ? 1 : 0} reading ${v.reading ? 1 : 0} stalls ${v.readStalls ?? 0} restarts ${__restarts}`;
+};
+const __fmt = (min) => Object.entries(__acc).filter((e) => e[1] >= min).map(([k, v]) => `${k} ${k === "reshapes" ? v : v.toFixed(1)}`).join(", ");
+const __render = Threads.prototype.render;
+Threads.prototype.render = function (cx) {
+  if (__r && __r.end < 0) {
+    const sh = __r.shaping ? ` shaping #${__r.shaping.n} p${__r.shaping.p} t${__r.shaping.t} for ${(now() - __r.shaping.t0).toFixed(0)}` : "";
+    __push(`RENDER_CUT\tgap ${(now() - __r.t0).toFixed(0)}${sh}\t${__fmt(0.1)}\t${__r.st}`, true);
+  }
+  for (const k in __acc) delete __acc[k];
+  __r = { t0: now(), end: -1, st: __state(this) };
+  const out = __render.call(this, cx);
+  __r.end = now() - __r.t0;
+  const w = __r.worst && __r.worst.d >= 3 ? `\tworst #${__r.worst.n} p${__r.worst.p} t${__r.worst.t} ${__r.worst.d.toFixed(1)}` : "";
+  if (__r.end >= 15 || __seq < 5 || __seq % 50 === 0) __push(`render\t${__r.end.toFixed(1)}\t${__fmt(1)}${w}\t${__state(this)}`);
+  return out;
+};
