@@ -93,12 +93,13 @@ while :; do
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
       # type except user, assistant, attachment, system, custom-title and agent-name, every attachment but
-      # a queued prompt, and every tool result, before jq parses anything. A quote inside a
-      # string is escaped, so these patterns only match a line's own keys. extract.jq drops the
-      # same lines again if one gets through.
+      # a queued prompt, and every tool result but a subagent's launch result (it names an
+      # agentId), before jq parses anything. A quote inside a string is escaped, so these
+      # patterns only match a line's own keys. extract.jq drops the same lines again if one
+      # gets through. perl is as fast as grep here; awk took 60 times as long.
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^gst]|ag[^e]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
-        | LC_ALL=C grep -v -F '"type":"tool_result"' \
+        | LC_ALL=C perl -ne 'print if index($_, q("type":"tool_result")) < 0 || index($_, q("agentId":")) != -1' \
         | jq -Rc -f "$here/extract.jq" > "$out"
     fi
   else

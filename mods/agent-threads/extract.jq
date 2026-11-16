@@ -25,6 +25,12 @@
 #   title  /rename title                {t}
 #   an     the agent's name             {t}: an agent-name line, which Claude Code writes
 #                                       again through the session
+#   r  a subagent's launch result       {id: tool call id, a: agent id, m: model, st: status}
+#                                       (async_launched, or a status when it ran in the
+#                                       foreground); a teammate's start is left out
+#   n  a task notification              {a: task id (a subagent's agent id), st: status, ms,
+#                                       tok}, from a user line (which is also a "p") or a
+#                                       queued one
 # Thinking blocks, tool inputs, tool results and bookkeeping lines are dropped. Texts are
 # capped at 200 KB so one chunk's output stays well under exec's 8 MiB limit.
 
@@ -48,10 +54,26 @@ def imgs($l; $c):
 def tag($s; $name):
   ($s | capture("<" + $name + ">(?<v>[\\s\\S]*?)</" + $name + ">")? | .v) // "";
 
+# A subagent's launch result: its agent id and model, by the call's id. A teammate starts
+# with another result and reports by message, so it is not one.
+def launch($l; $c):
+  ($l.toolUseResult) as $r
+  | if ($r | type) == "object" and ($r.agentId | type) == "string" and ($r.status | type) == "string" and $r.status != "teammate_spawned"
+    then ([ $c[]? | select(type == "object" and .type == "tool_result") | .tool_use_id ] | first // null) as $id
+      | if ($id | type) == "string" then {k: "r", id: $id, a: ($r.agentId | .[0:80]), m: ($r.resolvedModel // null), st: ($r.status | .[0:40])} else empty end
+    else empty end;
+
+# A task notification's task id, status, and the usage block's time and tokens.
+def notice($t):
+  tag($t; "task-id") as $a | tag($t; "status") as $st
+  | if $a != "" and $st != "" then
+      {k: "n", a: ($a | .[0:80]), st: ($st | .[0:40]), ms: (tag($t; "duration_ms") | tonumber? // null), tok: (tag($t; "subagent_tokens") | tonumber? // null)}
+    else empty end;
+
 def user_event:
   . as $l
   | ($l.message.content) as $c
-  | if $l.toolUseResult != null then empty
+  | if $l.toolUseResult != null then launch($l; $c)
     elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then empty
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
@@ -78,29 +100,32 @@ def user_event:
             | if ($s | length) == 0 then empty
               else {k: "p", o: $o, ts: $l.timestamp, t: (if own($o) then ($s | cap) else null end)} end
           end
+        # A task notification, with or without an origin: its state, then the prompt that
+        # counts it.
+        elif ($t | startswith("<task-notification>")) then
+          notice($t), {k: "p", o: (if ($l.origin.kind? | type) == "string" then $l.origin.kind else "task-notification" end), ts: $l.timestamp, t: null}
         elif ($l.origin | type) == "object" then
           ($l.origin.kind // "human") as $o
           | {k: "p", o: $o, ts: $l.timestamp, t: (if own($o) then ($t | cap) else null end)} + imgs($l; $c)
             + (if $o == "peer" and ($l.origin.name | type) == "string" then {n: ($l.origin.name | .[0:80])} else {} end)
         elif ($t | test("^<(local-command-|bash-|command-message)")) then empty
-        elif ($t | startswith("<task-notification>")) then {k: "p", o: "task-notification", ts: $l.timestamp, t: null}
         elif ($t | startswith("Another Claude session")) then {k: "p", o: "peer", ts: $l.timestamp, t: ($t | cap)}
         elif ($t | length) == 0 and (imgs($l; $c) == {}) then empty
         else {k: "p", o: "human", ts: $l.timestamp, t: ($t | cap)} + imgs($l; $c)
         end
     end;
 
-# A prompt sent while Claude works. Task notifications stay out: their user line, when there
-# is one, counts them, and one in mid-turn changes no row.
+# A prompt sent while Claude works. A task notification is only its state (notice): its user
+# line, when there is one, counts it, and one in mid-turn changes no row.
 def queued_event:
   . as $l
   | $l.attachment as $a
   | ($a.origin.kind? // "human") as $o
   | ($a.prompt | text_of) as $t
   | {uuid: $l.uuid, imagePasteIds: ($a.imagePasteIds // null)} as $img
-  | if (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
+  | if ($t | startswith("<task-notification>")) then notice($t)
+    elif (own($o) | not) or ($a.commandMode // "prompt") != "prompt" then empty
     elif $a.isMeta == true and $o != "peer" then empty
-    elif ($t | startswith("<task-notification>")) then empty
     elif ($t | length) == 0 and (imgs($img; $a.prompt) == {}) then empty
     else {k: "p", o: $o, ts: ($l.timestamp // $a.timestamp), t: ($t | cap)} + imgs($img; $a.prompt)
       + (if $o == "peer" and ($a.origin.name | type) == "string" then {n: ($a.origin.name | .[0:80])} else {} end)

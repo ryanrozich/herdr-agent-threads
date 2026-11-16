@@ -5927,6 +5927,52 @@ test("subagents: the synthetic fixture's three Agent calls read as their own gro
   ]);
 });
 
+test("subagent states: the group line says how many work and failed, and each row has its mark, time and a model pill when it differs", async () => {
+  const { v, cx } = await pane(fixture("--subagents"));
+  const turn = v.current().turns.find((t) => t.prompt.startsWith("Review the calendar code"));
+  const a = `0:${turn.n}`;
+  v.sel = a;
+  if (!v.open.has(a)) v.action("open", cx);
+  v.click(`rhead:${a}`, cx);
+  const grp = v.rows().find((r) => r.kind === "grp" && r.key.startsWith(`gp:${a}:`) && r.step.agent);
+  // All back, one failed: past tense, the failed count, no working count.
+  expect(v.rowDetail(grp).replace(/^grp#\d+ /, "")).toBe("Ran 3 subagents · 1 failed [failed]");
+  // No "background updates" for the notifications that only settled them.
+  expect(turn.followups).toBe(0);
+  v.click(grp.key, cx);
+  const calls = v.rows().filter((r) => r.kind === "call" && r.key.startsWith(`cl:${a}:${grp.gi}:`));
+  expect(calls.map((r) => v.rowDetail(r).replace(/^call#\d+ /, "").replace(/ \[(open|closed)\]/, ""))).toEqual([
+    "Agent · 48s [completed]", "Agent · 1m 01s [completed]", "Agent (sonnet 5.5) · 12s [failed]",
+  ]);
+  const icons = (r) => { rec = []; v.partContent(theme, r); const c = rec; rec = null; return c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop()); };
+  expect(icons(calls[0])[0]).toBe("check.svg");
+  expect(icons(calls[2])[0]).toBe("circle-x.svg");
+  expect(icons(grp)[0]).toBe("circle-x.svg");
+});
+
+test("subagent states: still working after the reply, the line says so with the spinner; in an ended session they have no result", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Check the calendar code", ts: at(0) },
+    { k: "u", n: "Agent", id: "toolu_a" }, { k: "r", id: "toolu_a", a: "a1", m: null, st: "async_launched" },
+    { k: "u", n: "Agent", id: "toolu_b" }, { k: "r", id: "toolu_b", a: "a2", m: null, st: "async_launched" },
+    { k: "t", t: "Two reviews are running; I will report back." }, { k: "d", ms: 9000, ts: at(1) },
+    { k: "n", a: "a2", st: "stopped", ms: 4000 },
+  ]);
+  const a = "0:1";
+  v.sel = a;
+  v.action("open", cx);
+  v.click(`rhead:${a}`, cx);
+  const grp = () => v.rows().find((r) => r.kind === "grp" && r.step.agent);
+  expect(v.rowDetail(grp()).replace(/^grp#\d+ /, "")).toBe("Running 2 subagents · 1 working");
+  v.click(grp().key, cx);
+  const calls = () => v.rows().filter((r) => r.kind === "call" && r.key.startsWith(`cl:${a}:`));
+  expect(calls().map((r) => v.rowDetail(r).replace(/^call#\d+ /, "").replace(/ \[(open|closed)\]/, ""))).toEqual(["Agent [working]", "Agent · 4s [stopped]"]);
+  // The terminal has ended: the one with no notification has no result on record.
+  v.res.ended = true;
+  expect(v.rowDetail(grp()).replace(/^grp#\d+ /, "")).toBe("Ran 2 subagents [open]");
+  expect(v.rowDetail(calls()[0])).toContain("[no result]");
+});
+
 test("level 1 and 2: a click on an open turn's line opens it to its steps; a group opens to its calls; i opens the Turn card and nothing in the list; a stopped turn says how long it ran", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) },
