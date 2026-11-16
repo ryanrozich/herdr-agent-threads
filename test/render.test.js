@@ -511,25 +511,38 @@ test("a turn answered together with a later one: its line says so, and its note 
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
 
-test("the info icon on a turn not selected shows while the pointer is on its line", async () => {
+test("the info icon on a turn not selected shows when the pointer reaches it, by a hover style, not a handler", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const keys = v.turnKeys(v.rows());
   const [a, b] = keys.slice(-2);
   v.sel = b;
   expect(v.infoState(a)).toBe("hover");
-  v.lineHot = a;
-  expect(v.infoState(a)).toBe("lit");
-  rec = [];
-  v.infoIcon(theme, "lit");
-  const lit = rec;
   rec = [];
   v.infoIcon(theme, "hover");
   const clear = rec;
   rec = null;
-  expect(lit).toContainEqual(["text_color", theme.dim]);
-  expect(clear).not.toContainEqual(["text_color", theme.dim]);
+  // Its only colour is its hover style's (the stub runs a hover style on the element itself),
+  // and it registers no handler.
+  expect(clear.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
+  expect(clear.some((e) => /^on_/.test(String(e[0])))).toBe(false);
   // The selected turn keeps its own state.
   expect(v.infoState(b)).toBe("sel");
+});
+
+test("no list row registers an event handler: Herdr throws on one inside the item renderer", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  draw(v, cx);
+  // Open every turn, select one, and draw every row the list has.
+  for (const k of v.turnKeys(v.rows())) v.open.add(k);
+  v.sel = v.turnKeys(v.rows()).at(-2);
+  const rows = v.rows();
+  rec = [];
+  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start: 0, end: rows.length }, true, false);
+  const drawn = rec;
+  rec = null;
+  const handlers = drawn.filter((e) => /^on_/.test(String(e[0])));
+  expect(rows.length).toBeGreaterThan(10);
+  expect(handlers.map((e) => e[0])).toEqual([]);
 });
 
 test("an agent row's sender label leaves room for the time and #n at 240 px (R6)", async () => {
