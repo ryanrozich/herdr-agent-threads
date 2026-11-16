@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -787,24 +787,28 @@ test("fencedBlock: a reply block that is one fenced code block, with its languag
   expect(fencedBlock("The chips had a fixed width.")).toBe(null);
 });
 
-test("railLayout: one tick per turn 9 px apart, closing to 3 px, then one tick for several turns", () => {
-  // 20 turns in a 600 px rail: the full 9 px pitch, a 2 px mark, day gaps kept.
-  expect(railLayout(20, 2, 600)).toEqual({ per: 1, ticks: 20, pitch: 9, mark: 2, dayGap: true });
-  // 100 turns in 400 px: 388 px less two 7 px day gaps over 100 ticks closes to 3 px, a 1 px mark.
-  expect(railLayout(100, 2, 400)).toEqual({ per: 1, ticks: 100, pitch: 3, mark: 1, dayGap: true });
-  // 400 turns in 400 px: one tick for 4 turns, and no day gaps once ticks stand for groups.
-  const L = railLayout(400, 3, 400);
-  expect(L.per).toBe(4);
-  expect(L.ticks).toBe(100);
-  expect(L.pitch).toBe(3);
-  expect(L.dayGap).toBe(false);
-  expect(L.ticks * L.pitch).toBeLessThanOrEqual(400 - 2 * RAIL.PAD);
-  // Never under 3 px, never over 9, whatever the height.
-  for (const [n, h] of [[2, 2000], [5, 0], [1000, 100]]) {
-    const x = railLayout(n, 0, h);
-    expect(x.pitch).toBeGreaterThanOrEqual(RAIL.MIN);
-    expect(x.pitch).toBeLessThanOrEqual(RAIL.MAX);
-  }
+test("railWindow: 9 px a tick at every length, a window of 60% of the list and at most 540 px that follows the turns on screen", () => {
+  const none = () => false;
+  // A short session: every tick, no cut.
+  expect(railWindow(20, none, 900)).toEqual({ top: 0, count: 20, cut: false });
+  expect(railWindow(60, none, 900)).toEqual({ top: 0, count: 60, cut: false });
+  // Past 60 ticks at 900 px: a window of 58 (540 px less a 9 px row at each end for a dot).
+  // While the list follows the newest turn it rests at the end.
+  expect(railWindow(344, none, 900, 0, null, true)).toEqual({ top: 286, count: 58, cut: true });
+  // It keeps the turns on screen three ticks from its ends, moving only as far as needed.
+  expect(railWindow(344, none, 900, 0, [130, 134])).toEqual({ top: 80, count: 58, cut: true });
+  expect(railWindow(344, none, 900, 100, [130, 134]).top).toBe(100);
+  expect(railWindow(344, none, 900, 128, [130, 134]).top).toBe(127);
+  // 60% of a 400 px list is 240 px: 24 ticks.
+  expect(railWindow(344, none, 400, 0, [10, 12]).count).toBe(24);
+  // Day gaps take 7 px and hold at every length.
+  const days = (i) => i % 10 === 0;
+  const w = railWindow(344, days, 900, 0, null, true);
+  expect(w.top + w.count).toBe(344);
+  expect(w.count).toBeLessThan(58);
+  // The same number of ticks for 3,000 turns as for 344.
+  expect(railWindow(3000, none, 900, 0, null, true).count).toBe(58);
+  expect(RAIL.FADE).toEqual([0.25, 0.5, 0.75]);
 });
 
 test("toolKind: each agent's tool names fall into commands, reads, edits, searches, web, agent tasks and other", () => {
