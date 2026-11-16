@@ -192,20 +192,40 @@ export function wrappedLines(text, per) {
 // blocks of at most MD_MAX bytes, split at blank lines outside fenced code, else at lines,
 // else at words.
 export const MD_MAX = 3500;
+// UTF-8 bytes in a string, by UTF-16 unit: four for a surrogate pair, three for a lone
+// surrogate, as TextEncoder counts. A for...of walk over the string cost 36 ms for a 34 KB
+// reply in Herdr's QuickJS.
 function utf8Len(s) {
-  let n = 0;
-  for (const ch of s) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; }
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) continue;
+    if (c < 0x800) { n += 1; continue; }
+    if (c >= 0xd800 && c < 0xdc00) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d < 0xe000) { n += 2; i++; continue; }
+    }
+    n += 2;
+  }
   return n;
 }
 const FENCE = /^\s*(`{3,}|~{3,})/;
+// Pieces joined by sep into runs of at most max UTF-8 bytes (a longer piece alone). Each run's
+// length is kept as it grows: measuring the whole run again for every piece made a reply with
+// long tables cost more than Herdr's time for a draw.
 function packed(pieces, sep, max) {
   const out = [];
-  let acc = "";
+  const sepLen = utf8Len(sep);
+  let chunk = [];
+  let len = 0;
   for (const p of pieces) {
-    const next = acc ? `${acc}${sep}${p}` : p;
-    if (acc && utf8Len(next) > max) { out.push(acc); acc = p; } else acc = next;
+    const pLen = utf8Len(p);
+    if (!len) { chunk = [p]; len = pLen; }
+    else if (len + sepLen + pLen > max) { out.push(chunk.join(sep)); chunk = [p]; len = pLen; }
+    else { chunk.push(p); len += sepLen + pLen; }
   }
-  if (acc) out.push(acc);
+  const last = chunk.join(sep);
+  if (last) out.push(last);
   return out;
 }
 export function mdChunks(md, max = MD_MAX) {
@@ -221,10 +241,55 @@ export function mdChunks(md, max = MD_MAX) {
     cur.push(line);
   }
   if (cur.length) blocks.push(cur.join("\n"));
-  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b]
-    : packed(b.split("\n").flatMap((l) => (utf8Len(l) <= max ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", max))), "\n", max)));
+  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b] : splitBlock(b, max) ?? packed(wordsIn(b.split("\n"), max), "\n", max)));
   return packed(pieces, "\n\n", max);
 }
+
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const PIPE_ROW = /^\s*\|/;
+// A block too long for one chunk that holds a table or fenced code, split so that every chunk
+// still draws as one: each later piece of a table starts with its header and rule rows again,
+// and each piece of a fenced block is closed and opened again with the same fence line. The
+// lines before and after it split as other text. Null for a block with neither, or when the
+// repeated lines would take half the room.
+function splitBlock(b, max) {
+  const ls = b.split("\n");
+  let at = -1;
+  let end = -1;
+  let head;
+  let foot = "";
+  for (let i = 0; i < ls.length && at < 0; i++) {
+    if (PIPE_ROW.test(ls[i]) && i + 1 < ls.length && TABLE_RULE.test(ls[i + 1]) && ls[i + 1].includes("-")) {
+      at = i;
+      end = i + 2;
+      while (end < ls.length && PIPE_ROW.test(ls[end])) end++;
+      head = `${ls[i]}\n${ls[i + 1]}`;
+    }
+    const f = ls[i].match(FENCE);
+    if (f) {
+      let j = i + 1;
+      while (j < ls.length && ls[j].match(FENCE)?.[1][0] !== f[1][0]) j++;
+      if (j >= ls.length) return null;
+      at = i;
+      end = j + 1;
+      head = ls[i];
+      foot = `\n${ls[j]}`;
+    }
+  }
+  if (at < 0) return null;
+  const top = head.split("\n").length;
+  const body = ls.slice(at + top, foot ? end - 1 : end);
+  const extra = utf8Len(head) + 1 + utf8Len(foot);
+  if (extra * 2 > max || !body.length) return null;
+  const room = max - extra;
+  const pre = ls.slice(0, at);
+  const tail = ls.slice(end);
+  const rest = (part) => (part.length ? packed(wordsIn(part, max), "\n", max) : []);
+  const own = packed(wordsIn(body, room), "\n", room).map((part) => `${head}\n${part}${foot}`);
+  return [...rest(pre), ...own, ...(tail.length ? splitBlock(tail.join("\n"), max) ?? rest(tail) : [])];
+}
+// Lines, with any line longer than the room split at words.
+function wordsIn(ls, room) { return ls.flatMap((l) => (utf8Len(l) <= room ? [l] : packed(l.match(/\S+\s*/g) ?? [l], "", room))); }
 
 // Herdr's Markdown reads $…$ as inline math and shows the text between as written, so a
 // **bold** span between two prices keeps its asterisks. Dollar signs outside code are
@@ -670,16 +735,17 @@ export const ROW = Object.freeze({
 // ---- reading type ----
 // Message and reply text is set for reading, a step above the pane's 11.5 to 12.5 px labels
 // (names, dates, the stats line and Show more keep those): settings textSize, 14 px by
-// default, 12 to 18. Its lines are 1.5 times the size apart (WCAG 2.2 SC 1.4.8 asks for at
-// least 1.5), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
+// default, 12 to 18. Its lines are LINE_RATIO times the size apart, 22 px at 14 (WCAG 2.2 SC 1.4.8
+// asks for at least 1.5; Orca's chat uses 1.54), and a line holds about MEASURE characters however wide the pane (SC 1.4.8: no
 // more than 80; Bringhurst: 45 to 75, 66 the ideal). PROSE_EM is an average character of
 // English prose in the system sans, in em, so MEASURE * PROSE_EM em is the line's width.
 export const TEXT_SIZE = 14;
+export const LINE_RATIO = 1.57;
 export const TEXT_RANGE = Object.freeze([12, 18]);
 export const MEASURE = 70;
 export const PROSE_EM = 0.47;
 // settings width: how long a reading line may be, in characters. Comfortable is MEASURE
-// (the width the owner found right, 545 px of pane at 14 px), Wide is 90 (the top of
+// (the line the owner found right, 461 px at 14 px), Wide is 90 (the top of
 // Butterick's 45 to 90), Full has no limit. A bubble stops at Wide's line even in Full.
 export const WIDTHS = Object.freeze({ comfortable: MEASURE, wide: 90, full: Infinity });
 export const WIDTH_NAMES = Object.freeze(Object.keys(WIDTHS));
@@ -690,7 +756,7 @@ export function readType(size = TEXT_SIZE, chars = MEASURE) {
   const n = chars > 0 ? chars : MEASURE;
   const line = (c) => (Number.isFinite(c) ? Math.round(c * PROSE_EM * px) : Infinity);
   return Object.freeze({
-    size: px, small: px - 0.5, line: Math.round(px * 1.5),
+    size: px, small: px - 0.5, line: Math.round(px * LINE_RATIO),
     prompt: ROW.PROMPT_CHAR * k, agent: ROW.AGENT_CHAR * k, reply: ROW.REPLY_CHAR * k,
     measure: line(n), bubble: line(Math.min(n, WIDTHS.wide)),
   });
@@ -707,13 +773,20 @@ export function rowTextWidth(width, _agent = false, size = TEXT_SIZE, chars = ME
 // at most one reading line.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
 export function readWidth(width, size = TEXT_SIZE, chars = MEASURE) { return Math.min(replyWidth(width), readType(size, chars).measure); }
-// The width that fits a reading line: the line, 16 px each side, and 52 px more for the
-// bubbles' left gap and the header's buttons. 545 px at 14 px, the width the owner found
-// right; it scales with Text size (479 at 12, 676 at 18). Cmd-Shift-T opens Threads at
-// this width, and a wider pane centres a column this wide. Wide makes it 676 at 14 px; Full
-// has none (Infinity), so the column is the pane.
-export const FIT_EXTRA = 52;
-export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(size, chars).measure + 2 * ROW.PAD_X + FIT_EXTRA; }
+// Side gutters: GUTTER.PCT of the pane each side, never under MIN or over MAX px. The column
+// holds the text, at most one reading line, and the turns' rows pad ROW.PAD_X inside it, so
+// columnWidth is the text plus 2 * ROW.PAD_X; a pane wider than that centres it, which
+// splits the spare room evenly. Bubbles and replies end at the same edge.
+export const GUTTER = Object.freeze({ PCT: 0.08, MIN: 24, MAX: 56 });
+export function gutter(paneW) { return Math.max(GUTTER.MIN, Math.min(GUTTER.MAX, Math.round(paneW * GUTTER.PCT))); }
+export function columnWidth(paneW, size = TEXT_SIZE, chars = MEASURE) {
+  const text = Math.max(60, Math.min(readType(size, chars).measure, paneW - 2 * gutter(paneW)));
+  return Math.min(paneW, text + 2 * ROW.PAD_X);
+}
+// The width that fits a reading line: the line and GUTTER.MAX each side. 573 px at 14 px
+// (Wide 704); it scales with Text size (505 at 12, 704 at 18). Cmd-Shift-T opens Threads at
+// this width and "Keep the pane at this width" holds it there. Full has none (Infinity).
+export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(size, chars).measure + 2 * GUTTER.MAX; }
 
 // ---- pasted images over a message ----
 // Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
@@ -1464,10 +1537,13 @@ export function actsLayout({ quote = true, select = false } = {}) {
 // A tool call's kind, from its name as each agent records it (Claude Code's Bash and Read,
 // Codex's shell and apply_patch, OpenCode's bash and grep, Cursor's Shell, Antigravity's
 // run_command and view_file). MCP tools, plans and to-do lists are other.
+export const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 const TOOL_KINDS = [
   ["other", /^mcp__|todo|plan|skill/i],
   ["web", /web|fetch|brows|url/i],
-  ["agent", /^(task|agent|subagent|spawn|delegate)/i],
+  // A subagent: Claude Code's Task or Agent, OpenCode's task, Codex's spawn calls. Exact names,
+  // since Claude Code's task list tools (TaskCreate, TaskUpdate, TaskOutput) start with Task.
+  ["agent", AGENT_CALL],
   // "exe" for exec_command: the read-only test flags the bare program word in the mod's code.
   ["command", /^(bash|shell|exe|local_shell|run_command|run_terminal|terminal|command)/i],
   ["edit", /edit|write|patch|replace|create_file|notebook/i],
@@ -1482,13 +1558,13 @@ export function toolKind(name) { return TOOL_KINDS.find(([, re]) => re.test(Stri
 const PAST = {
   command: (n) => `ran ${n} command${n === 1 ? "" : "s"}`, read: (n) => `read ${n} file${n === 1 ? "" : "s"}`,
   edit: (n) => `edited ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searched ${n} time${n === 1 ? "" : "s"}`,
-  web: (n) => `searched the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handed off ${n} task${n === 1 ? "" : "s"}`,
+  web: (n) => `searched the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `ran ${n} subagent${n === 1 ? "" : "s"}`,
   other: (n) => `used ${n} other tool${n === 1 ? "" : "s"}`,
 };
 const NOW = {
   command: (n) => `running ${n} command${n === 1 ? "" : "s"}`, read: (n) => `reading ${n} file${n === 1 ? "" : "s"}`,
   edit: (n) => `editing ${n} file${n === 1 ? "" : "s"}`, search: (n) => `searching ${n} time${n === 1 ? "" : "s"}`,
-  web: (n) => `searching the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `handing off ${n} task${n === 1 ? "" : "s"}`,
+  web: (n) => `searching the web ${n} time${n === 1 ? "" : "s"}`, agent: (n) => `running ${n} subagent${n === 1 ? "" : "s"}`,
   other: (n) => `using ${n} other tool${n === 1 ? "" : "s"}`,
 };
 export function groupKinds(calls) {
@@ -1591,7 +1667,14 @@ export function callText(name, input) {
 // the first.
 // The card beside a hovered tick: at most CARD_W wide, CARD_GAP px left of the tick, its prompt
 // clipped to two lines of about CARD_CHARS characters.
-export const RAIL = { W: 24, PAD: 6, MAX: 9, MIN: 3, DAY: 7, MARK: 7, SEL: 13, RIGHT: 5, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
+// The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
+// tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
+// the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
+export function railLook(side) {
+  const small = side < 40;
+  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14 };
+}
 export function railLayout(count, days, h) {
   const fit = (gaps) => {
     const room = Math.max(RAIL.MIN, h - 2 * RAIL.PAD - gaps * RAIL.DAY);

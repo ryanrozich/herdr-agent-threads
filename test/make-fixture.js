@@ -10,6 +10,7 @@
 //                command line and its local_command system line
 //   --usage      add /usage command lines (with and without origin, both tag orders)
 //   --skill      add a custom command (/review-pr 12) that Claude answers
+//   --subagents  add a turn with three Agent calls (launch results only) between two commands
 //   --peer       add a peer prompt that lands mid-turn and shares one turn_duration
 //   --notify     add a task notification that lands before its turn's turn_duration
 //   --agents     add turns other senders gave: an hc report <hc from="t7 review">, a peer
@@ -66,6 +67,7 @@ const notifyFirst = bool("--notify");
 const langs = bool("--langs");
 const agents = bool("--agents");
 const commands = bool("--commands");
+const subagents = bool("--subagents");
 const latestFx = bool("--latest");
 const long = bool("--long");
 const quotes = bool("--quotes");
@@ -339,6 +341,20 @@ if (agents) {
   prompt("Explain what the <hc from=...> tag in the last report means");
   assistant([{ type: "text", text: "It marks a report another terminal sent through hc." }], { out: 20 });
   end(6000);
+}
+
+// Subagents (round 5, step 1): three Agent calls between two commands, each answered with
+// Claude Code's launch result (an agent id, no report yet), then the turn's reply.
+if (subagents) {
+  const p = prompt("Review the calendar code three ways");
+  tool("Bash", { command: "git diff --stat" }, "3 files changed", p);
+  for (const [d, kind] of [["Review range math", "general-purpose"], ["Check time zones", "general-purpose"], ["Audit the tests", "code-reviewer"]]) {
+    tool("Agent", { description: d, prompt: `${d} in src/calendar.`, subagent_type: kind, run_in_background: true },
+      `Async agent launched successfully. agentId: a${String(msg).padStart(16, "0")}`, p);
+  }
+  tool("Bash", { command: "bun test calendar" }, "12 pass", p);
+  assistant([{ type: "text", text: "All three reviews are back: the range math and time zones are right, and two tests need a fixed clock." }], { out: 60 });
+  end(132000);
 }
 
 if (commands) {
