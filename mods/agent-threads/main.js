@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -3820,7 +3820,11 @@ export default class Threads extends View {
     // would ("debugRailCard:-" closes it), since the test window has no pointer.
     if (this.debug && name.startsWith("debugRailCard:")) {
       const n = name.slice(14);
-      this.railHover = n === "-" ? null : this.railTicks().ticks.find((k) => k.turns.some((x) => String(x.turn.n) === n))?.key ?? null;
+      if (n === "-") { this.railHover = null; return true; }
+      this.railTicks();
+      const i = this.railMemo?.all.findIndex((k) => String(k.turns[0].turn.n) === n) ?? -1;
+      this.railHover = i >= 0 ? this.railMemo.all[i].key : null;
+      if (i >= 0 && !this.railTicks().ticks.some((k) => k.i === i)) { this.railReveal(i, { notify() {} }); }
       return true;
     }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
@@ -7085,54 +7089,92 @@ export default class Threads extends View {
   }
 
   // ---- the rail ----
-  // On the list's right edge, in place of the scrollbar, in the list's own view: one tick per
-  // turn (ui.js railLayout). Turns on screen are brighter, the selected turn's tick is longer,
-  // a pinned turn's takes the accent colour and the running turn's pulses. A search dims the
-  // turns it leaves out. A tick's tooltip is one line, and a click puts the turn's top at the
-  // top of the pane, as a pin return does.
+  // On the list's right edge (or left, railSide), in place of the scrollbar, in the list's
+  // own view: one tick per turn, 9 px apart at every length, in a window of at most 60% of
+  // the list's height and 540 px (ui.js railWindow) that follows the turns on screen. Turns
+  // on screen are brighter, the selected turn's tick is longer, a pinned turn's takes the
+  // accent colour and the running turn's pulses. A search dims the turns it leaves out. A
+  // click puts the turn's top at the top of the pane, as a pin return does.
   railShown() {
     return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1;
   }
-  // The ticks are grouped once per list of turns, pane height and set of pins, and only the
-  // selection and the turns on screen are worked out on each draw. Grouping every turn on
-  // every draw, with a pin lookup per turn, took about half of Herdr's time for a draw in a
-  // session of 2,000 turns ("This view could not be re-rendered", interrupted).
+  // The ticks are made once per list of turns and set of pins; on each draw only the window,
+  // the selection and the turns on screen are worked out, and only the ticks in the window
+  // are drawn (60 at most at any length). Making every tick on every draw, with a pin lookup
+  // per turn, took about half of Herdr's time for a draw in a session of 2,000 turns.
   railTicks() {
     const list = this.railTurns ?? [];
     this.pinnedAll();
     const pins = this.pinTurns ?? new Set();
-    const h = Math.max(0, this.listH);
     let base = this.railMemo;
-    if (!base || base.list !== list || base.h !== h || base.pins !== pins) {
-      let days = 0;
-      for (let i = 1; i < list.length; i++) if (list[i].day && list[i].day !== list[i - 1].day) days++;
-      const L = railLayout(list.length, days, h);
-      const groups = [];
+    if (!base || base.list !== list || base.pins !== pins) {
+      const all = [];
       const at = new Map();
-      for (let i = 0; i < list.length; i += L.per) {
-        const g = list.slice(i, i + L.per);
-        const first = g[0];
+      const pinAt = [];
+      let liveAt = -1;
+      list.forEach((x, i) => {
+        at.set(x.key, i);
         const prev = list[i - 1];
-        for (const x of g) at.set(x.key, groups.length);
-        groups.push({
-          key: first.key, last: g[g.length - 1], turns: g,
-          dayStart: L.dayGap && Boolean(prev && first.day && first.day !== prev.day),
-          pinned: g.some((x) => pins.has(x.turn)), live: g.some((x) => x.live), miss: g.every((x) => x.miss),
-        });
-      }
-      base = this.railMemo = { list, h, pins, L, groups, at };
+        const pinned = pins.has(x.turn);
+        if (pinned) pinAt.push(i);
+        if (x.live) liveAt = i;
+        all.push({ key: x.key, last: x, turns: [x], dayStart: Boolean(prev && x.day && x.day !== prev.day), pinned, live: Boolean(x.live), miss: Boolean(x.miss) });
+      });
+      base = this.railMemo = { list, pins, all, at, pinAt, liveAt };
     }
+    const { all } = base;
+    const n = all.length;
     // Which turns are on screen, from the range the list last drew.
     const rows = this.rowsMemo ?? [];
     const [a, b] = this.viewRange ?? [0, 0];
     const on = new Set();
-    for (let i = a; i < Math.min(b, rows.length); i++) { const k = rowTurnKey(rows[i]); const gi = k ? base.at.get(k) : undefined; if (gi != null) on.add(gi); }
+    let lo = Infinity;
+    let hi = -1;
+    for (let i = a; i < Math.min(b, rows.length); i++) {
+      const k = rowTurnKey(rows[i]);
+      const gi = k ? base.at.get(k) : undefined;
+      if (gi != null) { on.add(gi); lo = Math.min(lo, gi); hi = Math.max(hi, gi); }
+    }
+    // The window stays where it is while the pointer is on the rail (railOn), and after a dot
+    // brought a turn into it until the list moves (railHeld); otherwise it follows the list.
+    const range = `${a}:${b}`;
+    if (this.railHeld && this.railHeld !== range) this.railHeld = null;
+    const held = Boolean(this.railOn || this.railHeld);
+    const day = (i) => all[i].dayStart;
+    const W = railWindow(n, day, Math.max(0, this.listH), this.railTop ?? 0, held || hi < 0 ? null : [lo, hi], !held && Boolean(this.follow));
+    this.railTop = W.top;
+    const end = W.top + W.count;
     const sel = this.sel ? base.at.get(this.sel) : undefined;
-    return { L: base.L, ticks: base.groups.map((g, i) => ({ ...g, sel: i === sel, inView: on.has(i) })) };
+    const ticks = [];
+    for (let i = W.top; i < end; i++) {
+      const j = i - W.top;
+      let fade = 1;
+      if (W.top > 0 && j < RAIL.FADE.length) fade = RAIL.FADE[j];
+      if (end < n && end - 1 - i < RAIL.FADE.length) fade = Math.min(fade, RAIL.FADE[end - 1 - i]);
+      ticks.push({ ...all[i], i, sel: i === sel, inView: on.has(i), fade, dayStart: j > 0 && all[i].dayStart });
+    }
+    // A pin or the running turn past an end: the nearest one, the running turn first.
+    const past = (above) => {
+      const live = base.liveAt >= 0 && (above ? base.liveAt < W.top : base.liveAt >= end) ? base.liveAt : -1;
+      if (live >= 0) return { i: live, live: true };
+      let pin = -1;
+      for (const p of base.pinAt) if (above ? p < W.top && p > pin : p >= end && (pin < 0 || p < pin)) pin = p;
+      return pin >= 0 ? { i: pin, live: false } : null;
+    };
+    return { L: { pitch: RAIL.MAX, mark: 2 }, ticks, n, cut: W.cut, top: W.top, dotTop: W.cut ? past(true) : null, dotBottom: W.cut ? past(false) : null };
+  }
+  // A press on an end's dot: its turn comes into the window, and the list stays where it is.
+  railReveal(i, cx) {
+    const base = this.railMemo;
+    if (!base) return;
+    const W = railWindow(base.all.length, (k) => base.all[k].dayStart, Math.max(0, this.listH), this.railTop ?? 0, [i, i], false);
+    this.railTop = W.top;
+    const [a, b] = this.viewRange ?? [0, 0];
+    this.railHeld = `${a}:${b}`;
+    cx.notify();
   }
   railTip(k) {
     const a = k.turns[0].turn;
-    if (k.turns.length > 1) return `#${a.n} to #${k.last.turn.n}`;
     const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
     const cut = text.length > 60 ? `${text.slice(0, 59)}…` : text;
     return [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null, cut || null].filter(Boolean).join(" · ");
@@ -7141,7 +7183,7 @@ export default class Threads extends View {
   // ("Yesterday · 3:48 PM · #7", the running turn "Today · now · #149") and a pin when the turn
   // is pinned; the prompt on two lines; the reply on three, flattened (a table's cells joined
   // with a middle dot, code as "[code]"), or "Working · 0:48" for the running turn. A turn with
-  // no reply shows its prompt alone. A tick that stands for several turns names the range.
+  // no reply shows its prompt alone.
   // The reply is flattened once per hovered turn (railReplyMemo), from its first 600
   // characters.
   railCard(k) {
@@ -7149,7 +7191,6 @@ export default class Threads extends View {
     // The person's own words, as the Pinned rows show them: a quoted line is not the prompt.
     const text = pinPromptText(String(a.prompt ?? "")).replace(/\s+/g, " ").trim();
     const body = clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text;
-    if (k.turns.length > 1) return { day: null, rest: `#${a.n} to #${k.last.turn.n}`, pinned: false, body, reply: null };
     let reply = null;
     if (k.live) reply = `Working${a.ts ? ` · ${fmtClock(Date.now() - a.ts)}` : ""}`;
     else {
@@ -7167,7 +7208,7 @@ export default class Threads extends View {
   // side the ticks grow toward and the side the card opens on move.
   railLeft() { return this.prefs.railSide === "left"; }
   railView(t) {
-    const { L, ticks } = this.railTicks();
+    const { L, ticks, cut, dotTop, dotBottom } = this.railTicks();
     const busy = this.liveState(t).color;
     const look = railLook(this.side());
     const left = this.railLeft();
@@ -7180,31 +7221,47 @@ export default class Threads extends View {
       let y = 0;
       ticks.forEach((k, i) => { if (i && k.dayStart) y += RAIL.DAY; ys.push(y); y += L.pitch; });
     }
-    const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center();
+    // The pointer on the rail holds its window (railTicks).
+    const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center()
+      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } });
+    // A cut end has a 9 px row past it, holding a dot for a pin or the running turn that lies
+    // that way; a press brings it into the window.
+    const endRow = (id, d, above) => {
+      const row = div().id(id).flex_none().relative().w(look.lane).h(L.pitch);
+      if (!d) return row;
+      const turn = this.railMemo.all[d.i].turns[0].turn;
+      const dot = div().absolute().top((L.pitch - RAIL.DOT) / 2).size(RAIL.DOT).rounded(RAIL.DOT / 2).bg(d.live ? busy : t.accent)
+        .when(d.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
+      return row.cursor_pointer().tooltip(`${d.live ? "Working" : "Pinned"} #${turn.n} ${above ? "above" : "below"}`)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.railReveal(d.i, cx); })
+        .child(left ? dot.left(look.right + 3) : dot.right(look.right + 3));
+    };
     return (left ? rail.left(0).items_start() : rail.right(0).items_end())
+      .when(cut, (el) => el.child(endRow("th-rail-up", dotTop, true)))
       .children(ticks.map((k, i) => {
         const hot = i === hi;
         const color = k.live ? busy : k.pinned ? t.accent : k.sel || hot ? t.foreground : k.inView ? t.muted : t.dim;
-        const op = k.miss && !hot ? 0.16 : k.live || k.pinned || k.sel || k.inView || hot ? 1 : 0.5;
+        const op = (k.miss && !hot ? 0.16 : k.live || k.pinned || k.sel || k.inView || hot ? 1 : 0.5) * (hot ? 1 : k.fade);
         const own = k.sel ? look.sel : look.mark;
         const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
         // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
         // peak can be wider than the lane leaves beside the inset.
         const mark = div().absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().relative().w(look.lane).h(L.pitch)
+        const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
           .child(left ? mark.left(look.right) : mark.right(look.right));
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
-        return Popup.new(`th-tick-card-${i}`, tick.on_hover((on, cx) => {
+        return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
           if (on) this.railHover = k.key;
           else if (this.railHover === k.key) this.railHover = null;
           cx.notify();
         })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k)));
-      }));
+      }))
+      .when(cut, (el) => el.child(endRow("th-rail-down", dotBottom, false)));
   }
   railCardView(t, k) {
     const c = this.railCard(k);
