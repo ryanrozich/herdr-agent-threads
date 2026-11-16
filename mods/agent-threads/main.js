@@ -6129,11 +6129,11 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
-  // "hover" leaves the icon clear for the line's hover style to colour; "lit" is the same
-  // icon while the pointer is on its line, coloured here, since that style does not reach the
-  // icon inside the HoverCard's trigger.
+  // "hover" leaves the icon clear for the line's hover style to colour, and gives it a hover
+  // style of its own, since the line's does not reach the icon inside the HoverCard's trigger.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
+      .when(state === "hover", (el) => el.hover((s) => s.text_color(t.dim)))
       .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
   }
   // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
@@ -6154,22 +6154,17 @@ export default class Threads extends View {
       .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
   }
   // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
-  // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
-  // the pointer is on the line).
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (clear until the
+  // pointer is on the line, or on the icon itself).
   infoState(key) {
-    if (this.sel !== key) return this.lineHot === key ? "lit" : "hover";
+    if (this.sel !== key) return "hover";
     return this.detailsOpen ? "on" : "sel";
   }
-  // A line on a turn not selected shows its info icon while the pointer is on it.
-  // The pointer on that line is noted (lineHot), so its info icon shows (infoState "lit").
-  lineInfo(t, key, el) {
-    if (this.sel === key) return el;
-    return this.reveal(t, el.id(`rh:${key}`)).on_hover((on, cx) => {
-      const was = this.lineHot ?? null;
-      this.lineHot = on ? key : was === key ? null : was;
-      if (this.lineHot !== was) cx.notify();
-    });
-  }
+  // A line on a turn not selected reveals its info icon while the pointer is on it. The icon
+  // inside the HoverCard's trigger does not take the line's hover colour, so it also has a
+  // hover style of its own (infoIcon). A hover style is all a list row can carry: an
+  // on_hover handler there throws ("cannot be registered from a virtual list item").
+  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
   // The list item whose Worked for line the card opens beside: an open turn's line, or a
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
