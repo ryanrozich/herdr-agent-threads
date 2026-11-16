@@ -1513,6 +1513,8 @@ export function focusTarget(panes, terminal, myTab) {
 // anywhere in a box counts (a list item takes one click handler, so click() tells the
 // icons apart by the press position). STRIP_CHAR is an 11.5 px label's character.
 export const ICON_BOX = 22;
+// The info icon on a turn that is not selected: always shown, at this opacity.
+export const INFO_DIM = 0.5;
 export const STRIP_CHAR = 6.6;
 
 // The strip under an open turn's reply: copy and quote from the left, the first glyph on the

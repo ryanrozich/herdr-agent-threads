@@ -56,7 +56,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
@@ -3537,6 +3537,10 @@ export default class Threads extends View {
     }
     if (kind === "you") { this.full.has(id) ? this.full.delete(id) : this.full.add(id); this.sel = id; return cx.notify(); }
     // Collapse closes the turn and lands on its row, as Esc does.
+    if (kind === "nr") {
+      const turn = this.findTurn(id);
+      if (turn?.answeredIn || turn?.answeredBy) { this.sel = id; this.goToAnswer(turn); return cx.notify(); }
+    }
     if (kind === "fold") { if (this.open.has(id)) this.toggle(id, cx); else this.sel = id; return cx.notify(); }
     if (kind === "lt") {
       if (!this.findTurn(id)) return;
@@ -6129,12 +6133,11 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
-  // "hover" leaves the icon clear for the line's hover style to colour, and gives it a hover
-  // style of its own, since the line's does not reach the icon inside the HoverCard's trigger.
+  // Always shown: dim at half strength on the other turns ("hover"), dim on the selected
+  // turn, accent while its card shows. A hover style alone did not show on the owner's machine.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
-      .when(state === "hover", (el) => el.hover((s) => s.text_color(t.dim)))
-      .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
+      .child(svg(ICON("info")).size(12).text_color(state === "on" ? t.accent : t.dim).when(state === "hover", (e) => e.opacity(INFO_DIM)));
   }
   // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
   // corner under the icon's right edge, or its bottom right corner over it when the line is
@@ -6154,17 +6157,12 @@ export default class Threads extends View {
       .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
   }
   // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
-  // card shows this turn, "sel" on the selected turn, "hover" on the others (clear until the
-  // pointer is on the line, or on the icon itself).
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (drawn at half
+  // strength; resting the pointer on it shows the card).
   infoState(key) {
     if (this.sel !== key) return "hover";
     return this.detailsOpen ? "on" : "sel";
   }
-  // A line on a turn not selected reveals its info icon while the pointer is on it. The icon
-  // inside the HoverCard's trigger does not take the line's hover colour, so it also has a
-  // hover style of its own (infoIcon). A hover style is all a list row can carry: an
-  // on_hover handler there throws ("cannot be registered from a virtual list item").
-  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
   // The list item whose Worked for line the card opens beside: an open turn's line, or a
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
@@ -6348,7 +6346,7 @@ export default class Threads extends View {
         ], sh.bubbleW),
       ]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
-        : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
+        : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
@@ -6731,7 +6729,7 @@ export default class Threads extends View {
         // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
-        return this.lineInfo(t, tkey, v_flex().pt(ROW.GAP))
+        return v_flex().pt(ROW.GAP)
           .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.lineIcon(t, r.key, tkey, probe)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
@@ -6756,10 +6754,10 @@ export default class Threads extends View {
           .when(this.latestCut(r), (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show all")));
       }
       case "noreply":
+        // A link: the list's own item click (click, "nr") goes to the answer, since a list
+        // item can register no handler of its own.
         if ((turn.answeredIn || turn.answeredBy) && !probe) {
-          return div().id(`th-answer-${r.key}`).mt(6).text_size(12.5).text_color(t.accent).cursor_pointer()
-            .on_click((_e, cx) => { cx.stop_propagation(); this.goToAnswer(turn); cx.notify(); })
-            .child(this.noReplyText(turn));
+          return div().mt(6).text_size(12.5).text_color(t.accent).cursor_pointer().child(this.noReplyText(turn));
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
       case "cmd":

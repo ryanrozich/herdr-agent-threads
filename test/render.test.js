@@ -511,27 +511,37 @@ test("a turn answered together with a later one: its line says so, and its note 
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
 
-test("the info icon on a turn not selected shows when the pointer reaches it, by a hover style, not a handler", async () => {
+test("the info icon is always shown: dim at half strength on other turns, dim on the selected one, accent with its card open, and no handler", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const keys = v.turnKeys(v.rows());
   const [a, b] = keys.slice(-2);
   v.sel = b;
   expect(v.infoState(a)).toBe("hover");
-  rec = [];
-  v.infoIcon(theme, "hover");
-  const clear = rec;
-  rec = null;
-  // Its only colour is its hover style's (the stub runs a hover style on the element itself),
-  // and it registers no handler.
-  expect(clear.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
-  expect(clear.some((e) => /^on_/.test(String(e[0])))).toBe(false);
-  // The selected turn keeps its own state.
   expect(v.infoState(b)).toBe("sel");
+  const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
+  const other = drawn("hover");
+  expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
+  expect(other).toContainEqual(["opacity", 0.5]);
+  // No hover style and no handler: neither shows on the owner's machine inside a list row.
+  expect(other.some((e) => e[0] === "hover" || /^on_/.test(String(e[0])))).toBe(false);
+  const sel = drawn("sel");
+  expect(sel.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
+  expect(sel.some((e) => e[0] === "opacity")).toBe(false);
+  expect(drawn("on").filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.accent]]);
 });
 
 test("no list row registers an event handler: Herdr throws on one inside the item renderer", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   draw(v, cx);
+  // Two turns with no reply of their own: one answered together with a later turn, one cut
+  // off and answered in a later one. Their notes link to the answer.
+  const ks = v.turnKeys(v.rows());
+  const s = v.current();
+  const [t1, t2] = [v.findTurn(ks[1]), v.findTurn(ks[3])];
+  t1.after = []; t1.answeredBy = t1.n + 1; t1.shapeKey = null;
+  t2.after = []; t2.answeredIn = t2.n + 1; t2.errors = ["cut off"]; t2.shapeKey = null;
+  expect(s.turns.includes(t1)).toBe(true);
+  v.rowsKey = null;
   // Open every turn, select one, and draw every row the list has.
   for (const k of v.turnKeys(v.rows())) v.open.add(k);
   v.sel = v.turnKeys(v.rows()).at(-2);
@@ -542,7 +552,14 @@ test("no list row registers an event handler: Herdr throws on one inside the ite
   rec = null;
   const handlers = drawn.filter((e) => /^on_/.test(String(e[0])));
   expect(rows.length).toBeGreaterThan(10);
+  expect(rows.filter((r) => r.kind === "noreply").length).toBeGreaterThanOrEqual(2);
   expect(handlers.map((e) => e[0])).toEqual([]);
+  // The note's link works through the list's own item click.
+  v.click(`nr:${ks[1]}`, cx);
+  expect(v.sel).toBe(`${ks[1].split(":")[0]}:${t1.n + 1}`);
+  expect(v.scrollTo?.key).toBe(`md:${v.sel}:0`);
+  v.click(`nr:${ks[3]}`, cx);
+  expect(v.sel).toBe(`${ks[3].split(":")[0]}:${t2.n + 1}`);
 });
 
 test("an agent row's sender label leaves room for the time and #n at 240 px (R6)", async () => {
@@ -1818,15 +1835,14 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
   const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed turn: its row's line has the icon, dim when selected, revealed by the pointer
-  // otherwise (no colour of its own, inside a hover reveal).
+  // A closed turn: its row's line has the icon, dim when selected, at half strength otherwise.
   v.sel = key;
   expect(icons(rowOf())).toContain("info.svg");
   v.sel = null;
   let c = rowOf();
   expect(icons(c)).toContain("info.svg");
   let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
   // An open turn with its line closed: the icon too.
   v.open = new Set([key]);
   v.sel = key;
@@ -1836,9 +1852,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   v.sel = null;
   expect(v.infoState(key)).toBe("hover");
   c = partOfLine();
-  expect(c.some((e) => e[0] === "id" && e[1] === `rh:${key}`)).toBe(true);
   at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
   // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
