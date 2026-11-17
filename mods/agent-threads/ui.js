@@ -1173,7 +1173,18 @@ export function inlineTokens(line, { markdown = true } = {}) {
 // The URL a rule makes for one match, or null when it does not pass the checks: captures
 // are URL-encoded, {repo} and {owner} come from the terminal's git remote, and the result
 // must be an http(s) URL on the template's own host, under 2,000 characters.
+// A rule that uses {repo} or {owner} needs the session's repository; one whose address is
+// on github.com needs that repository on GitHub too, so a GitLab or Bitbucket origin never
+// gets a github.com link. ctx.host: the origin's host (null when not known).
+export const GITHUB_HOSTS = ["github.com", "www.github.com", "ssh.github.com"];
+export function repoFits(rule, ctx = {}) {
+  if (!rule.repo) return true;
+  if (!ctx.repo) return false;
+  return !(GITHUB_HOSTS.includes(rule.host) && ctx.host && !GITHUB_HOSTS.includes(String(ctx.host).toLowerCase()));
+}
+
 export function fillUrl(rule, m, ctx = {}) {
+  if (!repoFits(rule, ctx)) return null;
   let bad = false;
   const url = rule.url.replace(/\$(\d)|\{(repo|owner)\}/g, (_all, d, k) => {
     if (d != null) return encodeURIComponent(m[Number(d)] ?? "");
@@ -1200,7 +1211,7 @@ export const SLOW_REPLY = "too slow on a reply; skipped until the rule changes";
 const clock = () => globalThis.performance?.now?.() ?? Date.now();
 export function linkPieces(text, rules, ctx = {}, budget = { chars: 20000, matches: 25 }) {
   const s = String(text ?? "");
-  const usable = (rules ?? []).filter((r) => r.re && !r.slow && (!r.repo || ctx.repo));
+  const usable = (rules ?? []).filter((r) => r.re && !r.slow && repoFits(r, ctx));
   const scan = Math.max(0, Math.min(s.length, budget.chars));
   budget.chars -= s.length;
   if (!usable.length || !scan || budget.matches <= 0) return [{ t: s }];
@@ -1362,8 +1373,8 @@ export function linkify(md, rules, ctx = {}, { maxChars = 20000, maxMatches = 25
 // rule matches become [text](url). Reads at most max * 8 characters (32,000 by default);
 // when the prompt is longer, a last line says how many characters are not shown.
 // Returns { md, quotes, code, links, cut }: cut is the characters left out.
-export function promptMd(text, { links: rules = [], repo = null, owner = null, max = 4000 } = {}) {
-  const ctx = { repo, owner };
+export function promptMd(text, { links: rules = [], repo = null, owner = null, host = null, max = 4000 } = {}) {
+  const ctx = { repo, owner, host };
   const budget = { chars: 20000, matches: 25 };
   let nLinks = 0;
   const lineMd = (line) => {
