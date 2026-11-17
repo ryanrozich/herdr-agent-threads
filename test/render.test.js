@@ -100,7 +100,7 @@ const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
-    if (cmd === "open" || cmd === "xdg-open") { log.push([cmd, ...args]); return { code: 0, stdout: "", stderr: "" }; }
+    if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
@@ -4228,7 +4228,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   // A bubble stops at Wide's line even in Full.
   expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
   // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
-  // back to 573; Full leaves it alone and turns the switch off.
+  // back to 573; Full leaves it alone and the switch as it was.
   v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
   v.paneW = 573;
   log = [];
@@ -4242,7 +4242,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   v.paneW = 573;
   log = [];
   v.action("width:full", cx);
-  expect(v.prefs).toMatchObject({ width: "full", readingWidth: false });
+  expect(v.prefs).toMatchObject({ width: "full", readingWidth: true });
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   // Full has no reading width: no fit button, and the pane is never asked back.
   v.paneW = 1200;
@@ -4250,6 +4250,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
   // With the switch off, Wide changes the column only.
+  v.prefs = { ...v.prefs, readingWidth: false };
   log = [];
   v.action("width:wide", cx);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
@@ -7984,7 +7985,7 @@ test("General holds text, rail side, key hints, the two message colors, link rul
   v.setTab = "general";
   const g = cardOf(v);
   const gs = strsOf(g);
-  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "Your messages", "Agent messages", "Link rules", "Quote key", "Open", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
+  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "Your messages", "Agent messages", "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
   for (const s of ["Show agent messages", "Width", "Shorten long messages", "Always show time", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(s);
   // Headings in the keys sheet's style, US spelling; the rows lost their icons.
   expect(gs).not.toContain("Colours");
@@ -8062,40 +8063,52 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
 });
 const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
 
-test("the file: Copy path says Copied in its own place with no toast, and Open writes a missing file first, then opens it", async () => {
+test("the file: its path with Copy path, which says Copied in its own place with no toast; no Open, which the mod has no way to do", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.action("settings", cx);
   v.setTab = "general";
-  let c = cardOf(v);
+  const c = cardOf(v);
+  expect(idsIn(c)).not.toContain("th-set-open");
+  expect(strsOf(c)).not.toContain("Open");
+  log = [];
   onOf(c, "th-set-copy", "on_click")({}, cx);
   expect(cx.clip).toBe(v.prefsPath());
   expect(v.toast).toBe(null);
   expect(strsOf(cardOf(v))).toContain("Copied");
   cx.flush(2000);
   expect(strsOf(cardOf(v))).toContain("Copy path");
-  // No file yet: it is written with the current values, then opened (xdg-open on Linux).
-  // (The platform is set on the pane: another test file's mock of Herdr has no window().)
-  v.platform = () => "linux";
-  keepSettings = true;
-  log = [];
-  settingsWrites.length = 0;
-  v.prefsRaw = null;
-  cx.pending = [];
-  c = cardOf(v);
-  onOf(c, "th-set-open", "on_click")({}, cx);
-  await Promise.all(cx.pending);
-  expect(settingsWrites.length).toBe(1);
-  expect(log.filter((x) => x[0] === "xdg-open" || x[0] === "open")).toEqual([["xdg-open", v.prefsPath()]]);
-  try {
-    v.platform = () => "macos";
-    log = []; cx.pending = [];
-    v.action("openSettingsFile", cx);
-    await Promise.all(cx.pending);
-    expect(log.filter((x) => x[0] === "xdg-open" || x[0] === "open")).toEqual([["open", v.prefsPath()]]);
-    expect(settingsWrites.length).toBe(1); // the file is there now
-    v.platform = () => "windows";
-    expect(idsIn(cardOf(v))).not.toContain("th-set-open");
-  } finally { keepSettings = false; delete recordFiles[v.prefsPath()]; }
+  expect(log.filter((x) => x[0] === "open")).toEqual([]);
+  expect(v.action("openSettingsFile", cx)).toBe(false);
+});
+
+test("a field that leaves the screen gives the keyboard back: a tab, the Link rules row, Back, or a command, after typing in the quote key field", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.action("settings", cx);
+  const into = () => { v.setTab = "general"; v.setPage = "main"; v.quoteInput.handlers.focus({}, cx); expect(v.fieldFocused).toBe("quote"); };
+  const back = (how) => {
+    const f0 = focusCalls;
+    how();
+    expect(v.fieldFocused).toBe(null);
+    expect(focusCalls).toBe(f0 + 1);
+    // The panel's keys work again.
+    const sel = v.sel;
+    v.key(keyEv("k"), cx);
+    expect(v.settingsOpen).toBe(true);
+    return sel;
+  };
+  into();
+  back(() => onOf(cardOf(v), "th-set-tab-chat", "on_click")({}, cx));
+  expect(v.setTab).toBe("chat");
+  into();
+  back(() => onOf(cardOf(v), "th-set-links", "on_click")({}, cx));
+  expect(v.setPage).toBe("links");
+  into();
+  v.setPage = "links";
+  back(() => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-back"); c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx); });
+  into();
+  back(() => v.action("settingsTab:chat", cx));
+  into();
+  back(() => v.action("settingsPage:links", cx));
 });
 
 test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
@@ -8276,4 +8289,44 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   v.action("settings", cx);
   v.setPage = "links";
   expect(strsOf(cardOf(v))).toContain("No rules yet.");
+});
+
+test("Shift w through Full keeps Keep the pane at this width as it was, and Reset resizes the pane the way a width change does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  for (const want of ["wide", "full", "comfortable"]) { v.key(shiftW, cx); expect(v.prefs.width).toBe(want); expect(v.prefs.readingWidth).toBe(true); }
+  // Off by hand stays off through a cycle too.
+  v.prefs = { ...v.prefs, readingWidth: false };
+  for (let i = 0; i < 3; i++) v.key(shiftW, cx);
+  expect(v.prefs.readingWidth).toBe(false);
+  // Reset: back to Comfortable with the switch on, and the pane to its column.
+  v.prefs = { ...v.prefs, width: "wide", readingWidth: true };
+  v.paneW = 704;
+  log = [];
+  v.action("resetSettings", cx);
+  expect(v.prefs).toMatchObject({ width: "comfortable", readingWidth: true });
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
+  // At the defaults already, at that width: nothing to resize.
+  v.paneW = 573;
+  log = [];
+  v.action("resetSettings", cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+test("a rule that turned slow on a reply shows Not working with the reason on the page and in the count", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/$1", example: "Z-1" }] }));
+  v.links[0].slow = "too slow on a reply; skipped until the rule changes";
+  v.action("settings", cx);
+  v.setTab = "general";
+  expect(strsOf(cardOf(v))).toContain("1 not working");
+  v.setPage = "links";
+  const c = cardOf(v);
+  expect(strsOf(c)).toContain("Not working: too slow on a reply; skipped until the rule changes");
+  expect(strsOf(c)).not.toContain("Finds nothing in its example");
+  // A change to the file compiles it again, and it runs.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/a/$1", example: "Z-1" }] }));
+  expect(v.links[0].slow).toBe(undefined);
 });

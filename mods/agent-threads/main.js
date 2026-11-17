@@ -6,9 +6,8 @@
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
 // layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
 // between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
-// it runs besides its scripts are hc get, git remote get-url, open <the README URL> (the
-// Amp page's button) and open <its settings file> (xdg-open on Linux; the settings card's
-// Open; the scripts run jq, lsof, ps
+// it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
+// Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
 // is its own settings file (settings.js).
 //
@@ -1077,7 +1076,7 @@ export default class Threads extends View {
   // Closes the card. A field in it that had the keyboard hands it back to the pane.
   closeSettings() {
     this.settingsOpen = false;
-    if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
+    this.dropField();
   }
   setQuoteField(v) {
     this.quoteSetting = true;
@@ -1101,14 +1100,10 @@ export default class Threads extends View {
       this.changePrefs({}, cx, { quoteKey: v });
     }
   }
-  // Opens settings.json with the system's open command (xdg-open on Linux), after writing it
-  // with the current values when there is no file yet, so Open never fails on a fresh install.
-  openSettingsFile(cx) {
-    cx.spawn(async () => {
-      if (this.prefsRaw == null) await this.changePrefs({}, cx);
-      if (this.platform() === "linux") await exec("xdg-open", [this.prefsPath()]).catch(() => null);
-      else await exec("open", [this.prefsPath()]).catch(() => null);
-    });
+  // A field in the card that leaves the screen (another tab, another page, the card closed)
+  // hands the keyboard back to the pane, so the panel's keys work again.
+  dropField() {
+    if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
   }
 
   // ---- pins (pins.js has the file's format) ----
@@ -4191,10 +4186,9 @@ export default class Threads extends View {
       case "settings": return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; } return true;
       // Every control on the settings card back to its default; link rules and the quote key stay.
-      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.capAsked = null; return true;
-      case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.setTab = name.slice(12); this.setPage = "main"; return true;
-      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.setPage = name.slice(13); return true;
-      case "openSettingsFile": this.openSettingsFile(cx); return true;
+      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
+      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -5004,19 +4998,22 @@ export default class Threads extends View {
   }
   // Choosing a width: with "Keep the pane at this width" on, the pane grows or shrinks to the
   // new column and the terminal gives or takes the room. Full has no column, so it leaves the
-  // pane as it is and turns that switch off.
+  // pane as it is; the switch stays as the person set it, so Comfortable after Full resizes again.
   chooseWidth(w, cx) {
     if (!WIDTH_NAMES.includes(w)) return false;
-    const full = w === "full";
-    this.changePrefs(full ? { width: w, readingWidth: false } : { width: w }, cx);
+    this.changePrefs({ width: w }, cx);
+    this.sizeToWidth();
+    return true;
+  }
+  // The pane to the chosen width's column, when the switch keeps it there (Full has none).
+  sizeToWidth() {
     this.fitColumn();
     this.capAsked = null;
     const me = this.me();
-    if (!full && this.prefs.readingWidth && !this.pinnedPane && me && !me.zoomed && this.paneW != null) {
+    if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.pinnedPane && me && !me.zoomed && this.paneW != null) {
       const px = this.readingPx();
-      if (Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
+      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
     }
-    return true;
   }
   // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
   // names all three, the one now on in the full text color. A second press inside its two
@@ -5467,7 +5464,7 @@ export default class Threads extends View {
 
   cardHead(t, links, close) {
     return h_flex().flex_none().h(CARD_HEAD).px(12).gap(8).items_center().border_b(1).border_color(t.border)
-      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.setPage = "main"; cx.notify(); })))
+      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.setPage = "main"; cx.notify(); })))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
       .when(!links, (el) => el.child(this.kbd(t, ",")))
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close));
@@ -5481,7 +5478,7 @@ export default class Threads extends View {
           .border_b(2).border_color(on ? t.accent : CLEAR)
           .text_size(12.5).font_medium().text_color(on ? t.foreground : t.muted)
           .hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.setTab = k; cx.notify(); })
+          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setTab = k; cx.notify(); })
           .child(word);
       }));
   }
@@ -5596,7 +5593,7 @@ export default class Threads extends View {
   generalRows(t, w) {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
-    const bad = (this.linkList ?? []).filter((r) => r.why).length;
+    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
     const n = this.linkCount ?? 0;
     const qn = this.quoteNote();
     return [
@@ -5612,7 +5609,7 @@ export default class Threads extends View {
       group("Links and keys", [
         h_flex().id("th-set-links").min_h(24).gap(8).items_center().cursor_pointer().rounded(5)
           .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.setPage = "links"; cx.notify(); })
+          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
           .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child("Link rules"))
           .child(div().flex_none().text_size(11.5).text_color(t.dim).child(n ? String(n) : "None"))
           .when(bad > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.blocked).child(`${bad} not working`)))
@@ -5698,7 +5695,6 @@ export default class Threads extends View {
     return h_flex().gap(6).items_center()
       .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(this.mono()).text_color(t.dim)
         .tooltip(tilde(this.prefsPath())).child(tilde(this.prefsPath())))
-      .when(this.platform() !== "windows", (el) => el.child(this.button(t, "th-set-open", "Open", (_e, cx) => { this.openSettingsFile(cx); })))
       .child(this.button(t, "th-set-copy", copied ? "Copied" : w < 360 ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy"));
   }
 
@@ -5731,7 +5727,8 @@ export default class Threads extends View {
   }
 
   ruleRow(t, r) {
-    const bad = r.why != null;
+    const why = r.why ?? r.rule?.slow ?? null;
+    const bad = why != null;
     const ex = this.ruleExample(r);
     return v_flex().id(`th-rule-${r.n}`).p(8).gap(3).rounded(6).border_1()
       .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
@@ -5748,7 +5745,7 @@ export default class Threads extends View {
           : div().flex_none().whitespace_nowrap().child(p.t))))
         : div().text_size(12).text_color(t.dim).child(ex.line))
       .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(ex.under)))
-      .when(bad, (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(`Not working: ${r.why}`)));
+      .when(bad, (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(`Not working: ${why}`)));
   }
 
   // What a rule does to its own example, kept until the rules or the repository change:
@@ -5756,6 +5753,7 @@ export default class Threads extends View {
   ruleExample(r) {
     const k = `${this.linksVer}|${this.linkListVer ?? 0}|${this.remote.repo ?? ""}`;
     if (this.ruleExKey !== k) { this.ruleExKey = k; this.ruleExMemo = new Map(); }
+    if (r.rule?.slow) return r.example ? { pieces: [{ t: r.example }], under: null } : { line: "No example yet", under: r.pattern || null };
     const hit = this.ruleExMemo.get(r);
     if (hit) return hit;
     let out;
