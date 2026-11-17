@@ -1,0 +1,154 @@
+{
+ "schema_version": "ATIF-v1.7",
+ "session_id": "s",
+ "agent": {
+  "name": "antigravity-cli",
+  "version": "unknown",
+  "model_name": "Gemini 3.5 Flash",
+  "extra": {
+   "reader": "agent-threads"
+  }
+ },
+ "steps": [
+  {
+   "step_id": 1,
+   "timestamp": "2026-11-01T09:40:00.000Z",
+   "source": "user",
+   "message": "Why does the search box lose its text when I go back?",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793526000|145l8tb|1"
+   }
+  },
+  {
+   "step_id": 2,
+   "source": "agent",
+   "model_name": "Gemini 3.5 Flash",
+   "reasoning_effort": "Medium",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "s1.0",
+     "function_name": "grep_search",
+     "arguments": {}
+    },
+    {
+     "tool_call_id": "s3.0",
+     "function_name": "view_file",
+     "arguments": {}
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "s1.0",
+      "extra": {
+       "no_result": true
+      }
+     },
+     {
+      "source_call_id": "s3.0",
+      "extra": {
+       "no_result": true
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793526000|145l8tb|1"
+   }
+  },
+  {
+   "step_id": 3,
+   "source": "agent",
+   "model_name": "Gemini 3.5 Flash",
+   "reasoning_effort": "Medium",
+   "message": "The search page keeps its text in component state, which resets when the page mounts again on back.\n\nKeeping it in the URL (`?q=`) fixes both back and reload:\n\n- `SearchBox` reads `q` from the URL on mount\n- typing updates `q` with `replace`, so it adds no history entry\n\nShall I make the change?",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793526000|145l8tb|1",
+    "end_ts": "2026-11-01T09:40:12.000Z",
+    "duration_ms": 12000
+   },
+   "metrics": {
+    "prompt_tokens": 35000,
+    "completion_tokens": 320,
+    "cached_tokens": 18900,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 3
+    }
+   }
+  },
+  {
+   "step_id": 4,
+   "timestamp": "2026-11-01T09:41:00.000Z",
+   "source": "user",
+   "message": "Yes, do it",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793526060|15xsbj6|1"
+   }
+  },
+  {
+   "step_id": 5,
+   "source": "agent",
+   "model_name": "Gemini 3.5 Flash",
+   "reasoning_effort": "Medium",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "s7.0",
+     "function_name": "replace_file_content",
+     "arguments": {}
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "s7.0",
+      "extra": {
+       "no_result": true
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793526060|15xsbj6|1"
+   }
+  },
+  {
+   "step_id": 6,
+   "source": "agent",
+   "model_name": "Gemini 3.5 Flash",
+   "reasoning_effort": "Medium",
+   "message": "Done. `SearchBox` now keeps the query in `?q=`, and going back restores it.",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793526060|15xsbj6|1",
+    "end_ts": "2026-11-01T09:41:08.000Z",
+    "duration_ms": 8000
+   },
+   "metrics": {
+    "prompt_tokens": 26100,
+    "completion_tokens": 250,
+    "cached_tokens": 20700,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 2
+    }
+   }
+  }
+ ],
+ "notes": "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
+ "final_metrics": {
+  "total_prompt_tokens": 61100,
+  "total_completion_tokens": 570,
+  "total_cached_tokens": 39600,
+  "total_steps": 6
+ }
+}

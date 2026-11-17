@@ -1,0 +1,82 @@
+{
+ "schema_version": "ATIF-v1.7",
+ "session_id": "s",
+ "agent": {
+  "name": "cursor-cli",
+  "version": "unknown",
+  "extra": {
+   "reader": "agent-threads"
+  }
+ },
+ "steps": [
+  {
+   "step_id": 1,
+   "timestamp": "2026-11-01T09:30:00.000Z",
+   "source": "user",
+   "message": "Make the checkout button full width on phones",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793525400|wt04pr|1"
+   }
+  },
+  {
+   "step_id": 2,
+   "source": "agent",
+   "message": "Looking at the checkout styles.",
+   "tool_calls": [
+    {
+     "tool_call_id": "1793525400|wt04pr|1#2.1",
+     "function_name": "Read",
+     "arguments": {},
+     "extra": {
+      "id_from_reader": true
+     }
+    },
+    {
+     "tool_call_id": "1793525400|wt04pr|1#2.2",
+     "function_name": "Edit",
+     "arguments": {},
+     "extra": {
+      "id_from_reader": true
+     }
+    }
+   ],
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793525400|wt04pr|1"
+   }
+  },
+  {
+   "step_id": 3,
+   "source": "agent",
+   "message": "Added a phone rule to `checkout.module.css`:\n\n```css\n@media (max-width: 480px) {\n  .payButton { width: 100%; }\n}\n```\n\nThe button keeps its width on tablets and up.",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793525400|wt04pr|1"
+   }
+  },
+  {
+   "step_id": 4,
+   "timestamp": "2026-11-01T09:32:00.000Z",
+   "source": "user",
+   "message": "Does it still line up with the coupon field?",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793525520|1vsj2jg|1"
+   }
+  },
+  {
+   "step_id": 5,
+   "source": "agent",
+   "message": "Yes. Both now span the full width below 480 px, with the same 16 px side margin.",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793525520|1vsj2jg|1"
+   }
+  }
+ ],
+ "notes": "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
+ "final_metrics": {
+  "total_steps": 5
+ }
+}
