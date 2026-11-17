@@ -137,10 +137,10 @@ function assistant(blocks, { stop = "end_turn", out = 120, input = 6, read = 420
     uuid: uid(), timestamp: tick(i === 0 ? secs : 0) }));
   return id;
 }
-function tool(name, input, result, promptId, tur = null) {
+function tool(name, input, result, promptId, tur = null, err = false) {
   const id = `toolu_${String(msg).padStart(6, "0")}_${name}`;
   assistant([{ type: "thinking", thinking: "…" }, { type: "tool_use", id, name, input }], { stop: "tool_use", out: 60 });
-  push({ ...base(), type: "user", promptId, toolUseResult: tur ?? { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result }] }, uuid: uid(), timestamp: tick(2) });
+  push({ ...base(), type: "user", promptId, toolUseResult: tur ?? { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result, ...(err ? { is_error: true } : {}) }] }, uuid: uid(), timestamp: tick(2) });
   return id;
 }
 function command(name, args = "", { origin = false, order = "name" } = {}) {
@@ -212,7 +212,7 @@ noise();
 let p = prompt("Fix the flaky login test so it stops timing out in CI");
 assistant([{ type: "text", text: "Let me look at the test first." }], { stop: "tool_use" });
 tool("Read", { file_path: "tests/login.spec.ts" }, "…", p);
-tool("Bash", { command: "bun test login" }, "1 fail", p);
+tool("Bash", { command: "bun test login" }, "1 fail", p, null, true);
 tool("Edit", { file_path: "tests/login.spec.ts" }, "ok", p);
 assistant([{ type: "text", text: "The test raced the redirect. It now waits for the session response instead of sleeping 2 s:\n\n```ts\nawait page.waitForResponse(\n  (r) => r.url().endsWith('/session'),\n)\nexpect(await cookie()).toBeTruthy()\n```\n\nRan the suite 20 times locally with no failures. One unrelated warning remains in the auth mock." }], { out: 410, read: 61000, write: 2400, secs: 6 });
 end(102000);

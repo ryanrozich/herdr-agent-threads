@@ -83,12 +83,20 @@ while :; do
     elif [ "$harness" = codex ]; then
       # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
       # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
-      # ignores the same lines if one gets through.
+      # ignores the same lines if one gets through. A call's output line becomes a short "_x"
+      # line: its time, its call id, and whether the start or end of the output says it failed
+      # (an exit code other than 0, success false, the failure lines calls.sh reads).
       # A subagent's thread names it in session_meta, near the start of the first line.
       nick=$(head -c 4096 "$file" | LC_ALL=C grep -m 1 -o '"agent_nickname":"[^"\\]*"' | head -n 1 | cut -d '"' -f 4) || nick=""
       { [ -z "$nick" ] || jq -cn --arg t "$nick" '{k: "an", t: $t[0:80]}'
       head -c "$used" "$tmp" \
-        | LC_ALL=C grep -E -v '"type":"(session_meta|world_state|token_usage_record|reasoning|function_call_output|custom_tool_call_output|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"' \
+        | LC_ALL=C perl -ne 'if (/"type":"(?:function_call_output|custom_tool_call_output)"/) {
+              my ($id) = /"call_id":"([0-9A-Za-z_.:|-]{1,200})"/; next unless defined $id;
+              my ($ts) = /^\{"timestamp":"([^"\\]{1,40})"/;
+              my $w = substr($_, 0, 4096) . substr($_, -1024);
+              my $f = $w =~ /\\"exit_code\\":-?[1-9]|"exit_code":-?[1-9]|\\"success\\":false|(?:^|\\n|")(?:Script failed|aborted|Process exited with code [1-9]|Exit code: [1-9])|tool failed/ ? "true" : "false";
+              printf qq({"type":"_x","timestamp":%s,"payload":{"call_id":"%s","f":%s}}\n), defined $ts ? qq("$ts") : "null", $id, $f; next }
+            print unless /"type":"(?:session_meta|world_state|token_usage_record|reasoning|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/' \
         | jq -Rc -f "$here/extract-codex.jq"; } > "$out"
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
@@ -97,9 +105,14 @@ while :; do
       # agentId), before jq parses anything. A quote inside a string is escaped, so these
       # patterns only match a line's own keys. extract.jq drops the same lines again if one
       # gets through. perl is as fast as grep here; awk took 60 times as long.
+      # Every other result line becomes a short "_x" line: its time, its calls' ids and whether
+      # it says is_error, so a call's result time is known without jq parsing its text.
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^gst]|ag[^e]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
-        | LC_ALL=C perl -ne 'print if index($_, q("type":"tool_result")) < 0 || index($_, q("agentId":")) != -1' \
+        | LC_ALL=C perl -ne 'if (index($_, q("type":"tool_result")) < 0 || index($_, q("agentId":")) != -1) { print; next }
+            my @ids = /"tool_use_id":"([0-9A-Za-z_.:|-]{1,200})"/g; next unless @ids;
+            my ($ts) = /"timestamp":"(\d{4}-\d\d-\d\dT[0-9:.]{1,20}Z?)"/;
+            printf qq({"type":"_x","ts":%s,"ids":[%s],"err":%s}\n), defined $ts ? qq("$ts") : "null", join(",", map { qq("$_") } @ids), /"is_error":true/ ? "true" : "false"' \
         | jq -Rc -f "$here/extract.jq" > "$out"
     fi
   else

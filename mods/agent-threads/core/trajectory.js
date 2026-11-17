@@ -7,14 +7,15 @@
 // - The first group ("Message") holds the prompt as a user cell.
 // - Each later group ("Step N") is one stretch of the agent's work: the text it said, then a
 //   tool cell for each call it made after that text. The reply is the last group's message.
-// - A tool cell names its tool and its call id. Its result is joined by that id: { call },
-//   with no text, since results stay on disk and are read when shown (calls.sh).
+// - A tool cell names its tool, its call id and its input in up to 120 characters. Its result
+//   is joined by that id: { call, end, failed }, with no text, since results stay on disk and
+//   are read when shown (calls.sh). failed is null when the result does not say.
 // - A subagent call's cell carries its run: its agent id, its state, tokens and time, from
 //   the launch result and the notification the reader already keeps (s.agents). Its own
 //   steps live in its own transcript, so they are null here.
 // - Every cell has a start and an end: a time in ms where the transcript gives one, else
-//   null, never made up. The reader keeps no times on steps yet, so only the prompt's start
-//   and the reply's end are known.
+//   null, never made up. A text starts when its first line was written; a call starts when
+//   it was made and ends when its result was written.
 // - A background update after the reply is a context cell in a group of its own.
 // - A turn carries its stable id (ids.js) when the caller gives it; trajectories(s) does.
 
@@ -42,7 +43,7 @@ export function trajectory(s, turn, id = null) {
   };
   for (const st of turn.steps ?? []) {
     if (st.k === "text") {
-      open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: null, end: null });
+      open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
       continue;
     }
     if (st.k !== "group") continue;
@@ -50,7 +51,10 @@ export function trajectory(s, turn, id = null) {
     if (!step || step.cells.some((c) => c.kind === "tool")) open();
     st.calls.forEach((name, i) => {
       const id = st.ids?.[i] ?? null;
-      const cell = { kind: "tool", tool: name, call: id, result: id ? { call: id } : null, start: null, end: null };
+      const info = st.info?.[i] ?? null;
+      const end = at(info?.rt);
+      const cell = { kind: "tool", tool: name, call: id, input: info?.in ?? null,
+        result: id ? { call: id, end, failed: info?.f ?? null } : null, start: at(info?.at), end };
       if (st.agent) {
         const a = id ? s.agents?.get(id) : null;
         cell.subagent = { agent: a ? agentId(s, a) : null, state: a?.st ?? null, tokens: a?.tok ?? null, ms: a?.ms ?? null, steps: null };
@@ -61,7 +65,7 @@ export function trajectory(s, turn, id = null) {
     if (st.count > st.calls.length) step.cells.push({ kind: "more", count: st.count - st.calls.length, start: null, end: null });
   }
   const text = reply(turn);
-  if (text) open().cells.push({ kind: "message", text, start: null, end: at(turn.endTs) });
+  if (text) open().cells.push({ kind: "message", text, start: at(turn.afterAt), end: at(turn.endTs) });
   if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
   return {
     id,
