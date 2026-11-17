@@ -100,7 +100,9 @@ test("builds turns from a Codex rollout", () => {
 
   expect(reply(plain)).toBe("It rounds tax per line.");
   expect(plain.tools).toBe(1);
-  expect(plain.steps).toEqual([{ k: "text", t: "Looking at the cart test.", cut: false }, { k: "group", calls: ["exec_command"], count: 1 }]);
+  // A text step and a call carry their times; this call records no id, so no result joins it.
+  expect(plain.steps).toEqual([{ k: "text", t: "Looking at the cart test.", cut: false, at: Date.parse("2026-01-02T03:00:04.000Z") },
+    { k: "group", calls: ["exec_command"], count: 1, info: [{ in: null, at: Date.parse("2026-01-02T03:00:05.000Z"), rt: null, f: null }] }]);
   expect(plain.model).toBe("gpt-5.5-codex");
   expect(plain.effort).toBe("medium");
   expect(plain.durationMs).toBe(4000);
@@ -147,12 +149,17 @@ test("a half-written last line waits for the rest", () => {
   expect(s.turns.at(-1).prompt).toBe("One more");
 });
 
-test("no reasoning, tool input or image data reaches the events", () => {
+test("no reasoning or image data reaches the events, and a call's input only as its summary of up to 120 characters", () => {
   const file = rollout();
   appendFileSync(file, line("response_item", { type: "reasoning", content: [{ type: "text", text: "SECRET-THOUGHT" }] }));
-  appendFileSync(file, line("response_item", { type: "function_call", name: "exec_command", arguments: "SECRET-ARGS" }));
+  appendFileSync(file, line("response_item", { type: "function_call", name: "exec_command", call_id: "call_s1", arguments: JSON.stringify({ cmd: "ls cart", extra: "SECRET-ARGS" }) }));
+  appendFileSync(file, line("response_item", { type: "function_call", name: "exec_command", call_id: "call_s2", arguments: JSON.stringify({ cmd: `echo ${"a".repeat(300)} SECRET-TAIL` }) }));
+  appendFileSync(file, line("response_item", { type: "function_call_output", call_id: "call_s1", output: JSON.stringify({ output: "SECRET-OUTPUT", metadata: { exit_code: 0 } }) }));
   const out = execFileSync("sh", [extractor, file, "0", String(1 << 20), "codex"], { encoding: "utf8" });
   expect(out).not.toContain("SECRET");
+  const calls = parseChunk(out).events.filter((e) => e.k === "u" && e.id?.startsWith("call_s"));
+  expect(calls.map((e) => e.in)).toEqual(["ls cart", `echo ${"a".repeat(115)}`]);
+  expect(parseChunk(out).events.filter((e) => e.k === "x" && e.id === "call_s1").map((e) => e.f)).toEqual([false]);
   expect(out).not.toContain(PNG);
   expect(out).not.toContain("environment_context");
 });
@@ -256,8 +263,11 @@ test("level 3: Codex calls carry their call ids, and calls.sh reads each one's i
   ].join(""));
   const ev = execFileSync("sh", [extractor, file, "0", String(1 << 20), "codex"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(ev.filter((e) => e.k === "u").map((e) => `${e.n}:${e.id}`)).toEqual(["exec_command:call_e1", "shell:call_s1", "apply_patch:call_p1", "exec:call_x1", "shell:call_l1", "js:call_j1"]);
-  // No tool input reaches the events, only the ids.
-  expect(JSON.stringify(ev)).not.toContain("bun test cart");
+  // A call's input reaches the events only as its summary, the same calls.sh shows, and its
+  // result as a time and whether it failed: no output text.
+  const brief = Object.fromEntries(ev.filter((e) => e.k === "u").map((e) => [e.id, e.in]));
+  const failed = Object.fromEntries(ev.filter((e) => e.k === "x").map((e) => [e.id, e.f]));
+  expect(JSON.stringify(ev)).not.toContain("no such file");
   const s = newSession(ID, file);
   for (const e of ev) apply(s, e);
   expect(s.turns[0].steps[0].ids).toEqual(["call_e1", "call_s1", "call_p1", "call_x1", "call_l1", "call_j1"]);
@@ -265,6 +275,7 @@ test("level 3: Codex calls carry their call ids, and calls.sh reads each one's i
   const got = execFileSync("sh", [calls, file, "codex", ...s.turns[0].steps[0].ids], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const ins = Object.fromEntries(got.filter((x) => x.k === "in").map((x) => [x.id, x.in]));
   expect(ins).toEqual({ call_e1: "bun test cart", call_s1: "ls src", call_p1: "src/cart.ts", call_x1: 'rg "total" src', call_l1: "git status", call_j1: "Read the cart" });
+  expect(brief).toEqual(ins);
   const outs = Object.fromEntries(got.filter((x) => x.k === "out").map((x) => [x.id, x]));
   expect(Object.keys(outs).sort()).toEqual(["call_e1", "call_j1", "call_p1", "call_s1", "call_x1"]);
   expect(outs.call_s1).toMatchObject({ out: "cart.ts\ntax.ts", err: false, lines: 2 });
@@ -274,6 +285,7 @@ test("level 3: Codex calls carry their call ids, and calls.sh reads each one's i
   expect(outs.call_x1.err).toBe(true);
   expect(outs.call_j1.err).toBe(true);
   expect(outs.call_x1.out).toContain("rg: src: no such file");
+  expect(failed).toEqual(Object.fromEntries(Object.entries(outs).map(([id, x]) => [id, x.err])));
   expect(outs.call_e1.ts).toMatch(/^2026-01-02T03:/);
 });
 
