@@ -177,8 +177,10 @@ def assistant_event:
       ( select($l | ends_reply) | {k: "s", ts: $l.timestamp} )
     end;
 
+# A subagent's own transcript (subagents/agent-<id>.jsonl) marks every line isSidechain: the
+# ATIF export reads one with THREADS_SIDECHAIN=1. The panel never sets it.
 def event:
-  if .isSidechain == true then empty
+  if .isSidechain == true and ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
   elif .type == "_x" then short_results
   elif .type == "user" then user_event
   elif .type == "assistant" then assistant_event
