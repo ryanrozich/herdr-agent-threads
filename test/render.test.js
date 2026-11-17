@@ -3004,7 +3004,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   draw(v, cx);
 });
 
-test("v in a pane from 480 px splits the Pinned column beside it, about a third wide, kept apart from the main pane; v moves between them", async () => {
+test("v in a pane from 480 px splits the Pinned column beside it, 340 px at 700, kept apart from the main pane; v moves between them", async () => {
   const { v, cx } = await pinPane("--extra", "6");
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
@@ -3022,7 +3022,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   v.settleSplit();
   expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
-  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 252 }]]);
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 340 }]]);
   // The header's Pinned button says the column is open, and v or a click focuses it.
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
   log = [];
@@ -3289,7 +3289,7 @@ test("Pinned view: each closed pin is a compact row, its digit, number, time, tw
   expect(state.shared["threads.debug"].t4.detail.filter((x) => x.startsWith("pin#")).length).toBe(3);
 });
 
-test("Pinned column: five pins, one day apart, fit a 240 to 320 px column at a 1150 px window without scrolling", async () => {
+test("Pinned column: five pins, one day apart, fit a 240 to 400 px column at a 1150 px window without scrolling", async () => {
   const { v, cx } = await pinsShown(["--only", "5", "--gap", "86400"], [4, 2, 0, 3, 1]);
   for (const width of [240, 280, 320, 400]) {
     v.width = width;
@@ -3392,7 +3392,7 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   log = [];
   v.settleSplit();
-  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 320 }], ["pane.focus", { pane: "p2" }]]);
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 384 }], ["pane.focus", { pane: "p2" }]]);
   draw(v, cx);
   // The owner closes the column: the next pin does not open it again, and v still does.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
@@ -3406,6 +3406,39 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
 });
 
+test("the Pinned column keeps the width the owner leaves it at, not the split's own resize", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.width = 960;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  // In the column: its first sizes (Herdr's default, then the split's resize) are not kept.
+  const col = new Threads();
+  col.pinnedPane = true;
+  col.me = () => ({ pane: "p3" });
+  col.paneW = 250;
+  col.shareWidth();
+  col.paneW = 382;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toBeUndefined();
+  // Once settled, a drag to 298 px is kept as Herdr's size, the frame included.
+  col.firstSizeAt = Date.now() - 2000;
+  col.paneW = 298;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toEqual({ px: 300 });
+  // The next column opens at that width.
+  log = [];
+  v.key(keyEv("v"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 300 }]);
+  // The fit button's own resize of the column is not taken as the owner's choice.
+  state.shared["threads.pinWidth"] = { px: 300, hold: Date.now() + 1500 };
+  col.paneW = 340;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"].px).toBe(300);
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+});
+
 test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
   const first = await pinPane("--extra", "6");
   log = [];
@@ -3413,7 +3446,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   first.v.action("pin", first.cx); // at 380 px: no column
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   const file = await saved();
-  for (const [width, px] of [[479, null], [498, 240]]) {
+  for (const [width, px] of [[479, null], [498, 258]]) {
     log = [];
     recordFiles[PINS] = JSON.stringify(file);
     const w = new Threads();
@@ -3572,10 +3605,8 @@ test("the person's bubble is plain and an agent's plum by default, and the panel
   expect(you().style.fill).toBe("#e6e6e614");
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
-  v.action("youName:Sam", cx);
-  expect(v.prefs.youName).toBe("Sam");
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -3685,8 +3716,8 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   draw(v, cx);
 });
 
-test("names: yours over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+test("names: none over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
@@ -3721,33 +3752,12 @@ test("names: yours over your message, none over a reply (one agent), who replied
   expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
   v.current().agentName = null;
   expect(v.agentName(row.turn)).toBe("Agent");
-  // The settings panel's field: typing names you, Esc gives the keys back.
-  const field = v.nameInput;
-  expect(field.value()).toBe("You");
-  field.handlers.focus({}, cx);
-  expect(v.naming).toBe(true);
-  const pins = v.pinnedAll().length;
-  expect(v.key(keyEv("p"), cx)).toBeUndefined(); // the field types it; no pin
-  expect(v.pinnedAll().length).toBe(pins);
-  field.set_value("  Sam ");
-  field.handlers.change({}, cx);
-  expect(v.prefs.youName).toBe("Sam");
-  // Your name heads the turn in the image viewer; the list draws no name over your message.
-  expect(drawn(row)).not.toContain("Sam");
-  expect(v.key(keyEv("escape"), cx)).toBe(true);
-  expect(v.naming).toBe(false);
-  expect(field.value()).toBe("Sam");
-  // A cleared field shows the name in use again when it loses the keys.
-  field.handlers.focus({}, cx);
-  field.set_value("");
-  field.handlers.change({}, cx);
-  field.handlers.blur({}, cx);
-  expect(field.value()).toBe("Sam");
+  // There is no name setting: the settings panel has no name field, and the image viewer
+  // heads your turn "You".
   v.settingsOpen = true;
-  draw(v, cx);
-  v.action("resetSettings", cx);
-  expect(field.value()).toBe("You");
-  await new Promise((r) => setTimeout(r, 20));
+  rec = []; v.settingsPanel(theme); const panel = rec; rec = null;
+  expect(panel).not.toContainEqual(["child", "Your name"]);
+  expect(v.viewerTurn(row.turn).who).toBe("You");
 });
 
 
@@ -6701,4 +6711,60 @@ test("the rail's window: 9 px a tick in a long session, at most 540 px, followin
   expect(v.railTicks().top).toBe(top);
   v.railOn = false;
   expect(v.railTicks().top).toBe(0);
+});
+
+test("the wheel on the rail moves its window a tick at a time and stops there, so the list stays; the pointer on the card holds it too", async () => {
+  const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
+  v.listH = 900;
+  draw(v, cx);
+  const ks = keys();
+  v.sel = ks.at(-1);
+  v.follow = true;
+  const w = v.railTicks();
+  const top = w.top;
+  let stopped = 0;
+  const wcx = { ...cx, stop_propagation() { stopped++; }, notify() {} };
+  // The rail's handler is the one after its hover report.
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  const wheel = r.find((e) => e[0] === "on_scroll_wheel")[1];
+  // 9 px of upward travel is one tick earlier; 4 px is not yet one, and the rest carries.
+  wheel({ delta: { x: 0, y: 4 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  wheel({ delta: { x: 0, y: 5 }, touch_phase: "moved" }, wcx);
+  expect(v.railOn).toBe(true);
+  expect(v.railTicks().top).toBe(top - 1);
+  wheel({ delta: { x: 0, y: 27 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 4);
+  // A wheel that counts lines: a line a tick, down towards later turns.
+  wheel({ delta: { x: 0, y: -40 }, delta_lines: { x: 0, y: -2 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 2);
+  expect(stopped).toBe(4);
+  // The list did not move or stop following.
+  expect(v.follow).toBe(true);
+  // It never goes past either end.
+  wheel({ delta: { x: 0, y: 9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(0);
+  wheel({ delta: { x: 0, y: -9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  // Off the rail the window follows the list again.
+  v.railOn = false;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // The pointer on a card holds the window, and the tick's hover leaving does not close it.
+  v.railHover = ks[140];
+  v.railCardOn = true;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top - 10);
+  v.railCardOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // A short session has nothing to move: the wheel goes on to the list.
+  const short = await pinPane("--extra", "6");
+  short.v.listH = 600;
+  draw(short.v, short.cx);
+  short.v.railTicks();
+  stopped = 0;
+  short.v.railWheel({ delta: { x: 0, y: 30 }, touch_phase: "moved" }, wcx);
+  expect(stopped).toBe(0);
 });
