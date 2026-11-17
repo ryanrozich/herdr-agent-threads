@@ -6,10 +6,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, threadMatches } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, threadMatches } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const imager = join(root, "mods/agent-threads/image.sh");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 

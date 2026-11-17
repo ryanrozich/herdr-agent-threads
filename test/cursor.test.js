@@ -6,11 +6,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, stats, replaced } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, stats, replaced } from "../mods/agent-threads/core/turns.js";
 import { harnessOf, harnessOfFile, idOfFile, cursorFolder, cursorStore, cursorArgv, cursorRoots, HARNESS } from "../mods/agent-threads/harness.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const locator = join(root, "mods/agent-threads/locate.sh");
 const ID = "00000000-0000-4000-8000-00000000000c";
 

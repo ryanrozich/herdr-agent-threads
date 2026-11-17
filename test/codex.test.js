@@ -5,10 +5,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const imager = join(root, "mods/agent-threads/image.sh");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==";
 const ID = "00000000-0000-7000-8000-000000000001";
@@ -261,7 +261,7 @@ test("level 3: Codex calls carry their call ids, and calls.sh reads each one's i
   const s = newSession(ID, file);
   for (const e of ev) apply(s, e);
   expect(s.turns[0].steps[0].ids).toEqual(["call_e1", "call_s1", "call_p1", "call_x1", "call_l1", "call_j1"]);
-  const calls = join(root, "mods/agent-threads/calls.sh");
+  const calls = join(root, "mods/agent-threads/core/calls.sh");
   const got = execFileSync("sh", [calls, file, "codex", ...s.turns[0].steps[0].ids], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const ins = Object.fromEntries(got.filter((x) => x.k === "in").map((x) => [x.id, x.in]));
   expect(ins).toEqual({ call_e1: "bun test cart", call_s1: "ls src", call_p1: "src/cart.ts", call_x1: 'rg "total" src', call_l1: "git status", call_j1: "Read the cart" });
