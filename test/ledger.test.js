@@ -116,6 +116,17 @@ test("ledger: a subagent whose run failed is a failed call (cross, wash, count, 
   expect([fails, rows[0].fails, ledgerTotals(rows).fails]).toEqual([1, 1, [rows[2].key]]);
 });
 
+test("ledger: calls past what the reader keeps make the failure count a floor ('1+ failed'), and their row says so", () => {
+  const t = turn(10, [[["Bash", "bun test", 2000, 3000, true], ["Read", "a.ts", 3000, 3100]]]);
+  t.steps[0].count = 250;
+  const { rows } = ledgerTurn(S, t, 0);
+  expect(rows[0]).toMatchObject({ fails: 1, partial: true });
+  expect(headParts(rows[0], 600).failed).toBe("1+ failed");
+  expect(rows.find((r) => r.lk === "more")).toMatchObject({ text: "and 248 more calls", status: "results not kept" });
+  expect(ledgerTotals(rows).partial).toEqual([rows[0].key]);
+  expect(headParts({ ...rows[0], partial: false }, 600).failed).toBe("1 failed");
+});
+
 test("ledger heading: '10 calls · 1 failed · 48.2k tok · 9m 44s'; narrow, tokens go first, then calls", () => {
   const h = { calls: 10, fails: 1, tokens: 48200, total: 584000, timed: true, going: false, interrupted: false };
   expect(Object.values(headParts(h, 600)).filter(Boolean).join(" · ")).toBe("10 calls · 1 failed · 48.2k tok · 9m 44s");

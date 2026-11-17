@@ -194,6 +194,9 @@ export function ledgerTurn(s, turn, si, live = false) {
       calls += c.count;
       r.lk = "more";
       r.text = `and ${c.count} more call${c.count === 1 ? "" : "s"}`;
+      // The reader names and follows the first STEP_CALLS calls of a group; the rest are a
+      // count, so whether any of them failed is not known (the failure counts read "N+").
+      r.status = "results not kept";
     } else if (c.kind === "context") {
       r.lk = "context";
       r.text = firstLine(c.text) || " ";
@@ -211,6 +214,8 @@ export function ledgerTurn(s, turn, si, live = false) {
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
     tokens: stats(turn).tokens, total: tr.end != null && t0 != null ? tr.end - t0 : null,
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line,
+    // Calls past what the reader keeps: their failures are not known, so the count is a floor.
+    partial: cells.some((c) => c.kind === "more"),
   };
   return { rows: [head, ...rows], fails, calls };
 }
@@ -220,7 +225,7 @@ export function ledgerTurn(s, turn, si, live = false) {
 // count is its own part so the drawing can put the red dot before it.
 export function headParts(h, width = 600) {
   const calls = h.calls ? `${h.calls} call${h.calls === 1 ? "" : "s"}` : null;
-  const failed = h.fails ? `${h.fails} failed` : null;
+  const failed = h.fails ? `${h.fails}${h.partial ? "+" : ""} failed` : null;
   const tok = h.tokens ? `${fmtTokens(h.tokens)} tok` : null;
   const total = h.going ? "running" : h.interrupted ? "interrupted" : !h.timed ? "no times" : durText(h.total) || null;
   return {
@@ -234,9 +239,9 @@ export function headParts(h, width = 600) {
 // The session's numbers, worked out in one place for whatever draws them: turns, steps
 // (rows that are not headings), calls and failures. rows are the ledger's rows.
 export function ledgerTotals(rows) {
-  const t = { turns: 0, steps: 0, calls: 0, failed: 0, fails: [] };
+  const t = { turns: 0, steps: 0, calls: 0, failed: 0, fails: [], partial: [] };
   for (const r of rows) {
-    if (r.kind === "trh") { t.turns++; t.calls += r.calls; continue; }
+    if (r.kind === "trh") { t.turns++; t.calls += r.calls; if (r.partial) t.partial.push(r.key); continue; }
     if (r.kind !== "tr") continue;
     t.steps++;
     if (r.failed) { t.failed++; t.fails.push(r.key); }

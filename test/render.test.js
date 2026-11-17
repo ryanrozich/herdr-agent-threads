@@ -146,6 +146,7 @@ execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
+const { ledgerTotals: ledgerTotalsForTest } = await import("../mods/agent-threads/ledger.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -8142,6 +8143,9 @@ test("the Trajectory always shows agent messages, marked apart, and reads none o
   expect(agentKeys.every((k) => heads.includes(k))).toBe(true);
   const marked = ledgerOnly(w).filter((r) => r.kind === "tr" && r.lk === "agent").map((r) => `${r.si}:${r.turn.n}`);
   expect(new Set(marked)).toEqual(new Set(agentKeys));
+  // The about counts agree: nothing is hidden here.
+  expect(w.counts().hiddenAll).toBe(0);
+  expect(v.counts().hiddenAll).toBe(agentKeys.length);
   // The chat's setting changes nothing here: the rows are not even built again.
   const rows = w.rows();
   w.prefs = { ...w.prefs, agentTurns: true };
@@ -8235,15 +8239,21 @@ test("draw time: the Trajectory of a 2,000-turn session builds in slices and dra
     // A draw with nothing changed, one after a key, and the failures' walk over every row.
     const still = best(() => v.render(cx));
     const step = best(() => { v.action("prev", cx); v.render(cx); });
-    const fail = best(() => { v.sumsMemo = null; v.ledgerSums(); });
-    m = { build, done, again, still, step, fail };
+    // The failures as the build gathers them, against a walk over every row (how it was).
+    const fail = best(() => v.ledgerSums());
+    const failWalk = best(() => ledgerTotalsForTest(v.baseRows));
+    // The newest turn and whether a turn shows, against the walk over every row for the turn keys.
+    const keysWalk = best(() => v.turnKeys(v.rows()));
+    const lastKey = best(() => v.lastTurnKey(v.rows()));
+    const shows = best(() => v.showsTurn(v.sel));
+    m = { build, done, again, still, step, fail, failWalk, keysWalk, lastKey, shows };
   } finally { listWindow = null; }
   const rows = ledgerOnly(v);
   expect(m.done).toBe(true);
   expect(rows.filter((r) => r.kind === "trh").length).toBeGreaterThan(n);
   const sum = (x) => x.reduce((a, b) => a + b, 0).toFixed(1);
   const top = (x) => Math.max(...x).toFixed(1);
-  console.log(`ledger ${n} turns, ${rows.length} rows: build ${m.build.length} frames, ${sum(m.build)} ms, slowest ${top(m.build)} ms; rebuild ${m.again.length} frames, ${sum(m.again)} ms, slowest ${top(m.again)} ms; still draw ${m.still.toFixed(2)} ms, key ${m.step.toFixed(2)} ms, failures walk ${m.fail.toFixed(2)} ms`);
+  console.log(`ledger ${n} turns, ${rows.length} rows: build ${m.build.length} frames, ${sum(m.build)} ms, slowest ${top(m.build)} ms; rebuild ${m.again.length} frames, ${sum(m.again)} ms, slowest ${top(m.again)} ms; still draw ${m.still.toFixed(2)} ms, key ${m.step.toFixed(2)} ms, failures ${m.fail.toFixed(3)} ms (a walk ${m.failWalk.toFixed(2)} ms); newest turn ${m.lastKey.toFixed(3)} ms, shows a turn ${m.shows.toFixed(3)} ms (turn keys walk ${m.keysWalk.toFixed(2)} ms)`);
   // bun runs this faster than Herdr does, so these are generous.
   expect(Math.max(...m.build)).toBeLessThan(40);
   expect(m.still).toBeLessThan(10);

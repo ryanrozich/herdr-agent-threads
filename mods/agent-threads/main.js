@@ -1806,6 +1806,9 @@ export default class Threads extends View {
         stale: from ? (this.staleRows ?? []).filter((i) => i < from.row) : [],
         sizes: from ? this.baseSizes.slice(0, from.row) : [],
         index,
+        // The Trajectory's failures (and turns with calls whose outcome is not kept), gathered
+        // as the rows are built (ledgerSums), the kept rows' carried over.
+        sums: this.ledger() ? this.keptSums(from) : null,
       };
     }
     this.buildStale = job.stale;
@@ -1817,7 +1820,12 @@ export default class Threads extends View {
     const out = this.buildRows(status, job.from, b0 + this.buildMax() / (this.ledger() ? 2 : 1));
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
-    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.cachedH.get(i) ?? this.height(out[i])); job.index.set(out[i].key, i); }
+    for (let i = job.sizes.length; i < out.length; i++) {
+      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
+      job.index.set(out[i].key, i);
+      if (job.sums && out[i].failed) job.sums.fails.push(out[i].key);
+      if (job.sums && out[i].partial) job.sums.partial.push(out[i].key);
+    }
     for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
     const res = this.buildInfo.resume;
     if (res) {
@@ -1833,6 +1841,7 @@ export default class Threads extends View {
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
     this.baseIndex = job.index;
+    this.baseSums = job.sums ? { ...job.sums, rows: out, failed: job.sums.fails.length } : null;
     this.staleRows = job.stale;
     this.probeList();
     this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks,
@@ -2617,9 +2626,9 @@ export default class Threads extends View {
   // the status or the setting change. cur: the newest session; all: every session.
   counts() {
     const status = this.status();
-    const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}`).join(",")}|${status}|${this.prefs.agentTurns ? 1 : 0}`;
+    const agents = this.agentsShown();
+    const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}`).join(",")}|${status}|${agents ? 1 : 0}`;
     if (this.countsKey === key) return this.countsMemo;
-    const agents = Boolean(this.prefs.agentTurns);
     const c = { agentAll: 0, hiddenAll: 0, shownAll: 0, agentCur: 0, hiddenCur: 0, shownCur: 0 };
     const lastSi = this.sessions.length - 1;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
@@ -2641,7 +2650,8 @@ export default class Threads extends View {
   // Whether the selection is on a hidden agent turn.
   selHidden() {
     if (!this.sel || this.agentsShown() || !this.findTurn(this.sel)?.agent) return false;
-    return !this.turnKeys(this.baseRows).includes(this.sel);
+    const i = this.baseIndex?.get(this.sel);
+    return !(i != null && TURN_ROWS.has(this.baseRows[i]?.kind));
   }
 
   // The selected turn was hidden: select the nearest shown turn before it (or the first);
@@ -2936,6 +2946,17 @@ export default class Threads extends View {
   codePer() { return Math.max(8, Math.floor((this.prose() - 18) / (12 * MONO_EM))); }
 
   turnKeys(rows) { return rows.filter((r) => TURN_ROWS.has(r.kind)).map((r) => r.key); }
+  // Without a walk over every row (the Trajectory of a long session has tens of thousands):
+  // whether the list shows this turn, by its key, and the newest turn the list shows.
+  showsTurn(key) {
+    this.rows();
+    const i = this.baseIndex?.get(key);
+    return i != null && TURN_ROWS.has(this.baseRows[i]?.kind);
+  }
+  lastTurnKey(rows) {
+    for (let i = rows.length - 1; i >= 0; i--) if (TURN_ROWS.has(rows[i].kind)) return rows[i].key;
+    return null;
+  }
 
   // The hidden agent turn whose reply this turn shares: Claude answered the person's prompt
   // and an agent message that came while it was open in one reply, or a later one after this
@@ -3065,8 +3086,8 @@ export default class Threads extends View {
       // is already there.
       this.follow = true;
       this.unseen = false;
-      const keys = this.turnKeys(this.rows());
-      if (keys.length) this.sel = keys[keys.length - 1];
+      const last = this.lastTurnKey(this.rows());
+      if (last) this.sel = last;
     }
   }
 
@@ -3074,8 +3095,8 @@ export default class Threads extends View {
     this.follow = true;
     this.stickStep = null;
     this.unseen = false;
-    const keys = this.turnKeys(this.rows());
-    if ((select || !this.sel) && keys.length) this.sel = keys[keys.length - 1];
+    const last = this.lastTurnKey(this.rows());
+    if ((select || !this.sel) && last) this.sel = last;
     this.toBottom = true;
   }
 
@@ -3315,12 +3336,22 @@ export default class Threads extends View {
     return this.ledgerPick(rows[i].key, true, cx);
   }
 
-  // The session's numbers (ledger.js ledgerTotals), worked out again only when the rows were
-  // built again: the failures in order, and the counts.
+  // The session's failures in order ({ failed, fails, partial }: partial, the headings of turns
+  // with calls whose outcome is not kept). Gathered as the build makes the rows (buildStep),
+  // so a rebuild of a long session costs no walk over its rows; a walk (ledger.js
+  // ledgerTotals) only for rows the build did not gather them for.
   ledgerSums() {
     const rows = this.baseRows ?? [];
+    if (this.baseSums?.rows === rows) return this.baseSums;
     if (this.sumsMemo?.rows !== rows || this.sumsMemo.n !== rows.length) this.sumsMemo = { rows, n: rows.length, sums: ledgerTotals(rows) };
     return this.sumsMemo.sums;
+  }
+  // What a build keeps of the last one's sums: those of the rows before from.row.
+  keptSums(from) {
+    if (!from) return { fails: [], partial: [] };
+    const b = this.baseSums?.rows === this.baseRows ? this.baseSums : ledgerTotals(this.baseRows.slice(0, from.row));
+    const before = (k) => (this.baseIndex.get(k) ?? Infinity) < from.row;
+    return { fails: b.fails.filter(before), partial: b.partial.filter(before) };
   }
 
   // f and Shift f: the next or previous failed call from the selection. At the last one it
@@ -3404,9 +3435,10 @@ export default class Threads extends View {
   }
 
   // The top row's failures in the Trajectory: "2 failed", or "1 of 2" while on one, with the
-  // previous and next arrows (Shift f and f). None: nothing is drawn.
+  // previous and next arrows (Shift f and f). None: nothing is drawn. "3+ failed" when some
+  // turn has calls whose outcome is not kept.
   failStep(t) {
-    const fails = this.ledgerSums().fails;
+    const { fails, partial } = this.ledgerSums();
     if (!fails.length) return null;
     const k = fails.indexOf(this.ledgerSel());
     const arrow = (id, icon, tip, d) => div().id(id).flex_none().size(20).flex().items_center().justify_center().rounded(4).cursor_pointer()
@@ -3415,7 +3447,7 @@ export default class Threads extends View {
       .child(svg(ICON(icon)).size(13));
     return h_flex().id("th-fails").flex_none().h(24).pl(6).pr(1).gap(4).items_center().rounded(5).bg(t.background)
       .child(div().flex_none().size(6).rounded(3).bg(t.blocked))
-      .child(div().flex_none().text_size(12).text_color(t.muted).child(k >= 0 ? `${k + 1} of ${fails.length}` : `${fails.length} failed`))
+      .child(div().flex_none().text_size(12).text_color(t.muted).child(k >= 0 ? `${k + 1} of ${fails.length}${partial.length ? "+" : ""}` : `${fails.length}${partial.length ? "+" : ""} failed`))
       .child(arrow("th-fail-prev", "chevron-up", "Previous failure (Shift f)", -1))
       .child(arrow("th-fail-next", "chevron-down", "Next failure (f)", 1));
   }
@@ -3848,7 +3880,7 @@ export default class Threads extends View {
   copyReply(key, cx) {
     const turn = this.findTurn(key);
     // Only a turn the list shows: a selection left on a hidden turn copies nothing.
-    if (!turn || !this.turnKeys(this.rows()).includes(key)) return;
+    if (!turn || !this.showsTurn(key)) return;
     const text = this.replyText(turn);
     if (!text) return;
     this.copy(text, `reply:${key}`, `Reply copied · ${text.length.toLocaleString()} chars, Markdown`, cx);
@@ -3857,7 +3889,7 @@ export default class Threads extends View {
   // The copy icon under a message: the prompt as the person wrote it.
   copyPrompt(key, cx) {
     const turn = this.findTurn(key);
-    if (!turn || !this.turnKeys(this.rows()).includes(key)) return;
+    if (!turn || !this.showsTurn(key)) return;
     const text = turn.prompt ?? "";
     if (!text) return;
     this.copy(text, `prompt:${key}`, `Prompt copied · ${text.length.toLocaleString()} chars`, cx);
@@ -3872,7 +3904,7 @@ export default class Threads extends View {
   // nothing from this reply, the quote says how instead.
   quoteSource(key, cx) {
     const turn = key ? this.findTurn(key) : null;
-    const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
+    const reply = turn && this.showsTurn(key) ? this.replyText(turn) : "";
     if (!reply) return { refuse: "No reply to quote." };
     if (this.selecting === key) {
       // Herdr 0.1.16 and later: the editor's highlight itself, with no ⌘C first.
@@ -4433,17 +4465,23 @@ export default class Threads extends View {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
     } else if (name === "nextFail" || name === "prevFail") return false;
-    const keys = this.turnKeys(rows);
-    const at = keys.indexOf(this.sel);
+    // The turn keys, worked out only for a key that needs them (a walk over every row).
+    let keyList = null;
+    const turnList = () => (keyList ??= this.turnKeys(rows));
     const go = (i) => {
+      const keys = turnList();
       if (!keys.length) return;
       this.sel = keys[Math.max(0, Math.min(keys.length - 1, i))];
       this.follow = this.sel === keys[keys.length - 1];
       this.scrollTo = { key: this.sel, how: "center" };
     };
     switch (name) {
-      case "prev": go(at < 0 ? keys.length - 1 : at - 1); return true;
-      case "next": go(at < 0 ? keys.length - 1 : at + 1); return true;
+      case "prev": case "next": {
+        const keys = turnList();
+        const at = keys.indexOf(this.sel);
+        go(at < 0 ? keys.length - 1 : at + (name === "next" ? 1 : -1));
+        return true;
+      }
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
       case "open":
@@ -4452,20 +4490,20 @@ export default class Threads extends View {
         // A search: Enter also hands the keys to the list, so p and the digits work on a result.
         if (this.filtering && this.query) this.toList();
         // In the outline: the list, with this turn open at its head.
-        if (this.outlined()) return this.leaveOutline(this.sel && keys.includes(this.sel) ? this.sel : null);
+        if (this.outlined()) return this.leaveOutline(this.sel && this.showsTurn(this.sel) ? this.sel : null);
         // In the Pinned view a closed pin opens at its place, as its number key does.
         if (this.view === "pinned" && this.sel && !this.open.has(this.sel)) {
           const i = this.pinnedList().findIndex((p) => p.key === this.sel);
           if (i >= 0) return this.goPin(i, cx);
         }
-        if (this.sel && keys.includes(this.sel)) this.toggle(this.sel, cx);
+        if (this.sel && this.showsTurn(this.sel)) this.toggle(this.sel, cx);
         return true;
       case "jump": this.filtering = true; this.input.set_value("#"); this.query = "#"; this.input.focus(); return true;
       case "prevDay": case "nextDay": {
         const k = this.dayStep(name === "nextDay" ? 1 : -1);
         if (!k) return false;
         this.sel = k;
-        this.follow = k === keys[keys.length - 1];
+        this.follow = k === this.lastTurnKey(rows);
         this.scrollTo = { key: k, how: "top" };
         return true;
       }
@@ -5888,7 +5926,7 @@ export default class Threads extends View {
     const n = jumpTarget(this.query);
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
-    if (cx && this.findTurn(key)?.agent && !this.agentsShown() && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
+    if (cx && this.findTurn(key)?.agent && !this.agentsShown() && !this.showsTurn(key)) this.setAgents(true, cx);
     this.sel = key; this.follow = false; this.scrollTo = { key, how: "center", flash: true };
   }
 
