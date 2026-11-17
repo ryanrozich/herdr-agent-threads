@@ -7317,6 +7317,50 @@ test("Rail side lists Left on the left and Right on the right", async () => {
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
 });
 
+// The owner, 17 Nov: "it would be cool if the card went away when we click on it so it doesn't
+// obscure what we're pulling up."
+test("a click on a rail tick closes its card, and it stays closed while the pointer stays on that tick", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  const handlers = () => {
+    rec = []; v.railView(theme); const r = rec; rec = null;
+    const hovers = r.filter((e) => e[0] === "on_hover").map((e) => e[1]).slice(1);
+    const at = r.findIndex((e) => e[0] === "id" && e[1] === "th-tick-1");
+    const click = r.slice(at).find((e) => e[0] === "on_click")[1];
+    return { r, hovers, click };
+  };
+  let h = handlers();
+  h.hovers[1](true, cx);
+  expect(v.railHover).toBe(ks[1]);
+  h = handlers();
+  expect(h.r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
+  // The pointer moved onto the card and back: the card's hover is on.
+  v.railCardOn = true;
+  h.click({}, cx);
+  expect(v.railHover).toBe(null);
+  expect(v.railCardOn).toBe(false);
+  expect(v.sel).toBe(ks[1]);
+  expect(v.scrollTo).toMatchObject({ key: ks[1], flash: true });
+  h = handlers();
+  expect(h.r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(false);
+  // A hover report for the same tick while the pointer is still on it does not reopen it.
+  h.hovers[1](true, cx);
+  expect(v.railHover).toBe(null);
+  // Leaving the tick and coming back opens it as before; so does another tick.
+  cx.timers = [];
+  h.hovers[1](false, cx);
+  expect(cx.timers.length).toBe(0);
+  h.hovers[1](true, cx);
+  expect(v.railHover).toBe(ks[1]);
+  h.click({}, cx);
+  expect(v.railHover).toBe(null);
+  h.hovers[2](true, cx);
+  expect(v.railHover).toBe(ks[2]);
+});
+
 // The owner's idea, 16 Nov: after a jump, the pair landed on gets a soft tint that fades out
 // fast, to draw the eye to it. It changes no row and redraws nothing for the fade: Herdr runs
 // the opacity transition itself.
@@ -7352,13 +7396,15 @@ test("a jump flashes the turn it lands on: an accent tint on its items, faded by
   for (const l of ls) {
     expect(l.calls).toContainEqual(["bg", alphaForTest(theme.accent, 0.14)]);
     expect(l.calls).toContainEqual(["opacity", 1]);
-    expect(l.calls).toContainEqual(["transition", "opacity", { duration: 600, easing: "ease-out" }]);
+    expect(l.calls).toContainEqual(["transition", "opacity", { duration: 1200, easing: "ease-out" }]);
   }
   cx.flush(180);
   expect(v.flash.on).toBe(false);
   ls = layers();
   for (const l of ls) expect(l.calls).toContainEqual(["opacity", 0]);
   cx.flush(900);
+  expect(v.flash).not.toBe(null);
+  cx.flush(1500);
   expect(v.flash).toBe(null);
   expect(layers()).toHaveLength(0);
   // The rows were never rebuilt for it.
