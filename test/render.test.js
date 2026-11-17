@@ -3848,14 +3848,14 @@ test("the list measuring its first item does not move a pin's place", async () =
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });
 
-test("the person's bubble is plain and an agent's plum by default, and the panel's swatches change them", async () => {
+test("the person's bubble is plain and an agent's amber by default, and the panel's swatches change them", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   const you = () => v.bubbleLook(theme, false);
   const agent = () => v.bubbleLook(theme, true);
   // Plain: the theme's text colour at 8%, in the theme's own colours.
   expect(you().style).toMatchObject({ fill: "#e6e6e614", ink: theme.foreground, outline: false });
   expect(you().theme).toBe(theme);
-  expect(agent().style).toMatchObject({ fill: "#715C91", ink: "#FFFFFF", outline: false });
+  expect(agent().style).toMatchObject({ fill: "#87643A", ink: "#FFFFFF", outline: false });
   // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
   // a command and Show more read on it.
   v.action("bubbleColor:slate", cx);
@@ -3882,7 +3882,7 @@ test("the person's bubble is plain and an agent's plum by default, and the panel
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "amber", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });

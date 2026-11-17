@@ -25,7 +25,7 @@ test("valid rules compile, with their host and whether they use {repo}", () => {
   expect(notes).toEqual([]);
   expect(r.map((x) => [x.n, x.name, x.host, x.repo])).toEqual([[1, "Issue", "linear.app", false], [2, "PR", "github.com", true]]);
   expect(r[0].re.flags).toContain("g");
-  expect(parseLinks(undefined)).toEqual({ rules: [], notes: [] });
+  expect(parseLinks(undefined)).toEqual({ rules: [], notes: [], list: [] });
   expect(parseLinks({}).notes[0]).toContain("not a list");
 });
 
@@ -216,4 +216,30 @@ test("linkify: a pasted-image label is never a link, the text after it still is"
   expect(out.links).toBe(1);
   expect(out.md).toContain("[Image #2] [Image #3]");
   expect(out.md).toContain("[\\#45](https://github.com/acme/widgets/pull/45)");
+});
+
+test("a rule's optional keys: on, type, description and example, each with its fallback", () => {
+  const { list, rules, notes } = parseLinks([
+    { ...ISSUE, type: "ticket", description: "  Our   tracker  ", example: "Fixed in ACME-412." },
+    { ...PR, type: "pull-request", on: false },
+    { ...ISSUE, name: "", type: "weird", description: "x".repeat(120), example: 7 },
+    { pattern: "x(", url: "https://x.example/$1", type: "ticket" },
+  ]);
+  expect(list.map((x) => [x.n, x.name, x.type, x.on, Boolean(x.rule), x.why])).toEqual([
+    [1, "Issue", "ticket", true, true, null],
+    [2, "PR", "pull-request", false, true, null],
+    [3, "Rule 3", "custom", true, true, null],
+    [4, "Rule 4", "ticket", true, false, "pattern not valid"],
+  ]);
+  expect(list[0].description).toBe("Our tracker");
+  expect(list[0].example).toBe("Fixed in ACME-412.");
+  expect(list[2].description.length).toBe(80);
+  expect(list[2].example).toBe("");
+  // A rule switched off links nothing and is not a fault: no note.
+  expect(rules.map((r) => r.n)).toEqual([1, 3]);
+  expect(notes).toEqual(["Link rule 4: pattern not valid"]);
+  expect(linkify("ACME-1 and #2", rules, ctx).links).toBe(1);
+  // An older file's rule has none of the four.
+  expect(parseLinks([ISSUE]).list[0]).toMatchObject({ type: "custom", description: "", example: "", on: true });
+  expect(parseExtras(JSON.stringify({ links: [ISSUE] })).linkList.length).toBe(1);
 });
