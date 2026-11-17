@@ -848,7 +848,7 @@ export default class Threads extends View {
   }
 
   // One row or card part as text for the debug report: "turn#3 p2/r3 h89 cmd:/review-pr",
-  // "turn#5 agent:hc:t7 review", "you#3 YOU · COMMAND", "stats#3 … | cache read …".
+  // "turn#5 agent:hc:t7 review", "you#3 USER · COMMAND", "stats#3 … | cache read …".
   rowDetail(r) {
     const n = r.turn ? `#${r.turn.n}` : "";
     const who = r.turn?.agent ? ` agent:${r.turn.sender.kind}:${r.turn.sender.name ?? ""} lw${this.labelRoom(r.turn, rowTextWidth(this.width, true, this.prefs.textSize, this.chars()))}` : "";
@@ -3689,7 +3689,7 @@ export default class Threads extends View {
         else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
         else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
         else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
-        else if (q.source === "selection") text = `Quoted your selection into ${t4}`;
+        else if (q.source === "selection") text = `Quoted the selection into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
         // Claude Code folds a long paste, and a second paste opens it.
         if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";
@@ -4357,7 +4357,7 @@ export default class Threads extends View {
     const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
     const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
     return {
-      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "You",
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "User",
       when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
       running: !turn.done, asOf: fmtTime(Date.now()),
       cmd: commandParts(turn)?.name ?? null,
@@ -5518,7 +5518,7 @@ export default class Threads extends View {
         .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
       .child(v_flex().flex_1().min_w(0).gap(2).items_end()
         .child(line("", t.dim))
-        .child(bubble(false, words("A message from you", "From you")))
+        .child(bubble(false, words("A message from the user", "From the user")))
         .child(line(fmtTime(PREVIEW_AT), t.dim)))
       .child(ticks);
   }
@@ -5603,7 +5603,7 @@ export default class Threads extends View {
         sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
       ]),
       group("Colors", [
-        this.colorRow(t, "bubbleColor", "Your messages"),
+        this.colorRow(t, "bubbleColor", "User messages"),
         this.colorRow(t, "agentBubbleColor", "Agent messages"),
       ]),
       group("Links and keys", [
@@ -5717,7 +5717,7 @@ export default class Threads extends View {
     const other = (this.prefsNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
-      group(`Your rules${list.length ? ` · ${list.length}` : ""}`, list.length
+      group(`Rules${list.length ? ` · ${list.length}` : ""}`, list.length
         ? list.map((r) => this.ruleRow(t, r))
         : [note("No rules yet.")]),
       ...other.map((n) => note(n, t.blocked)),
@@ -5924,8 +5924,8 @@ export default class Threads extends View {
     if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
       const n = this.counts().hiddenAll;
-      return this.empty(t, "bot", "Nothing you typed yet",
-        `Nothing you typed in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,
+      return this.empty(t, "bot", "No user messages yet",
+        `No user messages in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,
         [this.button(t, "th-show-agents", "Show them", (_e, cx) => { this.setAgents(true, cx); cx.notify(); }, "bot")]);
     }
     const slots = this.slotsMemo;
@@ -6480,10 +6480,10 @@ export default class Threads extends View {
   }
   youText(r) { return this.youClip(r.turn, r.full); }
 
-  // "YOU", "YOU · COMMAND" or "FROM T7 REVIEW".
+  // "USER", "USER · COMMAND" or "FROM T7 REVIEW".
   youLabel(turn) {
     if (turn.agent) return turn.sender?.name ? `FROM ${turn.sender.name.toUpperCase()}` : kindWords(turn.sender).toUpperCase();
-    return turn.cmd ? "YOU · COMMAND" : "YOU";
+    return turn.cmd ? "USER · COMMAND" : "USER";
   }
 
   // The YOU block as TextView Markdown (ui.js promptMd: quotes as blockquotes, code kept,

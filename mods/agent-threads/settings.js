@@ -3,17 +3,17 @@
 // reinstall, which replaces mods/agent-threads/, leaves it alone). A person can edit it by
 // hand; the pane watches it and applies a change at once.
 //
-//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "plain",
+//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "blue",
 //     "agentBubbleColor": "amber", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
-// bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
-// bubbles, a preset name (ui.js BUBBLES; "plain", the default for the person's, is the
-// theme's own look; "amber" is the agent's default, plum before it, and a file that holds
-// plum keeps it) or "#rrggbb".
+// bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
+// bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
+// "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
+// the theme's own look) or "#rrggbb".
 // truncate: shorten long messages (false, the default: every message and reply shows in full,
 // with no Show more anywhere). On, a collapsed row shows promptLines and replyLines of each
 // with Show more, and an open turn's message and running reply are cut with Show all.
@@ -43,15 +43,15 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
 // Builds before it wrote every value on any change, so a file without the mark that holds
 // exactly their defaults (2 and 3) reads as the new defaults; the next save adds the mark.
-// "look": 3 marks a file written since the quiet look, whose bubble default is plain. Builds
-// before it wrote the old default, slate, on any change, so a file without the mark that
-// holds slate reads as plain; any other colour in it was the person's choice and is kept.
+// "look": 3 marks a file written since the quiet look. Builds before it wrote the old
+// default, slate, on any change, so a file without the mark that holds slate reads as the
+// default (blue); any other colour in it was the user's choice and is kept.
 export const LOOK = 3;
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }

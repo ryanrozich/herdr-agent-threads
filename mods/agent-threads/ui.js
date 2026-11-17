@@ -1597,7 +1597,7 @@ const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
 // 300 px, "Agent message" with no name.
 export function senderLabel(sender, width) {
-  if (!sender || sender.kind === "you") return "You";
+  if (!sender || sender.kind === "you") return "User";
   const words = kindWords(sender);
   if (!sender.name) return cap1(words);
   return width < 300 ? sender.name : `${sender.name} · ${words}`;

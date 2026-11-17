@@ -355,6 +355,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 // F3: the selected running turn's working card is sized with the line heights it draws.
 test("the working card's estimate uses the YOU part it draws and the 20 px note lines", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the message: the plain look
   let seen = 0;
   for (const width of [240, 380, 640]) {
     v.width = width;
@@ -831,7 +832,7 @@ test("in Select view q quotes what ⌘C copied from the reply, and never the who
   expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
   expect(cx.clip).toBe(`> ${part}\n\n`);
   expect(v.lastQuote).toMatchObject({ source: "selection", selectView: true, pasted: true });
-  expect(v.toast.text).toMatch(/^Quoted your selection into t4/);
+  expect(v.toast.text).toMatch(/^Quoted the selection into t4/);
   // Highlighted but not copied: the clipboard holds outside text. q pastes nothing, neither
   // that text nor the whole reply, and says how.
   for (const [clip, why] of [["rm -rf / from some other window", "notInReply"], ["", "empty"]]) {
@@ -1020,6 +1021,7 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
 // selects; only a click that does not move opens the turn.
 test("a closed turn's message and reply start select by drag, a click that does not move opens it, and q quotes what ⌘C copied from either", async () => {
   const { v, cx } = await quotePane();
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the message: the plain look
   const keys = v.turnKeys(v.rows());
   const k = keys.find((x) => !v.open.has(x));
   expect(k).toBeTruthy();
@@ -1186,7 +1188,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full.clear();
   const you = mdSources.find(([id]) => id === "th-you-you:0:3");
   expect(you[1]).toBe("> The retry path still logs a warning when the queue is empty\\.\\\n> It also retries forever\\.\n\nCap the retries at five\\, and log once\\.");
-  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 YOU md q1 code0 links0 h\d+/);
+  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 USER md q1 code0 links0 h\d+/);
   // The 40-line quote is clipped to 2 lines with Show all.
   v.open = new Set(["0:9"]);
   draw(v, cx);
@@ -1197,7 +1199,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.open = new Set(["0:3"]);
   draw(v, cx);
   expect(mdSources.some(([id]) => id === "th-you-you:0:3")).toBe(false);
-  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 YOU hl q1/);
+  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 USER hl q1/);
   v.query = "";
   // R5: Show all shows a long pasted prompt to its end, and past 200,000 characters says
   // how much it leaves out.
@@ -2147,7 +2149,7 @@ test("D1: LATEST UPDATE draws in muted, or foreground where muted is faint; the 
   };
   let calls = frame(v, cx);
   for (const label of ["LATEST UPDATE"]) expect(colourOf(calls, label)).toBe(theme.muted);
-  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU"))).toBe(false);
+  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU" || x === "USER"))).toBe(false);
   // A theme whose muted reads under 4.5:1 on the card: foreground.
   const faint = { ...theme, muted: "#5a5a5a" };
   const real = theme.muted;
@@ -2344,7 +2346,7 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   // and the bubble's colours, and the panel shown (settings.json viewerReply).
   const vt = overlays[0].props.gallery.turn;
   expect(overlays[0].props.gallery.panel).toBe(true);
-  expect(vt).toMatchObject({ n: two.n, agent: false, who: "You", running: false, md: v.replyText(two), copy: v.replyText(two), stats: v.statsFull(two), caption: v.captionParts(two), size: 14 });
+  expect(vt).toMatchObject({ n: two.n, agent: false, who: "User", running: false, md: v.replyText(two), copy: v.replyText(two), stats: v.statsFull(two), caption: v.captionParts(two), size: 14 });
   expect(vt.prompt).toContain("[Image #2] [Image #3]");
   expect(vt.fill).toBe(v.bubbleLook(theme, false).style.fill);
   v.prefs = { ...v.prefs, viewerReply: false };
@@ -3851,11 +3853,13 @@ test("the list measuring its first item does not move a pin's place", async () =
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });
 
-test("the person's bubble is plain and an agent's amber by default, and the panel's swatches change them", async () => {
+test("the user's bubble is blue and an agent's amber by default, and the panel's swatches change them", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   const you = () => v.bubbleLook(theme, false);
   const agent = () => v.bubbleLook(theme, true);
+  expect(you().style).toMatchObject({ fill: "#2563EB", ink: "#FFFFFF", outline: false });
   // Plain: the theme's text colour at 8%, in the theme's own colours.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
   expect(you().style).toMatchObject({ fill: "#e6e6e614", ink: theme.foreground, outline: false });
   expect(you().theme).toBe(theme);
   expect(agent().style).toMatchObject({ fill: "#87643A", ink: "#FFFFFF", outline: false });
@@ -3885,7 +3889,7 @@ test("the person's bubble is plain and an agent's amber by default, and the pane
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "amber", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "amber", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -3937,7 +3941,7 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   const time = fmtTimeForTest(turn.ts);
   v.sel = null;
   let drawn = strings(() => v.rowItem(theme, row, false));
-  expect(drawn).not.toContain("You");
+  expect(drawn).not.toContain("User");
   // (The Turn card in the line's hover card is titled "Turn #n"; it shows only under the pointer.)
   expect(drawn.some((x) => x.includes(`#${turn.n}`) && x !== `Turn #${turn.n}`)).toBe(false);
   // The time is drawn for a hover on the message to reveal: the message and its strip are one
@@ -4002,7 +4006,7 @@ test("names: none over your message, none over a reply (one agent), who replied 
   expect(v.current().agentName).toBe("shop-agent");
   // No name over your message (the bubble on the right says it is yours), and none over
   // the reply in a session with one agent.
-  expect(drawn(row)).not.toContain("You");
+  expect(drawn(row)).not.toContain("User");
   expect(drawn(row)).not.toContain("shop-agent");
   expect(v.lineText(row.turn)).not.toContain("·");
   // A session where more than one agent replied (OpenCode records each turn's agent): who
@@ -4032,14 +4036,14 @@ test("names: none over your message, none over a reply (one agent), who replied 
   v.current().agentName = null;
   expect(v.agentName(row.turn)).toBe("Agent");
   // There is no name setting: the settings panel has no name field, and the image viewer
-  // heads your turn "You".
+  // heads the user's turn "User".
   v.setSettings(true);
   for (const tab of ["general", "chat"]) {
     v.setTab = tab;
     rec = []; v.settingsCard(theme); const panel = rec; rec = null;
     expect(panel).not.toContainEqual(["child", "Your name"]);
   }
-  expect(v.viewerTurn(row.turn).who).toBe("You");
+  expect(v.viewerTurn(row.turn).who).toBe("User");
 });
 
 
@@ -4542,7 +4546,7 @@ function afterId(calls, id) {
   return calls.slice(i + 1, j < 0 ? undefined : j);
 }
 const VIEW_TURN = {
-  n: 4, agent: false, who: "You", when: "9:25 AM · 58s", running: false, asOf: "9:30 AM", cmd: null,
+  n: 4, agent: false, who: "User", when: "9:25 AM · 58s", running: false, asOf: "9:30 AM", cmd: null,
   prompt: "[Image #41] [Image #42] The chips wrap on tablet.\nSee [Image #43] for the phone.", promptCut: 0,
   caption: [["wrench", "3 tool calls (not shown)"]],
   md: "The chips had a fixed width.\n\n- tablet scrolls\n- desktop stays\n\nCosts $5 to $9 a month.", copy: "The chips had a fixed width. (source)", left: 0,
@@ -4594,7 +4598,7 @@ test("the image viewer shows the turn's prompt and reply beside the image, 500 p
   expect(afterId(c, "th-gallery-panel")).toContainEqual(["border_l", 1]);
   const t = text();
   // The head, the caption, the stats and Copy reply; the Reply button is on the top line.
-  expect(t).toContain("#4 | · | You | 9:25 AM · 58s");
+  expect(t).toContain("#4 | · | User | 9:25 AM · 58s");
   expect(t).toContain("3 tool calls (not shown)");
   expect(t).toContain("58s · 7.9k tokens · opus 5.5 · 3 tool calls");
   expect(t).toContain("Copy reply");
@@ -7745,7 +7749,7 @@ test("while a long session's first rows are still built, the pane says it is rea
   v.render(cx);
   expect(v.rowJob).toBeTruthy();
   expect(said.some((x) => /^Reading session/.test(x))).toBe(true);
-  expect(said).not.toContain("Nothing you typed yet");
+  expect(said).not.toContain("No user messages yet");
   // Once built, the turns.
   v.buildMax = max;
   for (let i = 0; i < 60 && v.rowJob; i++) { v.renders++; v.render(cx); }
@@ -7985,7 +7989,7 @@ test("General holds text, rail side, key hints, the two message colors, link rul
   v.setTab = "general";
   const g = cardOf(v);
   const gs = strsOf(g);
-  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "Your messages", "Agent messages", "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
+  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "User messages", "Agent messages", "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
   for (const s of ["Show agent messages", "Width", "Shorten long messages", "Always show time", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(s);
   // Headings in the keys sheet's style, US spelling; the rows lost their icons.
   expect(gs).not.toContain("Colours");
@@ -7993,11 +7997,11 @@ test("General holds text, rail side, key hints, the two message colors, link rul
   for (const gone of ["bot.svg", "clock.svg", "scissors.svg", "fold-horizontal.svg", "move-horizontal.svg"]) expect(icons).not.toContain(gone);
   // A color's name is its dot's tooltip: amber is the agent default now.
   expect(g.some((e) => e[0] === "tooltip" && e[1] === "Amber · default")).toBe(true);
-  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Plain · default")).toBe(true);
+  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Blue · default")).toBe(true);
   v.setTab = "chat";
   const ch = strsOf(cardOf(v));
   for (const s of ["Messages", "Layout", "Show agent messages", "Shorten long messages", "Always show time", "Width", "Comfortable", "Wide", "Full", "Keep the pane at this width", "Reset to defaults"]) expect(ch).toContain(s);
-  for (const s of ["Your messages", "Agent messages", "Text size", "Quote key", "Copy path", "Rail side"]) expect(ch).not.toContain(s);
+  for (const s of ["User messages", "Agent messages", "Text size", "Quote key", "Copy path", "Rail side"]) expect(ch).not.toContain(s);
   // The hidden count sits beside its switch; the two hints that repeated a switch are gone.
   expect(ch.some((x) => /\d+ (hidden|folded)/.test(x))).toBe(true);
   expect(ch).not.toContain("A message's time shows when its turn is selected.");
@@ -8013,7 +8017,7 @@ test("the preview follows text size, both colors, the time, hidden agent message
   v.action("settings", cx);
   const pv = () => { rec = []; v.cardPreview(theme, 440); const c = rec; rec = null; return c; };
   let c = pv();
-  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "A message from an agent", "A message from you", "9:12 AM"]));
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "A message from an agent", "A message from the user", "9:12 AM"]));
   expect(strsOf(c)).not.toContain("9:10 AM");
   expect(c).toContainEqual(["opacity", 0.45]);
   expect(c).toContainEqual(["bg", "#87643A"]); // amber
@@ -8028,7 +8032,7 @@ test("the preview follows text size, both colors, the time, hidden agent message
   expect(c).toContainEqual(["left", 5]);
   // A narrow card shortens the words to keep one line.
   v.prefs = { ...v.prefs, agentTurns: false };
-  expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From you"]));
+  expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From the user"]));
 });
 
 test("a switch on the card shows no toast; the a key still says what it did", async () => {
@@ -8263,7 +8267,7 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   expect(idsIn(c)).toContain("th-set-back");
   expect(idsIn(c)).not.toContain("th-set-tab-general"); // no tabs and no preview on the page
   expect(idsIn(c)).not.toContain("th-set-preview");
-  for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Your rules · 5",
+  for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Rules · 5",
     "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412", "On",
     "PR", "Off", "This session has no repository, so this rule links nothing here.",
     "Broken", "Not working: pattern not valid", "Bare", "No example yet", "\\bBUG-(\\d+)\\b", "Miss", "Finds nothing in its example",
