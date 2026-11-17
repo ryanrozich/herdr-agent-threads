@@ -51,7 +51,7 @@ Pins follow the session: closing the pane, restarting Herdr and resuming keep th
 
 **Where pins are saved.** `~/.config/herdr-app/data/agent-threads/pins.json` holds, per session, its id, a fingerprint of each pinned turn, your place in it and the first 80 characters of its prompt. Sessions untouched for 90 days are dropped. The file stays on your machine, and you can delete it at any time.
 
-**Pins and the quote key.** If your `quoteKey` is `p` or `u`, quote keeps the letter. To pin a turn then, open it and click the pin on its top line. To unpin, click that pin again, or select the pin in the Pinned view and click its header's pin button. `v` is taken, so a `quoteKey` of `v` falls back to `q` with a note in the settings panel.
+**Pins and the quote key.** If your `quoteKey` is `p` or `u`, quote keeps the letter. To pin a turn then, open it and click the pin on its top line. To unpin, click that pin again, or select the pin in the Pinned view and click its header's pin button. `v` is taken, so a `quoteKey` of `v` falls back to `q` with a note in the settings panel. So are `y` (the Trajectory) and `f` (its failures): a `quoteKey` of `y` or `f`, which earlier versions took, now falls back to `q` the same way.
 
 ## Quoting into the terminal
 

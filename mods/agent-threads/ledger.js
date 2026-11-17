@@ -82,6 +82,29 @@ function stretches(list, t0, span, min = 0.006) {
   return out;
 }
 
+// Every row of a list h px tall, so the list can be given one number for its sizes: Herdr's
+// v_virtual_list takes at most 10,000 sizes as an array (a 6,000-turn Trajectory has about
+// 41,000 rows), and any count as one number. The spacer under a short list becomes as many
+// h px fillers as fit in it (floor, so the list still fits); the gap under the floating top,
+// the tail and any other row taller than h keep an h px first slot, followed by fillers
+// (ceil). Fillers keep a spacer's, gap's or tail's kind, else are "fill"; their keys are
+// "<key>:<k>". Returns the rows and sizes as they were when every row is h px already.
+export function evenRows(rows, sizes, h = LEDGER_ROW) {
+  if (sizes.every((x) => x === h)) return { rows, sizes };
+  const out = [];
+  const hs = [];
+  rows.forEach((r, i) => {
+    if (sizes[i] === h) { out.push(r); hs.push(h); return; }
+    const pad = r.kind === "spacer" || r.kind === "gap" || r.kind === "tail";
+    const n = r.kind === "spacer" ? Math.floor(sizes[i] / h) : Math.max(1, Math.ceil(sizes[i] / h));
+    for (let k = 0; k < n; k++) {
+      out.push(k > 0 ? { kind: pad ? r.kind : "fill", key: `${r.key}:${k}`, h } : pad ? { ...r, h } : r);
+      hs.push(h);
+    }
+  });
+  return { rows: out, sizes: hs };
+}
+
 // At most n stretches: the closest neighbours are joined until n are left, for a drawing
 // that makes an element per stretch (the line without vector paths).
 export function coarse(segs, n = 40) {
@@ -147,15 +170,18 @@ export function ledgerTurn(s, turn, si, live = false) {
       calls++;
       r.tool = String(c.tool ?? "tool");
       r.text = String(c.input ?? "").replace(/\s+/g, " ").trim();
-      const failed = c.result?.failed === true;
+      // A failed call: its result says so, or, for a subagent, its run ended failed (the
+      // launch itself succeeds). A run stopped or killed is not a failure.
+      const failed = c.result?.failed === true || c.subagent?.state === "failed";
       const ended = c.end != null;
       const open = Boolean(c.result) && !ended && (ends || (live && i === lastTool));
       r.lk = failed ? "failed" : c.subagent ? "subagent" : open ? (live ? "running" : "noresult") : "tool";
-      if (c.subagent && !failed) {
+      if (c.subagent) {
         r.tool = "Agent";
         r.sub = { state: c.subagent.state ?? null, tokens: c.subagent.tokens ?? null };
       }
       r.status = STATUS[r.lk] ?? null;
+      if (failed && r.sub?.tokens) r.status = `failed · ${fmtTokens(r.sub.tokens)} tok`;
       r.failed = failed;
       if (failed) fails++;
       if (c.start != null && t0 != null) r.start = c.start - t0;
@@ -168,6 +194,9 @@ export function ledgerTurn(s, turn, si, live = false) {
       calls += c.count;
       r.lk = "more";
       r.text = `and ${c.count} more call${c.count === 1 ? "" : "s"}`;
+      // The reader names and follows the first STEP_CALLS calls of a group; the rest are a
+      // count, so whether any of them failed is not known (the failure counts read "N+").
+      r.status = "results not kept";
     } else if (c.kind === "context") {
       r.lk = "context";
       r.text = firstLine(c.text) || " ";
@@ -185,6 +214,8 @@ export function ledgerTurn(s, turn, si, live = false) {
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
     tokens: stats(turn).tokens, total: tr.end != null && t0 != null ? tr.end - t0 : null,
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line,
+    // Calls past what the reader keeps: their failures are not known, so the count is a floor.
+    partial: cells.some((c) => c.kind === "more"),
   };
   return { rows: [head, ...rows], fails, calls };
 }
@@ -194,7 +225,7 @@ export function ledgerTurn(s, turn, si, live = false) {
 // count is its own part so the drawing can put the red dot before it.
 export function headParts(h, width = 600) {
   const calls = h.calls ? `${h.calls} call${h.calls === 1 ? "" : "s"}` : null;
-  const failed = h.fails ? `${h.fails} failed` : null;
+  const failed = h.fails ? `${h.fails}${h.partial ? "+" : ""} failed` : null;
   const tok = h.tokens ? `${fmtTokens(h.tokens)} tok` : null;
   const total = h.going ? "running" : h.interrupted ? "interrupted" : !h.timed ? "no times" : durText(h.total) || null;
   return {
@@ -208,9 +239,9 @@ export function headParts(h, width = 600) {
 // The session's numbers, worked out in one place for whatever draws them: turns, steps
 // (rows that are not headings), calls and failures. rows are the ledger's rows.
 export function ledgerTotals(rows) {
-  const t = { turns: 0, steps: 0, calls: 0, failed: 0, fails: [] };
+  const t = { turns: 0, steps: 0, calls: 0, failed: 0, fails: [], partial: [] };
   for (const r of rows) {
-    if (r.kind === "trh") { t.turns++; t.calls += r.calls; continue; }
+    if (r.kind === "trh") { t.turns++; t.calls += r.calls; if (r.partial) t.partial.push(r.key); continue; }
     if (r.kind !== "tr") continue;
     t.steps++;
     if (r.failed) { t.failed++; t.fails.push(r.key); }
