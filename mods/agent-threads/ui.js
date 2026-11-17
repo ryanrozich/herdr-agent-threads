@@ -1190,9 +1190,17 @@ export function fillUrl(rule, m, ctx = {}) {
 // that matches at the earliest position wins; a match over 80 characters, or one whose URL
 // fails the checks, stays plain. budget (shared across calls for one text): characters
 // scanned and matches left. Rules that use {repo} or {owner} are skipped without a repo.
+// A rule that still runs slow on a reply's text (the checks in settings.js are a guard, not
+// a proof) is marked slow after one search over SLOW_SEARCH ms, or SLOW_TEXT ms in one text,
+// and skipped from then on, until the file changes the rule (it is compiled again). The page
+// shows the reason. One search already running cannot be stopped.
+export const SLOW_SEARCH = 8;
+const SLOW_TEXT = 20;
+export const SLOW_REPLY = "too slow on a reply; skipped until the rule changes";
+const clock = () => globalThis.performance?.now?.() ?? Date.now();
 export function linkPieces(text, rules, ctx = {}, budget = { chars: 20000, matches: 25 }) {
   const s = String(text ?? "");
-  const usable = (rules ?? []).filter((r) => r.re && (!r.repo || ctx.repo));
+  const usable = (rules ?? []).filter((r) => r.re && !r.slow && (!r.repo || ctx.repo));
   const scan = Math.max(0, Math.min(s.length, budget.chars));
   budget.chars -= s.length;
   if (!usable.length || !scan || budget.matches <= 0) return [{ t: s }];
@@ -1200,12 +1208,18 @@ export function linkPieces(text, rules, ctx = {}, budget = { chars: 20000, match
   let at = 0;
   let pos = 0;
   const next = usable.map(() => undefined);
+  const spent = usable.map(() => 0);
   const find = (i) => {
     const r = usable[i];
+    if (r.slow) return null;
     let p = pos;
     for (;;) {
       r.re.lastIndex = p;
+      const t0 = clock();
       const m = r.re.exec(s);
+      const dt = clock() - t0;
+      spent[i] += dt;
+      if (dt > SLOW_SEARCH || spent[i] > SLOW_TEXT) { r.slow = SLOW_REPLY; return null; }
       if (!m || m.index >= scan) return null;
       if (m[0].length) return m;
       p = m.index + 1; // a zero-width match moves on by one

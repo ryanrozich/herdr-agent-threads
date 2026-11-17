@@ -12,8 +12,8 @@ mock.module("herdr", () => ({
   ...Object.fromEntries(["exec", "hc", "home", "appHome", "readTextFile", "watchFolder", "theme", "themes", "settings", "panes", "terminals",
     "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
-const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS } = await import("../mods/agent-threads/settings.js");
-const { linkify, linkPieces, fillUrl, parseRemote, promptMd } = await import("../mods/agent-threads/ui.js");
+const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG } = await import("../mods/agent-threads/settings.js");
+const { linkify, linkPieces, fillUrl, parseRemote, promptMd, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
 
 const ISSUE = { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" };
 const PR = { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" };
@@ -242,4 +242,32 @@ test("a rule's optional keys: on, type, description and example, each with its f
   // An older file's rule has none of the four.
   expect(parseLinks([ISSUE]).list[0]).toMatchObject({ type: "custom", description: "", example: "", on: true });
   expect(parseExtras(JSON.stringify({ links: [ISSUE] })).linkList.length).toBe(1);
+});
+
+test("quantifiers side by side that overlap are slow on long runs, and the check says so in bounded time; plain rules still pass", () => {
+  const t0 = performance.now();
+  const l = parseLinks([
+    { name: "a", pattern: "\\s*\\s*\\s*\\s*Q", url: "https://x.example/$0" },
+    { name: "b", pattern: "\\w+\\w+\\w+X", url: "https://x.example/$0" },
+    { name: "c", pattern: "\\d*\\d*\\d*\\d*\\d*\\d*Z", url: "https://x.example/$0" },
+    { name: "ok1", pattern: "\\bACME-(\\d+)\\b", url: "https://x.example/$1" },
+    { name: "ok2", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
+    { name: "ok3", pattern: "\\b[A-Z]{2,10}-\\d+\\b", url: "https://x.example/$0" },
+  ]);
+  // The first is caught only by the long runs; the others by one check or the other.
+  expect(l.list[0].why).toBe(SLOW_LONG);
+  expect(l.list.map((r) => r.why)).toEqual([SLOW_LONG, expect.stringMatching(/^too slow/), expect.stringMatching(/^too slow/), null, null, null]);
+  expect(performance.now() - t0).toBeLessThan(3000);
+});
+
+test("a rule slow on a reply is skipped from then on, and says why, so one rule cannot stall a draw", () => {
+  let calls = 0;
+  const slow = { name: "slow", url: "https://x.example/$0", host: "x.example", re: { lastIndex: 0, exec() { calls++; const t = performance.now(); while (performance.now() - t < 12) { /* a slow search */ } return null; } } };
+  const fast = { name: "fast", re: /ACME-(\d+)/g, url: "https://t.example/$1", host: "t.example" };
+  const p = linkPieces("see ACME-4 and more", [slow, fast]);
+  expect(p.filter((x) => x.url).map((x) => x.url)).toEqual(["https://t.example/4"]);
+  expect(slow.slow).toBe(SLOW_REPLY);
+  const n = calls;
+  expect(linkify("ACME-5 again", [slow, fast]).links).toBe(1);
+  expect(calls).toBe(n);
 });

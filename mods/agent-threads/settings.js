@@ -154,7 +154,8 @@ const EXAMPLE_MAX = 200;
 // A rule is not working, with a note, when
 // it has no pattern or URL, the pattern is over 200 characters, does not compile, matches
 // the empty string, has a nested quantifier, an alternation under a quantifier or a
-// backreference, takes over 5 ms on a hostile probe (up to 33 characters), its URL template is not a fixed http(s) host, or it is past the 20th.
+// backreference, takes over 5 ms on a hostile probe (up to 33 characters) or over 3 ms on a run of one kind of
+// character (up to 2,048), its URL template is not a fixed http(s) host, or it is past the 20th.
 // Each kept rule: { n, name, re (global), url, host, repo (uses {repo} or {owner}) }. A rule
 // with on: false is kept out of rules (it links nothing and takes no text from the rules
 // below it) and has no note. list: one entry a rule in the file, for the Link rules page:
@@ -214,8 +215,26 @@ function linkFault(r, i) {
       if (now() - t0 > 5) return "too slow on a short test text; disabled";
     }
   }
+  // Long runs of one kind of character: quantifiers side by side that can take the same
+  // characters ("\s*\s*Q", "\w+\w+X") cost polynomial time on a near miss, which the short
+  // probes miss and nested-group shapes do not show. Lengths grow by half from 16 to 2,048,
+  // stopping at the first probe over 3 ms (each step costs at most a few times the last),
+  // and the whole check stops at 100 ms. A plain pattern runs these in about a millisecond.
+  const start = now();
+  for (const unit of [" ", "a", "1", "a1 _-.", "#", lit]) {
+    for (let len = 16; len <= LONG_PROBE; len = Math.ceil(len * 1.5)) {
+      const probe = `${unit.repeat(Math.ceil(len / unit.length)).slice(0, len)}!`;
+      const t0 = now();
+      re.lastIndex = 0;
+      re.exec(probe);
+      const t1 = now();
+      if (t1 - t0 > 3 || t1 - start > 100) return SLOW_LONG;
+    }
+  }
   return null;
 }
+const LONG_PROBE = 2048;
+export const SLOW_LONG = "too slow on long text; disabled";
 
 // quoteKey and links from the file's text, with their notes. Text that does not parse
 // gives the defaults (parseSettings reports that).
