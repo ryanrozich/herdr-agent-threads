@@ -4955,6 +4955,9 @@ test("rows left unshaped by stopped renders: past the draw's time the rest are n
   v.shape = function (...a) { calls++; return shape.apply(this, a); };
   const reshape = v.reshape;
   v.reshape = function (...a) { done++; const out = reshape.apply(this, a); this.shapeSpent = done >= 10 ? 1e9 : 0; return out; };
+  // The draw's time is the counted one above, not the clock: shape() also adds its own
+  // elapsed time, which on a slow CI runner could pass the 2 to 12 ms limit by itself.
+  v.shapeBudget = 1e6;
   v.shapeSpent = 0;
   done = 0;
   calls = 0;
