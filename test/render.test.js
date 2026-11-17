@@ -91,7 +91,7 @@ mock.module("gpui-base", () => ({
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
-  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
+  TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
 // ("in"), so a test can time the synchronous stretches between awaits.
@@ -349,7 +349,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 });
 
 // F3: the selected running turn's working card is sized with the line heights it draws.
-test("the working card's estimate uses the 22 px prompt and 20 px note lines it draws", async () => {
+test("the working card's estimate uses the YOU part it draws and the 20 px note lines", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
   let seen = 0;
   for (const width of [240, 380, 640]) {
@@ -359,22 +359,19 @@ test("the working card's estimate uses the 22 px prompt and 20 px note lines it 
     if (!r) continue;
     seen++;
     const est = v.estimate(r);
-    // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
+    // The smallest it can be: padding, the message's bubble (one line), the strip under it,
     // the live line, one note line, padding.
-    expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
-    // Each prompt line of the row's shape (as its closed row draws it) counts 22 px, each note
-    // line 20 px.
+    expect(est).toBeGreaterThanOrEqual(8 + 16 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
+    // The message is the open turn's YOU part (its estimate until the probe measures it); each
+    // note line counts 20 px.
     const g = v.workingGeom(r.turn, r.shape);
-    expect(g.lines).toBe(r.shape.p);
-    expect(est).toBe(8 + 12 + g.promptH + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    expect(g.promptH).toBe(r.shape.p * 22 + (r.shape.pMore ? 18 : 0));
+    expect(est).toBe(8 + v.youHeight(v.workYou(r)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
-    // Prompt lines are 22 px rows (promptBlock), the note sets 20 px lines.
-    const hs = rec.filter(([n]) => n === "h").map(([, x]) => x);
+    // The message is the YOU part's TextView; the note sets 20 px lines.
+    expect(rec).toContainEqual(["TextView", `th-you-wyou:${r.key}`]);
     rec = null;
-    expect(hs.filter((x) => x === 22).length).toBeGreaterThanOrEqual(r.shape.p);
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -514,7 +511,7 @@ test("a turn answered together with a later one: its line says so, and its note 
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
 
-test("the info icon is always shown: dim at half strength on other turns, dim on the selected one, accent with its card open, and no handler", async () => {
+test("the info icon is always shown: dim, like the line's label, on every turn, accent with its card open, and no handler", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const keys = v.turnKeys(v.rows());
   const [a, b] = keys.slice(-2);
@@ -524,7 +521,8 @@ test("the info icon is always shown: dim at half strength on other turns, dim on
   const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
   const other = drawn("hover");
   expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
-  expect(other).toContainEqual(["opacity", 0.5]);
+  // The label's colour with no fade (about 3:1; at half strength it was under 2:1).
+  expect(other.some((e) => e[0] === "opacity")).toBe(false);
   // No hover style and no handler: neither shows on the owner's machine inside a list row.
   expect(other.some((e) => e[0] === "hover" || /^on_/.test(String(e[0])))).toBe(false);
   const sel = drawn("sel");
@@ -941,6 +939,79 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
   expect(v.lastQuote).toMatchObject({ source: "reply" });
 });
 
+// The owner's go, 17 Nov: highlight by drag in any turn, open or closed. A press and drag
+// selects; only a click that does not move opens the turn.
+test("a closed turn's message and reply start select by drag, a click that does not move opens it, and q quotes what ⌘C copied from either", async () => {
+  const { v, cx } = await quotePane();
+  const keys = v.turnKeys(v.rows());
+  const k = keys.find((x) => !v.open.has(x));
+  expect(k).toBeTruthy();
+  const turn = v.findTurn(k);
+  v.toggle(keys.find((x) => v.open.has(x)), cx);
+  v.sel = k;
+  draw(v, cx);
+  const row = v.rows().find((r) => r.key === k);
+  expect(row.kind).toBe("turn");
+  // Drawn: the message and the reply start are selectable text views.
+  const v0 = views.length;
+  v.rowItem(theme, row, false);
+  const drawn = views.slice(v0);
+  const sel = (x) => x.calls.some(([n, on]) => n === "selectable" && on === true);
+  const msg = drawn.filter((x) => x.id.startsWith("th-sp-"));
+  const rep = drawn.filter((x) => x.id.startsWith("th-cmd-cmd:") || x.id.startsWith("th-sr-"));
+  expect(msg.length).toBeGreaterThan(0);
+  expect(rep.length).toBeGreaterThan(0);
+  expect([...msg, ...rep].every(sel)).toBe(true);
+  // A drag selects: the turn is selected and stays closed. A double press too.
+  v.sel = keys.find((x) => x !== k);
+  v.pressMoved = 40; v.pressCount = 1;
+  v.click(k, cx);
+  expect([v.sel, v.open.has(k)]).toEqual([k, false]);
+  v.pressMoved = 0; v.pressCount = 2;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(false);
+  // ⌘C copied part of its message: q quotes that.
+  const words = (t) => t.replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(turn.prompt);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // Part of its reply: that.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(v.replyText(turn));
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // A highlight with nothing copied: a mod cannot read it (Herdr issue 1110), so q quotes the
+  // whole reply.
+  v.notePress(cx);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // A click that does not move opens it.
+  v.pressMoved = 0; v.pressCount = 1;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(true);
+  // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
+  // agent's message, a stop's reason) stays a plain line, in its own colour.
+  const v2 = views.length;
+  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
+  // While a search marks its hits, the lines are plain, so the marks still show.
+  v.query = turn.prompt.split(/\s+/)[0];
+  const v1 = views.length;
+  v.rowItem(theme, { ...row, shape: v.shape(turn) }, false);
+  expect(views.slice(v1).some((x) => x.id.startsWith("th-sp-"))).toBe(false);
+  v.query = "";
+});
+
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
@@ -1098,19 +1169,24 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
-  // Code blocks do not wrap: the editor's soft_wrap is off, so a long line scrolls sideways
-  // inside the block, and the box is as tall as its lines.
+  // Code blocks wrap (nothing in the list scrolls on its own): the editor's soft_wrap is on,
+  // and the box is as tall as its wrapped rows, up to CODE_LINES (12) until Show all.
   const code = v.rows().find((r) => r.kind === "code");
-  expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
+  expect(code).toMatchObject({ rows: 1, shown: 1, more: false });
   expect(v.codeBoxH(code)).toBe(36);
   v.makeCode(code.key.split(":").slice(1, 3).join(":"));
-  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: false, readonly: true, value: "git log --grep ACME-9" });
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
   const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
+  const per = v.codePer();
   const shape = v.codeShape(long);
-  expect(shape.rows).toBe(1);
-  expect(shape.shown).toBe(1);
-  expect(shape.caption).toBe(false);
-  expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
+  expect(per).toBe(Math.floor((v.prose() - 18) / (12 * 0.62)));
+  expect(shape.rows).toBe((await import("../mods/agent-threads/ui.js")).codeRows(long, per));
+  expect(shape.rows).toBeGreaterThan(1);
+  expect(shape.shown).toBe(shape.rows);
+  expect(shape.more).toBe(false);
+  const tall = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+  expect(v.codeShape(tall)).toMatchObject({ rows: 20, shown: 12, more: true, all: false });
+  expect(v.codeShape(tall, true)).toMatchObject({ rows: 20, shown: 20, more: true, all: true });
   // The label is the fence's language, or nothing: never "code".
   const head = v.rows().find((r) => r.kind === "codehead");
   rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
@@ -1592,7 +1668,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
   } finally { herdrSettings = { font_family: "Mono" }; }
 });
 
-test("V3b: reply and latest TextViews never scroll, and only the YOU box over 420 px does", async () => {
+test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px is cut there with Show all, which a press opens in place", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--langs", "--long", "--blocks"));
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
@@ -1603,10 +1679,31 @@ test("V3b: reply and latest TextViews never scroll, and only the YOU box over 42
   expect(md.length).toBeGreaterThan(5);
   for (const x of md) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   const you = views.filter((x) => x.id.startsWith("th-you-"));
-  const scrolls = you.filter((x) => x.calls.some(([n, a]) => n === "scrollable" && a === true));
-  expect(scrolls.length).toBeGreaterThan(0); // the 40-line prompt with Show all
-  for (const x of scrolls) expect(v.youMd(v.rows().find((r) => `th-you-${r.key}` === x.id)).capped).toBe(true);
+  expect(you.length).toBeGreaterThan(0);
+  for (const x of you) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   for (const x of views.filter((y) => y.id.startsWith("th-probe-"))) expect(x.calls.some(([n]) => n === "scrollable")).toBe(false);
+  // The 40-line prompt: its first 420 px, cut, no scrolling box, and Show all in the bubble.
+  const capped = v.rows().find((r) => r.kind === "you" && v.youMd(r).capped);
+  expect(capped).toBeTruthy();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  let d = drawn(capped);
+  expect(d.some(([n]) => n === "overflow_y_scrollbar" || n === "overflow_scroll")).toBe(false);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(true);
+  expect(d.some(([n, a]) => n === "child" && a === "Show all")).toBe(true);
+  const h0 = v.estimate(capped);
+  // A press on the bubble (the list's item click) opens the rest in place; another closes it.
+  v.click(capped.key, cx);
+  const open = v.rows().find((r) => r.key === capped.key);
+  expect(open.all).toBe(true);
+  const y = v.youMd(open);
+  expect(y).toMatchObject({ capped: false, long: true });
+  expect(y.bodyH).toBeGreaterThan(420);
+  expect(v.estimate(open)).toBeGreaterThan(h0);
+  d = drawn(open);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
+  expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
+  v.click(capped.key, cx);
+  expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
 test("V3b: the first-frame estimate is never under the reading-line reference, and at most a line and 18 px over", async () => {
@@ -1839,14 +1936,15 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
   const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed turn: its row's line has the icon, dim when selected, at half strength otherwise.
+  // A closed turn: its row's line has the icon, dim, with no fade.
   v.sel = key;
   expect(icons(rowOf())).toContain("info.svg");
   v.sel = null;
   let c = rowOf();
   expect(icons(c)).toContain("info.svg");
   let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // An open turn with its line closed: the icon too.
   v.open = new Set([key]);
   v.sel = key;
@@ -1857,7 +1955,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   expect(v.infoState(key)).toBe("hover");
   c = partOfLine();
   at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
@@ -2242,7 +2341,7 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(card).toMatchObject({ kind: "working", split: true });
   expect(rows[at(key) - 1].kind).toBe("wtop");
   const g = v.workingGeom(last);
-  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+  expect(v.estimate(card)).toBe(6 + v.youHeight(v.workYou(card)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
   draw(v, cx);
   // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
   overlays.length = 0;
@@ -2488,7 +2587,7 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   // Open, the note goes to the answer.
   v.goToAnswer(cut);
   expect(v.sel).toBe("0:2");
-  expect(v.scrollTo).toEqual({ key: "0:2", how: "center" });
+  expect(v.scrollTo).toEqual({ key: "0:2", how: "center", flash: true });
   const listed = (q) => { v.query = q; return v.rows().filter((r) => r.kind === "turn").map((r) => r.turn.n); };
   // The answer's words list the row cut off, and its words list the answer.
   expect(listed("marine mammal")).toEqual([1, 2]);
@@ -2672,7 +2771,13 @@ test("a second press goes on to a place far down the turn, under a line that say
   cx.flush();
   expect(scrolled.length).toBe(2);
   expect(scrolled[0][0]).toBeGreaterThan(line);
-  expect(scrolled[1]).toEqual([line, "top"]);
+  // The line's top just under the floating top, never under it: an earlier item at the top,
+  // lifted by the rest for one frame (landExact).
+  const minTop = v.floating() ? 32 : 0;
+  expect(v.landed).toMatchObject({ key: `resume:${a}`, y: minTop });
+  const sl = v.slotsMemo;
+  expect(scrolled[1]).toEqual([v.landed.j, "top"]);
+  expect(sl.slice(v.landed.j, line).reduce((x, n) => x + n, 0) - v.landed.lift).toBe(minTop);
   draw(v, cx);
 });
 
@@ -2691,9 +2796,14 @@ test("the first press shows the head even when the place would show under it; a 
   cx.timers = [];
   draw(v, cx);
   cx.flush();
-  // The head lands like a place: an item further down first, then the head at the top.
+  // The head lands like a place: an item further down first, then the head near the top but
+  // clear of the floating top (an earlier item at the top, the head under it).
   const head = v.rows().findIndex((r) => r.key === a);
-  expect(scrolled.at(-1)).toEqual([head, "top"]);
+  const [j, how] = scrolled.at(-1);
+  expect(how).toBe("top");
+  expect(j).toBeLessThanOrEqual(head);
+  const y = (v.slotsMemo ?? []).slice(j, head).reduce((x, n) => x + n, 0);
+  expect(j === head || y >= 32).toBe(true);
   expect(scrolled[0][0]).toBeGreaterThan(head);
   expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
   // The view moves before the second press: the press shows the head again.
@@ -5883,6 +5993,8 @@ test("a settings change in a long session reshapes rows over several frames, the
 
 test("the rail card: a hovered tick shows the day, time and number, two lines of its prompt and three of its reply, beside it on the left", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
+  // The default pane at the reading width, or wider than the column.
+  v.paneW = Math.max(573, v.width + 80);
   v.listH = 600;
   draw(v, cx);
   const ks = keys();
@@ -6000,6 +6112,8 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
+  // The default pane at the reading width, or wider than the column.
+  v.paneW = Math.max(573, v.width + 80);
   v.listH = 600;
   draw(v, cx);
   const ks = keys();
@@ -6035,12 +6149,16 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
-  // A click selects the turn and puts its top at the top of the pane, as a pin return does.
+  // A click selects the turn and brings it level with the tick: its first line at about the
+  // tick's height (railTickY), the turn's top 18 px above that.
   v.follow = true;
+  const tickY = v.railTickY(ks[0]);
+  expect(tickY).toBeGreaterThan(0);
+  expect(tickY).toBeLessThan(v.listH);
   v.railJump(ks[0], cx);
   expect(v.sel).toBe(ks[0]);
   expect(v.follow).toBe(false);
-  expect(v.scrollTo).toEqual({ key: ks[0], how: "head" });
+  expect(v.scrollTo).toEqual({ key: ks[0], how: "head", flash: true, at: Math.max(0, tickY - 18) });
   // A search keeps every tick and dims the ones it leaves out.
   const word = v.findTurn(ks[0]).prompt.split(/\s+/).find((w) => w.length > 5);
   v.query = word;
@@ -6480,31 +6598,46 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   // A group of one, open, is the call's own row, with no group line over it.
   expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
   expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · <0.1s [closed]");
-  // A click on a call opens its output: every line in a box 12 lines tall that scrolls inside
-  // and sideways, with no Show all.
+  // A click on a call opens its output: its lines wrap, in a box 12 rows tall that does not
+  // scroll (the lines run on, cut, at their full height), and Show all under it is its own
+  // list item.
   v.click(`cl:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 plain h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
   const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(box).toMatchObject({ rows: 30, shown: 12 });
   expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
   rec = []; v.partContent(theme, box, false); const bc = rec; rec = null;
-  expect(bc.some((e) => e[0] === "overflow_scroll")).toBe(true);
-  expect(bc.some((e) => e[0] === "whitespace_nowrap")).toBe(true);
-  expect(bc.some((e) => e[0] === "child" && typeof e[1] === "string" && /^Show (all|less)/.test(e[1]))).toBe(false);
+  expect(bc.some((e) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scrollbar", "whitespace_nowrap"].includes(e[0]))).toBe(false);
+  expect(bc.some((e) => e[0] === "h" && e[1] === 30 * 16)).toBe(true);
+  const all = v.rows().find((r) => r.key === `oa:${a}:0:0`);
+  expect(all).toMatchObject({ kind: "oall", left: 18, all: false });
+  expect(v.height(all)).toBe(26);
+  rec = []; v.partContent(theme, all, false); const ac = rec; rec = null;
+  expect(ac.some((e) => e[0] === "child" && e[1] === "Show all · 18 more rows")).toBe(true);
   // A click on the box only selects its turn.
   v.click(`co:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/lines 30\/30/);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
+  // Show all shows every row in place; Show less goes back to 12.
+  v.click(`oa:${a}:0:0`, cx);
+  const opened = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(opened.shown).toBe(30);
+  expect(v.height(opened)).toBe(8 * 2 + 2 + 30 * 16 + 4);
+  expect(v.rows().find((r) => r.key === `oa:${a}:0:0`)).toMatchObject({ all: true });
+  v.click(`oa:${a}:0:0`, cx);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
   // → opens every call's output; ← closes the outputs, then the groups.
   v.action("deeper", cx);
   expect(v.rows().filter((r) => r.kind === "cout").length).toBe(3);
   expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 plain h\d+ \| lint: 2 errors$/);
   // The read file has a known extension: between frames its output gets a read-only editor
-  // that colours it as js and does not wrap; plain text stays plain.
+  // that colours it as js and wraps; plain text stays plain.
   const before = editors.length;
   draw(v, cx);
   cx.flush(0);
   draw(v, cx);
   const ed = editors.slice(before).find((e) => e.opts.language === "js");
-  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: false, value: "export const total = 1;" });
+  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: true, value: "export const total = 1;" });
   expect(detail(`co:${a}:2:0`)).toMatch(/ editor js h\d+/);
   expect(detail(`co:${a}:0:1`)).toMatch(/ plain h\d+/);
   v.action("shallower", cx);
@@ -6716,7 +6849,11 @@ test("a scroll to a closed turn with pasted images lands on its tiles, the item 
     cx.timers = [];
     draw(v, cx);
     cx.flush();
-    expect(scrolled.at(-1)).toEqual([tiles, "top"]);
+    // The tiles' top just under the floating top (landExact when no earlier item fits).
+    const minTop = v.floating() ? 32 : 0;
+    expect(v.landed).toMatchObject({ key: `imgs:${key}`, y: minTop });
+    expect(scrolled.at(-1)).toEqual([v.landed.j, "top"]);
+    expect(v.slotsMemo.slice(v.landed.j, tiles).reduce((x, n) => x + n, 0) - (v.landed.lift ?? 0)).toBe(minTop);
   }
 });
 
@@ -6737,7 +6874,7 @@ test("level 3 lines draw paths from the terminal's working folder, or from ~, an
   // The call line, the group's current call and each output line go through it; the
   // transcript and the call entries keep the full text.
   const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
-  expect(src).toContain(".child(this.short(callText(r.name, c?.input)))");
+  expect(src).toContain("wrapCap(this.short(callText(r.name, c?.input))");
   expect(src).toContain("current: last?.input ? this.short(callText(");
   expect(src).toContain(".child(this.short(l) || \" \")");
 });
@@ -6951,6 +7088,279 @@ test("the wheel on the rail moves its window a tick at a time and stops there, s
   expect(stopped).toBe(0);
 });
 
+// The owner's choice A and B, 16 Nov: nothing inside the list scrolls on its own, since Herdr
+// passes the wheel on to the list after an inner box uses it and a row cannot stop it. Code,
+// a call's command and a tool's output wrap; a tall code block and a long output show their
+// start and Show all, a list item of its own; an output longer than the panel holds opens in
+// a viewer outside the list, whose output scrolls on its own and holds the wheel.
+test("no list row scrolls on its own: code and commands wrap, Show all opens the rest in place, a long output opens a viewer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-inner-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: false }] } });
+  const longCmd = `cd ~/acme-web && ${"bun run build --filter=packages/checkout && ".repeat(14)}bun test`;
+  const huge = Array.from({ length: 500 }, (_, i) => `ok ${i + 1} cart total rounds once`).join("\n");
+  const lines = [use("toolu_b1", "Bash", { command: longCmd }, 1), res("toolu_b1", huge, 3),
+    use("toolu_b2", "Bash", { command: "bun run lint" }, 4), res("toolu_b2", "a\nb\nc", 5)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000d", file);
+  const code = Array.from({ length: 30 }, (_, i) => `export const step${i} = ${i};`).join("\n");
+  for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_b1" }, { k: "u", n: "Bash", id: "toolu_b2" },
+    { k: "t", t: `Done.\n\n\`\`\`js\n${code}\n\`\`\`` }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.toggle(a, cx);
+  v.action("deeper", cx);
+  await settled();
+  v.action("deeper", cx);
+  await settled();
+  v.click(`cl:${a}:0:0`, cx);
+  v.click(`cl:${a}:0:1`, cx);
+  await settled();
+  const rows = v.rows();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  const scrolling = (d) => d.some(([n, x]) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scroll", "overflow_y_scrollbar", "overflow_x_scrollbar"].includes(n) || (n === "scrollable" && x === true));
+  // Every row, everything open: no scrolling box, and no handler.
+  for (const r of rows) {
+    const d = drawn(r);
+    expect([r.key, scrolling(d)]).toEqual([r.key, false]);
+    expect([r.key, d.filter(([n]) => /^on_/.test(n)).map(([n]) => n)]).toEqual([r.key, []]);
+  }
+  // The long command wraps, up to 6 lines, its row as tall as its lines; the short one is one line.
+  const long = rows.find((r) => r.kind === "call" && r.id === "toolu_b1");
+  const sh = v.callShape(long);
+  expect(sh.rows).toBe(6);
+  expect(sh.text.endsWith("…")).toBe(true);
+  expect(v.height(long)).toBe((long.one ? 4 + 22 : 20) + 5 * 16);
+  const short = rows.find((r) => r.kind === "call" && r.id === "toolu_b2");
+  expect(v.callShape(short).rows).toBe(1);
+  expect(v.height(short)).toBe(short.one ? 4 + 22 : 20);
+  // The 500-line output is more than the panel holds (400 lines): 12 rows, then a link to
+  // open all of it in a viewer.
+  const big = rows.find((r) => r.kind === "cout" && r.id === "toolu_b1");
+  expect(big.shown).toBe(12);
+  const link = rows.find((r) => r.kind === "oall" && r.id === "toolu_b1");
+  expect(link).toMatchObject({ view: true, total: 500 });
+  expect(drawn(link).some(([n, x]) => n === "child" && x === "Open all 500 lines in a viewer")).toBe(true);
+  // The 3-line output needs no Show all.
+  expect(rows.some((r) => r.kind === "oall" && r.id === "toolu_b2")).toBe(false);
+  // The 30-line code block: 12 rows in view, the editor at its full height inside, then Show all.
+  const box = rows.find((r) => r.kind === "code");
+  expect(box).toMatchObject({ rows: 30, shown: 12, more: true });
+  const bd = drawn(box);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 30 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 6)).toBe(true); // the clip ends at row 12
+  const more = rows.find((r) => r.kind === "codeall");
+  expect(drawn(more).some(([n, x]) => n === "child" && x === "Show all · 18 more rows")).toBe(true);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key)).toMatchObject({ shown: 30, all: true });
+  expect(v.height(v.rows().find((r) => r.key === box.key))).toBe(30 * 20 + 16);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key).shown).toBe(12);
+  // The link opens the output viewer outside the list.
+  overlays.length = 0;
+  v.click(link.key, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", props: { output: { title: "#1 · Bash", lines: 500, total: 500 } } });
+  expect(overlays[0].props.output.text).toBe(huge);
+  // The viewer: the call, its line count, all of it in a read-only editor that wraps and numbers
+  // its lines, in a box that holds the wheel; Esc closes it.
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov9", output: overlays[0].props.output } };
+  const g = new Threads();
+  const gcx = makeCx();
+  const before = editors.length;
+  g.init(state.props, gcx);
+  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: true, line_numbers: true, value: huge });
+  rec = []; g.render(gcx); const gd = rec; rec = null;
+  const texts = gd.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("#1 · Bash");
+  expect(texts).toContain("500 lines");
+  expect(handlerAfterId(gd, "th-output-body", "on_scroll_wheel")).toBeTruthy();
+  let stopped = false;
+  handlerAfterId(gd, "th-output-body", "on_scroll_wheel")({}, { ...gcx, stop_propagation: () => { stopped = true; } });
+  expect(stopped).toBe(true);
+  handlerAfterId(gd, "th-output", "on_key_down")({ key: "escape" }, gcx);
+  expect(closed).toContain("ov9");
+  expect(() => g.close()).not.toThrow();
+});
+
+test("a rail click lands the turn level with its tick, clear of the floating top; a narrow pane hides the rail", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  expect(v.railShown()).toBe(true);
+  // The ticks are centred in the list's box, so the middle one is near the middle.
+  const mid = ks[Math.floor(ks.length / 2)];
+  expect(Math.abs(v.railTickY(mid) - 300)).toBeLessThan(60);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  v.railJump(mid, cx);
+  const want = v.scrollTo.at;
+  draw(v, cx);
+  cx.flush();
+  const rows = v.rows();
+  const slots = v.slotsMemo;
+  const head = rows.findIndex((r) => r.key === mid);
+  const [j, how] = scrolled.at(-1);
+  // Where the turn's top lands: under the items from j, or centred.
+  const y = how === "center" ? (600 - slots[head]) / 2 : slots.slice(j, head).reduce((x, n) => x + n, 0);
+  expect(y).toBeGreaterThanOrEqual(32);
+  const best = Math.min(...[0, ...Array.from({ length: head }, (_, k) => slots.slice(head - 1 - k, head).reduce((x, n) => x + n, 0))]
+    .filter((z) => z >= 32 && z + Math.min(slots[head], 48) <= 600).map((z) => Math.abs(z - want)));
+  expect(Math.abs(y - want)).toBeLessThanOrEqual(best);
+  // A pane too narrow for a whole Comfortable line hides the rail: 549 px at 14 px text.
+  const { railMinPane } = await import("../mods/agent-threads/ui.js");
+  expect(v.prefs.textSize).toBe(14);
+  expect(railMinPane(14)).toBe(549);
+  v.paneW = 548;
+  expect(v.railShown()).toBe(false);
+  v.paneW = 549;
+  expect(v.railShown()).toBe(true);
+  // The default pane at the reading width (573 px) keeps it.
+  v.paneW = 573;
+  expect(v.railShown()).toBe(true);
+});
+
+// The owner's fault on PR 73, 16 Nov: a click on a tick whose turn had a tall turn above it,
+// and was itself taller than the pane, put the turn at the very top with its first lines
+// under the top row. The list can only put an item's top at its top edge, and no earlier item
+// started near the tick; the turn now lands level with it (landExact, one frame of lift).
+test("a rail click lands a tall turn level with its tick when the turn above it is tall too", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = 675;
+  v.listH = 1000;
+  draw(v, cx);
+  const ks = keys();
+  const mid = ks[Math.floor(ks.length / 2)];
+  const prev = ks[ks.indexOf(mid) - 1];
+  // Both turns are long: a 30-line prompt each, and the one above with a long reply.
+  for (const k of [prev, mid]) {
+    const turn = v.findTurn(k);
+    turn.prompt = Array.from({ length: 30 }, (_, i) => `line ${i + 1} of the long paste about the checkout total`).join("\n");
+    turn.shapeKey = null;
+  }
+  v.rowsKey = null;
+  draw(v, cx);
+  let rows = v.rows();
+  let slots = v.slotsMemo;
+  const head = rows.findIndex((r) => r.key === mid);
+  const want = Math.round(Math.max(32, v.railTickY(mid) - 8 - 10));
+  // The case: the item above is taller than the room over the tick, and the turn is taller
+  // than the pane, so no item's top lands within a line of the tick.
+  expect(slots[head - 1]).toBeGreaterThan(want + 22);
+  expect(slots[head]).toBeGreaterThan(1000 - want);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  cx.timers = [];
+  v.railJump(mid, cx);
+  draw(v, cx);
+  expect(v.landed).toMatchObject({ key: mid, y: want, how: "top" });
+  const { j, lift } = v.landed;
+  expect(j).toBe(head - 1);
+  expect(lift).toBe(slots[head - 1] - want);
+  // The scroll to the earlier item comes with its lift on the first row, for that frame.
+  const first = slots[0];
+  cx.flush(48);
+  expect(scrolled.at(-1)).toEqual([j, "top"]);
+  expect(v.landLift).toBe(lift);
+  draw(v, cx);
+  expect(v.slotsMemo[0]).toBe(first + lift);
+  // The list kept its offset in px (top of item j plus lift): with the lift gone, the turn's
+  // top is want px down, the end of the turn above over it.
+  cx.flush(120);
+  expect(v.landLift).toBe(0);
+  draw(v, cx);
+  rows = v.rows();
+  slots = v.slotsMemo;
+  expect(slots[0]).toBe(first);
+  const offset = slots.slice(0, j).reduce((x, n) => x + n, 0) + lift;
+  const top = slots.slice(0, head).reduce((x, n) => x + n, 0);
+  expect(top - offset).toBe(want);
+});
+
+test("landExact: the nearest earlier item at least want above, lifted by the rest", async () => {
+  const { landExact } = await import("../mods/agent-threads/ui.js");
+  // Item 3 to 300 px down: item 2 (40) is short of it, item 1 (40 + 600) past it by 340.
+  expect(landExact([100, 600, 40, 900], 3, 300)).toEqual({ j: 1, how: "top", y: 300, lift: 340 });
+  // An exact fit needs no lift.
+  expect(landExact([100, 260, 40, 900], 3, 300)).toEqual({ j: 1, how: "top", y: 300, lift: 0 });
+  // Want 0: the item itself at the top.
+  expect(landExact([100, 600], 1, 0)).toEqual({ j: 1, how: "top", y: 0, lift: 0 });
+  // Everything above is shorter than want: the list's start at the top.
+  expect(landExact([50, 60, 900], 2, 300)).toEqual({ j: 0, how: "top", y: 110, lift: 0 });
+});
+
+test("Rail side lists Left on the left and Right on the right", async () => {
+  const { v } = await pinPane("--extra", "2");
+  rec = [];
+  v.railSideRow(theme, (x) => x);
+  const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
+  rec = null;
+  expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
+});
+
+// The owner's idea, 16 Nov: after a jump, the pair landed on gets a soft tint that fades out
+// fast, to draw the eye to it. It changes no row and redraws nothing for the fade: Herdr runs
+// the opacity transition itself.
+test("a jump flashes the turn it lands on: an accent tint on its items, faded by a transition, then gone", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "4");
+  draw(v, cx);
+  const ks = keys();
+  const key = ks[1];
+  v.open = new Set([key]);
+  v.rowsKey = null;
+  draw(v, cx);
+  v.scroll = { scroll_to_item() {}, scroll_to_bottom() {} };
+  const rowsKey = v.rowsKey;
+  cx.timers = [];
+  v.railJump(key, cx);
+  draw(v, cx);
+  // Nothing before the scroll is done.
+  expect(v.flash ?? null).toBe(null);
+  const rows = v.rows();
+  const mine = rows.map((r, i) => [r, i]).filter(([r]) => r.turn && `${r.si}:${r.turn.n}` === key).map(([, i]) => i);
+  expect(mine.length).toBeGreaterThan(3); // an open turn: several items
+  const layers = () => {
+    rec = [];
+    v.listItems(theme, rows, rows.map(() => 100), { start: 0, end: rows.length }, true, false);
+    const c = rec; rec = null;
+    return c.map((e, i) => [e, i]).filter(([e]) => e[0] === "id" && String(e[1]).startsWith("th-flash-")).map(([e, i]) => ({ id: e[1], calls: c.slice(i, i + 12) }));
+  };
+  cx.flush(140);
+  expect(v.flash).toMatchObject({ key, on: true });
+  let ls = layers();
+  // One layer per item of that turn, and none on the others.
+  expect(ls.length).toBe(mine.length);
+  for (const l of ls) {
+    expect(l.calls).toContainEqual(["bg", alphaForTest(theme.accent, 0.14)]);
+    expect(l.calls).toContainEqual(["opacity", 1]);
+    expect(l.calls).toContainEqual(["transition", "opacity", { duration: 600, easing: "ease-out" }]);
+  }
+  cx.flush(180);
+  expect(v.flash.on).toBe(false);
+  ls = layers();
+  for (const l of ls) expect(l.calls).toContainEqual(["opacity", 0]);
+  cx.flush(900);
+  expect(v.flash).toBe(null);
+  expect(layers()).toHaveLength(0);
+  // The rows were never rebuilt for it.
+  expect(v.rowsKey).toBe(rowsKey);
+  // A pin return, #n in the search and Go to that reply flash too; a plain move does not.
+  v.action("prev", cx);
+  expect(v.scrollTo?.flash).toBeFalsy();
+});
+
 // The owner's fault, 16 Nov: a prompt typed while the agent worked (Claude Code queues it and
 // writes it as a queued_command attachment) showed only its quote line, as plain text, while
 // its turn ran and was selected.
@@ -6988,16 +7398,30 @@ test("a queued prompt that opens with a quote shows whole on the running turn's 
   v.sel = key;
   const r = v.rows().find((x) => x.key === key);
   expect(r.kind).toBe("working");
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the bubble: the plain look
   rec = [];
+  views.length = 0;
   v.workingItem(theme, r);
   const drawn = rec;
   rec = null;
-  const text = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
-  for (const w of ["I think the rounding", "billing/receipt.ts", "Keep the helper", "Which of the two should change?"]) expect(text).toContain(w);
-  // The quote is drawn behind its bar, without its "> ".
-  expect(r.shape.kinds?.[0]).toBe("q");
-  expect(text).not.toContain("> The checkout");
-  expect(v.estimate(r)).toBeGreaterThan(8 + 12 + 6 * 22);
+  // The open turn's YOU part, whole, as Markdown: the quote in full as a blockquote, and the
+  // owner's three paragraphs kept apart (the closed row's lines ran them together).
+  expect(drawn).toContainEqual(["TextView", `th-you-wyou:${key}`]);
+  const md = views.find((x) => x.id === `th-you-wyou:${key}`).md.replace(/\\(?!\n)/g, "");
+  for (const w of ["I think the rounding", "billing/receipt", "Keep the helper", "Which of the two should change?"]) expect(md).toContain(w);
+  expect(md).toMatch(/^> /);
+  expect(md.split(/\n{2,}/).length).toBeGreaterThanOrEqual(3);
+  // Its height is the YOU part's: the probe's measure once it reports, the estimate till then.
+  const y = v.workYou(r);
+  const rest = 8 + 6 + 16 + 6 + 24 + 6 + v.workingGeom(r.turn, r.shape).note * 20 + 10;
+  expect(v.estimate(r)).toBe(rest + v.youHeight(y));
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
+  v.probed(`wyou:${key}`, v.partSig(y), { height: 300 * v.zoom() }, cx);
+  expect(v.estimate(r)).toBe(rest + 300);
+  // Not selected, it is the one-line row, and its message is still measured for the card.
+  v.sel = null;
+  expect(v.rows().find((x) => x.key === key).kind).toBe("wrow");
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
 });
 
 // The owner's fault, 16 Nov: the viewer drew a quote as "> " text. A run of quote lines is drawn as
@@ -7018,4 +7442,34 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(bars.length).toBe(1);
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
+});
+
+// PR 72 and 75 together: the running card draws the open turn's YOU part, so a message past
+// 420 px is cut there with Show all, and a press on the card opens it in place.
+test("the running card's message past 420 px is cut with Show all, and a press on the card shows it whole", async () => {
+  const prompt = Array.from({ length: 40 }, (_, i) => `step ${i + 1}: cart total recomputed for order ${1000 + i}`).join("\n");
+  const at = (s) => `2026-11-16T10:00:${String(s).padStart(2, "0")}.000Z`;
+  const lines = [
+    { type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, message: { role: "user", content: prompt } },
+    { type: "assistant", uuid: "a1", timestamp: at(5), sessionId: "s", message: { id: "m1", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "cart/total.ts" } }] } },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "threads-runlong-"));
+  const file = join(dir, "r.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  const key = v.turnKeys(v.rows()).at(-1);
+  v.sel = key;
+  let r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: true });
+  const h0 = v.estimate(r);
+  v.click(key, cx);
+  r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: false });
+  expect(v.estimate(r)).toBeGreaterThan(h0);
+  expect(v.open.has(key)).toBe(false);
+  v.click(key, cx);
+  expect(v.youMd(v.workYou(v.rows().find((x) => x.key === key))).capped).toBe(true);
 });
