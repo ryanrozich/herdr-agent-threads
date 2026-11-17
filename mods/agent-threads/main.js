@@ -54,7 +54,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
+  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
@@ -810,6 +810,7 @@ export default class Threads extends View {
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
+      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
       case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
@@ -1192,7 +1193,7 @@ export default class Threads extends View {
     this.follow = false;
     this.toBottom = false; // a jump to the newest turn still waiting would take this frame
     const q = this.filterText();
-    const hidden = (q && !threadMatches(s.turns, turn, q)) || !isShown(turn, { agentTurns: this.prefs.agentTurns, live: p.state === "live" });
+    const hidden = (q && !threadMatches(s.turns, turn, q)) || !isShown(turn, { agentTurns: this.prefs.agentTurns, live: p.state === "live", turns: s.turns });
     this.pinVisit = hidden ? key : null;
     // The note above the turn can be out of view when the place is further down.
     if (hidden) this.say(visitNote(Boolean(q && !threadMatches(s.turns, turn, q))), "pin", cx, 3000);
@@ -1890,7 +1891,7 @@ export default class Threads extends View {
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       // The live newest turn (isLive), found once for the session.
       const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
-      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi });
+      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
       // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
       for (let ti = t0; ti < s.turns.length; ti++) {
@@ -1970,10 +1971,46 @@ export default class Threads extends View {
   // line ("split").
   closedRows(item, out) {
     const shape = this.shape(item.turn);
-    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (shape.thumbs ? 1 : 0));
+    const fold = this.foldState(item);
+    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (fold || shape.thumbs ? 1 : 0));
+    // An agent turn with a reply while agent messages are hidden: its one line, then the row
+    // without the sender and, while folded, without the message.
+    if (fold) { out.push({ ...item, kind: "afold", key: `af:${item.key}`, turnKey: item.key, live: false, fold }); out.push({ ...item, shape, fold }); return; }
     if (!shape.thumbs) { out.push({ ...item, shape }); return; }
     out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, shape, split: true });
+  }
+
+  // An agent turn shown, while agent messages are hidden, for its reply (ui.js agentReplied):
+  // "folded" (its message is one line over the reply) or "shown" (a press on that line drew
+  // the message under it: `full` holds "<turn key>:am"); null for every other turn. While a
+  // search is on, the message is drawn whole, so its matches can be seen.
+  foldState(item) {
+    if (this.prefs.agentTurns || !item.turn?.agent || item.live || this.filterText()) return null;
+    const s = this.sessions[item.si];
+    if (!s || !agentReplied(item.turn, s.turns)) return null;
+    return this.full.has(`${item.key}:am`) ? "shown" : "folded";
+  }
+  // What a fold leaves out of the closed row: its sender line and, folded, the message and
+  // the strip under it (ui.js rowHeight). The row then starts a gap above the line.
+  foldCut(r) {
+    if (!r.fold || r.kind !== "turn") return 0;
+    if (r.fold === "shown") return ROW.PAD_T + ROW.META;
+    const sh = r.shape;
+    return ROW.PAD_T + ROW.META + ROW.GAP + (sh.thumbs ? thumbSize(this.width, this.prefs.textSize, this.chars()) + ROW.GAP : 0)
+      + 2 * ROW.BUBBLE_PY + this.rt().line * sh.p + (sh.pMore ? ROW.MORE : 0) + ROW.GAP + ROW.META;
+  }
+  // The folded message's one line: the sender's icon, "helper-a · agent message" and a
+  // chevron, quiet; a press shows the message, or folds it again.
+  foldLine(t, r) {
+    const { turn } = r;
+    const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0).cursor_pointer()
+      .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
+      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .text_color(t.muted).child(senderLabel(turn.sender, this.width)))
+      .child(svg(ICON(r.fold === "shown" ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
+    if (r.open) return h_flex().px(ROW.PAD_X).min_w(0).child(line);
+    return this.rowFrame(t, false, false, false, [line], ROW.PAD_T, 0);
   }
 
   // The running turn. With pasted images its meta line and tiles are an item of their own
@@ -2344,18 +2381,27 @@ export default class Threads extends View {
     const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}`).join(",")}|${status}|${this.prefs.agentTurns ? 1 : 0}`;
     if (this.countsKey === key) return this.countsMemo;
     const agents = Boolean(this.prefs.agentTurns);
-    const c = { agentAll: 0, hiddenAll: 0, shownAll: 0, agentCur: 0, hiddenCur: 0, shownCur: 0 };
+    // folded: agent turns shown for their reply, their message one line (foldState).
+    const c = { agentAll: 0, hiddenAll: 0, shownAll: 0, foldedAll: 0, agentCur: 0, hiddenCur: 0, shownCur: 0 };
     const lastSi = this.sessions.length - 1;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
+      const live = this.isLive(s, si, ti, status);
+      const on = isShown(t, { agentTurns: agents, live, turns: s.turns });
       c.agentAll += t.agent ? 1 : 0;
       c.hiddenAll += on ? 0 : 1;
       c.shownAll += on ? 1 : 0;
+      c.foldedAll += on && t.agent && !agents && !live ? 1 : 0;
       if (si === lastSi) { c.agentCur += t.agent ? 1 : 0; c.hiddenCur += on ? 0 : 1; c.shownCur += on ? 1 : 0; }
     }));
     this.countsKey = key;
     this.countsMemo = c;
     return c;
+  }
+
+  // The agent messages not shown whole while they are hidden: "40 folded, 1 hidden" (folded:
+  // shown for their reply, the message one line; hidden: no reply of their own).
+  agentCountText(c) {
+    return [c.foldedAll ? `${c.foldedAll.toLocaleString()} folded` : null, c.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null].filter(Boolean).join(", ");
   }
 
   // Whether the selection is on a hidden agent turn.
@@ -2455,7 +2501,7 @@ export default class Threads extends View {
     const agents = Boolean(this.prefs.agentTurns);
     const shows = (ti) => {
       const live = this.isLive(s, si, ti, status);
-      return !live && isShown(s.turns[ti], { agentTurns: agents, live }) && !this.open.has(`${si}:${s.turns[ti].n}`);
+      return !live && isShown(s.turns[ti], { agentTurns: agents, live, turns: s.turns }) && !this.open.has(`${si}:${s.turns[ti].n}`);
     };
     if (from < 0) { from = s.turns.length; for (let k = 0; from > 0 && k < SHAPE_FIRST;) if (shows(--from)) k++; }
     for (let ti = from, k = 0; ti < s.turns.length && k < SHAPE_FIRST; ti++) {
@@ -2564,12 +2610,17 @@ export default class Threads extends View {
     const resume = this.resumeAt();
     const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
-    // Pasted images: their tiles over the message. A tile opens the review.
-    if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
-    // full: the whole message, by the reader's Show all or because long messages are not
-    // shortened; less: Show less, only after a Show all.
-    out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) || !this.prefs.truncate, less: this.full.has(key) && Boolean(this.prefs.truncate) });
-    out.push({ ...item, kind: "ustrip", key: `us:${key}` });
+    // An agent turn shown for its reply: its message folded to one line (foldState).
+    const fold = this.foldState(item);
+    if (fold) out.push({ ...item, kind: "afold", key: `af:${key}`, turnKey: key, fold, open: true });
+    if (fold !== "folded") {
+      // Pasted images: their tiles over the message. A tile opens the review.
+      if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
+      // full: the whole message, by the reader's Show all or because long messages are not
+      // shortened; less: Show less, only after a Show all.
+      out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) || !this.prefs.truncate, less: this.full.has(key) && Boolean(this.prefs.truncate) });
+      out.push({ ...item, kind: "ustrip", key: `us:${key}` });
+    }
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     // Level 1, under the line when it is open: the steps, then straight into the reply. The
@@ -2708,7 +2759,7 @@ export default class Threads extends View {
     const agentTurns = Boolean(this.prefs.agentTurns);
     for (let ti = s.turns.length - 1; ti >= 0; ti--) {
       const turn = s.turns[ti];
-      if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti) })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
+      if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti), turns: s.turns })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
     }
     return null;
   }
@@ -3497,6 +3548,15 @@ export default class Threads extends View {
     this.textSel = null;
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    // A folded agent message's line: the message, or folded again (foldState).
+    if (kind === "af") {
+      const k = `${id}:am`;
+      if (this.full.has(k)) this.full.delete(k); else this.full.add(k);
+      this.toList();
+      this.sel = id;
+      this.follow = false;
+      return cx.notify();
+    }
     if (kind === "resume") {
       this.toList();
       this.sel = id;
@@ -4570,8 +4630,8 @@ export default class Threads extends View {
     const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null]];
     if (showAgents) {
       const on = Boolean(this.prefs.agentTurns);
-      out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
-        countLabel(on ? c.agentAll : c.hiddenAll), null]);
+      out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${this.agentCountText(c)}) (a)`, "agents", on,
+        countLabel(on ? c.agentAll : c.hiddenAll + c.foldedAll), null]);
     }
     if (!narrow && this.view === "pinned") out.push(pinBtn);
     const label = `Pinned${pins ? ` ${pins}` : ""}`;
@@ -4889,7 +4949,7 @@ export default class Threads extends View {
     const status = this.status();
     let shown = 0, hit = 0, hiddenHit = 0;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status) });
+      const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status), turns: s.turns });
       const m = threadMatches(s.turns, t, q);
       if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
     }));
@@ -4925,7 +4985,7 @@ export default class Threads extends View {
       .child(h_flex().id("th-set-agents").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("agents", cx); cx.notify(); })
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
-        .child(label(this.counts().hiddenAll && !P.agentTurns ? `Agent messages · ${this.counts().hiddenAll.toLocaleString()} hidden` : "Agent messages"))
+        .child(label(!P.agentTurns && this.agentCountText(this.counts()) ? `Agent messages · ${this.agentCountText(this.counts()).replace(", ", " · ")}` : "Agent messages"))
         .child(sw))
       .child(v_flex().gap(2)
         .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
@@ -5238,7 +5298,7 @@ export default class Threads extends View {
       this.scrollTo = null;
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
-      const lead = (k) => (rows[k - 1]?.kind === "wtop" && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
+      const lead = (k) => ((rows[k - 1]?.kind === "wtop" || rows[k - 1]?.kind === "afold") && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
@@ -5778,7 +5838,7 @@ export default class Threads extends View {
   height(r) {
     if (r.kind === "turn" && r.shape?.md != null) {
       const m = this.measured(this.cmdFor(r));
-      return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r);
+      return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r) - this.foldCut(r);
     }
     if (PROBED.has(r.kind)) {
       const m = this.measured(r);
@@ -5793,7 +5853,8 @@ export default class Threads extends View {
       case "spacer": return r.h;
       case "gap": return r.h;
       case "tail": return r.h;
-      case "turn": return r.shape.height - this.splitCut(r);
+      case "turn": return r.shape.height - this.splitCut(r) - this.foldCut(r);
+      case "afold": return r.open ? ROW.META : ROW.PAD_T + ROW.META;
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "wake": return WAKE_H;
@@ -6112,6 +6173,7 @@ export default class Threads extends View {
       case "line": return this.lineItem(t, r, focusedPanel);
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "wtop": return this.workingTop(t, r, focusedPanel);
+      case "afold": return this.foldLine(t, r);
       case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
       case "divider": return this.dividerItem(t, r);
@@ -6404,22 +6466,23 @@ export default class Threads extends View {
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     const bt = this.bubbleLook(t, turn.agent).theme;
     // Split: the meta line and tiles are the wtop item over it (closedRows).
+    // Folded (foldState): the sender is the line over it, and the message is left out.
     return this.rowFrame(t, sel, focusedPanel, false, [
-      ...(turn.agent && !r.split ? [this.senderLine(t, turn)] : []),
-      this.youGroup(t, turn, key, sel, [
+      ...(turn.agent && !r.split && !r.fold ? [this.senderLine(t, turn)] : []),
+      ...(r.fold === "folded" ? [] : [this.youGroup(t, turn, key, sel, [
         ...(sh.thumbs && !r.split ? [this.thumbStrip(t, turn, key)] : []),
         this.bubble(t, turn, [
           this.promptBlock(bt, turn, sh, sel),
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
-      ]),
+      ])]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
-    ], r.split ? ROW.GAP : ROW.PAD_T);
+    ], r.split || r.fold ? ROW.GAP : ROW.PAD_T);
   }
 
   // A closed row's message and the strip under it, as one element, so a hover anywhere on

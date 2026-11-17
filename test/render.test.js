@@ -226,8 +226,10 @@ test("the all-hidden empty state and a running agent turn draw", async () => {
   v.sel = null; v.fitKey = null; draw(v, cx);
   expect(v.rows().some((r) => r.kind === "wrow")).toBe(true);
   const { v: w, cx: wx } = await pane(fixture("--only", "0", "--agents"));
-  // drop the person's own turns: every turn hidden
+  // drop the person's own turns, and the agents' replies (an agent turn with a reply of its own
+  // stays, its message folded): every turn hidden
   w.current().turns = w.current().turns.filter((t) => t.agent);
+  for (const t of w.current().turns) t.after = [];
   w.current().version++;
   draw(w, wx);
   expect(w.turnKeys(w.rows()).length).toBe(0);
@@ -439,8 +441,8 @@ test("a live agent turn that finishes while hidden hands the selection back (F1)
   v.follow = true;
   v.jumpLatest(true);
   expect(v.sel).toBe("0:2"); // the live agent turn shows while it runs
+  // It ends with no reply of its own (with one it would stay, its message folded).
   const { apply } = await import("../mods/agent-threads/turns.js");
-  apply(s, { k: "t", t: "Noted." });
   apply(s, { k: "d", ms: 500, ts: at(3) });
   draw(v, cx);
   expect(v.turnKeys(v.rows())).toEqual(["0:1"]);
@@ -480,6 +482,79 @@ test("a prompt answered together with a hidden agent message borrows its reply (
   v.prefs = { ...v.prefs, agentTurns: true };
   draw(v, cx);
   expect(v.shape(t1).reply.join(" ")).toBe("Answered together with #2");
+});
+
+test("an agent turn with a reply of its own shows while agent messages are hidden, its message folded to one line", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    // A teammate's message, then a reply the person must see.
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good. The release note needs one more line." }, { k: "d", ms: 800, ts: at(3) },
+    // One with no reply of its own stays hidden.
+    { k: "p", o: "peer", t: peer("Done here"), ts: at(4) }, { k: "d", ms: 200, ts: at(5) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2"]);
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.kind === "turn" && r.key === "0:2");
+  // The one line over the row, then the row without the sender or the message.
+  expect(rows[i - 1]).toMatchObject({ kind: "afold", key: "af:0:2", turnKey: "0:2", fold: "folded" });
+  expect(rows[i].fold).toBe("folded");
+  const sh = rows[i].shape;
+  expect(v.height(rows[i])).toBe(sh.height - v.foldCut(rows[i]));
+  expect(v.foldCut(rows[i])).toBeGreaterThan(sh.p * v.rt().line);
+  expect(v.height(rows[i - 1])).toBe(8 + 16);
+  const detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.some((d) => d.startsWith("afold#2 folded helper-a"))).toBe(true);
+  // The counts: one folded, one hidden; the chip's number is both.
+  expect(v.counts()).toMatchObject({ foldedAll: 1, hiddenAll: 1 });
+  const chip = v.headerButtons().find((b) => b[0] === "th-agents");
+  expect(chip[2]).toBe("Show agent messages (1 folded, 1 hidden) (a)");
+  // A press on the line shows the message under it, and another folds it again.
+  v.click("af:0:2", cx);
+  draw(v, cx);
+  expect(v.sel).toBe("0:2");
+  let r2 = v.rows().find((r) => r.kind === "turn" && r.key === "0:2");
+  expect(r2.fold).toBe("shown");
+  expect(v.height(r2)).toBe(r2.shape.height - 8 - 16);
+  v.click("af:0:2", cx);
+  draw(v, cx);
+  r2 = v.rows().find((r) => r.kind === "turn" && r.key === "0:2");
+  expect(r2.fold).toBe("folded");
+  // Open: the line over the reply, and no message part while folded.
+  v.open = new Set(["0:2"]);
+  draw(v, cx);
+  const open = v.rows().filter((r) => r.si === 0 && r.turn?.n === 2).map((r) => r.kind);
+  expect(open.slice(0, 2)).toEqual(["head", "afold"]);
+  expect(open.includes("you")).toBe(false);
+  v.click("af:0:2", cx);
+  draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "you" && r.turn.n === 2)).toBe(true);
+  v.open.clear();
+  // A search draws the message whole, so its matches can be seen.
+  v.query = "green";
+  draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "afold")).toBe(false);
+  expect(v.turnKeys(v.rows())).toEqual(["0:2"]);
+  v.query = "";
+  // With agent messages shown (a), every agent message is whole, with no line.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "afold" || r.fold)).toBe(false);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+});
+
+test("an agent turn whose reply is shared with the person's prompt stays hidden: the person's row has the reply", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Summarise the failing test", ts: at(0) },
+    { k: "p", o: "peer", t: peer("Also check cart.ts"), ts: at(1) },
+    { k: "t", t: "The test fails because cart.ts rounds early. Both fixed." },
+    { k: "d", ms: 2000, ts: at(2) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1"]);
+  expect(v.counts()).toMatchObject({ foldedAll: 0, hiddenAll: 1 });
 });
 
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
@@ -1209,12 +1284,15 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   view.rows();
   const toggleOn = time(() => { view.setPrefs({ ...view.prefs, agentTurns: true }); view.rows(); });
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
-  const keys = view.turnKeys(view.rows());
-  view.toggle(keys.at(-2), r.cx);
   // The list draws the rows of one screen at its end, as Herdr does (the stub otherwise draws
   // all 1,305, and each row's own cost, its hover card and its whole reply, adds up past
   // anything Herdr draws). allFrame is the same open frame with every row drawn, for the log.
   listWindow = (n) => ({ start: Math.max(0, n - 14), end: n });
+  // The rows build can take more than one slice (BUILD_MS, one a frame) once agent turns with
+  // replies show: the frames that finish it, before the keys are read.
+  for (let k = 0; k < 50 && view.rowJob; k++) view.render(r.cx);
+  const keys = view.turnKeys(view.rows());
+  view.toggle(keys.at(-2), r.cx);
   const openFrame = time(() => view.render(r.cx));
   const nextFrame = time(() => view.render(r.cx));
   listWindow = null;
@@ -1235,7 +1313,10 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   // slower (32 ms, 207 ms), so CI allows twice each: the regressions they guard against (a
   // whole read parsed in one go, rows rebuilt per frame) cost several times more.
   const slow = process.env.CI ? 2 : 1;
-  expect(r.longest).toBeLessThanOrEqual(25 * slow);
+  // 30 ms, not 25: 1,170 of this fixture's 1,305 turns are agent messages with a reply, which
+  // show folded while agent messages are hidden, and the last stretch shapes the turns in view
+  // from them (20 to 23 ms before they showed, 26 to 28 ms after).
+  expect(r.longest).toBeLessThanOrEqual(30 * slow);
   expect(r.pcts.length).toBeGreaterThanOrEqual(4);
   for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
   expect(r.pcts.at(-1)).toBe(100);
@@ -5670,8 +5751,14 @@ test("o shows the outline: one row per turn under the same day bands, with the s
   // The agents toggle decides which turns show.
   const { v: w, cx: wx } = await pane(fixture("--only", "2", "--agents"));
   w.prefs = { ...w.prefs, agentTurns: false };
+  // An agent turn with a reply of its own shows while agent messages are hidden; one without
+  // stays hidden.
+  const quiet = w.current().turns.find((t) => t.agent);
+  quiet.after = [];
+  w.current().version++;
   w.action("outline", wx);
   const own = w.rows().filter((r) => r.kind === "line").length;
+  expect(w.rows().some((r) => r.kind === "line" && r.turn === quiet)).toBe(false);
   w.setAgents(true, wx);
   const all = w.rows().filter((r) => r.kind === "line");
   expect(all.length).toBeGreaterThan(own);
@@ -5809,7 +5896,14 @@ test("a settings change in a long session reshapes rows over several frames, the
   const { v, cx } = await paneWith(busy(), null, 1000);
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
+  // Half the agent messages without a reply of their own, so they stay hidden till the toggle
+  // below (the rest show, folded, for their reply).
+  v.current().turns.forEach((t, i) => { if (t.agent && i % 2) t.after = []; });
+  v.current().version++;
   draw(v, cx);
+  // Every row shaped before the change below (more rows show, so the first draws leave some
+  // for later frames, whose timer the test clears).
+  for (let k = 0; k < 400 && (v.rowJob || v.shapeLeft > 0 || v.staleRows?.length); k++) { cx.flush(0); draw(v, cx); }
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);

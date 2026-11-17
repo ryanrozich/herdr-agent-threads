@@ -1541,9 +1541,25 @@ export function senderIcon(sender) {
 }
 
 // Whether a turn is shown: the person's own turns always; another sender's when the
-// setting is on, or while it is the live newest turn (Working or Needs you).
-export function isShown(turn, { agentTurns = false, live = false } = {}) {
-  return !turn.agent || agentTurns || live;
+// setting is on, or while it is the live newest turn (Working or Needs you), or, given its
+// session's turns, when it has a reply of its own (agentReplied): then its message is folded
+// to one line over the reply.
+export function isShown(turn, { agentTurns = false, live = false, turns = null } = {}) {
+  return !turn.agent || agentTurns || live || (turns != null && agentReplied(turn, turns));
+}
+
+// An agent turn that keeps its reply on screen while agent messages are hidden, its message
+// folded to one line (the owner, 17 Nov: a reply written for the person was hidden because
+// an agent's message had started the turn). Not one with no reply text, and not one whose
+// reply an earlier turn of the person's already shows (main.js borrowedFrom: Claude answered
+// both in one reply). Reads the reply's pieces without joining them, since the counts call
+// this for every turn.
+export function agentReplied(turn, turns) {
+  if (!turn.agent || !turn.after?.some((x) => /\S/.test(x))) return false;
+  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
+    if (!turns[i].agent && !turns[i].after.length) return false;
+  }
+  return true;
 }
 
 // The turns shown and how many are hidden, for a list of turns (live: the live turn).
@@ -1554,7 +1570,7 @@ export function visible(turns, { agentTurns = false, live = null, match = null }
   let hiddenMatches = 0;
   let matched = 0;
   for (const t of turns) {
-    const on = isShown(t, { agentTurns, live: t === live });
+    const on = isShown(t, { agentTurns, live: t === live, turns });
     const hit = match ? match(t) : true;
     if (!on) { hidden++; if (match && hit) hiddenMatches++; continue; }
     shown.push(t);
