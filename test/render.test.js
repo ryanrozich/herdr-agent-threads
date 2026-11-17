@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -3004,7 +3004,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   draw(v, cx);
 });
 
-test("v in a pane from 480 px splits the Pinned column beside it, about a third wide, kept apart from the main pane; v moves between them", async () => {
+test("v in a pane from 480 px splits the Pinned column beside it, 340 px at 700, kept apart from the main pane; v moves between them", async () => {
   const { v, cx } = await pinPane("--extra", "6");
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
@@ -3022,7 +3022,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   v.settleSplit();
   expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
-  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 252 }]]);
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 340 }]]);
   // The header's Pinned button says the column is open, and v or a click focuses it.
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
   log = [];
@@ -3289,7 +3289,7 @@ test("Pinned view: each closed pin is a compact row, its digit, number, time, tw
   expect(state.shared["threads.debug"].t4.detail.filter((x) => x.startsWith("pin#")).length).toBe(3);
 });
 
-test("Pinned column: five pins, one day apart, fit a 240 to 320 px column at a 1150 px window without scrolling", async () => {
+test("Pinned column: five pins, one day apart, fit a 240 to 400 px column at a 1150 px window without scrolling", async () => {
   const { v, cx } = await pinsShown(["--only", "5", "--gap", "86400"], [4, 2, 0, 3, 1]);
   for (const width of [240, 280, 320, 400]) {
     v.width = width;
@@ -3392,7 +3392,7 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   log = [];
   v.settleSplit();
-  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 320 }], ["pane.focus", { pane: "p2" }]]);
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 384 }], ["pane.focus", { pane: "p2" }]]);
   draw(v, cx);
   // The owner closes the column: the next pin does not open it again, and v still does.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
@@ -3406,6 +3406,39 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
 });
 
+test("the Pinned column keeps the width the owner leaves it at, not the split's own resize", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.width = 960;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  // In the column: its first sizes (Herdr's default, then the split's resize) are not kept.
+  const col = new Threads();
+  col.pinnedPane = true;
+  col.me = () => ({ pane: "p3" });
+  col.paneW = 250;
+  col.shareWidth();
+  col.paneW = 382;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toBeUndefined();
+  // Once settled, a drag to 298 px is kept as Herdr's size, the frame included.
+  col.firstSizeAt = Date.now() - 2000;
+  col.paneW = 298;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toEqual({ px: 300 });
+  // The next column opens at that width.
+  log = [];
+  v.key(keyEv("v"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 300 }]);
+  // The fit button's own resize of the column is not taken as the owner's choice.
+  state.shared["threads.pinWidth"] = { px: 300, hold: Date.now() + 1500 };
+  col.paneW = 340;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"].px).toBe(300);
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+});
+
 test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
   const first = await pinPane("--extra", "6");
   log = [];
@@ -3413,7 +3446,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   first.v.action("pin", first.cx); // at 380 px: no column
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   const file = await saved();
-  for (const [width, px] of [[479, null], [498, 240]]) {
+  for (const [width, px] of [[479, null], [498, 258]]) {
     log = [];
     recordFiles[PINS] = JSON.stringify(file);
     const w = new Threads();
@@ -5760,7 +5793,7 @@ test("a settings change in a long session reshapes rows over several frames, the
   expect(v.shapeLeft).toBe(0);
 });
 
-test("the rail card: a hovered tick shows its turn's number and time over two lines of its prompt, beside it on the left", async () => {
+test("the rail card: a hovered tick shows the day, time and number, two lines of its prompt and three of its reply, beside it on the left", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.listH = 600;
   draw(v, cx);
@@ -5781,10 +5814,26 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
   const turn = v.findTurn(ks[1]);
   const c = v.railCard(ticks[1]);
-  expect(c.head).toMatch(new RegExp(`^#${turn.n} · \\d`));
+  // The first line: the day leads (muted), then the time and the number (dim).
+  expect(c.day).toBe(railDay(turn.ts));
+  expect(c.rest).toMatch(new RegExp(`^\\d{1,2}:\\d\\d\\s[AP]M · #${turn.n}$`));
+  expect(r).toContainEqual(["child", c.day]);
+  expect(r).toContainEqual(["child", c.rest]);
   expect(c.body.length).toBeGreaterThan(0);
-  expect(c.body.length).toBeLessThanOrEqual(2 * 40);
-  expect(r.some((e) => e[0] === "child" && e[1] === c.head)).toBe(true);
+  expect(c.body.length).toBeLessThanOrEqual(2 * 46);
+  // The reply on three lines at most, flattened, in the muted colour.
+  expect(c.reply.length).toBeGreaterThan(0);
+  expect(c.reply.length).toBeLessThanOrEqual(3 * 50);
+  expect(c.reply).not.toMatch(/[*`#|]/);
+  expect(r).toContainEqual(["child", c.reply]);
+  expect(r.some((e) => e[0] === "w" && e[1] === 300)).toBe(true);
+  // The peak: the hovered tick at its peak (24 px, 16 in this gutter under 40 px), its
+  // neighbours less by the square of how near they are.
+  const look = railLook(v.side());
+  const ws = r.filter((e) => e[0] === "w").map((e) => e[1]);
+  expect(look.peak).toBe(v.side() < 40 ? 16 : 24);
+  expect(ws).toContain(look.peak);
+  expect(ws).toContain(railSwell(look.mark, look.peak, v.railTicks().L.pitch));
   hovers[0](false, cx);
   expect(v.railHover).toBe(ks[1]);
   hovers[1](false, cx);
@@ -5799,11 +5848,29 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   v.sel = ks[2];
   v.action("pin", cx);
   ({ ticks } = v.railTicks());
-  expect(v.railCard(ticks[2]).head).toMatch(/ · pinned$/);
+  expect(v.railCard(ticks[2]).pinned).toBe(true);
+  expect(v.railCard(ticks[1]).pinned).toBe(false);
+  // While a card is open, p pins the card's turn, not the selected one.
+  v.railHover = ks[3];
+  v.action("pin", cx);
+  ({ ticks } = v.railTicks());
+  expect(ticks[3].pinned).toBe(true);
+  expect(ticks[2].pinned).toBe(true);
+  v.railHover = null;
+  // Rail side Left: the lane on the left edge, the card anchored on its left centre.
+  v.prefs = { ...v.prefs, railSide: "left" };
+  v.railHover = ks[1];
+  rec = []; v.railView(theme); r = rec; rec = null;
+  expect(r.some((e) => e[0] === "anchor" && e[1] === "left_center")).toBe(true);
+  const lk = railLook(v.side());
+  expect(r.some((e) => e[0] === "pl" && e[1] === RAIL.CARD_GAP + Math.max(0, lk.peak + lk.right - lk.lane))).toBe(true);
+  expect(r).toContainEqual(["left", 0]);
+  v.prefs = { ...v.prefs, railSide: "right" };
+  v.railHover = null;
   v.listH = 12;
   ({ ticks } = v.railTicks());
   expect(ticks[0].turns.length).toBeGreaterThan(1);
-  expect(v.railCard(ticks[0]).head).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
+  expect(v.railCard(ticks[0]).rest).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
@@ -5839,7 +5906,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(v.side()).toBeGreaterThan(56);
   rec = []; v.railView(theme); const wide = rec; rec = null;
   expect(wide.filter((e) => e[0] === "w").map((e) => e[1])).toEqual(expect.arrayContaining([32, 10, 16]));
-  expect(wide.some((e) => e[0] === "pr" && e[1] === 14)).toBe(true);
+  expect(wide.some((e) => e[0] === "right" && e[1] === 14)).toBe(true);
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));

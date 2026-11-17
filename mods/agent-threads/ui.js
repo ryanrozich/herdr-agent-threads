@@ -522,6 +522,19 @@ export function dayParts(ts, now = Date.now()) {
   return label === "Today" || label === "Yesterday" ? { name: label, date: `${wd.slice(0, 3)} ${date}` } : { name: `${wd} ${date}`, date: null };
 }
 
+// The day on a rail card: the day bands' words, short. "Today", "Yesterday", then the short
+// weekday and the date, "Fri 13 Nov", with the year when it is not this year,
+// "Mon 28 Dec 2025". One rule at every distance, so the card and the list agree.
+export function railDay(ts, now = Date.now()) {
+  if (!ts) return null;
+  const label = dayLabel(ts, now);
+  if (label === "Today" || label === "Yesterday") return label;
+  const d = new Date(ts);
+  const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  const year = d.getFullYear() !== new Date(now).getFullYear() ? ` ${d.getFullYear()}` : "";
+  return `${wd} ${label}${year}`;
+}
+
 // "#12" (or "#" while typing it) in the filter field jumps to a turn instead of filtering.
 // Returns the turn number, 0 for a bare "#", or null when the text is a filter.
 export function jumpTarget(q) {
@@ -694,6 +707,13 @@ export function flattenMd(md, max = Infinity) {
       continue;
     }
     let l = raw.replace(/^\s*(>\s*)+/, "");
+    // A table row: its cells joined with a middle dot, as bullets are; its rule line goes.
+    if (/^\s*\|.*\|\s*$/.test(l)) {
+      if (/^[\s|:-]+$/.test(l)) continue;
+      const cells = l.trim().slice(1, -1).split("|").map((c) => c.replace(/\*\*|__|`/g, "").trim()).filter(Boolean);
+      for (const c of cells) { parts.push({ t: c, bullet: true }); have += c.length + 3; }
+      continue;
+    }
     const bullet = /^\s*([-*+]|\d+[.)])\s+/.test(l) && !/^\s*([-*_]\s*){3,}$/.test(l);
     l = l.replace(/^\s*#{1,6}\s+/, "").replace(/^\s*([-*+]|\d+[.)])\s+/, "").replace(/^\s*([-*_]\s*){3,}$/, "");
     l = l.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\*\*|__|`/g, "")
@@ -1665,15 +1685,25 @@ export function callText(name, input) {
 // and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
 // gap while every turn has its own tick. h is the rail's height, days the day starts after
 // the first.
-// The card beside a hovered tick: at most CARD_W wide, CARD_GAP px left of the tick, its prompt
-// clipped to two lines of about CARD_CHARS characters.
-export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 250, CARD_GAP: 4, CARD_CHARS: 34 };
+// The card beside a hovered tick: at most CARD_W wide, CARD_GAP px from the tick on the
+// rail's inner side; a first line with the day, the time and the number, the prompt on two
+// lines of about CARD_CHARS characters and the reply on three of about REPLY_CHARS.
+// The peak: the hovered tick grows to PEAK px (PEAK_SMALL in a gutter under 40 px), and the
+// ticks within SWELL px of it grow less, by the square of how near they are (railSwell).
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36 };
 // The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
 // tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
 // the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
 export function railLook(side) {
   const small = side < 40;
-  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14 };
+  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14, peak: small ? RAIL.PEAK_SMALL : RAIL.PEAK };
+}
+// A tick's width at d px from the hovered tick: the peak at 0, then less by the square of
+// how near it is, back to its own width w at SWELL px. At 9 px apart: 24, 18, 13.5 and 11.
+export function railSwell(w, peak, d) {
+  if (!(d >= 0) || d >= RAIL.SWELL) return w;
+  const k = 1 - d / RAIL.SWELL;
+  return Math.max(w, Math.round((w + (peak - w) * k * k) * 2) / 2);
 }
 export function railLayout(count, days, h) {
   const fit = (gaps) => {
@@ -1718,7 +1748,7 @@ export function boxHit(layout, x, names) {
 }
 
 // A pin in the Pinned column and the narrow Pinned view is a compact row, so five fit in a
-// 240 to 320 px column at a 1150 px window: its digit in an accent badge on the left, then
+// 240 to 400 px column at a 1150 px window: its digit in an accent badge on the left, then
 // the turn's number and time, two lines of the prompt and one of the reply. Every line has
 // a fixed height and is cut with an ellipsis where it runs long, so the drawn row is the
 // stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px.
@@ -1764,17 +1794,27 @@ export function columnResize(c, m, d) {
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
 
-// The Pinned column that v (or the first pin) splits off a Threads pane. It lists pins, so
-// it can be narrow: about a third of the pane, 240 to 320 px. A pane from PIN_SPLIT_MIN
-// (480 px, so a pane set to 500 that measures a pixel or two less still counts) gets the
-// column; narrower, Pinned shows in the same pane. Herdr takes the column's room from the
-// pane's neighbours as well as from Threads. Returns the column's width, or null.
-export const PIN_COL = Object.freeze([240, 320]);
+// The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane,
+// 340 to 400 px (PIN_COL_WANT), so a compact row shows about 40 characters of its prompt a
+// line (the row's text is the column less PIN_ROW's 54 px of padding and badge). A pane
+// under 580 px gives the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at
+// least PIN_MAIN_MIN if Herdr takes all the room from it. Mostly it does not: with
+// readingWidth on, Threads sits at its reading width (about 570 px at text size 14) and
+// Herdr takes the column's room from the terminal beside it. A pane from
+// PIN_SPLIT_MIN (480 px, so a pane set to 500 that measures a pixel or two less still
+// counts) gets the column; narrower, Pinned shows in the same pane. Herdr takes the column's
+// room from the pane's neighbours as well as from Threads. A width the owner set with - and =
+// (kept), up to 640 px with Threads at least PIN_MAIN_MIN, wins. Returns the column's
+// width, or null.
+export const PIN_COL = Object.freeze([240, 400]);
+export const PIN_COL_WANT = 340;
 export const PIN_MAIN_MIN = 240;
 export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
-export function pinColumn(width) {
+export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
-  return Math.max(PIN_COL[0], Math.min(PIN_COL[1], Math.round(width * 0.36)));
+  const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4)));
+  const room = Math.round(width) - PIN_MAIN_MIN;
+  return Math.max(PIN_COL[0], Math.min(want, room, kept > 0 ? 640 : PIN_COL[1]));
 }
 
 // A header button's width: a 24 px icon, or a labelled one (7 px padding a side, 12 px text).

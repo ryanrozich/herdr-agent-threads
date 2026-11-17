@@ -442,11 +442,17 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
   }
 });
 
-test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, leaving Threads at least 240", () => {
+test("the Pinned column: from 480 px, 40% of Threads, 340 to 400 px, never under 240 or leaving Threads under 240", () => {
   expect(PIN_SPLIT_MIN).toBe(480);
-  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 240], [600, 240], [700, 252], [800, 288], [960, 320], [1600, 320]]) {
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 258], [571, 331], [580, 340], [700, 340], [820, 340], [900, 360], [960, 384], [1000, 400], [1600, 400]]) {
     expect(pinColumn(w)).toBe(px);
     if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+    // A compact row's text (the column less 54 px) holds about 40 prompt characters from 580 px.
+    if (w >= 580) expect((px - 54) / 6.7).toBeGreaterThanOrEqual(40);
+  }
+  // A width the owner left the column at wins, within 240 to 640 px and Threads at least 240.
+  for (const [w, kept, px] of [[1000, 300, 300], [1000, 460, 460], [600, 500, 360], [571, 300, 300], [1600, 700, 640], [500, 200, 240], [470, 300, null]]) {
+    expect(pinColumn(w, kept)).toBe(px);
   }
   expect(pinColumn(Number.NaN)).toBe(null);
   expect(headerButtonWidth(null)).toBe(24);
@@ -901,9 +907,9 @@ test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column b
   expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
   // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
   // 8, 12 and 6.
-  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14 });
-  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6 });
-  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6 });
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6, peak: 16 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16 });
 });
 
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
@@ -940,4 +946,19 @@ test("level 3 paths: relative to the working folder inside it, from ~ elsewhere,
   // A folder given with a trailing slash, and a root or empty folder, which shortens nothing.
   expect(shortPaths("/home/dev/acme-web/a.ts", "/home/dev/acme-web/", home)).toBe("a.ts");
   expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
+});
+
+test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
+  const { railDay, railSwell, flattenMd, RAIL } = await import("../mods/agent-threads/ui.js");
+  const now = new Date(2026, 10, 16, 12).getTime();
+  expect(railDay(now, now)).toBe("Today");
+  expect(railDay(now - 86400000, now)).toBe("Yesterday");
+  expect(railDay(new Date(2026, 10, 13, 11, 20).getTime(), now)).toBe("Fri 13 Nov");
+  expect(railDay(new Date(2025, 11, 28, 14, 5).getTime(), now)).toBe("Sun 28 Dec 2025");
+  expect(railDay(null, now)).toBe(null);
+  expect([0, 9, 18, 27, 36, 50].map((d) => railSwell(10, RAIL.PEAK, d))).toEqual([24, 18, 13.5, 11, 10, 10]);
+  expect(railSwell(8, RAIL.PEAK_SMALL, 0)).toBe(16);
+  expect(RAIL.CARD_W).toBe(300);
+  expect(flattenMd("Here:\n\n| Step | State | Takes |\n|---|:--:|---|\n| build | **ok** | 2s |\n\nDone.")).toBe("Here: Step · State · Takes · build · ok · 2s Done.");
+  expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
 });
