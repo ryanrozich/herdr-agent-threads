@@ -624,11 +624,13 @@ test("the key sheet lists every key the panel takes, and a pin key gives way to 
   const shown = (q) => new Set(keySheet(q).flatMap(([, items]) => items.flatMap(([keys]) => keys)));
   const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End" };
   const all = shown("q");
-  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G"]) {
+  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G", "y", "f"]) {
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
-  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "View"]);
+  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Trajectory", "Open turn", "Pins", "Image viewer", "View"]);
+  // The Pinned column has no outline and no Trajectory.
+  expect(keySheet("q", { outline: false }).map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "View"]);
   expect(shown("p").has("p")).toBe(true); // as the quote key
   expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
   expect(keySheet("u").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "u")).toBe(false);

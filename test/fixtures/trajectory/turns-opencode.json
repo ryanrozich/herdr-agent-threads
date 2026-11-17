@@ -34,6 +34,7 @@
     ]
    }
   ],
+  "afterAt": null,
   "usage": {
    "msg_a1": {
     "i": 30400,
@@ -91,6 +92,7 @@
     ]
    }
   ],
+  "afterAt": null,
   "usage": {
    "msg_a2": {
     "i": 31800,

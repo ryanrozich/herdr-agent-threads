@@ -186,7 +186,9 @@ test("parseRemote: https, scp-style and ssh, with or without .git", () => {
 
 test("quoteKey: one free letter a–z, else q with a note", () => {
   expect(parseQuoteKey(undefined)).toEqual({ key: "q", note: null });
-  expect(parseQuoteKey("y")).toEqual({ key: "y", note: null });
+  expect(parseQuoteKey("x")).toEqual({ key: "x", note: null });
+  // y switches to the Trajectory and f steps through its failures, so neither is free.
+  for (const taken of ["y", "f"]) expect(parseQuoteKey(taken).key).toBe("q");
   for (const bad of ["jj", "j", "Q", "1", 5, "", "ä"]) {
     const r = parseQuoteKey(bad);
     expect(r.key).toBe("q");
