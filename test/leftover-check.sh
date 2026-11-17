@@ -2,8 +2,8 @@
 # Runs bun test with TMPDIR set to a fresh empty folder, and fails when the run leaves
 # anything behind: an entry in that folder, or a live process from the run. A process counts
 # as the run's when it is in the run's process group (bun test runs as its own job, and its
-# children stay in the group even once orphaned) or when its command line or environment
-# names the folder (every child inherits TMPDIR).
+# children stay in the group even once orphaned), when its command line or environment names
+# the folder (every child inherits TMPDIR), or on macOS when its working folder is in it.
 # Exits with bun test's own code when the tests fail, 1 when they pass but left something.
 # Usage: sh test/leftover-check.sh [bun test arguments]
 set -u
@@ -24,8 +24,33 @@ wait "$job"
 rc=$?
 trap - INT TERM HUP
 
-# A process still on its way out gets a moment.
-sleep 1
+# The run's processes still alive: in its process group; or with the folder in their command
+# line or environment (with e, ps adds the environment; BSD and procps both); or, on macOS,
+# where ps does not show a system binary's environment, with their working folder in it (one
+# lsof over this user's processes, cwd only: under a second). The snapshots go to files
+# first, so the searches below (whose command lines hold the folder) are not in them.
+alive() {
+  ps axeww -o pid=,command= > "$snap"
+  {
+    grep -F "$run" "$snap" | awk '{ print $1 }'
+    ps -A -o pid=,pgid= | awk -v g="$job" '$2 == g { print $1 }'
+    if [ "$(uname)" = Darwin ] && command -v lsof > /dev/null; then
+      lsof -n -w -a -d cwd -u "$(id -u)" -Fpn > "$snap" 2> /dev/null
+      awk -v r="$run" '/^p/ { pid = substr($0, 2) } /^n/ && index($0, r) { print pid }' "$snap"
+    fi
+  } | sort -u
+}
+
+# A process on its way out gets up to 10 s (a slow CI runner) before it counts as left.
+pids=$(alive)
+i=0
+while [ -n "$pids" ] && [ "$i" -lt 10 ]; do
+  sleep 1
+  i=$((i + 1))
+  pids=$(alive)
+done
+rm -f "$snap"
+
 bad=0
 left=$(ls -A "$run")
 if [ -n "$left" ]; then
@@ -33,13 +58,6 @@ if [ -n "$left" ]; then
   printf '%s\n' "$left" | head -20 >&2
   bad=1
 fi
-# The snapshot goes to a file first, so the search below is not in it. With e, ps adds each
-# process's environment to its command line (BSD and procps both).
-ps axeww -o pid=,command= > "$snap"
-pids=$(grep -F "$run" "$snap" | awk '{ print $1 }')
-pids="$pids $(ps -A -o pid=,pgid= | awk -v g="$job" '$2 == g { print $1 }')"
-pids=$(printf '%s\n' $pids | sort -u)
-rm -f "$snap"
 if [ -n "$pids" ]; then
   echo "leftover-check: the run left these processes running:" >&2
   # Without e here: the log gets the command lines, not the environments.
