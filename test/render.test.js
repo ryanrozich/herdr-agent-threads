@@ -7717,20 +7717,22 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   expect(v.sel).toBe(a);
   expect(overlays).toHaveLength(1);
   const o = overlays[0].props.output;
-  expect(o).toMatchObject({ title: "#1 · Diagram", note: "", wrap: false, lang: "text" });
+  expect(o).toMatchObject({ title: "#1 · Diagram", note: "", wrap: false, numbers: false, lang: "text" });
   expect(o.text).toContain("│ Cart ├───►│ Total ok? ├─yes►│ Pay │");
+  // No line starts with a plain space, which the editor would draw indent guides in.
+  expect(o.text).not.toMatch(/^ /m);
   expect(o.text).not.toContain("flowchart");
   state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", output: o } };
   const g = new Threads();
   const gcx = makeCx();
   const before = editors.length;
   g.init(state.props, gcx);
-  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: false, value: o.text });
+  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: false, line_numbers: false, value: o.text });
   // A pie chart: the source, wrapped, under a note that names what can be drawn.
   overlays.length = 0;
   v.click(links[1].key, cx);
   const p = overlays[0].props.output;
-  expect(p).toMatchObject({ title: "#1 · Mermaid source", wrap: true, text: pie });
+  expect(p).toMatchObject({ title: "#1 · Mermaid source", wrap: true, numbers: true, text: pie });
   expect(p.note).toBe('Threads can draw flowchart, state, sequence, class, ER and XY chart diagrams, not "pie". The source is below.');
   state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov8", output: p } };
   const h = new Threads();

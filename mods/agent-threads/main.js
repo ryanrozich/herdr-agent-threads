@@ -4279,16 +4279,18 @@ export default class Threads extends View {
     this.outputOpened = { key: r.key, lines: n };
     return true;
   }
-  // A Mermaid block drawn as text art (diagram.js) in the same viewer, unwrapped so the
-  // drawing keeps its shape. A kind the renderer cannot draw, or source it cannot read,
-  // opens the source with a plain note saying so.
+  // A Mermaid block drawn as text art (diagram.js) in the same viewer, unwrapped and with no
+  // line numbers so the drawing keeps its shape. The editor draws indent guides in leading
+  // spaces, which would stripe the space left of a box: those are no-break spaces instead.
+  // A kind the renderer cannot draw, or source it cannot read, opens the source with a
+  // plain note saying so.
   openDiagram(r) {
     const src = String(r.seg?.text ?? "").replace(/\n+$/, "");
     const d = drawDiagram(src);
-    const text = d.art ?? src;
+    const text = d.art ? d.art.replace(/^ +/gm, (m) => "\u00a0".repeat(m.length)) : src;
     const n = text.split("\n").length;
     openOverlay({ mod: MOD, kind: "dialog", frame: "none", width: 1, height: 1, props: { output: {
-      title: `#${r.turn?.n ?? ""} · ${d.art ? "Diagram" : "Mermaid source"}`, cmd: "", note: d.error ?? "", wrap: !d.art,
+      title: `#${r.turn?.n ?? ""} · ${d.art ? "Diagram" : "Mermaid source"}`, cmd: "", note: d.error ?? "", wrap: !d.art, numbers: !d.art,
       text, lines: n, total: n, lang: "text",
     } } });
     this.diagramOpened = { key: r.key, drawn: Boolean(d.art) };
@@ -4300,10 +4302,10 @@ export default class Threads extends View {
     this.h = cx.focus_handle();
     cx.timer.after(0, () => this.h.focus());
     this.outv = { overlay: p.overlay ?? null, title: String(o.title ?? ""), cmd: String(o.cmd ?? ""), text: String(o.text ?? ""),
-      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null, note: String(o.note ?? ""), wrap: o.wrap !== false };
+      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null, note: String(o.note ?? ""), wrap: o.wrap !== false, numbers: o.numbers !== false };
     try {
       this.outv.st = EditorState.new({
-        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: true, folding: false, soft_wrap: this.outv.wrap,
+        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: this.outv.numbers, folding: false, soft_wrap: this.outv.wrap,
         font_family: settings().font_family, font_size: 12, syntax: this.syntaxColors(theme()),
       });
     } catch (e) {
