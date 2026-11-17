@@ -6,7 +6,7 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
@@ -91,7 +91,7 @@ mock.module("gpui-base", () => ({
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
-  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
+  TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
 // ("in"), so a test can time the synchronous stretches between awaits.
@@ -349,7 +349,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 });
 
 // F3: the selected running turn's working card is sized with the line heights it draws.
-test("the working card's estimate uses the 22 px prompt and 20 px note lines it draws", async () => {
+test("the working card's estimate uses the YOU part it draws and the 20 px note lines", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
   let seen = 0;
   for (const width of [240, 380, 640]) {
@@ -359,22 +359,19 @@ test("the working card's estimate uses the 22 px prompt and 20 px note lines it 
     if (!r) continue;
     seen++;
     const est = v.estimate(r);
-    // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
+    // The smallest it can be: padding, the message's bubble (one line), the strip under it,
     // the live line, one note line, padding.
-    expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
-    // Each prompt line of the row's shape (as its closed row draws it) counts 22 px, each note
-    // line 20 px.
+    expect(est).toBeGreaterThanOrEqual(8 + 16 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
+    // The message is the open turn's YOU part (its estimate until the probe measures it); each
+    // note line counts 20 px.
     const g = v.workingGeom(r.turn, r.shape);
-    expect(g.lines).toBe(r.shape.p);
-    expect(est).toBe(8 + 12 + g.promptH + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    expect(g.promptH).toBe(r.shape.p * 22 + (r.shape.pMore ? 18 : 0));
+    expect(est).toBe(8 + v.youHeight(v.workYou(r)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
-    // Prompt lines are 22 px rows (promptBlock), the note sets 20 px lines.
-    const hs = rec.filter(([n]) => n === "h").map(([, x]) => x);
+    // The message is the YOU part's TextView; the note sets 20 px lines.
+    expect(rec).toContainEqual(["TextView", `th-you-wyou:${r.key}`]);
     rec = null;
-    expect(hs.filter((x) => x === 22).length).toBeGreaterThanOrEqual(r.shape.p);
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -419,7 +416,7 @@ test("the probe is clipped and transparent, never invisible()", async () => {
 
 // A session built from extractor events, put in place of the fixture's.
 async function scripted(events) {
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000a", v.current().file);
   for (const e of events) apply(s, e);
@@ -439,7 +436,7 @@ test("a live agent turn that finishes while hidden hands the selection back (F1)
   v.follow = true;
   v.jumpLatest(true);
   expect(v.sel).toBe("0:2"); // the live agent turn shows while it runs
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(s, { k: "t", t: "Noted." });
   apply(s, { k: "d", ms: 500, ts: at(3) });
   draw(v, cx);
@@ -514,7 +511,7 @@ test("a turn answered together with a later one: its line says so, and its note 
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
 
-test("the info icon is always shown: dim at half strength on other turns, dim on the selected one, accent with its card open, and no handler", async () => {
+test("the info icon is always shown: dim, like the line's label, on every turn, accent with its card open, and no handler", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const keys = v.turnKeys(v.rows());
   const [a, b] = keys.slice(-2);
@@ -524,7 +521,8 @@ test("the info icon is always shown: dim at half strength on other turns, dim on
   const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
   const other = drawn("hover");
   expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
-  expect(other).toContainEqual(["opacity", 0.5]);
+  // The label's colour with no fade (about 3:1; at half strength it was under 2:1).
+  expect(other.some((e) => e[0] === "opacity")).toBe(false);
   // No hover style and no handler: neither shows on the owner's machine inside a list row.
   expect(other.some((e) => e[0] === "hover" || /^on_/.test(String(e[0])))).toBe(false);
   const sel = drawn("sel");
@@ -941,6 +939,79 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
   expect(v.lastQuote).toMatchObject({ source: "reply" });
 });
 
+// The owner's go, 17 Nov: highlight by drag in any turn, open or closed. A press and drag
+// selects; only a click that does not move opens the turn.
+test("a closed turn's message and reply start select by drag, a click that does not move opens it, and q quotes what ⌘C copied from either", async () => {
+  const { v, cx } = await quotePane();
+  const keys = v.turnKeys(v.rows());
+  const k = keys.find((x) => !v.open.has(x));
+  expect(k).toBeTruthy();
+  const turn = v.findTurn(k);
+  v.toggle(keys.find((x) => v.open.has(x)), cx);
+  v.sel = k;
+  draw(v, cx);
+  const row = v.rows().find((r) => r.key === k);
+  expect(row.kind).toBe("turn");
+  // Drawn: the message and the reply start are selectable text views.
+  const v0 = views.length;
+  v.rowItem(theme, row, false);
+  const drawn = views.slice(v0);
+  const sel = (x) => x.calls.some(([n, on]) => n === "selectable" && on === true);
+  const msg = drawn.filter((x) => x.id.startsWith("th-sp-"));
+  const rep = drawn.filter((x) => x.id.startsWith("th-cmd-cmd:") || x.id.startsWith("th-sr-"));
+  expect(msg.length).toBeGreaterThan(0);
+  expect(rep.length).toBeGreaterThan(0);
+  expect([...msg, ...rep].every(sel)).toBe(true);
+  // A drag selects: the turn is selected and stays closed. A double press too.
+  v.sel = keys.find((x) => x !== k);
+  v.pressMoved = 40; v.pressCount = 1;
+  v.click(k, cx);
+  expect([v.sel, v.open.has(k)]).toEqual([k, false]);
+  v.pressMoved = 0; v.pressCount = 2;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(false);
+  // ⌘C copied part of its message: q quotes that.
+  const words = (t) => t.replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(turn.prompt);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // Part of its reply: that.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(v.replyText(turn));
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // A highlight with nothing copied: a mod cannot read it (Herdr issue 1110), so q quotes the
+  // whole reply.
+  v.notePress(cx);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // A click that does not move opens it.
+  v.pressMoved = 0; v.pressCount = 1;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(true);
+  // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
+  // agent's message, a stop's reason) stays a plain line, in its own colour.
+  const v2 = views.length;
+  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
+  // While a search marks its hits, the lines are plain, so the marks still show.
+  v.query = turn.prompt.split(/\s+/)[0];
+  const v1 = views.length;
+  v.rowItem(theme, { ...row, shape: v.shape(turn) }, false);
+  expect(views.slice(v1).some((x) => x.id.startsWith("th-sp-"))).toBe(false);
+  v.query = "";
+});
+
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
@@ -1098,19 +1169,24 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
-  // Code blocks do not wrap: the editor's soft_wrap is off, so a long line scrolls sideways
-  // inside the block, and the box is as tall as its lines.
+  // Code blocks wrap (nothing in the list scrolls on its own): the editor's soft_wrap is on,
+  // and the box is as tall as its wrapped rows, up to CODE_LINES (12) until Show all.
   const code = v.rows().find((r) => r.kind === "code");
-  expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
+  expect(code).toMatchObject({ rows: 1, shown: 1, more: false });
   expect(v.codeBoxH(code)).toBe(36);
   v.makeCode(code.key.split(":").slice(1, 3).join(":"));
-  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: false, readonly: true, value: "git log --grep ACME-9" });
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
   const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
+  const per = v.codePer();
   const shape = v.codeShape(long);
-  expect(shape.rows).toBe(1);
-  expect(shape.shown).toBe(1);
-  expect(shape.caption).toBe(false);
-  expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
+  expect(per).toBe(Math.floor((v.prose() - 18) / (12 * 0.62)));
+  expect(shape.rows).toBe((await import("../mods/agent-threads/ui.js")).codeRows(long, per));
+  expect(shape.rows).toBeGreaterThan(1);
+  expect(shape.shown).toBe(shape.rows);
+  expect(shape.more).toBe(false);
+  const tall = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+  expect(v.codeShape(tall)).toMatchObject({ rows: 20, shown: 12, more: true, all: false });
+  expect(v.codeShape(tall, true)).toMatchObject({ rows: 20, shown: 20, more: true, all: true });
   // The label is the fence's language, or nothing: never "code".
   const head = v.rows().find((r) => r.kind === "codehead");
   rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
@@ -1592,7 +1668,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
   } finally { herdrSettings = { font_family: "Mono" }; }
 });
 
-test("V3b: reply and latest TextViews never scroll, and only the YOU box over 420 px does", async () => {
+test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px is cut there with Show all, which a press opens in place", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--langs", "--long", "--blocks"));
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
@@ -1603,10 +1679,31 @@ test("V3b: reply and latest TextViews never scroll, and only the YOU box over 42
   expect(md.length).toBeGreaterThan(5);
   for (const x of md) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   const you = views.filter((x) => x.id.startsWith("th-you-"));
-  const scrolls = you.filter((x) => x.calls.some(([n, a]) => n === "scrollable" && a === true));
-  expect(scrolls.length).toBeGreaterThan(0); // the 40-line prompt with Show all
-  for (const x of scrolls) expect(v.youMd(v.rows().find((r) => `th-you-${r.key}` === x.id)).capped).toBe(true);
+  expect(you.length).toBeGreaterThan(0);
+  for (const x of you) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   for (const x of views.filter((y) => y.id.startsWith("th-probe-"))) expect(x.calls.some(([n]) => n === "scrollable")).toBe(false);
+  // The 40-line prompt: its first 420 px, cut, no scrolling box, and Show all in the bubble.
+  const capped = v.rows().find((r) => r.kind === "you" && v.youMd(r).capped);
+  expect(capped).toBeTruthy();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  let d = drawn(capped);
+  expect(d.some(([n]) => n === "overflow_y_scrollbar" || n === "overflow_scroll")).toBe(false);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(true);
+  expect(d.some(([n, a]) => n === "child" && a === "Show all")).toBe(true);
+  const h0 = v.estimate(capped);
+  // A press on the bubble (the list's item click) opens the rest in place; another closes it.
+  v.click(capped.key, cx);
+  const open = v.rows().find((r) => r.key === capped.key);
+  expect(open.all).toBe(true);
+  const y = v.youMd(open);
+  expect(y).toMatchObject({ capped: false, long: true });
+  expect(y.bodyH).toBeGreaterThan(420);
+  expect(v.estimate(open)).toBeGreaterThan(h0);
+  d = drawn(open);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
+  expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
+  v.click(capped.key, cx);
+  expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
 test("V3b: the first-frame estimate is never under the reading-line reference, and at most a line and 18 px over", async () => {
@@ -1839,14 +1936,15 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
   const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed turn: its row's line has the icon, dim when selected, at half strength otherwise.
+  // A closed turn: its row's line has the icon, dim, with no fade.
   v.sel = key;
   expect(icons(rowOf())).toContain("info.svg");
   v.sel = null;
   let c = rowOf();
   expect(icons(c)).toContain("info.svg");
   let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // An open turn with its line closed: the icon too.
   v.open = new Set([key]);
   v.sel = key;
@@ -1857,7 +1955,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   expect(v.infoState(key)).toBe("hover");
   c = partOfLine();
   at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
@@ -2242,7 +2341,7 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(card).toMatchObject({ kind: "working", split: true });
   expect(rows[at(key) - 1].kind).toBe("wtop");
   const g = v.workingGeom(last);
-  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+  expect(v.estimate(card)).toBe(6 + v.youHeight(v.workYou(card)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
   draw(v, cx);
   // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
   overlays.length = 0;
@@ -4729,7 +4828,7 @@ test("the header shows the agent's state beside the badge: Working, Needs you, D
   state.terminals[0].status = "working";
   expect(word()).toBe("Done");
   expect(v.stateTip(v.agentStateNow())).toBe("Codex finished its newest turn. Codex reports no live status, so this is read from the transcript.");
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(v.current(), { k: "p", o: "human", t: "One more change", ts: "2026-11-01T10:00:00.000Z" });
   expect(v.current().turns.at(-1).done).toBeFalsy();
   expect(word()).toBe(null);
@@ -5086,7 +5185,12 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 });
 
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
-function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
+// Drops the queued timers and the marks that say a frame is queued: a timer dropped with its
+// mark still set would never be asked for again, and the rows would stop where they are.
+function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; }
+// Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
+// 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
+function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
   const { v, cx } = await longSession(450);
@@ -5116,7 +5220,7 @@ test("a long session's rows are built over several frames, the old rows shown ti
 });
 
 test("a new turn in a long session rebuilds only from the last mark: the rows match a full build", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx, s } = await longSession(450);
   v.debug = false;
   v.width = 545;
@@ -5159,10 +5263,11 @@ test("the probe takes the parts nearest the top of the pane first, walking out b
   expect(due.length).toBe(16);
   expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key.replace(/^cmd:/, "")) - at) <= 16)).toBe(true);
-  // All measured: nothing due, and the next call does not walk the rows again.
+  // All measured: nothing due, within a few frames (the walk ends its pass, then one pass
+  // finds nothing), and then the next call does not walk the rows again.
   for (const r of v.probeRows) v.meas.set(r.key, { sig: v.partSig(r), h: 20 });
   v.measVer = (v.measVer ?? 0) + 1;
-  expect(v.probeDue().length).toBe(0);
+  for (let i = 0; i < 6 && v.probeLeft !== 0; i++) expect(v.probeDue().length).toBe(0);
   expect(v.probeLeft).toBe(0);
   const visit = v.partSig.bind(v);
   let sigs = 0;
@@ -5257,7 +5362,7 @@ test("no dot when the new end of the list draws on screen, or when the list foll
   // The reply to the newest turn counts as new too: its turn ends.
   const { v } = await scripted([{ k: "p", o: "human", t: "Fix the cart total", ts: at(0) }]);
   const before = v.newestSig();
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(v.current(), { k: "t", t: "Fixed." });
   apply(v.current(), { k: "d", ms: 900, ts: at(1) });
   v.noteNew(before);
@@ -5838,9 +5943,10 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
     // The reshaping time a draw gets follows the last draw's cost on the real clock: start
-    // from a quick one, so the counts below do not depend on how busy the machine is.
+    // from a quick one, so the counts below do not depend on how busy the machine is. On a slow
+    // machine the draws above may leave a frame queued: dropTimers drops it with its mark.
     v.frameBase = 0;
-    cx.timers = [];
+    dropTimers(v, cx);
     // A scroll asked for now waits for the reshaping, and a return's wait for the probe
     // (until) starts after it.
     v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
@@ -5875,7 +5981,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(v.scrollTo).toBe(null);
     // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
     v.action("agents", cx);
-    cx.timers = [];
+    dropTimers(v, cx);
     draw(v, cx);
     for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
     expect(shown().some((r) => r.shape.blank)).toBe(true);
@@ -6347,7 +6453,7 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
 });
 
 test("subagents open while the turn runs: their rows show without a press, the person's close stays, and the finished turn folds them into one line", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, s, cx } = await scripted([
     { k: "p", o: "human", t: "Review the calendar code", ts: at(0) },
     { k: "u", n: "Bash", id: "toolu_b" },
@@ -6398,7 +6504,7 @@ test("subagents open while the turn runs: their rows show without a press, the p
 });
 
 test("a running turn is open while it runs: its steps arrive in order, the group still running says so, Working… closes it; it closes when done unless the person chose", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, s } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) }, { k: "t", t: "Looking at the cart." }, { k: "u", n: "Read" }, { k: "u", n: "Bash" },
   ]);
@@ -6464,7 +6570,7 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
     use("toolu_a2", "Bash", { command: "bun run lint" }, 4), res("toolu_a2", "lint: 2 errors", 5, true),
     use("toolu_a3", "Read", { file_path: "src/cart.ts" }, 7), res("toolu_a3", "export const total = 1;", 7)];
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000c", file);
   for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
@@ -6499,31 +6605,46 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   // A group of one, open, is the call's own row, with no group line over it.
   expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
   expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · <0.1s [closed]");
-  // A click on a call opens its output: every line in a box 12 lines tall that scrolls inside
-  // and sideways, with no Show all.
+  // A click on a call opens its output: its lines wrap, in a box 12 rows tall that does not
+  // scroll (the lines run on, cut, at their full height), and Show all under it is its own
+  // list item.
   v.click(`cl:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 plain h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
   const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(box).toMatchObject({ rows: 30, shown: 12 });
   expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
   rec = []; v.partContent(theme, box, false); const bc = rec; rec = null;
-  expect(bc.some((e) => e[0] === "overflow_scroll")).toBe(true);
-  expect(bc.some((e) => e[0] === "whitespace_nowrap")).toBe(true);
-  expect(bc.some((e) => e[0] === "child" && typeof e[1] === "string" && /^Show (all|less)/.test(e[1]))).toBe(false);
+  expect(bc.some((e) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scrollbar", "whitespace_nowrap"].includes(e[0]))).toBe(false);
+  expect(bc.some((e) => e[0] === "h" && e[1] === 30 * 16)).toBe(true);
+  const all = v.rows().find((r) => r.key === `oa:${a}:0:0`);
+  expect(all).toMatchObject({ kind: "oall", left: 18, all: false });
+  expect(v.height(all)).toBe(26);
+  rec = []; v.partContent(theme, all, false); const ac = rec; rec = null;
+  expect(ac.some((e) => e[0] === "child" && e[1] === "Show all · 18 more rows")).toBe(true);
   // A click on the box only selects its turn.
   v.click(`co:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/lines 30\/30/);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
+  // Show all shows every row in place; Show less goes back to 12.
+  v.click(`oa:${a}:0:0`, cx);
+  const opened = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(opened.shown).toBe(30);
+  expect(v.height(opened)).toBe(8 * 2 + 2 + 30 * 16 + 4);
+  expect(v.rows().find((r) => r.key === `oa:${a}:0:0`)).toMatchObject({ all: true });
+  v.click(`oa:${a}:0:0`, cx);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
   // → opens every call's output; ← closes the outputs, then the groups.
   v.action("deeper", cx);
   expect(v.rows().filter((r) => r.kind === "cout").length).toBe(3);
   expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 plain h\d+ \| lint: 2 errors$/);
   // The read file has a known extension: between frames its output gets a read-only editor
-  // that colours it as js and does not wrap; plain text stays plain.
+  // that colours it as js and wraps; plain text stays plain.
   const before = editors.length;
   draw(v, cx);
   cx.flush(0);
   draw(v, cx);
   const ed = editors.slice(before).find((e) => e.opts.language === "js");
-  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: false, value: "export const total = 1;" });
+  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: true, value: "export const total = 1;" });
   expect(detail(`co:${a}:2:0`)).toMatch(/ editor js h\d+/);
   expect(detail(`co:${a}:0:1`)).toMatch(/ plain h\d+/);
   v.action("shallower", cx);
@@ -6551,7 +6672,7 @@ test("level 3: a group claims no check or red mark until its calls are read; onc
     use("toolu_e3", "Bash", { command: "bun run lint --fix" }, 5), res("toolu_e3", "fixed", 6),
     use("toolu_e4", "Bash", { command: "bun run lint" }, 7), res("toolu_e4", "clean", 8)];
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000e", file);
   for (const e of [{ k: "p", o: "human", t: "Fix the lint", ts: ts(0) },
@@ -6612,7 +6733,7 @@ test("level 3 while a turn runs: the running group names what runs now; an open 
   const ts = (s) => new Date(Date.now() - 60000 + s * 1000).toISOString();
   const use = { type: "assistant", timestamp: ts(1), message: { id: "msg_b1", role: "assistant", content: [{ type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "bun run e2e" } }] } };
   writeFileSync(file, `${JSON.stringify(use)}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000d", file);
   apply(s, { k: "p", o: "human", t: "Run the e2e suite", ts: ts(0) });
@@ -6760,7 +6881,7 @@ test("level 3 lines draw paths from the terminal's working folder, or from ~, an
   // The call line, the group's current call and each output line go through it; the
   // transcript and the call entries keep the full text.
   const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
-  expect(src).toContain(".child(this.short(callText(r.name, c?.input)))");
+  expect(src).toContain("wrapCap(this.short(callText(r.name, c?.input))");
   expect(src).toContain("current: last?.input ? this.short(callText(");
   expect(src).toContain(".child(this.short(l) || \" \")");
 });
@@ -6972,6 +7093,111 @@ test("the wheel on the rail moves its window a tick at a time and stops there, s
   stopped = 0;
   short.v.railWheel({ delta: { x: 0, y: 30 }, touch_phase: "moved" }, wcx);
   expect(stopped).toBe(0);
+});
+
+// The owner's choice A and B, 16 Nov: nothing inside the list scrolls on its own, since Herdr
+// passes the wheel on to the list after an inner box uses it and a row cannot stop it. Code,
+// a call's command and a tool's output wrap; a tall code block and a long output show their
+// start and Show all, a list item of its own; an output longer than the panel holds opens in
+// a viewer outside the list, whose output scrolls on its own and holds the wheel.
+test("no list row scrolls on its own: code and commands wrap, Show all opens the rest in place, a long output opens a viewer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-inner-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: false }] } });
+  const longCmd = `cd ~/acme-web && ${"bun run build --filter=packages/checkout && ".repeat(14)}bun test`;
+  const huge = Array.from({ length: 500 }, (_, i) => `ok ${i + 1} cart total rounds once`).join("\n");
+  const lines = [use("toolu_b1", "Bash", { command: longCmd }, 1), res("toolu_b1", huge, 3),
+    use("toolu_b2", "Bash", { command: "bun run lint" }, 4), res("toolu_b2", "a\nb\nc", 5)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000d", file);
+  const code = Array.from({ length: 30 }, (_, i) => `export const step${i} = ${i};`).join("\n");
+  for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_b1" }, { k: "u", n: "Bash", id: "toolu_b2" },
+    { k: "t", t: `Done.\n\n\`\`\`js\n${code}\n\`\`\`` }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.toggle(a, cx);
+  v.action("deeper", cx);
+  await settled();
+  v.action("deeper", cx);
+  await settled();
+  v.click(`cl:${a}:0:0`, cx);
+  v.click(`cl:${a}:0:1`, cx);
+  await settled();
+  const rows = v.rows();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  const scrolling = (d) => d.some(([n, x]) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scroll", "overflow_y_scrollbar", "overflow_x_scrollbar"].includes(n) || (n === "scrollable" && x === true));
+  // Every row, everything open: no scrolling box, and no handler.
+  for (const r of rows) {
+    const d = drawn(r);
+    expect([r.key, scrolling(d)]).toEqual([r.key, false]);
+    expect([r.key, d.filter(([n]) => /^on_/.test(n)).map(([n]) => n)]).toEqual([r.key, []]);
+  }
+  // The long command wraps, up to 6 lines, its row as tall as its lines; the short one is one line.
+  const long = rows.find((r) => r.kind === "call" && r.id === "toolu_b1");
+  const sh = v.callShape(long);
+  expect(sh.rows).toBe(6);
+  expect(sh.text.endsWith("…")).toBe(true);
+  expect(v.height(long)).toBe((long.one ? 4 + 22 : 20) + 5 * 16);
+  const short = rows.find((r) => r.kind === "call" && r.id === "toolu_b2");
+  expect(v.callShape(short).rows).toBe(1);
+  expect(v.height(short)).toBe(short.one ? 4 + 22 : 20);
+  // The 500-line output is more than the panel holds (400 lines): 12 rows, then a link to
+  // open all of it in a viewer.
+  const big = rows.find((r) => r.kind === "cout" && r.id === "toolu_b1");
+  expect(big.shown).toBe(12);
+  const link = rows.find((r) => r.kind === "oall" && r.id === "toolu_b1");
+  expect(link).toMatchObject({ view: true, total: 500 });
+  expect(drawn(link).some(([n, x]) => n === "child" && x === "Open all 500 lines in a viewer")).toBe(true);
+  // The 3-line output needs no Show all.
+  expect(rows.some((r) => r.kind === "oall" && r.id === "toolu_b2")).toBe(false);
+  // The 30-line code block: 12 rows in view, the editor at its full height inside, then Show all.
+  const box = rows.find((r) => r.kind === "code");
+  expect(box).toMatchObject({ rows: 30, shown: 12, more: true });
+  const bd = drawn(box);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 30 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 6)).toBe(true); // the clip ends at row 12
+  const more = rows.find((r) => r.kind === "codeall");
+  expect(drawn(more).some(([n, x]) => n === "child" && x === "Show all · 18 more rows")).toBe(true);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key)).toMatchObject({ shown: 30, all: true });
+  expect(v.height(v.rows().find((r) => r.key === box.key))).toBe(30 * 20 + 16);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key).shown).toBe(12);
+  // The link opens the output viewer outside the list.
+  overlays.length = 0;
+  v.click(link.key, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", props: { output: { title: "#1 · Bash", lines: 500, total: 500 } } });
+  expect(overlays[0].props.output.text).toBe(huge);
+  // The viewer: the call, its line count, all of it in a read-only editor that wraps and numbers
+  // its lines, in a box that holds the wheel; Esc closes it.
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov9", output: overlays[0].props.output } };
+  const g = new Threads();
+  const gcx = makeCx();
+  const before = editors.length;
+  g.init(state.props, gcx);
+  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: true, line_numbers: true, value: huge });
+  rec = []; g.render(gcx); const gd = rec; rec = null;
+  const texts = gd.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("#1 · Bash");
+  expect(texts).toContain("500 lines");
+  expect(handlerAfterId(gd, "th-output-body", "on_scroll_wheel")).toBeTruthy();
+  let stopped = false;
+  handlerAfterId(gd, "th-output-body", "on_scroll_wheel")({}, { ...gcx, stop_propagation: () => { stopped = true; } });
+  expect(stopped).toBe(true);
+  handlerAfterId(gd, "th-output", "on_key_down")({ key: "escape" }, gcx);
+  expect(closed).toContain("ov9");
+  expect(() => g.close()).not.toThrow();
 });
 
 test("a rail click lands the turn level with its tick, clear of the floating top; a narrow pane hides the rail", async () => {
@@ -7225,16 +7451,30 @@ test("a queued prompt that opens with a quote shows whole on the running turn's 
   v.sel = key;
   const r = v.rows().find((x) => x.key === key);
   expect(r.kind).toBe("working");
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the bubble: the plain look
   rec = [];
+  views.length = 0;
   v.workingItem(theme, r);
   const drawn = rec;
   rec = null;
-  const text = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
-  for (const w of ["I think the rounding", "billing/receipt.ts", "Keep the helper", "Which of the two should change?"]) expect(text).toContain(w);
-  // The quote is drawn behind its bar, without its "> ".
-  expect(r.shape.kinds?.[0]).toBe("q");
-  expect(text).not.toContain("> The checkout");
-  expect(v.estimate(r)).toBeGreaterThan(8 + 12 + 6 * 22);
+  // The open turn's YOU part, whole, as Markdown: the quote in full as a blockquote, and the
+  // owner's three paragraphs kept apart (the closed row's lines ran them together).
+  expect(drawn).toContainEqual(["TextView", `th-you-wyou:${key}`]);
+  const md = views.find((x) => x.id === `th-you-wyou:${key}`).md.replace(/\\(?!\n)/g, "");
+  for (const w of ["I think the rounding", "billing/receipt", "Keep the helper", "Which of the two should change?"]) expect(md).toContain(w);
+  expect(md).toMatch(/^> /);
+  expect(md.split(/\n{2,}/).length).toBeGreaterThanOrEqual(3);
+  // Its height is the YOU part's: the probe's measure once it reports, the estimate till then.
+  const y = v.workYou(r);
+  const rest = 8 + 6 + 16 + 6 + 24 + 6 + v.workingGeom(r.turn, r.shape).note * 20 + 10;
+  expect(v.estimate(r)).toBe(rest + v.youHeight(y));
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
+  v.probed(`wyou:${key}`, v.partSig(y), { height: 300 * v.zoom() }, cx);
+  expect(v.estimate(r)).toBe(rest + 300);
+  // Not selected, it is the one-line row, and its message is still measured for the card.
+  v.sel = null;
+  expect(v.rows().find((x) => x.key === key).kind).toBe("wrow");
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
 });
 
 // The owner's fault, 16 Nov: the viewer drew a quote as "> " text. A run of quote lines is drawn as
@@ -7255,4 +7495,234 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(bars.length).toBe(1);
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
+});
+
+test("a rebuild keeps a closed turn's rows until the turn, its measures or the look change", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  for (let i = 0; i < 40; i++) draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const rowOf = (k) => v.baseRows.find((r) => r.kind === "turn" && r.key === k);
+  const sizeOf = (k) => v.baseSizes[v.baseRows.indexOf(rowOf(k))];
+  const [a, b] = [keys.at(-10), keys.at(-6)];
+  // A closed turn whose reply is Markdown, measured by the probe.
+  const c = keys.slice(-5, -1).find((k) => rowOf(k)?.shape?.md != null);
+  const before = { a: rowOf(a), b: rowOf(b), c: rowOf(c) };
+  expect(before.a && before.b && before.c).toBeTruthy();
+  // Opening another turn rebuilds the rows: the closed ones are the same objects.
+  v.open.add(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(a)).toBe(before.a);
+  expect(rowOf(b)).toBe(before.b);
+  // The reader changed one turn (a new version): only that one is built again.
+  const tb = v.findTurn(b);
+  tb.after = [`${tb.after?.[0] ?? ""}\n\nOne more line from the agent.`];
+  tb.v += 1;
+  v.open.delete(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(a)).toBe(before.a);
+  expect(rowOf(b)).not.toBe(before.b);
+  expect(rowOf(b).shape).not.toBe(before.b.shape);
+  // A new measure of a closed turn's reply: its kept rows carry the old size, so it is built
+  // again with the measured one.
+  const rc = rowOf(c);
+  const part = v.cmdFor(rc);
+  v.probed(part.key, v.partSig(part), { height: 400 * v.zoom() }, cx);
+  v.open.add(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(c)).not.toBe(rc);
+  expect(sizeOf(c)).toBe(rc.shape.mdBase + 400);
+  // A new width: every row is built again.
+  const wa = rowOf(a);
+  v.width += 40;
+  for (let i = 0; i < 20; i++) draw(v, cx);
+  expect(rowOf(a)).not.toBe(wa);
+});
+
+test("opening or closing a turn, or a part of one, puts only its rows in place, the same as building every row", async () => {
+  // Ten days of turns: day bands, and the places a later build can start (marks) after them.
+  const { v, cx } = await pane(fixture("--extra", "250", "--gap", "3600", "--images"));
+  for (let i = 0; i < 40; i++) { if (v.shapeLeft > 0) v.reshapeDue = true; draw(v, cx); }
+  const keys = v.turnKeys(v.rows());
+  const marks = () => JSON.stringify(v.rowBuild.marks.map((m) => [m.ti, m.row, m.dayRow]));
+  const view = (rows, sizes) => rows.map((r, i) => `${r.key} ${r.kind} ${sizes[i]}`);
+  const full = () => {
+    // The same state built from nothing.
+    const w = { rows: v.baseRows, sizes: v.baseSizes, index: v.baseIndex, build: v.rowBuild, key: v.rowsKey };
+    v.rowBuild = null; v.rowsKey = null; v.rowJob = null;
+    v.rows();
+    while (v.rowJob) { v.renders++; v.rows(); }
+    const got = { rows: view(v.baseRows, v.baseSizes), index: [...v.baseIndex].sort().join(), marks: marks() };
+    Object.assign(v, { baseRows: w.rows, baseSizes: w.sizes, baseIndex: w.index, rowBuild: w.build, rowsKey: w.key, fitKey: null });
+    return got;
+  };
+  let spliced = 0;
+  const step = (name, fn) => {
+    fn();
+    const was = v.rowBuild;
+    v.rows();
+    if (v.rowBuild !== was && v.rowBuild.sessions === was.sessions) spliced++;
+    const want = full();
+    expect({ name, rows: view(v.baseRows, v.baseSizes) }).toEqual({ name, rows: want.rows });
+    expect([...v.baseIndex].sort().join()).toBe(want.index);
+    expect(marks()).toBe(want.marks);
+    for (const [k, i] of v.baseIndex) expect(v.baseRows[i].key).toBe(k);
+  };
+  expect(v.rowBuild.marks.length).toBeGreaterThan(3);
+  const a = keys.at(-120);
+  const b = keys.at(-5);
+  step("open a", () => v.open.add(a));
+  step("open b", () => v.open.add(b));
+  const g = v.baseRows.find((r) => r.kind === "grp" && r.key.startsWith(`gp:${b}:`));
+  if (g) step("open a group of b", () => v.setGroup(`${b}:${g.gi}`, true));
+  step("close a", () => v.open.delete(a));
+  step("whole prompt of b", () => v.full.add(b));
+  step("close b", () => { v.open.delete(b); v.full.delete(b); });
+  step("open the first", () => v.open.add(keys[0]));
+  step("close it", () => v.open.delete(keys[0]));
+  // New call details with nothing open: the rows stay as they are.
+  step("new call details", () => { v.callVer = (v.callVer ?? 0) + 1; });
+  // The same parts open in another order.
+  step("open a and b", () => { v.open.add(a); v.open.add(b); });
+  step("same, other order", () => { v.open.delete(a); v.open.add(a); });
+  // Estimates left out of time in open turns: those turns are built again, not every row.
+  step("again", () => { v.againOpen = true; v.rowsKey = "again"; });
+  expect(spliced).toBeGreaterThanOrEqual(6);
+});
+
+// PR 72 and 75 together: the running card draws the open turn's YOU part, so a message past
+// 420 px is cut there with Show all, and a press on the card opens it in place.
+test("the running card's message past 420 px is cut with Show all, and a press on the card shows it whole", async () => {
+  const prompt = Array.from({ length: 40 }, (_, i) => `step ${i + 1}: cart total recomputed for order ${1000 + i}`).join("\n");
+  const at = (s) => `2026-11-16T10:00:${String(s).padStart(2, "0")}.000Z`;
+  const lines = [
+    { type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, message: { role: "user", content: prompt } },
+    { type: "assistant", uuid: "a1", timestamp: at(5), sessionId: "s", message: { id: "m1", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "cart/total.ts" } }] } },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "threads-runlong-"));
+  const file = join(dir, "r.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  const key = v.turnKeys(v.rows()).at(-1);
+  v.sel = key;
+  let r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: true });
+  const h0 = v.estimate(r);
+  v.click(key, cx);
+  r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: false });
+  expect(v.estimate(r)).toBeGreaterThan(h0);
+  expect(v.open.has(key)).toBe(false);
+  v.click(key, cx);
+  expect(v.youMd(v.workYou(v.rows().find((x) => x.key === key))).capped).toBe(true);
+});
+
+test("while a long session's first rows are still built, the pane says it is reading, not that nothing was typed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "300", "--agents"));
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  // The first build of the rows, in slices, as after reading a long session.
+  v.baseRows = null; v.rowsKey = null; v.rowJob = null;
+  const max = v.buildMax;
+  v.buildMax = () => 0;
+  const said = [];
+  const { empty, loading } = v;
+  v.empty = function (...a) { said.push(a[2]); return empty.apply(this, a); };
+  v.loading = function (...a) { said.push(a[1]); return loading.apply(this, a); };
+  v.render(cx);
+  expect(v.rowJob).toBeTruthy();
+  expect(said.some((x) => /^Reading session/.test(x))).toBe(true);
+  expect(said).not.toContain("Nothing you typed yet");
+  // Once built, the turns.
+  v.buildMax = max;
+  for (let i = 0; i < 60 && v.rowJob; i++) { v.renders++; v.render(cx); }
+  said.length = 0;
+  v.render(cx);
+  expect(v.rowJob).toBeNull();
+  expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
+  expect(said).toEqual([]);
+});
+
+test("the probe looks at no more than its share of rows a frame: a part far from the top is found over frames, then nothing is due; the nearest parts stay first", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  // Every part measured but the first turn's, far above the top at the end of the list.
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  expect(parts.length).toBeGreaterThan(500);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  v.measVer = (v.measVer ?? 0) + 1;
+  const sig = v.partSig.bind(v);
+  let sigs = 0;
+  v.partSig = (...a) => { sigs++; return sig(...a); };
+  let found = null;
+  let calls = 0;
+  for (; calls < 20 && !found; calls++) {
+    sigs = 0;
+    const due = v.probeDue();
+    // At most 300 rows, of which only turns with a reply are parts.
+    expect(sigs).toBeLessThanOrEqual(300);
+    if (!due.length) expect(v.probeLeft).toBe(1);
+    found = due.find(([r]) => r.key === parts[0].key) ?? null;
+  }
+  expect(found).toBeTruthy();
+  expect(calls).toBeGreaterThan(1);
+  // Measured: the walk goes on from the rows it knows are clean, finds nothing, and the
+  // probe is quiet.
+  v.meas.set(parts[0].key, { sig: v.partSig(parts[0]), h: 20 });
+  v.measVer++;
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBeLessThanOrEqual(300);
+  expect(v.probeLeft).toBe(0);
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBe(0);
+});
+
+test("the probe's walk goes on past measured rows while measures keep coming in", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  let found = false;
+  // A measure of some part comes in every frame, as while the newest parts are measured.
+  for (let i = 0; i < 40 && !found; i++) {
+    found = v.probeDue().some(([r]) => r.key === parts[0].key);
+    v.measVer = (v.measVer ?? 0) + 1;
+  }
+  expect(found).toBe(true);
+});
+
+test("the probe's walk starts over at the top when the rows change, and asks again for a part that has not reported", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  v.meas = new Map();
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  const turns = v.baseRows.filter((r) => r.kind === "turn");
+  v.topKey = turns[150].key;
+  const first = v.probeDue().map(([r]) => r.key);
+  expect(first.length).toBe(16);
+  // Not reported yet: the same parts again, nearest first (up to three tries each).
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
+  // The rows changed: from the top again.
+  v.probeList();
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
 });

@@ -1,0 +1,104 @@
+[
+ {
+  "id": "1793524200|1o3dmdg|1",
+  "n": 1,
+  "start": 1793524200000,
+  "end": 1793524238000,
+  "done": true,
+  "groups": [
+   {
+    "title": "Message",
+    "cells": [
+     {
+      "kind": "user",
+      "text": "Rename useCart to useBasket everywhere",
+      "start": 1793524200000,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 1",
+    "cells": [
+     {
+      "kind": "tool",
+      "tool": "grep",
+      "call": "call_grep",
+      "result": {
+       "call": "call_grep"
+      },
+      "start": null,
+      "end": null
+     },
+     {
+      "kind": "tool",
+      "tool": "edit",
+      "call": "call_edit",
+      "result": {
+       "call": "call_edit"
+      },
+      "start": null,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 2",
+    "cells": [
+     {
+      "kind": "message",
+      "text": "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`.",
+      "start": null,
+      "end": 1793524238000
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "1793524295|gyotob|1",
+  "n": 2,
+  "start": 1793524295000,
+  "end": 1793524312000,
+  "done": true,
+  "groups": [
+   {
+    "title": "Message",
+    "cells": [
+     {
+      "kind": "user",
+      "text": "Update the README example too",
+      "start": 1793524295000,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 1",
+    "cells": [
+     {
+      "kind": "tool",
+      "tool": "edit",
+      "call": "call_edit",
+      "result": {
+       "call": "call_edit"
+      },
+      "start": null,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 2",
+    "cells": [
+     {
+      "kind": "message",
+      "text": "The README's **Cart state** example now imports `useBasket`.",
+      "start": null,
+      "end": 1793524312000
+     }
+    ]
+   }
+  ]
+ }
+]

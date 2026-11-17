@@ -5,7 +5,7 @@ import {
   pickOpenCode, openCodeTitleMatch, openCodeLabel, quotePaste,
 } from "../mods/agent-threads/harness.js";
 import { canQuote } from "../mods/agent-threads/ui.js";
-import { shortModel } from "../mods/agent-threads/turns.js";
+import { shortModel } from "../mods/agent-threads/core/turns.js";
 
 const CODEX_ID = "00000000-0000-7000-8000-000000000001";
 
