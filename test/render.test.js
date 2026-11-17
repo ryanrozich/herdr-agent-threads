@@ -110,9 +110,16 @@ mock.module("herdr", () => ({
 let pinWrites = 0;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there).
 const settingsWrites = [];
+// A script that has not ended in 4 s is stopped and the call fails, with a line naming it: a
+// hung child ends before bun's 5 s test limit kills it as a dangling process, which says
+// nothing of which call it was (once in CI).
+const EXEC_LIMIT_MS = 4000;
 function execReal(cmd, args) {
-    try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
-    catch (e) { return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
+    try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"], timeout: EXEC_LIMIT_MS }), stderr: "" }; }
+    catch (e) {
+      if (e.code === "ETIMEDOUT") console.error(`exec: ${cmd} ${args.join(" ")} ran past ${EXEC_LIMIT_MS} ms and was stopped`);
+      return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
+    }
 }
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
@@ -6016,6 +6023,11 @@ test("a settings change in a long session reshapes rows over several frames, the
   draw(v, cx);
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;
+  // Every row built and shaped before the change below, on any machine: on the real clock a
+  // slow one left rows unshaped here, and the counts below came out otherwise.
+  v.shapeBudget = Infinity;
+  settleRows(v, cx);
+  v.shapeBudget = null;
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
   expect(shown().length).toBeGreaterThan(100);
   // Reshaped for Reply lines 2: the turn's shape key has the new count, and the row draws it.
@@ -6025,6 +6037,14 @@ test("a settings change in a long session reshapes rows over several frames, the
   // Each reading of the clock moves it 0.25 ms, so a reshape costs about 0.5 ms and a frame
   // reshapes about 24 rows.
   performance.now = () => (fake += 0.25);
+  // The scroll's waits (2 s at most while rows settle, 400 ms for the probe) are on Date.now:
+  // stopped, so the frames below take no time however slow the machine is.
+  const realDate = Date.now;
+  const today = realDate();
+  Date.now = () => today;
+  // The list draws the rows of one screen at its end, as Herdr does: drawing all 1,305 rows in
+  // each of the 40 frames below took 3 s on one CPU, and the same frames run either way.
+  listWindow = (n) => ({ start: Math.max(0, n - 24), end: n });
   try {
     // The pane shows the turns from 20 rows above the end.
     const before = shown();
@@ -6076,7 +6096,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
     expect(shown().some((r) => r.shape.blank || r.shape !== r.turn.shapeMemo)).toBe(false);
-  } finally { performance.now = realPerf; }
+  } finally { performance.now = realPerf; Date.now = realDate; listWindow = null; }
   // The heights match a reshape done in one go, with no budget.
   const keep = shown().map((r) => r.shape.height);
   for (const t of v.current().turns) { t.shapeKey = null; t.shapeMemo = null; }
