@@ -2686,7 +2686,10 @@ export default class Threads extends View {
     if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
-    this.scrollTo = { key: `md:${key}:0`, how: "top", or: [`md:${key}:0.0`, `cc:${key}:0`, key] };
+    // "land": scroll_to_item alone brings an item to the nearest edge, which showed the end
+    // of a tall reply below the view. It waits up to 400 ms for the opened parts' measures,
+    // since a short estimate lets the list clamp at its end.
+    this.scrollTo = { key: `md:${key}:0`, how: "land", or: [`md:${key}:0.0`, `cc:${key}:0`, key], until: Date.now() + 400 };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
