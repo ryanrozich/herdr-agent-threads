@@ -90,7 +90,7 @@ Press `a` to show messages other agents sent the session, such as a subagent's r
 
 ### Make it yours
 
-Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), how many lines a row shows, bubble colours, and whether agent messages show. You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with two tabs: General (text size, the rail's side, the key hints, the two message colors, link rules, the quote key and the file) and Chat (agent messages, how many lines a row shows, the time, and the reading width: Comfortable, Wide or Full, which `Shift w` also steps). You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
@@ -112,6 +112,7 @@ Press `,` for settings: text size, the reading width (Comfortable, Wide or Full)
 | `t` | Go to the terminal |
 | `a` | Show or hide agent messages |
 | `,` | Settings |
+| `Shift w` | Step the reading width |
 | `?` | Every key |
 | `Esc` | Back out |
 
