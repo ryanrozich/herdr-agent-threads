@@ -147,15 +147,18 @@ export function ledgerTurn(s, turn, si, live = false) {
       calls++;
       r.tool = String(c.tool ?? "tool");
       r.text = String(c.input ?? "").replace(/\s+/g, " ").trim();
-      const failed = c.result?.failed === true;
+      // A failed call: its result says so, or, for a subagent, its run ended failed (the
+      // launch itself succeeds). A run stopped or killed is not a failure.
+      const failed = c.result?.failed === true || c.subagent?.state === "failed";
       const ended = c.end != null;
       const open = Boolean(c.result) && !ended && (ends || (live && i === lastTool));
       r.lk = failed ? "failed" : c.subagent ? "subagent" : open ? (live ? "running" : "noresult") : "tool";
-      if (c.subagent && !failed) {
+      if (c.subagent) {
         r.tool = "Agent";
         r.sub = { state: c.subagent.state ?? null, tokens: c.subagent.tokens ?? null };
       }
       r.status = STATUS[r.lk] ?? null;
+      if (failed && r.sub?.tokens) r.status = `failed · ${fmtTokens(r.sub.tokens)} tok`;
       r.failed = failed;
       if (failed) fails++;
       if (c.start != null && t0 != null) r.start = c.start - t0;

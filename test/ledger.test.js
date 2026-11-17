@@ -106,6 +106,16 @@ test("ledger: a subagent call is one row with its run's time, state and tokens",
   expect(r).toMatchObject({ lk: "subagent", tool: "Agent", text: "Review the range math", dur: 48000, sub: { state: "completed", tokens: 41000 } });
 });
 
+test("ledger: a subagent whose run failed is a failed call (cross, wash, count, f); one stopped is not", () => {
+  const t = turn(9, [[["Agent", "Audit the tests", 2000, 3000], ["Agent", "Check the docs", 2000, 3000]]], { agent: true });
+  const [a, b] = t.steps[0].ids;
+  const s = { agents: new Map([[a, { st: "failed", tok: 4000, ms: 9000 }], [b, { st: "killed", tok: 1000, ms: 2000 }]]), agentIds: new Map() };
+  const { rows, fails } = ledgerTurn(s, t, 0);
+  expect(rows[2]).toMatchObject({ lk: "failed", failed: true, tool: "Agent", text: "Audit the tests", status: "failed · 4k tok", sub: { state: "failed" } });
+  expect(rows[3]).toMatchObject({ lk: "subagent", failed: false, sub: { state: "killed" } });
+  expect([fails, rows[0].fails, ledgerTotals(rows).fails]).toEqual([1, 1, [rows[2].key]]);
+});
+
 test("ledger heading: '10 calls · 1 failed · 48.2k tok · 9m 44s'; narrow, tokens go first, then calls", () => {
   const h = { calls: 10, fails: 1, tokens: 48200, total: 584000, timed: true, going: false, interrupted: false };
   expect(Object.values(headParts(h, 600)).filter(Boolean).join(" · ")).toBe("10 calls · 1 failed · 48.2k tok · 9m 44s");

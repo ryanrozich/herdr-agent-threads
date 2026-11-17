@@ -7787,14 +7787,16 @@ test("the top row has Chat and Trajectory as words, or two icons under 420 px; a
   expect(v.action("view", cx)).toBe(false);
 });
 
-test("Trajectory failures: the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
+test("Trajectory failures: a failed call and a failed subagent run; the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
   const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
   settleRows(v, cx);
   const rows = ledgerOnly(v);
   const fails = rows.filter((r) => r.failed).map((r) => r.key);
-  expect(fails.length).toBe(2);
-  expect(v.ledgerSums()).toMatchObject({ failed: 2, fails });
+  // The Bash call that failed, and the subagent run "Audit the tests" that ended failed.
+  expect(fails.length).toBe(3);
+  expect(rows.filter((r) => r.failed).map((r) => r.tool)).toContain("Agent");
+  expect(v.ledgerSums()).toMatchObject({ failed: 3, fails });
   // From the first row: the first failure, then the second, then it stops there.
   v.action("first", cx);
   expect(v.tsel).toBe(rows[0].key);
@@ -7804,10 +7806,12 @@ test("Trajectory failures: the cross, the wash, the word, the count in the headi
   v.key(keyEv("f"), cx);
   expect(v.tsel).toBe(fails[1]);
   v.key(keyEv("f"), cx);
-  expect(v.tsel).toBe(fails[1]);
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toBe(fails[2]);
   // Shift f goes back, and stops at the first.
   v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
-  expect(v.tsel).toBe(fails[0]);
+  expect(v.tsel).toBe(fails[1]);
+  v.key(keyEv("F"), cx);
   v.key(keyEv("F"), cx);
   expect(v.tsel).toBe(fails[0]);
   // The landing row fades in, by itself.
@@ -7819,12 +7823,12 @@ test("Trajectory failures: the cross, the wash, the word, the count in the headi
   let calls = rec;
   rec = null;
   const child = (x) => calls.some((c) => c[0] === "child" && c[1] === x);
-  expect(child("1 of 2")).toBe(true);
+  expect(child("1 of 3")).toBe(true);
   expect(child("1 failed")).toBe(true);
   expect(child("failed")).toBe(true);
   // The wash on the other failed row only: the selected one has the list's gray fill.
   const wash = () => calls.filter((c) => c[0] === "bg" && c[1] === alphaForTest(theme.blocked, 0.09)).length;
-  expect(wash()).toBe(1);
+  expect(wash()).toBe(2);
   expect(calls.some((c) => c[0] === "svg" && String(c[1]).endsWith("/x.svg"))).toBe(true);
   const head = rows.find((r) => r.kind === "trh" && r.fails);
   expect(calls.some((c) => c[0] === "id" && c[1] === `th-tlr-${head.key}`)).toBe(true);
@@ -7835,8 +7839,8 @@ test("Trajectory failures: the cross, the wash, the word, the count in the headi
   draw(v, cx);
   calls = rec;
   rec = null;
-  expect(wash()).toBe(2);
-  expect(child("2 failed")).toBe(true);
+  expect(wash()).toBe(3);
+  expect(child("3 failed")).toBe(true);
   // A session with no failures: no count is drawn and f does nothing.
   const { v: w, cx: wx } = await pane(fixture("--only", "3"), { view: "trajectory" });
   settleRows(w, wx);
