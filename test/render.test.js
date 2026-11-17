@@ -176,11 +176,11 @@ async function settle(v, tries = 200) {
   throw new Error("the pane never finished reading");
 }
 
-async function pane(file) {
+async function pane(file, more = {}) {
   state = {
     terminals: [{ address: "t4", status: "idle", name: "claude" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
-    props: { terminal: "t4", transcript: file, debug: true }, shared: {},
+    props: { terminal: "t4", transcript: file, debug: true, ...more }, shared: {},
   };
   const v = new Threads();
   const cx = makeCx();
@@ -7694,7 +7694,7 @@ const ledgerOnly = (v) => v.rows().filter((r) => !["spacer", "gap", "tail"].incl
 
 const flaky = (v) => v.rows().find((r) => r.turn?.prompt?.startsWith("Fix the flaky login")).key;
 
-test("y switches the pane to the Trajectory and back; the view is kept on the pane and the selected turn carries both ways", async () => {
+test("y in a pane under 480 px switches the pane to the Trajectory and back; the view is kept on the pane and the selected turn carries both ways", async () => {
   const { v, cx } = await pane(twoFails());
   settleRows(v, cx);
   const turns = v.turnKeys(v.rows());
@@ -7774,7 +7774,10 @@ test("the top row has Chat and Trajectory as words, or two icons under 420 px; a
   rec = null;
   expect(narrow.some((c) => c[0] === "child" && c[1] === "Trajectory")).toBe(false);
   expect(narrow.filter((c) => c[0] === "svg").map((c) => c[1])).toEqual(expect.arrayContaining([expect.stringContaining("messages.svg"), expect.stringContaining("list.svg")]));
-  // The command for keys.json: agent-threads.view:trajectory and view:chat.
+  // In the chat f is not a key.
+  expect(v.action("nextFail", cx)).toBe(false);
+  // The command for keys.json: agent-threads.view:trajectory and view:chat (here, under
+  // 480 px, the pane switches).
   expect(v.action("view:trajectory", cx)).toBe(true);
   expect(v.ledger()).toBe(true);
   expect(v.action("view:chat", cx)).toBe(true);
@@ -7785,12 +7788,8 @@ test("the top row has Chat and Trajectory as words, or two icons under 420 px; a
 });
 
 test("Trajectory failures: the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
-  const { v, cx } = await pane(twoFails());
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
-  settleRows(v, cx);
-  // In the chat f is not a key.
-  expect(v.action("nextFail", cx)).toBe(false);
-  v.action("view", cx);
   settleRows(v, cx);
   const rows = ledgerOnly(v);
   const fails = rows.filter((r) => r.failed).map((r) => r.key);
@@ -7839,8 +7838,7 @@ test("Trajectory failures: the cross, the wash, the word, the count in the headi
   expect(wash()).toBe(2);
   expect(child("2 failed")).toBe(true);
   // A session with no failures: no count is drawn and f does nothing.
-  const { v: w, cx: wx } = await pane(fixture("--only", "3"));
-  w.action("view", wx);
+  const { v: w, cx: wx } = await pane(fixture("--only", "3"), { view: "trajectory" });
   settleRows(w, wx);
   rec = [];
   draw(w, wx);
@@ -7852,9 +7850,8 @@ test("Trajectory failures: the cross, the wash, the word, the count in the headi
 
 test("Trajectory bars and times: a bar on one scale, the start from 420 px and the bar from 500 px, '?' for a time not given", async () => {
   const { barFrac } = await import("../mods/agent-threads/ledger.js");
-  const { v, cx } = await pane(twoFails());
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
-  v.action("view", cx);
   settleRows(v, cx);
   const detail = () => state.shared["threads.debug"].t4.detail;
   expect(detail().some((d) => /^tr#\d+ context \? /.test(d))).toBe(true);
@@ -7882,10 +7879,9 @@ test("Trajectory bars and times: a bar on one scale, the start from 420 px and t
 // A call still running is in test/ledger.test.js; the fixture's running turn has its results.
 test("the Trajectory of a running turn: its heading says 'now' and 'running', and no clock ticks", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--open"));
-  v.paneW = 573;
   settleRows(v, cx);
   expect(v.liveShown).toBe(true); // the chat's running turn has its clock
-  v.action("view", cx);
+  v.action("view", cx); // under 480 px: the pane switches
   settleRows(v, cx);
   const rows = ledgerOnly(v);
   const head = rows.filter((r) => r.kind === "trh").at(-1);
@@ -7894,6 +7890,143 @@ test("the Trajectory of a running turn: its heading says 'now' and 'running', an
   expect(state.shared["threads.debug"].t4.detail.find((d) => d.startsWith(`trh#${head.n} `))).toContain("running");
   // Nothing in the ledger counts up, so the list is not redrawn every second for it.
   expect(v.liveShown).toBe(false);
+});
+
+test("y in a pane from 480 px splits the Trajectory pane beside it, 560 px, kept in its own map; y moves between them and the pane closes with Threads", async () => {
+  const { v, cx } = await pane(twoFails());
+  v.paneW = 573;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  settleRows(v, cx);
+  const pick = flaky(v);
+  v.sel = pick;
+  log = [];
+  v.key(keyEv("y"), cx);
+  // This pane stays the chat; the split carries the view and the selected turn goes ahead.
+  expect(v.ledger()).toBe(false);
+  const split = log.find(([, n]) => n === "pane.split");
+  expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: pick, pane: "p2" });
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  expect(state.shared["threads.pinnedByTerminal"]).toBeUndefined();
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 560 }]);
+  // Open: y, or Trajectory in the top row, goes to it.
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(log.filter(([, n]) => n === "pane.focus")).toEqual([["run", "pane.focus", { pane: "p3" }]]);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  // The Trajectory pane: view "trajectory" in its props. It finds its own pane, shows the
+  // ledger only, opens on the chat's turn and keeps its own scroll.
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const wx = makeCx();
+  w.init(state.props, wx);
+  await settle(w);
+  w.paneW = 573;
+  settleRows(w, wx);
+  expect([w.trajPane, w.ledger(), w.me().pane]).toEqual([true, true, "p3"]);
+  w.syncSel(wx);
+  expect([w.sel, w.tsel]).toEqual([pick, pick]);
+  expect(w.scroll).not.toBe(v.scroll);
+  // Its header has the filter only, its footer no pin; it takes no pin, agents or settings keys.
+  expect(w.headerButtons().map((b) => b[0])).toEqual(["th-search"]);
+  expect(w.footerHints().map((x) => x[0])).not.toContain("p");
+  for (const k of ["pin", "pinned", "agents", "settings", "go:1", "undoUnpin"]) expect(w.action(k, wx)).toBe(false);
+  expect(w.pinnedList().length).toBe(0);
+  // y, or Chat in its top row, goes back to the chat's pane; it never leaves the Trajectory.
+  log = [];
+  w.key(keyEv("y"), wx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  expect(w.action("view:chat", wx)).toBe(true);
+  expect(w.ledger()).toBe(true);
+  // Commands with no pane focused reach the chat's pane, not this one.
+  expect(w.sideKey()).toBe("threads.trajByTerminal");
+  // Threads closes: the Trajectory pane closes too, once.
+  log = [];
+  state.panes = state.panes.filter((p) => p.pane !== "p2");
+  w.poll(wx);
+  w.poll(wx);
+  expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
+});
+
+test("the chat and its Trajectory pane select the same turn: a move in one moves the other", async () => {
+  const { v, cx } = await pane(twoFails());
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p3" } };
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  settleRows(v, cx);
+  const turns = v.turnKeys(v.rows());
+  v.sel = turns[0];
+  v.syncSel(cx);
+  state.props = { ...state.props, view: "trajectory" };
+  const w = new Threads();
+  const wx = makeCx();
+  w.init(state.props, wx);
+  await settle(w);
+  settleRows(w, wx);
+  w.syncSel(wx);
+  expect(w.sel).toBe(turns[0]);
+  // The chat moves: the Trajectory selects that turn's heading.
+  v.key(keyEv("j"), cx);
+  v.syncSel(cx);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[1], pane: "p2" });
+  w.syncSel(wx);
+  expect([w.sel, w.tsel]).toEqual([turns[1], turns[1]]);
+  // A move inside the turn (one of its steps) moves nothing in the chat.
+  w.key(keyEv("j"), wx);
+  expect(w.sel).toBe(turns[1]);
+  w.syncSel(wx);
+  const at = state.shared["threads.turnSel"].t4.at;
+  // The Trajectory moves to another turn: the chat selects it and brings it on screen.
+  w.ledgerPick(turns[3], true, wx);
+  w.syncSel(wx);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[3], pane: "p3" });
+  expect(state.shared["threads.turnSel"].t4.at).toBeGreaterThanOrEqual(at);
+  v.viewRange = [0, 0];
+  v.syncSel(cx);
+  expect(v.sel).toBe(turns[3]);
+  expect(v.scrollTo).toMatchObject({ key: turns[3], how: "center" });
+  // Nothing new: neither pane moves or writes again.
+  const before = state.shared["threads.turnSel"].t4;
+  v.scrollTo = null;
+  v.syncSel(cx);
+  w.syncSel(wx);
+  expect(state.shared["threads.turnSel"].t4).toBe(before);
+  expect(v.scrollTo).toBe(null);
+});
+
+test("the Trajectory always shows agent messages, marked apart, and reads none of the chat's settings for it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2", "--agents"));
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.prefs = { ...v.prefs, agentTurns: false };
+  settleRows(v, cx);
+  const agentKeys = v.sessions.flatMap((s, si) => s.turns.filter((t) => t.agent).map((t) => `${si}:${t.n}`));
+  expect(agentKeys.length).toBeGreaterThan(0);
+  expect(v.turnKeys(v.rows()).some((k) => agentKeys.includes(k))).toBe(false);
+  state.props = { ...state.props, view: "trajectory" };
+  const w = new Threads();
+  const wx = makeCx();
+  w.init(state.props, wx);
+  await settle(w);
+  w.prefs = { ...w.prefs, agentTurns: false };
+  settleRows(w, wx);
+  const heads = ledgerOnly(w).filter((r) => r.kind === "trh").map((r) => r.key);
+  expect(agentKeys.every((k) => heads.includes(k))).toBe(true);
+  const marked = ledgerOnly(w).filter((r) => r.kind === "tr" && r.lk === "agent").map((r) => `${r.si}:${r.turn.n}`);
+  expect(new Set(marked)).toEqual(new Set(agentKeys));
+  // The chat's setting changes nothing here: the rows are not even built again.
+  const rows = w.rows();
+  w.prefs = { ...w.prefs, agentTurns: true };
+  expect(w.rows()).toBe(rows);
+  // A chat that hides agent messages does not select one the Trajectory selected.
+  const chatSel = v.sel;
+  w.ledgerPick(agentKeys[0], true, wx);
+  w.syncSel(wx);
+  v.syncSel(cx);
+  expect(v.sel).toBe(chatSel);
 });
 
 // The Trajectory of a long session: its rows are built in slices of the chat's build time
@@ -7914,7 +8047,7 @@ test("draw time: the Trajectory of a 2,000-turn session builds in slices and dra
   try {
     const chatStill = best(() => v.render(cx));
     console.log(`chat still ${chatStill.toFixed(2)}`);
-    v.action("view", cx);
+    v.setTraj(true, cx); // the same ledger as the Trajectory pane's, in this pane
     // The build: a slice a frame, each about BUILD_MS; the rows on screen stay until it is done.
     const build = frames();
     const done = v.rowJob === null;

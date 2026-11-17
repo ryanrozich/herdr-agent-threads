@@ -160,6 +160,15 @@ const MAP_KEY = "threads.byTerminal";
 // shared("threads.pinnedByTerminal"): terminal -> its Pinned pane (v), kept apart from the
 // map above so Cmd-Shift-T still finds the main Threads pane.
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
+// shared("threads.trajByTerminal"): terminal -> its Trajectory pane (y), kept apart the same way.
+const TRAJ_MAP_KEY = "threads.trajByTerminal";
+// shared("threads.turnSel"): terminal -> { key, pane, at }, the selected turn as the pane that
+// last moved it wrote it, so the chat and its Trajectory pane select the same turn (syncSel).
+const SEL_KEY = "threads.turnSel";
+// The Trajectory pane: split off a Threads pane from this width (narrower, y switches the
+// pane itself), and given this px width, room for its start column and bars (ledger.js).
+const TRAJ_SPLIT_MIN = 480;
+const TRAJ_COL = 560;
 // shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
@@ -261,8 +270,7 @@ function launch() {
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (pane?.mod === MOD) {
     // Pressed on a Threads pane: go back to the terminal it reads.
-    const term = Object.entries(shared(MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0]
-      ?? Object.entries(shared(PIN_MAP_KEY) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0];
+    const term = [MAP_KEY, PIN_MAP_KEY, TRAJ_MAP_KEY].map((k) => Object.entries(shared(k) ?? {}).find(([, v]) => v.pane === pane.pane)?.[0]).find(Boolean);
     if (term && terminals().some((t) => t.address === term)) {
       // By pane id: pane.focus {terminal} prefers a layout block showing the terminal, which
       // may be outside this tab.
@@ -293,8 +301,8 @@ function launch() {
 }
 
 // shared("threads.byTerminal"): terminal -> its Threads pane, so the launcher focuses an
-// open one instead of splitting again, and a pane knows its own id. The Pinned pane is kept
-// in its own map (PIN_MAP_KEY).
+// open one instead of splitting again, and a pane knows its own id. The Pinned and the
+// Trajectory panes are kept in their own maps (PIN_MAP_KEY, TRAJ_MAP_KEY).
 function remember(terminal, pane, key = MAP_KEY) {
   const map = { ...(shared(key) ?? {}) };
   for (const [k, v] of Object.entries(map)) if (!panes().some((p) => p.pane === v.pane)) delete map[k];
@@ -652,6 +660,10 @@ export default class Threads extends View {
     // the switch in a pane too narrow to split).
     this.pinnedPane = p?.view === "pinned";
     this.view = this.pinnedPane ? "pinned" : "all";
+    // props().view "trajectory": this pane is the Trajectory pane that y split off a Threads
+    // pane. It shows the ledger only, with its own scroll, and selects the turn the chat
+    // selects (syncSel).
+    this.trajPane = p?.view === "trajectory";
     // Tests only, with debug: a pane width to lay out for when the window does not draw
     // (a window behind another never reports its size). Never set by the launcher.
     this.forcedWidth = this.debug && Number(p?.width) > 0 ? Number(p.width) : null;
@@ -727,10 +739,10 @@ export default class Threads extends View {
     // when it opened, for Esc. Not saved across restarts.
     this.outline = false;
     this.outlineBack = null;
-    // y: the Trajectory view (the ledger, ledger.js) in place of the chat, kept on this pane
-    // while it lives; a new pane opens on the chat. tsel is the selected ledger row; sel stays
-    // the turn that owns it, so the selected turn is the same in both views.
-    this.traj = false;
+    // The Trajectory (the ledger, ledger.js): the Trajectory pane, or in a pane too narrow to
+    // split, y switches this pane to it, kept while the pane lives. tsel is the selected
+    // ledger row; sel stays the turn that owns it, so the selected turn is the same in both.
+    this.traj = this.trajPane;
     this.tsel = null;
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
@@ -748,6 +760,7 @@ export default class Threads extends View {
     });
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
+      this.syncSel(cx);
       // A render Herdr stopped left renderOpen set (no timer runs during a render), and
       // Herdr asks for no render after it: ask for one. This timer was set up here, outside
       // any render, since a timer asked for inside a stopped render may never run.
@@ -780,7 +793,7 @@ export default class Threads extends View {
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
     const rows = this.res.kind === "found" || s ? this.rows() : [];
     const snap = {
-      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
+      pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, trajPane: this.trajPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       traj: this.ledger(), tsel: this.ledger() ? this.ledgerSel() : null, outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
@@ -1150,7 +1163,7 @@ export default class Threads extends View {
     this.pinChanged(k, cx);
     const i = this.pinnedList().findIndex((p) => p.pin === pin);
     // A pin opens the Pinned column when there is room and it was not closed this pane's life.
-    const col = !this.pinnedPane && !this.pinnedPaneOpen() && !this.pinColClosed && this.view === "all" && this.openPinned(cx, true);
+    const col = !this.pinnedPane && !this.trajPane && !this.pinnedPaneOpen() && !this.pinColClosed && this.view === "all" && this.openPinned(cx, true);
     this.say(`Pinned #${turn.n} · ${col ? "in the Pinned column · " : ""}press ${i + 1} to come back`, "pin", cx, 3000);
     return true;
   }
@@ -1263,7 +1276,7 @@ export default class Threads extends View {
   me() {
     const own = props()?.pane ?? this.myPane;
     if (own) return panes().find((p) => p.pane === own) ?? null;
-    if (this.pinnedPane) return this.pinnedSelf();
+    if (this.sideKey()) return this.sideSelf(this.sideKey());
     const known = shared(MAP_KEY)?.[this.terminal];
     const mine = known ? panes().find((p) => p.pane === known.pane) : null;
     if (mine) return mine;
@@ -1271,20 +1284,22 @@ export default class Threads extends View {
     // terminal's tab that no other terminal has claimed is this one.
     const tab = this.pane()?.tab;
     const claimed = new Set([...Object.entries(shared(MAP_KEY) ?? {}).filter(([t]) => t !== this.terminal).map(([, v]) => v.pane),
-      ...Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane)]);
+      ...Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane), ...Object.values(shared(TRAJ_MAP_KEY) ?? {}).map((v) => v.pane)]);
     const here = panes().filter((p) => p.mod === MOD && p.tab === tab && !claimed.has(p.pane));
     if (here.length === 1) return here[0];
     const anywhere = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane));
     return anywhere.length === 1 ? anywhere[0] : null;
   }
-  // The Pinned pane's own pane: the one in its map, or else the only Threads pane in the
-  // main pane's tab that no map claims (it was split from there, and props carry no id).
-  pinnedSelf() {
-    const known = shared(PIN_MAP_KEY)?.[this.terminal];
+  // The map a pane split off Threads is kept in: the Pinned pane's or the Trajectory pane's.
+  sideKey() { return this.pinnedPane ? PIN_MAP_KEY : this.trajPane ? TRAJ_MAP_KEY : null; }
+  // Such a pane's own pane: the one in its map, or else the only Threads pane in the main
+  // pane's tab that no map claims (it was split from there, and props carry no id).
+  sideSelf(key) {
+    const known = shared(key)?.[this.terminal];
     const mine = known ? panes().find((p) => p.pane === known.pane) : null;
     if (mine) return mine;
     const main = shared(MAP_KEY)?.[this.terminal]?.pane;
-    const claimed = new Set([...Object.values(shared(MAP_KEY) ?? {}), ...Object.values(shared(PIN_MAP_KEY) ?? {})].map((v) => v.pane));
+    const claimed = new Set([MAP_KEY, PIN_MAP_KEY, TRAJ_MAP_KEY].flatMap((k) => Object.values(shared(k) ?? {})).map((v) => v.pane));
     const tab = panes().find((p) => p.pane === main)?.tab;
     const here = panes().filter((p) => p.mod === MOD && !claimed.has(p.pane) && (!tab || p.tab === tab));
     return here.length === 1 ? here[0] : null;
@@ -1292,6 +1307,7 @@ export default class Threads extends View {
   // The main Threads pane of this terminal, and its Pinned pane, when open.
   mainPane() { const id = shared(MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   pinnedPaneOpen() { const id = shared(PIN_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
+  trajPaneOpen() { const id = shared(TRAJ_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   status() { return this.pane()?.status ?? this.term()?.status ?? null; }
 
   resolve(cx) {
@@ -1594,7 +1610,7 @@ export default class Threads extends View {
     const mine = this.me()?.pane ?? null;
     if (!mine) return;
     this.myPane = mine;
-    const key = this.pinnedPane ? PIN_MAP_KEY : MAP_KEY;
+    const key = this.sideKey() ?? MAP_KEY;
     if (shared(key)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine, key));
   }
 
@@ -1659,7 +1675,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${this.agentsShown() ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "", this.ledger() ? "traj" : "",
     ].join("|");
@@ -1937,7 +1953,7 @@ export default class Threads extends View {
     if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
     const numW = outlineNumW(maxN);
     const q = this.filterText();
-    const agents = Boolean(this.prefs.agentTurns);
+    const agents = this.agentsShown();
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -2470,20 +2486,21 @@ export default class Threads extends View {
       return true;
     }
     if (this.splitAsk) return true;
-    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
+    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000, map: PIN_MAP_KEY };
     run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
   }
 
-  // Once the split has applied: the new pane goes in the Pinned map and gets the column's
-  // width. Opened by a pin or by Threads opening, the keyboard goes back to Threads.
+  // Once the split has applied: the new pane goes in its map (the Pinned or the Trajectory
+  // one) and gets its width. Opened by a pin or by Threads opening, the keyboard goes back
+  // to Threads.
   settleSplit() {
     const a = this.splitAsk;
     if (!a) return;
     const made = panes().find((p) => p.mod === MOD && !a.before.includes(p.pane));
     if (made) {
       this.splitAsk = null;
-      remember(this.terminal, made.pane, PIN_MAP_KEY);
+      remember(this.terminal, made.pane, a.map);
       run("layout.resize", { id: made.pane, px: a.px });
       if (a.back) run("pane.focus", { pane: a.back });
     } else if (Date.now() > a.until) this.splitAsk = null;
@@ -2514,6 +2531,7 @@ export default class Threads extends View {
   // narrower or wider, and Threads the other way, so the terminal stays put (ui.js
   // columnResize says why a drag on the divider cannot do this).
   resizeColumn(d, cx) {
+    if (this.trajPane) return false;
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
     const main = this.pinnedPane ? this.mainPane() : this.me();
     if (!col || !main) return false;
@@ -2534,8 +2552,8 @@ export default class Threads extends View {
   // room. Closing the column keeps it closed for this pane's life, until v opens it again.
   // In the column: it closes when its Threads pane closes.
   autoPinned(cx) {
-    if (this.pinnedPane) {
-      // The column goes with its Threads pane: once the main pane has been seen, its closing
+    if (this.pinnedPane || this.trajPane) {
+      // The column (and the Trajectory pane) goes with its Threads pane: once the main pane has been seen, its closing
       // closes the column, so opening Threads again brings both back together.
       const main = this.mainPane();
       if (main) this.mainSeen = true;
@@ -2574,9 +2592,13 @@ export default class Threads extends View {
     return c;
   }
 
+  // Whether agent messages show: the chat's setting (agentTurns, a), and always in the
+  // Trajectory, which marks them apart and reads none of the chat's settings for it.
+  agentsShown() { return this.ledger() || Boolean(this.prefs.agentTurns); }
+
   // Whether the selection is on a hidden agent turn.
   selHidden() {
-    if (!this.sel || this.prefs.agentTurns || !this.findTurn(this.sel)?.agent) return false;
+    if (!this.sel || this.agentsShown() || !this.findTurn(this.sel)?.agent) return false;
     return !this.turnKeys(this.baseRows).includes(this.sel);
   }
 
@@ -2927,7 +2949,7 @@ export default class Threads extends View {
     const si = this.sessions.length - 1;
     const s = this.sessions[si];
     if (!s) return null;
-    const agentTurns = Boolean(this.prefs.agentTurns);
+    const agentTurns = this.agentsShown();
     for (let ti = s.turns.length - 1; ti >= 0; ti--) {
       const turn = s.turns[ti];
       if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti) })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
@@ -3066,9 +3088,90 @@ export default class Threads extends View {
   }
 
   // ---- the Trajectory (y) ----
-  // The ledger shows in the list's own view, in place of the chat; the Pinned view keeps its
-  // cards and the Pinned column has no Trajectory.
-  ledger() { return Boolean(this.traj) && this.view !== "pinned" && !this.pinnedPane; }
+  // The ledger is all the Trajectory pane shows. In a Threads pane switched to it (too narrow
+  // to split) it shows in the list's own view, in place of the chat; the Pinned view keeps
+  // its cards and the Pinned column has no Trajectory.
+  ledger() { return this.trajPane || (Boolean(this.traj) && this.view !== "pinned" && !this.pinnedPane); }
+
+  // y, or Trajectory in the top row: the Trajectory pane beside this one, split off it from
+  // TRAJ_SPLIT_MIN wide and given TRAJ_COL px (Herdr takes the room from the pane's
+  // neighbours too), or focused when it is open. Narrower, this pane switches to the
+  // Trajectory, with a toast that says why. In the Trajectory pane, y goes back to the chat's
+  // pane; in a pane switched to it, y switches back.
+  openTraj(cx) {
+    if (this.pinnedPane) return false;
+    if (this.trajPane) {
+      const main = this.mainPane();
+      if (main) run("pane.focus", { pane: main.pane });
+      return true;
+    }
+    if (this.ledger()) return this.setTraj(false, cx);
+    const open = this.trajPaneOpen();
+    if (open) { this.postSel(); run("pane.focus", { pane: open.pane }); return true; }
+    const me = this.me();
+    if (!me || !(this.pw() >= TRAJ_SPLIT_MIN)) {
+      this.setTraj(true, cx);
+      if (me) this.say(`The Trajectory shows here: its own pane needs Threads ${TRAJ_SPLIT_MIN} px wide`, "list", cx, 3500);
+      return true;
+    }
+    if (this.splitAsk) return true;
+    // The new pane opens on the selected turn: it reads it from here (syncSel).
+    this.postSel();
+    this.splitAsk = { before: panes().map((p) => p.pane), px: TRAJ_COL, back: null, until: Date.now() + 4000, map: TRAJ_MAP_KEY };
+    run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "trajectory" } });
+    return true;
+  }
+
+  // The chat and its Trajectory pane select the same turn. Each 120 ms: a turn this pane
+  // selected since it last looked is written to shared("threads.turnSel") (SEL_KEY); else one
+  // the other pane wrote is selected here and brought on screen. The Pinned pane takes no
+  // part, and the chat writes only while its Trajectory pane is open.
+  syncSel(cx) {
+    if (!this.terminal || this.pinnedPane || this.view === "pinned" || !this.sessions.length) return;
+    const mine = this.myPane ?? this.me()?.pane;
+    if (!mine) return;
+    const got = shared(SEL_KEY)?.[this.terminal];
+    const tag = got ? `${got.pane}|${got.at}|${got.key}` : null;
+    if (this.trajPane) {
+      // First look: take the chat's turn, not this pane's own first choice.
+      if (this.selPosted === undefined) this.selPosted = this.sel;
+    } else {
+      // The chat writes only while its Trajectory pane is open, and its turn once as it opens
+      // (a restart brings both back), never one the pane wrote before.
+      const open = Boolean(this.trajPaneOpen());
+      if (!open || !this.trajWas) { this.trajWas = open; this.selTag = tag; this.selPosted = open ? null : this.sel; }
+      if (!open) return;
+    }
+    if (this.sel && this.sel !== this.selPosted) { this.postSel(mine); return; }
+    if (!got || tag === this.selTag) return;
+    if (got.pane === mine || got.key === this.sel || !this.findTurn(got.key)) { this.selTag = tag; return; }
+    // A turn whose rows are not built yet is tried again on the next look.
+    if (this.adoptSel(got.key, cx)) { this.selTag = tag; cx.notify(); }
+  }
+  postSel(mine = this.myPane ?? this.me()?.pane) {
+    if (!this.terminal || !this.sel || !mine) return;
+    const at = Date.now();
+    this.selPosted = this.sel;
+    this.selTag = `${mine}|${at}|${this.sel}`;
+    setShared(SEL_KEY, { ...(shared(SEL_KEY) ?? {}), [this.terminal]: { key: this.sel, pane: mine, at } });
+  }
+  // The other pane's turn, selected here: in the ledger its heading (unless a row of that
+  // turn is selected already), in the chat the turn, brought on screen when it is not.
+  adoptSel(key, cx) {
+    if (this.ledger()) {
+      if (!this.ledgerPick(key, true, cx)) return false;
+    } else {
+      // A turn the chat hides (an agent message while they are hidden) stays unselected here.
+      if (this.baseIndex && !this.baseIndex.has(key)) return false;
+      this.sel = key;
+      this.follow = false;
+      const at = this.rowIndex(key);
+      const [a, b] = this.viewRange ?? [0, 0];
+      if (!(at > a && at < b)) this.scrollTo = { key, how: "center", until: Date.now() + 400 };
+    }
+    this.selPosted = this.sel;
+    return true;
+  }
 
   // What a flash (a jump's landing) lights: a ledger row by itself, a chat row with its turn.
   flashKey(r) { return r.kind === "tr" || r.kind === "trh" ? r.key : rowTurnKey(r) ?? r.key; }
@@ -3181,6 +3284,7 @@ export default class Threads extends View {
   // that owns the selected row is selected and scrolled to. The landing row fades in.
   setTraj(on, cx) {
     if (this.pinnedPane) return false;
+    if (this.trajPane) return on ? true : this.openTraj(cx);
     if (Boolean(on) === this.ledger()) return true;
     if (this.selecting) this.endSelect();
     this.detailsOpen = false;
@@ -3214,7 +3318,7 @@ export default class Threads extends View {
       .text_size(12).text_color(mine ? t.foreground : t.dim).when(mine, (el) => el.bg(t.raised))
       .when(!mine, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
       .tooltip(tip)
-      .on_click((_e, cx) => { cx.stop_propagation(); this.setTraj(label === "Trajectory", cx); cx.notify(); })
+      .on_click((_e, cx) => { cx.stop_propagation(); if ((label === "Trajectory") !== on) this.openTraj(cx); cx.notify(); })
       .child(words ? label : svg(ICON(icon)).size(13));
     return h_flex().id("th-view").flex_none().h(24).p(1).gap(1).items_center().rounded(5).border_1().border_color(t.border).bg(t.background)
       .child(part("th-view-chat", "Chat", "messages", !on, "The turns as a chat (y)"))
@@ -4240,8 +4344,11 @@ export default class Threads extends View {
     this.stickStep = null; // a key decides, not a frame drawn before it
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
-    if (name === "view") return this.setTraj(!this.ledger(), cx);
-    if (name === "view:chat" || name === "view:trajectory") return this.setTraj(name === "view:trajectory", cx);
+    if (name === "view") return this.openTraj(cx);
+    if (name === "view:chat" || name === "view:trajectory") return (name === "view:trajectory") === this.ledger() || this.openTraj(cx);
+    // The chat's own parts have no place in the Trajectory pane: pins, agent messages (always
+    // shown there) and the settings, which are the chat's.
+    if (this.trajPane && (/^(pin|pinned|undoUnpin|settings|resetSettings|agents)(:|$)/.test(name) || name.startsWith("go:"))) return false;
     // The Trajectory's own keys come first: its rows are many, and the turn keys are not needed.
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
@@ -4450,9 +4557,9 @@ export default class Threads extends View {
         const me = this.me();
         const threads = panes().filter((p) => p.mod === MOD);
         const focusedOne = threads.find((p) => p.focused);
-        const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
-        const mains = threads.filter((p) => !pinnedIds.has(p.pane));
-        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
+        const sideIds = new Set([PIN_MAP_KEY, TRAJ_MAP_KEY].flatMap((k) => Object.values(shared(k) ?? {})).map((v) => v.pane));
+        const mains = threads.filter((p) => !sideIds.has(p.pane));
+        if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.sideKey() && mains[0].pane === me.pane)) {
           if (this.action(c, cx)) cx.notify();
         }
       }
@@ -5113,7 +5220,7 @@ export default class Threads extends View {
   readingPx() { return fitWidth(this.prefs.textSize, this.chars()); }
   chars() { return widthChars(this.prefs.width); }
   keepWidth() {
-    if (this.pinnedPane || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded) return;
+    if (this.sideKey() || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded) return;
     const me = this.me();
     if (!me || me.zoomed) return;
     const px = this.readingPx();
@@ -5133,7 +5240,7 @@ export default class Threads extends View {
     this.fitColumn();
     this.capAsked = null;
     const me = this.me();
-    if (!full && this.prefs.readingWidth && !this.pinnedPane && me && !me.zoomed && this.paneW != null) {
+    if (!full && this.prefs.readingWidth && !this.sideKey() && me && !me.zoomed && this.paneW != null) {
       const px = this.readingPx();
       if (Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
     }
@@ -5142,7 +5249,7 @@ export default class Threads extends View {
   // w, or the header's fit button: Threads to the reading width, and an open Pinned column to
   // its own width for that, wider or narrower than they are now.
   fitToReading(cx) {
-    const main = this.pinnedPane ? this.mainPane() : this.me();
+    const main = this.sideKey() ? this.mainPane() : this.me();
     if (!main) return false;
     const px = this.readingPx();
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
@@ -5157,7 +5264,7 @@ export default class Threads extends View {
     return true;
   }
   // Wider than the reading width by more than a little: the header offers the fit button.
-  tooWide() { return !this.pinnedPane && this.paneW != null && this.paneW > this.readingPx() + 8; }
+  tooWide() { return !this.sideKey() && this.paneW != null && this.paneW > this.readingPx() + 8; }
 
   // Under 440 px the header's badge drops its word and the latest button gives way (End still
   // acts), so the text keeps room beside the labelled Pinned button.
@@ -5204,9 +5311,12 @@ export default class Threads extends View {
     // The Pinned pane: its pin button gives way under 300 px too, so "1 of 5" keeps its room
     // beside the heading.
     if (this.pinnedPane) return [...(this.narrow() ? [] : [pinBtn]), ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
+    // The Trajectory pane: the filter only. Pins, agent messages and the settings are the chat's.
+    const search = ["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null];
+    if (this.trajPane) return [search];
     const narrow = this.narrow();
-    const showAgents = (c.agentAll > 0 || this.prefs.agentTurns) && !narrow;
-    const out = [["th-search", "search", "Filter (/)", "filterToggle", this.filtering || Boolean(this.query), null, null]];
+    const showAgents = (c.agentAll > 0 || this.prefs.agentTurns) && !narrow && !this.ledger();
+    const out = [search];
     if (showAgents) {
       const on = Boolean(this.prefs.agentTurns);
       out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
@@ -5529,8 +5639,9 @@ export default class Threads extends View {
     if (!q) return null;
     const status = this.status();
     let shown = 0, hit = 0, hiddenHit = 0;
+    const agents = this.agentsShown();
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status) });
+      const on = isShown(t, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
       const m = threadMatches(s.turns, t, q);
       if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
     }));
@@ -5698,7 +5809,7 @@ export default class Threads extends View {
     const n = jumpTarget(this.query);
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
-    if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
+    if (cx && this.findTurn(key)?.agent && !this.agentsShown() && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
     this.sel = key; this.follow = false; this.scrollTo = { key, how: "center", flash: true };
   }
 
@@ -7752,7 +7863,7 @@ export default class Threads extends View {
     // The outline: move, open the turn, back to the list, then search and pin.
     if (this.outlined()) return fitHints([["↑↓", "move"], ["↵", "open"], ["Esc", "list"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
     // The Trajectory: move a row, step through failures, back to the chat.
-    if (this.ledger()) return fitHints([["↑↓", "move"], ["f", "next failure"], ["y", "chat"], ["c", "copy"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
+    if (this.ledger()) return fitHints([["↑↓", "move"], ["f", "next failure"], ["y", "chat"], ["c", "copy"], ["/", "filter"], ...(this.trajPane ? [] : pinHint), ["?", "keys"]], this.pw());
     // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]

@@ -44,7 +44,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ...(outline ? [["Trajectory", [
-      [["y"], "Chat or Trajectory: the turns as a chat, or each step of them"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
+      [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
       [["f", "Shift f"], "Next or previous failed call"],
     ]]] : []),
     ["Open turn", [
