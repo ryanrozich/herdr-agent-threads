@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 7,
   "ts": 1793524350000,
   "origin": "human",
   "prompt": "What does the auth mock warning in the test output mean?",
@@ -43,6 +44,7 @@
  },
  {
   "n": 2,
+  "v": 27,
   "ts": 1793524384000,
   "origin": "human",
   "prompt": "Fix the flaky login test so it stops timing out in CI",
@@ -141,6 +143,7 @@
  },
  {
   "n": 3,
+  "v": 32,
   "ts": 1793524466000,
   "origin": "human",
   "prompt": "Run the full e2e suite and summarise the failures",
@@ -194,6 +197,7 @@
  },
  {
   "n": 4,
+  "v": 42,
   "ts": 1793524553000,
   "origin": "human",
   "prompt": "Why does CI fail here? Log below:\n\nTimeoutError: waitForURL 30000ms\n    at step0 (tests/login.spec.ts:40:5)\n    at step1 (tests/login.spec.ts:41:5)\n    at step2 (tests/login.spec.ts:42:5)\n    at step3 (tests/login.spec.ts:43:5)\n    at step4 (tests/login.spec.ts:44:5)\n    at step5 (tests/login.spec.ts:45:5)\n    at step6 (tests/login.spec.ts:46:5)\n    at step7 (tests/login.spec.ts:47:5)\n    at step8 (tests/login.spec.ts:48:5)\n    at step9 (tests/login.spec.ts:49:5)\n    at step10 (tests/login.spec.ts:50:5)\n    at step11 (tests/login.spec.ts:51:5)\n    at step12 (tests/login.spec.ts:52:5)\n    at step13 (tests/login.spec.ts:53:5)\n    at step14 (tests/login.spec.ts:54:5)\n    at step15 (tests/login.spec.ts:55:5)\n    at step16 (tests/login.spec.ts:56:5)\n    at step17 (tests/login.spec.ts:57:5)\n    at step18 (tests/login.spec.ts:58:5)\n    at step19 (tests/login.spec.ts:59:5)\n    at step20 (tests/login.spec.ts:60:5)\n    at step21 (tests/login.spec.ts:61:5)\n    at step22 (tests/login.spec.ts:62:5)\n    at step23 (tests/login.spec.ts:63:5)\n    at step24 (tests/login.spec.ts:64:5)\n    at step25 (tests/login.spec.ts:65:5)\n    at step26 (tests/login.spec.ts:66:5)\n    at step27 (tests/login.spec.ts:67:5)\n    at step28 (tests/login.spec.ts:68:5)\n    at step29 (tests/login.spec.ts:69:5)\n    at step30 (tests/login.spec.ts:70:5)\n    at step31 (tests/login.spec.ts:71:5)\n    at step32 (tests/login.spec.ts:72:5)\n    at step33 (tests/login.spec.ts:73:5)\n    at step34 (tests/login.spec.ts:74:5)\n    at step35 (tests/login.spec.ts:75:5)\n    at step36 (tests/login.spec.ts:76:5)\n    at step37 (tests/login.spec.ts:77:5)\n    at step38 (tests/login.spec.ts:78:5)\n    at step39 (tests/login.spec.ts:79:5)",
@@ -264,6 +268,7 @@
  },
  {
   "n": 5,
+  "v": 52,
   "ts": 1793524607000,
   "origin": "human",
   "prompt": "Add a retry note to the README",
@@ -327,6 +332,7 @@
  },
  {
   "n": 6,
+  "v": 75,
   "ts": 1793524650000,
   "origin": "human",
   "prompt": "Review the calendar code three ways",

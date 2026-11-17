@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 9,
   "ts": 1793525400000,
   "origin": "human",
   "prompt": "Make the checkout button full width on phones",
@@ -53,6 +54,7 @@
  },
  {
   "n": 2,
+  "v": 11,
   "ts": 1793525520000,
   "origin": "human",
   "prompt": "Does it still line up with the coupon field?",

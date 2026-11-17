@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 9,
   "ts": 1793523600000,
   "origin": "human",
   "prompt": "Why is the order total a cent off when there are three or more items?",
@@ -59,6 +60,7 @@
  },
  {
   "n": 2,
+  "v": 14,
   "ts": 1793523687000,
   "origin": "human",
   "prompt": "Yes, and add a test with three items at $3.33",
