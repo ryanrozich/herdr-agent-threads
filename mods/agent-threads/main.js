@@ -3574,6 +3574,14 @@ export default class Threads extends View {
     this.toList();
     if (/^\d+$/.test(kind)) {
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
+      // The selected running card whose message is taller than YOU_MAX: Show all and Show
+      // less (ya:, which the open turn shares), as a press on an open turn's bubble does.
+      const lr = this.sel === key ? this.baseRows?.find((x) => x.key === key && x.live && x.kind === "working") : null;
+      if (lr && this.youMd(this.workYou(lr)).long) {
+        const k = `ya:${key}`;
+        this.full.has(k) ? this.full.delete(k) : this.full.add(k);
+        return cx.notify();
+      }
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -5779,7 +5787,7 @@ export default class Threads extends View {
   // draws it: whole, as Markdown, every paragraph and quote. It is measured by the probe like
   // that part, under its own key, while the turn runs, selected or not, so selecting the
   // turn (which rebuilds nothing) finds it measured.
-  workYou(r) { return { ...r, kind: "you", key: `wyou:${r.key}`, full: true, less: false }; }
+  workYou(r) { return { ...r, kind: "you", key: `wyou:${r.key}`, full: true, less: false, all: this.full.has(`ya:${r.key}`) }; }
 
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure

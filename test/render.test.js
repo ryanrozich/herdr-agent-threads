@@ -7370,3 +7370,33 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
+
+// PR 72 and 75 together: the running card draws the open turn's YOU part, so a message past
+// 420 px is cut there with Show all, and a press on the card opens it in place.
+test("the running card's message past 420 px is cut with Show all, and a press on the card shows it whole", async () => {
+  const prompt = Array.from({ length: 40 }, (_, i) => `step ${i + 1}: cart total recomputed for order ${1000 + i}`).join("\n");
+  const at = (s) => `2026-11-16T10:00:${String(s).padStart(2, "0")}.000Z`;
+  const lines = [
+    { type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, message: { role: "user", content: prompt } },
+    { type: "assistant", uuid: "a1", timestamp: at(5), sessionId: "s", message: { id: "m1", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "cart/total.ts" } }] } },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "threads-runlong-"));
+  const file = join(dir, "r.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  const key = v.turnKeys(v.rows()).at(-1);
+  v.sel = key;
+  let r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: true });
+  const h0 = v.estimate(r);
+  v.click(key, cx);
+  r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  expect(v.youMd(v.workYou(r))).toMatchObject({ long: true, capped: false });
+  expect(v.estimate(r)).toBeGreaterThan(h0);
+  expect(v.open.has(key)).toBe(false);
+  v.click(key, cx);
+  expect(v.youMd(v.workYou(v.rows().find((x) => x.key === key))).capped).toBe(true);
+});
