@@ -349,7 +349,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 });
 
 // F3: the selected running turn's working card is sized with the line heights it draws.
-test("the working card's estimate uses the 22 px prompt and 20 px note lines it draws", async () => {
+test("the working card's estimate uses the YOU part it draws and the 20 px note lines", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
   let seen = 0;
   for (const width of [240, 380, 640]) {
@@ -359,22 +359,19 @@ test("the working card's estimate uses the 22 px prompt and 20 px note lines it 
     if (!r) continue;
     seen++;
     const est = v.estimate(r);
-    // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
+    // The smallest it can be: padding, the message's bubble (one line), the strip under it,
     // the live line, one note line, padding.
-    expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
-    // Each prompt line of the row's shape (as its closed row draws it) counts 22 px, each note
-    // line 20 px.
+    expect(est).toBeGreaterThanOrEqual(8 + 16 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
+    // The message is the open turn's YOU part (its estimate until the probe measures it); each
+    // note line counts 20 px.
     const g = v.workingGeom(r.turn, r.shape);
-    expect(g.lines).toBe(r.shape.p);
-    expect(est).toBe(8 + 12 + g.promptH + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    expect(g.promptH).toBe(r.shape.p * 22 + (r.shape.pMore ? 18 : 0));
+    expect(est).toBe(8 + v.youHeight(v.workYou(r)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
-    // Prompt lines are 22 px rows (promptBlock), the note sets 20 px lines.
-    const hs = rec.filter(([n]) => n === "h").map(([, x]) => x);
+    // The message is the YOU part's TextView; the note sets 20 px lines.
+    expect(rec).toContainEqual(["TextView", `th-you-wyou:${r.key}`]);
     rec = null;
-    expect(hs.filter((x) => x === 22).length).toBeGreaterThanOrEqual(r.shape.p);
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -2245,7 +2242,7 @@ test("a running turn shows its pasted images, and a tile opens the viewer", asyn
   expect(card).toMatchObject({ kind: "working", split: true });
   expect(rows[at(key) - 1].kind).toBe("wtop");
   const g = v.workingGeom(last);
-  expect(v.estimate(card)).toBe(6 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+  expect(v.estimate(card)).toBe(6 + v.youHeight(v.workYou(card)) + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
   draw(v, cx);
   // A press beside the tiles selects the turn; one on the second tile opens the viewer at it.
   overlays.length = 0;
@@ -6991,16 +6988,30 @@ test("a queued prompt that opens with a quote shows whole on the running turn's 
   v.sel = key;
   const r = v.rows().find((x) => x.key === key);
   expect(r.kind).toBe("working");
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the bubble: the plain look
   rec = [];
+  views.length = 0;
   v.workingItem(theme, r);
   const drawn = rec;
   rec = null;
-  const text = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
-  for (const w of ["I think the rounding", "billing/receipt.ts", "Keep the helper", "Which of the two should change?"]) expect(text).toContain(w);
-  // The quote is drawn behind its bar, without its "> ".
-  expect(r.shape.kinds?.[0]).toBe("q");
-  expect(text).not.toContain("> The checkout");
-  expect(v.estimate(r)).toBeGreaterThan(8 + 12 + 6 * 22);
+  // The open turn's YOU part, whole, as Markdown: the quote in full as a blockquote, and the
+  // owner's three paragraphs kept apart (the closed row's lines ran them together).
+  expect(drawn).toContainEqual(["TextView", `th-you-wyou:${key}`]);
+  const md = views.find((x) => x.id === `th-you-wyou:${key}`).md.replace(/\\(?!\n)/g, "");
+  for (const w of ["I think the rounding", "billing/receipt", "Keep the helper", "Which of the two should change?"]) expect(md).toContain(w);
+  expect(md).toMatch(/^> /);
+  expect(md.split(/\n{2,}/).length).toBeGreaterThanOrEqual(3);
+  // Its height is the YOU part's: the probe's measure once it reports, the estimate till then.
+  const y = v.workYou(r);
+  const rest = 8 + 6 + 16 + 6 + 24 + 6 + v.workingGeom(r.turn, r.shape).note * 20 + 10;
+  expect(v.estimate(r)).toBe(rest + v.youHeight(y));
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
+  v.probed(`wyou:${key}`, v.partSig(y), { height: 300 * v.zoom() }, cx);
+  expect(v.estimate(r)).toBe(rest + 300);
+  // Not selected, it is the one-line row, and its message is still measured for the card.
+  v.sel = null;
+  expect(v.rows().find((x) => x.key === key).kind).toBe("wrow");
+  expect(v.probeRows.some((x) => x.key === `wyou:${key}`)).toBe(true);
 });
 
 // The owner's fault, 16 Nov: the viewer drew a quote as "> " text. A run of quote lines is drawn as

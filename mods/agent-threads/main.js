@@ -1806,6 +1806,7 @@ export default class Threads extends View {
     for (const r of this.baseRows ?? []) {
       if (PROBED.has(r.kind)) probed.push(r);
       else if (r.kind === "turn" && r.shape?.md != null) cmds.push(this.cmdFor(r));
+      else if (r.live && (r.kind === "working" || r.kind === "wrow")) probed.push(this.workYou(r));
     }
     return probed.concat(cmds);
   }
@@ -5601,6 +5602,11 @@ export default class Threads extends View {
 
   // A collapsed row's reply block, as a probe part of its own: "cmd:<turn key>".
   cmdRow(r) { return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: r.shape.md, est: r.shape.mdEst }; }
+  // The running turn's message, drawn on its card (workingItem) as an open turn's YOU part
+  // draws it: whole, as Markdown, every paragraph and quote. It is measured by the probe like
+  // that part, under its own key, while the turn runs, selected or not, so selecting the
+  // turn (which rebuilds nothing) finds it measured.
+  workYou(r) { return { ...r, kind: "you", key: `wyou:${r.key}`, full: true, less: false }; }
 
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure
@@ -5807,8 +5813,10 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
+        // The message is the open turn's YOU part (workYou): its measure, or its estimate.
         const g = this.workingGeom(r.turn, r.shape);
-        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.promptH
+        const y = this.workYou(r);
+        return (r.split ? ROW.GAP : ROW.PAD_T) + (this.measured(y) ?? this.youHeight(y))
           + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T;
@@ -5895,7 +5903,7 @@ export default class Threads extends View {
     if (this.meas.size > 20000) this.meas.clear();
     this.meas.set(key, { sig, h });
     this.measVer = (this.measVer ?? 0) + 1;
-    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
+    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key.startsWith("wyou:") ? key.slice(5) : key;
     const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
     if (r?.key === rowKey) {
@@ -5922,7 +5930,8 @@ export default class Threads extends View {
     const n = rows.length;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
     const visit = (r) => {
-      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
+        : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
       if (!part) return;
       const sig = this.partSig(part, base);
       const m = this.meas?.get(part.key);
@@ -6631,20 +6640,15 @@ export default class Threads extends View {
   // The running turn when selected: the message in full (up to 6 lines), the strip under
   // it, the live line with its tokens, and a note on where the reply will appear. Every line
   // has a fixed height, so the drawn height is the estimate (F3).
-  // The selected running turn. Its message is drawn as its closed row draws it (promptBlock
-  // from the row's shape): whole, every paragraph, with a quote behind its bar. It used to be
-  // the prompt's first lines as plain text, which cut a quoted prompt to its quote line.
+  // The selected running turn. Its message is drawn as an open turn's YOU part (workYou):
+  // whole, as Markdown, every paragraph, with each quote in full behind its bar and an
+  // agent's name inside its bubble. It used to be the closed row's lines, which ran the
+  // paragraphs together and cut a long quote.
   workingItem(t, r) {
     const { turn, key } = r;
     const g = this.workingGeom(turn, r.shape);
-    const sh = r.shape;
-    const bt = this.bubbleLook(t, turn.agent).theme;
-    const body = sh
-      ? [this.promptBlock(bt, turn, sh, true), ...(sh.pMore ? [this.moreLine(bt)] : [])]
-      : [div().h(g.promptH).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(g.prompt)];
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.bubble(t, turn, body, sh?.bubbleW ?? bubbleMax(this.width, this.prefs.textSize, this.chars())),
+      this.partContent(t, this.workYou(r), false),
       this.youStrip(t, turn, key, true),
       this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
