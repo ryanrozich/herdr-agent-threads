@@ -90,7 +90,7 @@ Press `a` to show messages other agents sent the session, such as a subagent's r
 
 ### Make it yours
 
-Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), how many lines a row shows, bubble colours, your name, and whether agent messages show. You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), how many lines a row shows, bubble colours, and whether agent messages show. You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 

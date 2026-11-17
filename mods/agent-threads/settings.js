@@ -4,7 +4,7 @@
 // hand; the pane watches it and applies a change at once.
 //
 //   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "plain",
-//     "agentBubbleColor": "plum", "youName": "You", "quoteKey": "q",
+//     "agentBubbleColor": "plum", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
@@ -18,7 +18,7 @@
 // with Show more, and an open turn's message and running reply are cut with Show all.
 // alwaysShowTime: keep each message's time under its bubble (false, the default: the time
 // shows under the selected turn's bubble only).
-// youName: the name over the person's messages, 1 to 40 characters, "You" when unset.
+// railSide: the side of the list the turn rail sits on, "right" (the default) or "left".
 // width: how long a reading line may be, "comfortable" (70 characters, the default), "wide"
 // (90) or "full" (no limit; a bubble still stops at 90). One value for every pane.
 // readingWidth: keep the Threads pane at the width's column (true, the default): a pane that
@@ -36,7 +36,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -56,13 +56,6 @@ const clampInt = (v, [lo, hi], dflt) => {
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : dflt;
 };
 
-// A name to show: one line of 1 to 40 characters, trimmed, or null.
-export const NAME_MAX = 40;
-export function nameValue(v) {
-  if (typeof v !== "string") return null;
-  const s = v.replace(/\s+/g, " ").trim();
-  return s ? [...s].slice(0, NAME_MAX).join("") : null;
-}
 
 // { values, error }: values always complete; error is a one-line note when the text is not
 // a JSON object (the defaults apply then). A missing file (null) is not an error.
@@ -82,12 +75,12 @@ export function parseSettings(text) {
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
-      youName: nameValue(raw.youName) ?? DEFAULTS.youName,
       width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,
       readingWidth: typeof raw.readingWidth === "boolean" ? raw.readingWidth : DEFAULTS.readingWidth,
       viewerReply: typeof raw.viewerReply === "boolean" ? raw.viewerReply : DEFAULTS.viewerReply,
       alwaysShowTime: typeof raw.alwaysShowTime === "boolean" ? raw.alwaysShowTime : DEFAULTS.alwaysShowTime,
       truncate: typeof raw.truncate === "boolean" ? raw.truncate : DEFAULTS.truncate,
+      railSide: raw.railSide === "left" || raw.railSide === "right" ? raw.railSide : DEFAULTS.railSide,
     },
     error: null,
   };

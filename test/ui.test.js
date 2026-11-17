@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railLayout, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -442,11 +442,17 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
   }
 });
 
-test("the Pinned column: from 480 px, about a third of Threads, 240 to 320 px, leaving Threads at least 240", () => {
+test("the Pinned column: from 480 px, 40% of Threads, 340 to 400 px, never under 240 or leaving Threads under 240", () => {
   expect(PIN_SPLIT_MIN).toBe(480);
-  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 240], [600, 240], [700, 252], [800, 288], [960, 320], [1600, 320]]) {
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 258], [571, 331], [580, 340], [700, 340], [820, 340], [900, 360], [960, 384], [1000, 400], [1600, 400]]) {
     expect(pinColumn(w)).toBe(px);
     if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+    // A compact row's text (the column less 54 px) holds about 40 prompt characters from 580 px.
+    if (w >= 580) expect((px - 54) / 6.7).toBeGreaterThanOrEqual(40);
+  }
+  // A width the owner left the column at wins, within 240 to 640 px and Threads at least 240.
+  for (const [w, kept, px] of [[1000, 300, 300], [1000, 460, 460], [600, 500, 360], [571, 300, 300], [1600, 700, 640], [500, 200, 240], [470, 300, null]]) {
+    expect(pinColumn(w, kept)).toBe(px);
   }
   expect(pinColumn(Number.NaN)).toBe(null);
   expect(headerButtonWidth(null)).toBe(24);
@@ -787,24 +793,28 @@ test("fencedBlock: a reply block that is one fenced code block, with its languag
   expect(fencedBlock("The chips had a fixed width.")).toBe(null);
 });
 
-test("railLayout: one tick per turn 9 px apart, closing to 3 px, then one tick for several turns", () => {
-  // 20 turns in a 600 px rail: the full 9 px pitch, a 2 px mark, day gaps kept.
-  expect(railLayout(20, 2, 600)).toEqual({ per: 1, ticks: 20, pitch: 9, mark: 2, dayGap: true });
-  // 100 turns in 400 px: 388 px less two 7 px day gaps over 100 ticks closes to 3 px, a 1 px mark.
-  expect(railLayout(100, 2, 400)).toEqual({ per: 1, ticks: 100, pitch: 3, mark: 1, dayGap: true });
-  // 400 turns in 400 px: one tick for 4 turns, and no day gaps once ticks stand for groups.
-  const L = railLayout(400, 3, 400);
-  expect(L.per).toBe(4);
-  expect(L.ticks).toBe(100);
-  expect(L.pitch).toBe(3);
-  expect(L.dayGap).toBe(false);
-  expect(L.ticks * L.pitch).toBeLessThanOrEqual(400 - 2 * RAIL.PAD);
-  // Never under 3 px, never over 9, whatever the height.
-  for (const [n, h] of [[2, 2000], [5, 0], [1000, 100]]) {
-    const x = railLayout(n, 0, h);
-    expect(x.pitch).toBeGreaterThanOrEqual(RAIL.MIN);
-    expect(x.pitch).toBeLessThanOrEqual(RAIL.MAX);
-  }
+test("railWindow: 9 px a tick at every length, a window of 60% of the list and at most 540 px that follows the turns on screen", () => {
+  const none = () => false;
+  // A short session: every tick, no cut.
+  expect(railWindow(20, none, 900)).toEqual({ top: 0, count: 20, cut: false });
+  expect(railWindow(60, none, 900)).toEqual({ top: 0, count: 60, cut: false });
+  // Past 60 ticks at 900 px: a window of 58 (540 px less a 9 px row at each end for a dot).
+  // While the list follows the newest turn it rests at the end.
+  expect(railWindow(344, none, 900, 0, null, true)).toEqual({ top: 286, count: 58, cut: true });
+  // It keeps the turns on screen three ticks from its ends, moving only as far as needed.
+  expect(railWindow(344, none, 900, 0, [130, 134])).toEqual({ top: 80, count: 58, cut: true });
+  expect(railWindow(344, none, 900, 100, [130, 134]).top).toBe(100);
+  expect(railWindow(344, none, 900, 128, [130, 134]).top).toBe(127);
+  // 60% of a 400 px list is 240 px: 24 ticks.
+  expect(railWindow(344, none, 400, 0, [10, 12]).count).toBe(24);
+  // Day gaps take 7 px and hold at every length.
+  const days = (i) => i % 10 === 0;
+  const w = railWindow(344, days, 900, 0, null, true);
+  expect(w.top + w.count).toBe(344);
+  expect(w.count).toBeLessThan(58);
+  // The same number of ticks for 3,000 turns as for 344.
+  expect(railWindow(3000, none, 900, 0, null, true).count).toBe(58);
+  expect(RAIL.FADE).toEqual([0.25, 0.5, 0.75]);
 });
 
 test("toolKind: each agent's tool names fall into commands, reads, edits, searches, web, agent tasks and other", () => {
@@ -901,9 +911,9 @@ test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column b
   expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
   // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
   // 8, 12 and 6.
-  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14 });
-  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6 });
-  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6 });
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6, peak: 16 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16 });
 });
 
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
@@ -940,4 +950,19 @@ test("level 3 paths: relative to the working folder inside it, from ~ elsewhere,
   // A folder given with a trailing slash, and a root or empty folder, which shortens nothing.
   expect(shortPaths("/home/dev/acme-web/a.ts", "/home/dev/acme-web/", home)).toBe("a.ts");
   expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
+});
+
+test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
+  const { railDay, railSwell, flattenMd, RAIL } = await import("../mods/agent-threads/ui.js");
+  const now = new Date(2026, 10, 16, 12).getTime();
+  expect(railDay(now, now)).toBe("Today");
+  expect(railDay(now - 86400000, now)).toBe("Yesterday");
+  expect(railDay(new Date(2026, 10, 13, 11, 20).getTime(), now)).toBe("Fri 13 Nov");
+  expect(railDay(new Date(2025, 11, 28, 14, 5).getTime(), now)).toBe("Sun 28 Dec 2025");
+  expect(railDay(null, now)).toBe(null);
+  expect([0, 9, 18, 27, 36, 50].map((d) => railSwell(10, RAIL.PEAK, d))).toEqual([24, 18, 13.5, 11, 10, 10]);
+  expect(railSwell(8, RAIL.PEAK_SMALL, 0)).toBe(16);
+  expect(RAIL.CARD_W).toBe(300);
+  expect(flattenMd("Here:\n\n| Step | State | Takes |\n|---|:--:|---|\n| build | **ok** | 2s |\n\nDone.")).toBe("Here: Step · State · Takes · build · ok · 2s Done.");
+  expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
 });

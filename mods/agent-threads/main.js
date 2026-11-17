@@ -58,10 +58,10 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railLayout, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -154,6 +154,11 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
+// The Pinned column's width as the owner last left it, with - and = (a drag on its divider
+// resizes Threads, ui.js columnResize) or any other way Herdr resizes it: { px }, Herdr's
+// px size (the measured width and the frame). "hold" until a time: the pane's own resize
+// (fitToReading) is under way and is not the owner's choice.
+const PIN_W_KEY = "threads.pinWidth";
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -664,17 +669,6 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
-    // The settings panel's name field: while it has the keyboard, keys type (this.naming).
-    this.nameInput = InputState.new({ placeholder: DEFAULTS.youName, value: DEFAULTS.youName });
-    this.naming = false;
-    this.nameInput.on("focus", (_e, cx) => { this.naming = true; cx.notify(); });
-    this.nameInput.on("blur", (_e, cx) => { this.endNaming(cx); });
-    this.nameInput.on("submit", (_e, cx) => { this.endNaming(cx); this.h.focus(); });
-    this.nameInput.on("change", (_e, cx) => {
-      const v = nameValue(this.nameInput.value());
-      if (v && v !== this.prefs.youName) this.changePrefs({ youName: v }, cx);
-      cx.notify();
-    });
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -950,18 +944,8 @@ export default class Threads extends View {
   setPrefs(values) {
     const was = this.prefs;
     this.prefs = values;
-    // The name field shows the name in use, except while the person is typing in it.
-    if (!this.naming && this.nameInput && this.nameInput.value() !== values.youName) this.nameInput.set_value(values.youName);
     // Hiding agent turns: a hidden selected turn hands the selection to the turn before it.
     if (was.agentTurns && !values.agentTurns) this.reselect = true;
-  }
-
-  // The name field gives the keyboard back and shows the name in use, trimmed. A cleared
-  // field changed nothing, so it shows the name it had.
-  endNaming(cx) {
-    this.naming = false;
-    if (this.nameInput.value() !== this.prefs.youName) this.nameInput.set_value(this.prefs.youName);
-    cx?.notify();
   }
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
@@ -2262,7 +2246,7 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    const px = pinColumn(this.pw());
+    const px = pinColumn(this.pw(), this.keptPinWidth());
     if (!me || !px) {
       if (auto) return false;
       this.setView("pinned");
@@ -2289,12 +2273,25 @@ export default class Threads extends View {
     } else if (Date.now() > a.until) this.splitAsk = null;
   }
 
-  // This pane's width, for its partner (resizeColumn).
+  // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that
+  // changes after the pane has settled (1.5 s from its first measure, past the split's own
+  // resize) is the owner's: kept for the next time the column opens (keptPinWidth).
   shareWidth() {
     const me = this.me();
     if (!me || this.paneW == null) return;
     const map = shared(WIDTH_KEY) ?? {};
     if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
+    if (!this.pinnedPane) return;
+    const now = Date.now();
+    this.firstSizeAt ??= now;
+    const kept = shared(PIN_W_KEY) ?? {};
+    if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
+    const px = Math.round(this.paneW) + PANE_FRAME;
+    if (kept.px !== px) setShared(PIN_W_KEY, { px });
+  }
+  keptPinWidth() {
+    const px = shared(PIN_W_KEY)?.px;
+    return Number.isFinite(px) && px > 0 ? px : null;
   }
 
   // - and =, in the column or in Threads while the column is open: the column 40 px
@@ -2313,6 +2310,7 @@ export default class Threads extends View {
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
+    setShared(PIN_W_KEY, { px: next.column });
     return true;
   }
 
@@ -3655,15 +3653,7 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
-    const name = keyAction(e, this.filtering || this.naming, this.quoteKey);
-    // In the name field Esc gives the keyboard back to the list; other keys type.
-    if (this.naming) {
-      if (name !== "escape") return;
-      this.endNaming(cx);
-      this.h.focus();
-      cx.stop_propagation();
-      return true;
-    }
+    const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -3729,7 +3719,12 @@ export default class Threads extends View {
       case "outline": return this.setOutline(!this.outlined());
       case "outline:on": return this.setOutline(true);
       case "outline:off": return this.setOutline(false);
-      case "pin": if (this.sel) this.togglePin(this.sel, cx); return true;
+      // While a rail card is open, p pins the card's turn, not the selected one.
+      case "pin": {
+        const card = Popup && this.railHover && this.railShown() ? this.railHover : null;
+        if (card || this.sel) this.togglePin(card ?? this.sel, cx);
+        return true;
+      }
       case "undoUnpin": return this.undoUnpin(cx);
       case "pinned": return this.openPinned(cx);
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
@@ -3737,6 +3732,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
+      case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
       case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
       case "copy": if (this.sel) this.copyReply(this.sel, cx); return true;
       case "select": {
@@ -3770,7 +3766,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -3805,11 +3801,6 @@ export default class Threads extends View {
     }
     // "width:wide": the reading width (settings width), for every pane.
     if (name.startsWith("width:")) return this.chooseWidth(name.slice(6), cx);
-    // "youName:Sam": the name over the person's messages; an empty one is the default.
-    if (name.startsWith("youName:")) {
-      this.changePrefs({ youName: nameValue(name.slice(8)) ?? DEFAULTS.youName }, cx);
-      return true;
-    }
     // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
@@ -3836,7 +3827,11 @@ export default class Threads extends View {
     // would ("debugRailCard:-" closes it), since the test window has no pointer.
     if (this.debug && name.startsWith("debugRailCard:")) {
       const n = name.slice(14);
-      this.railHover = n === "-" ? null : this.railTicks().ticks.find((k) => k.turns.some((x) => String(x.turn.n) === n))?.key ?? null;
+      if (n === "-") { this.railHover = null; return true; }
+      this.railTicks();
+      const i = this.railMemo?.all.findIndex((k) => String(k.turns[0].turn.n) === n) ?? -1;
+      this.railHover = i >= 0 ? this.railMemo.all[i].key : null;
+      if (i >= 0 && !this.railTicks().ticks.some((k) => k.i === i)) { this.railReveal(i, { notify() {} }); }
       return true;
     }
     // Tests only: "debugScroll:md:0:7:4" puts that list item at the top, as a person's scroll would.
@@ -3929,7 +3924,7 @@ export default class Threads extends View {
     const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
     const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
     return {
-      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : this.prefs.youName,
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "You",
       when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
       running: !turn.done, asOf: fmtTime(Date.now()),
       cmd: commandParts(turn)?.name ?? null,
@@ -4372,7 +4367,7 @@ export default class Threads extends View {
       });
     }
     const t = theme();
-    const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
+    const focusedPanel = this.h.is_focused() || this.input && this.filtering;
     if (this.debug) this.measure();
     const floating = this.floating();
     const banners = this.banners(t);
@@ -4499,7 +4494,10 @@ export default class Threads extends View {
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     run("layout.resize", { id: main.pane, px });
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
-    if (col) run("layout.resize", { id: col.pane, px: pinColumn(px) ?? PIN_COL[0] });
+    if (col) {
+      setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
+      run("layout.resize", { id: col.pane, px: pinColumn(px, this.keptPinWidth()) ?? PIN_COL[0] });
+    }
     this.capAsked = null;
     this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
     return true;
@@ -4922,6 +4920,7 @@ export default class Threads extends View {
           .child(toggle(Boolean(P.alwaysShowTime))))
         .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.alwaysShowTime ? "Each message's time shows under its bubble." : "A message's time shows when its turn is selected.")))
       .child(this.widthRow(t, label))
+      .child(this.railSideRow(t, label))
       .child(h_flex().id("th-set-width").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keepWidth", cx); cx.notify(); })
         .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
@@ -4938,11 +4937,6 @@ export default class Threads extends View {
         .child(stepper("promptLines", "Prompt lines"))
         .child(stepper("replyLines", "Reply lines")))
       .child(stepper("textSize", "Text size"))
-      .child(h_flex().gap(6).items_center()
-        .child(label("Your name"))
-        .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
-          .border_color(this.naming ? t.accent : t.border).bg(t.background).items_center()
-          .child(Input.new(this.nameInput).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))))
       .child(this.swatches(t, "bubbleColor", "Your messages"))
       .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
@@ -4992,6 +4986,21 @@ export default class Threads extends View {
             .child(names[w])))))
       .when(same, (el) => el.child(div().pl(19).text_size(11.5).text_color(t.dim)
         .child(`This pane is narrower than Comfortable (${narrowPx} px), so all three look the same here.`)));
+  }
+
+  // Rail side: Right (the default) or Left, as the Width row's segments.
+  railSideRow(t, label) {
+    const cur = this.railLeft() ? "left" : "right";
+    return h_flex().gap(6).items_center()
+      .child(svg(ICON("panel-right")).size(13).flex_none().text_color(t.muted))
+      .child(label("Rail side"))
+      .child(h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
+        .children(["right", "left"].map((w) => div().id(`th-rail-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
+          .flex().items_center().cursor_pointer().text_size(12)
+          .bg(w === cur ? t.hover : alpha(t.hover, 0)).text_color(w === cur ? t.foreground : t.muted)
+          .hover((st) => st.bg(t.hover))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`railSide:${w}`, cx); cx.notify(); })
+          .child(w === "right" ? "Right" : "Left"))));
   }
 
   // A bubble colour setting: its name and the colour's name, then a swatch for each preset
@@ -7076,98 +7085,246 @@ export default class Threads extends View {
   }
 
   // ---- the rail ----
-  // On the list's right edge, in place of the scrollbar, in the list's own view: one tick per
-  // turn (ui.js railLayout). Turns on screen are brighter, the selected turn's tick is longer,
-  // a pinned turn's takes the accent colour and the running turn's pulses. A search dims the
-  // turns it leaves out. A tick's tooltip is one line, and a click puts the turn's top at the
-  // top of the pane, as a pin return does.
+  // On the list's right edge (or left, railSide), in place of the scrollbar, in the list's
+  // own view: one tick per turn, 9 px apart at every length, in a window of at most 60% of
+  // the list's height and 540 px (ui.js railWindow) that follows the turns on screen. Turns
+  // on screen are brighter, the selected turn's tick is longer, a pinned turn's takes the
+  // accent colour and the running turn's pulses. A search dims the turns it leaves out. A
+  // click puts the turn's top at the top of the pane, as a pin return does.
   railShown() {
     return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1;
   }
-  // The ticks are grouped once per list of turns, pane height and set of pins, and only the
-  // selection and the turns on screen are worked out on each draw. Grouping every turn on
-  // every draw, with a pin lookup per turn, took about half of Herdr's time for a draw in a
-  // session of 2,000 turns ("This view could not be re-rendered", interrupted).
+  // The ticks are made once per list of turns and set of pins; on each draw only the window,
+  // the selection and the turns on screen are worked out, and only the ticks in the window
+  // are drawn (60 at most at any length). Making every tick on every draw, with a pin lookup
+  // per turn, took about half of Herdr's time for a draw in a session of 2,000 turns.
   railTicks() {
     const list = this.railTurns ?? [];
     this.pinnedAll();
     const pins = this.pinTurns ?? new Set();
-    const h = Math.max(0, this.listH);
     let base = this.railMemo;
-    if (!base || base.list !== list || base.h !== h || base.pins !== pins) {
-      let days = 0;
-      for (let i = 1; i < list.length; i++) if (list[i].day && list[i].day !== list[i - 1].day) days++;
-      const L = railLayout(list.length, days, h);
-      const groups = [];
+    if (!base || base.list !== list || base.pins !== pins) {
+      const all = [];
       const at = new Map();
-      for (let i = 0; i < list.length; i += L.per) {
-        const g = list.slice(i, i + L.per);
-        const first = g[0];
+      const pinAt = [];
+      let liveAt = -1;
+      list.forEach((x, i) => {
+        at.set(x.key, i);
         const prev = list[i - 1];
-        for (const x of g) at.set(x.key, groups.length);
-        groups.push({
-          key: first.key, last: g[g.length - 1], turns: g,
-          dayStart: L.dayGap && Boolean(prev && first.day && first.day !== prev.day),
-          pinned: g.some((x) => pins.has(x.turn)), live: g.some((x) => x.live), miss: g.every((x) => x.miss),
-        });
-      }
-      base = this.railMemo = { list, h, pins, L, groups, at };
+        const pinned = pins.has(x.turn);
+        if (pinned) pinAt.push(i);
+        if (x.live) liveAt = i;
+        all.push({ key: x.key, last: x, turns: [x], dayStart: Boolean(prev && x.day && x.day !== prev.day), pinned, live: Boolean(x.live), miss: Boolean(x.miss) });
+      });
+      base = this.railMemo = { list, pins, all, at, pinAt, liveAt };
     }
+    const { all } = base;
+    const n = all.length;
     // Which turns are on screen, from the range the list last drew.
     const rows = this.rowsMemo ?? [];
     const [a, b] = this.viewRange ?? [0, 0];
     const on = new Set();
-    for (let i = a; i < Math.min(b, rows.length); i++) { const k = rowTurnKey(rows[i]); const gi = k ? base.at.get(k) : undefined; if (gi != null) on.add(gi); }
+    let lo = Infinity;
+    let hi = -1;
+    for (let i = a; i < Math.min(b, rows.length); i++) {
+      const k = rowTurnKey(rows[i]);
+      const gi = k ? base.at.get(k) : undefined;
+      if (gi != null) { on.add(gi); lo = Math.min(lo, gi); hi = Math.max(hi, gi); }
+    }
+    // The window stays where it is while the pointer is on the rail (railOn) or its card
+    // (railCardOn), and after a dot brought a turn into it until the list moves (railHeld);
+    // otherwise it follows the list.
+    const range = `${a}:${b}`;
+    if (this.railHeld && this.railHeld !== range) this.railHeld = null;
+    // A card that closed (its tick left the window) without telling the pointer left it.
+    if (!this.railHover) this.railCardOn = false;
+    const held = Boolean(this.railOn || this.railCardOn || this.railHeld);
+    const day = (i) => all[i].dayStart;
+    const W = railWindow(n, day, Math.max(0, this.listH), this.railTop ?? 0, held || hi < 0 ? null : [lo, hi], !held && Boolean(this.follow));
+    this.railTop = W.top;
+    this.railCut = W.cut;
+    const end = W.top + W.count;
     const sel = this.sel ? base.at.get(this.sel) : undefined;
-    return { L: base.L, ticks: base.groups.map((g, i) => ({ ...g, sel: i === sel, inView: on.has(i) })) };
+    const ticks = [];
+    for (let i = W.top; i < end; i++) {
+      const j = i - W.top;
+      let fade = 1;
+      if (W.top > 0 && j < RAIL.FADE.length) fade = RAIL.FADE[j];
+      if (end < n && end - 1 - i < RAIL.FADE.length) fade = Math.min(fade, RAIL.FADE[end - 1 - i]);
+      ticks.push({ ...all[i], i, sel: i === sel, inView: on.has(i), fade, dayStart: j > 0 && all[i].dayStart });
+    }
+    // A pin or the running turn past an end: the nearest one, the running turn first.
+    const past = (above) => {
+      const live = base.liveAt >= 0 && (above ? base.liveAt < W.top : base.liveAt >= end) ? base.liveAt : -1;
+      if (live >= 0) return { i: live, live: true };
+      let pin = -1;
+      for (const p of base.pinAt) if (above ? p < W.top && p > pin : p >= end && (pin < 0 || p < pin)) pin = p;
+      return pin >= 0 ? { i: pin, live: false } : null;
+    };
+    return { L: { pitch: RAIL.MAX, mark: 2 }, ticks, n, cut: W.cut, top: W.top, dotTop: W.cut ? past(true) : null, dotBottom: W.cut ? past(false) : null };
+  }
+  // The wheel on the rail moves its window a tick at a time (9 px of a touchpad's travel, or a
+  // line from a wheel that counts lines) and the list stays: the rail is drawn over the list,
+  // so its handler runs first and stops the event there. A window that is not cut has nothing
+  // to move, and the wheel goes on to the list.
+  railWheel(e, cx) {
+    if (!this.railCut) return;
+    cx.stop_propagation();
+    const lines = Number(e?.delta_lines?.y) || 0;
+    let steps;
+    if (lines) steps = Math.sign(lines) * Math.max(1, Math.round(Math.abs(lines)));
+    else {
+      this.railAcc = (this.railAcc ?? 0) + (Number(e?.delta?.y) || 0);
+      steps = Math.trunc(this.railAcc / RAIL.MAX);
+      this.railAcc -= steps * RAIL.MAX;
+    }
+    if (e?.touch_phase === "ended" || e?.touch_phase === "cancelled") this.railAcc = 0;
+    if (!steps) return;
+    // Up (a positive delta, as for the list) shows earlier turns.
+    this.railTop = Math.max(0, (this.railTop ?? 0) - steps);
+    this.railOn = true;
+    cx.notify();
+  }
+  // A press on an end's dot: its turn comes into the window, and the list stays where it is.
+  railReveal(i, cx) {
+    const base = this.railMemo;
+    if (!base) return;
+    const W = railWindow(base.all.length, (k) => base.all[k].dayStart, Math.max(0, this.listH), this.railTop ?? 0, [i, i], false);
+    this.railTop = W.top;
+    const [a, b] = this.viewRange ?? [0, 0];
+    this.railHeld = `${a}:${b}`;
+    cx.notify();
   }
   railTip(k) {
     const a = k.turns[0].turn;
-    if (k.turns.length > 1) return `#${a.n} to #${k.last.turn.n}`;
     const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
     const cut = text.length > 60 ? `${text.slice(0, 59)}…` : text;
     return [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null, cut || null].filter(Boolean).join(" · ");
   }
-  // The rail card (Herdr 0.1.15, Popup): a tick's turn on two lines, its number and time over
-  // its prompt, at most two lines of it. A tick that stands for several turns names the range.
+  // The rail card (Herdr 0.1.15, Popup): a first line with the day, the time and the number
+  // ("Yesterday · 3:48 PM · #7", the running turn "Today · now · #149") and a pin when the turn
+  // is pinned; the prompt on two lines; the reply on three, flattened (a table's cells joined
+  // with a middle dot, code as "[code]"), or "Working · 0:48" for the running turn. A turn with
+  // no reply shows its prompt alone.
+  // The reply is flattened once per hovered turn (railReplyMemo), from its first 600
+  // characters.
   railCard(k) {
     const a = k.turns[0].turn;
-    const head = k.turns.length > 1 ? `#${a.n} to #${k.last.turn.n}`
-      : [`#${a.n}`, k.live ? "now" : fmtTime(a.ts), k.pinned ? "pinned" : null].filter(Boolean).join(" · ");
-    const text = String(a.prompt ?? "").replace(/\s+/g, " ").trim();
-    return { head, body: clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text };
+    // The person's own words, as the Pinned rows show them: a quoted line is not the prompt.
+    const text = pinPromptText(String(a.prompt ?? "")).replace(/\s+/g, " ").trim();
+    const body = clipPrompt(text, 2, RAIL.CARD_CHARS, 200).text;
+    let reply = null;
+    if (k.live) reply = `Working${a.ts ? ` · ${fmtClock(Date.now() - a.ts)}` : ""}`;
+    else {
+      const m = this.railReplyMemo;
+      if (m?.turn === a) reply = m.text;
+      else {
+        const flat = flattenMd(String(this.replyText(a) ?? "").slice(0, 600), 200);
+        reply = flat ? clipPrompt(flat, 3, RAIL.REPLY_CHARS, 200).text : null;
+        this.railReplyMemo = { turn: a, text: reply };
+      }
+    }
+    return { day: railDay(a.ts), rest: [k.live ? "now" : fmtTime(a.ts), `#${a.n}`].join(" · "), pinned: k.pinned, body, reply };
   }
+  // The rail's side: "right" (the default) or "left" (settings railSide). Only the lane, the
+  // side the ticks grow toward and the side the card opens on move.
+  railLeft() { return this.prefs.railSide === "left"; }
   railView(t) {
-    const { L, ticks } = this.railTicks();
+    const { L, ticks, cut, dotTop, dotBottom } = this.railTicks();
     const busy = this.liveState(t).color;
     const look = railLook(this.side());
-    return v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).right(0).w(look.lane).justify_center().items_end()
+    const left = this.railLeft();
+    // The peak: each tick's width from its distance in px to the hovered tick, set in the draw
+    // that opens the card. Distances count the day gaps.
+    const hi = this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
+    let ys = null;
+    if (hi >= 0) {
+      ys = [];
+      let y = 0;
+      ticks.forEach((k, i) => { if (i && k.dayStart) y += RAIL.DAY; ys.push(y); y += L.pitch; });
+    }
+    // The pointer on the rail holds its window (railTicks).
+    const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center()
+      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
+      .on_scroll_wheel((e, cx) => this.railWheel(e, cx));
+    // A cut end has a 9 px row past it, holding a dot for a pin or the running turn that lies
+    // that way; a press brings it into the window.
+    const endRow = (id, d, above) => {
+      const row = div().id(id).flex_none().relative().w(look.lane).h(L.pitch);
+      if (!d) return row;
+      const turn = this.railMemo.all[d.i].turns[0].turn;
+      const dot = div().absolute().top((L.pitch - RAIL.DOT) / 2).size(RAIL.DOT).rounded(RAIL.DOT / 2).bg(d.live ? busy : t.accent)
+        .when(d.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
+      return row.cursor_pointer().tooltip(`${d.live ? "Working" : "Pinned"} #${turn.n} ${above ? "above" : "below"}`)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.railReveal(d.i, cx); })
+        .child(left ? dot.left(look.right + 3) : dot.right(look.right + 3));
+    };
+    return (left ? rail.left(0).items_start() : rail.right(0).items_end())
+      .when(cut, (el) => el.child(endRow("th-rail-up", dotTop, true)))
       .children(ticks.map((k, i) => {
-        const color = k.live ? busy : k.pinned ? t.accent : k.sel ? t.foreground : k.inView ? t.muted : t.dim;
-        const op = k.miss ? 0.16 : k.live || k.pinned || k.sel || k.inView ? 1 : 0.5;
-        const mark = div().flex_none().w(k.sel ? look.sel : look.mark).h(L.mark).rounded(1).bg(color).opacity(op)
+        const hot = i === hi;
+        const color = k.live ? busy : k.pinned ? t.accent : k.sel || hot ? t.foreground : k.inView ? t.muted : t.dim;
+        const op = (k.miss && !hot ? 0.16 : k.live || k.pinned || k.sel || k.inView || hot ? 1 : 0.5) * (hot ? 1 : k.fade);
+        const own = k.sel ? look.sel : look.mark;
+        const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
+        // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
+        // peak can be wider than the lane leaves beside the inset.
+        // Herdr slides a change of width over 90 ms by itself (round 7, the slide): the draw
+        // only sets the new width, and no timer runs in the mod.
+        const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
+          .transition("width", { duration: RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${i}`).flex_none().w(look.lane).h(L.pitch).flex().items_center().justify_end().pr(look.right)
-          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer().rounded(2).hover((s) => s.bg(t.hover))
+        const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
+          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
           .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
-          .child(mark);
-        // On Herdr 0.1.15 a hovered tick shows the card beside it, to its left; before that,
-        // the one-line tooltip.
+          .child(left ? mark.left(look.right) : mark.right(look.right));
+        // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
+        // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
-        const open = this.railHover === k.key;
-        return Popup.new(`th-tick-card-${i}`, tick.on_hover((on, cx) => {
-          if (on) this.railHover = k.key;
-          else if (this.railHover === k.key) this.railHover = null;
-          cx.notify();
-        })).anchor("right_center").when(open, (el) => el.content(this.railCardView(t, k)));
-      }));
+        return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
+          if (on) { this.railHover = k.key; this.railLeave = null; cx.notify(); return; }
+          if (this.railHover !== k.key || this.railCardOn) return;
+          // The card stays 200 ms after the pointer leaves its tick, so it can cross to the
+          // card (whose own hover then keeps it); another tick's hover cancels the wait.
+          const leave = (this.railLeave = {});
+          cx.timer.after(RAIL.CARD_KEEP_MS, (cx) => {
+            if (this.railLeave !== leave) return;
+            this.railLeave = null;
+            if (this.railHover === k.key && !this.railCardOn) { this.railHover = null; cx.notify(); }
+          });
+        })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k).id("th-rail-card-box")
+          .on_hover((on, cx) => {
+            // The pointer on the card keeps it open and holds the window.
+            this.railCardOn = Boolean(on);
+            if (on) { this.railHover = k.key; this.railLeave = null; }
+            else if (this.railHover === k.key && !this.railOn) { this.railHover = null; cx.notify(); }
+          })));
+      }))
+      .when(cut, (el) => el.child(endRow("th-rail-down", dotBottom, false)));
   }
   railCardView(t, k) {
     const c = this.railCard(k);
-    return v_flex().id("th-rail-card").mr(RAIL.CARD_GAP).w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
-      .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
-      .child(div().text_size(11).line_height("15px").text_color(t.dim).child(c.head))
-      .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().text_color(t.foreground).child(c.body)));
+    const card = v_flex().id("th-rail-card").w(Math.min(RAIL.CARD_W, Math.max(120, this.width - 44))).px(10).py(7).gap(2)
+      .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md();
+    // Clear of the peak, which reaches past the lane by what it outgrows the room beside the
+    // inset (6 px at the usual 32 px lane and 14 px inset). Padding on a box around the card,
+    // since the Popup pins the card's outer corner and a margin on that side is not counted.
+    const look = railLook(this.side());
+    const gap = RAIL.CARD_GAP + Math.max(0, look.peak + look.right - look.lane);
+    const box = div().flex_none();
+    return (this.railLeft() ? box.pl(gap) : box.pr(gap)).child(card
+      .child(h_flex().h(15).gap(4).items_center().text_size(11).line_height("15px").min_w(0)
+        .when(Boolean(c.day), (el) => el.child(div().flex_none().text_color(t.muted).child(c.day)).child(div().flex_none().text_color(t.dim).child("·")))
+        .child(div().min_w(0).truncate().text_color(t.dim).child(c.rest))
+        .child(div().flex_1())
+        // The pin: accent when pinned; a press pins or unpins the card's turn, as p does.
+        .child(div().id("th-rail-card-pin").flex_none().size(15).flex().items_center().justify_center().rounded(3).cursor_pointer()
+          .text_color(c.pinned ? t.accent : t.dim).hover((s) => s.bg(t.hover).text_color(c.pinned ? t.accent : t.foreground))
+          .tooltip(`${c.pinned ? "Unpin" : "Pin"} #${k.turns[0].turn.n} (p)`)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.togglePin(k.key, cx); cx.notify(); })
+          .child(svg(ICON("pin")).size(11))))
+      .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().font_medium().text_color(t.foreground).child(c.body)))
+      .when(Boolean(c.reply), (el) => el.child(div().text_size(12).line_height("17px").max_h(51).overflow_hidden().text_color(t.muted).child(c.reply))));
   }
   railJump(key, cx) {
     this.toList();
