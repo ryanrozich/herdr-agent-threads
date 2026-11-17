@@ -16,8 +16,10 @@
 //   null, never made up. The reader keeps no times on steps yet, so only the prompt's start
 //   and the reply's end are known.
 // - A background update after the reply is a context cell in a group of its own.
+// - A turn carries its stable id (ids.js) when the caller gives it; trajectories(s) does.
 
 import { reply } from "./turns.js";
+import { turnIds } from "./ids.js";
 
 const at = (ms) => (Number.isFinite(ms) ? ms : null);
 
@@ -30,7 +32,7 @@ function agentId(s, a) {
   return m.get(a) ?? null;
 }
 
-export function trajectory(s, turn) {
+export function trajectory(s, turn, id = null) {
   const groups = [{ title: "Message", cells: [{ kind: "user", text: turn.prompt, start: at(turn.ts), end: null }] }];
   let step = null;
   const open = () => {
@@ -62,6 +64,7 @@ export function trajectory(s, turn) {
   if (text) open().cells.push({ kind: "message", text, start: null, end: at(turn.endTs) });
   if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
   return {
+    id,
     n: turn.n,
     start: at(turn.ts),
     end: at(turn.endTs),
@@ -69,4 +72,10 @@ export function trajectory(s, turn) {
     ...(turn.interrupted ? { interrupted: true } : {}),
     groups,
   };
+}
+
+// Every turn of a session, each with its stable id (ids.js), the ids worked out once.
+export function trajectories(s) {
+  const ids = new Map([...turnIds(s.turns)].map(([id, t]) => [t, id]));
+  return s.turns.map((t) => trajectory(s, t, ids.get(t) ?? null));
 }
