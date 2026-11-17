@@ -362,16 +362,19 @@ test("the working card's estimate uses the 22 px prompt and 20 px note lines it 
     // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
     // the live line, one note line, padding.
     expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
-    // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
-    const g = v.workingGeom(r.turn);
-    expect(est).toBe(8 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
-    expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
+    // Each prompt line of the row's shape (as its closed row draws it) counts 22 px, each note
+    // line 20 px.
+    const g = v.workingGeom(r.turn, r.shape);
+    expect(g.lines).toBe(r.shape.p);
+    expect(est).toBe(8 + 12 + g.promptH + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+    expect(g.promptH).toBe(r.shape.p * 22 + (r.shape.pMore ? 18 : 0));
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
+    // Prompt lines are 22 px rows (promptBlock), the note sets 20 px lines.
+    const hs = rec.filter(([n]) => n === "h").map(([, x]) => x);
     rec = null;
-    expect(lh).toContain("22px");
+    expect(hs.filter((x) => x === 22).length).toBeGreaterThanOrEqual(r.shape.p);
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -6946,4 +6949,73 @@ test("a reply's table may run wider than the reading line, centred on it, up to 
   // A pane no wider than the column leaves the table on the reading line.
   v.paneW = v.width;
   expect(extraOf(md[1])).toBe(0);
+});
+
+// The owner's fault, 16 Nov: a prompt typed while the agent worked (Claude Code queues it and
+// writes it as a queued_command attachment) showed only its quote line, as plain text, while
+// its turn ran and was selected.
+test("a queued prompt that opens with a quote shows whole on the running turn's card, the quote behind its bar", async () => {
+  const prompt = [
+    "> The checkout total rounds each line before it sums them, so a cart of three items at 3.335 shows a cent more than the receipt does.",
+    "I think the rounding should happen once, at the end, the way the receipt does it.",
+    "Can you check where the line totals are built?",
+    "",
+    "The receipt code is in billing/receipt.ts and the cart code is in cart/total.ts.",
+    "Both use the same money helper but call it at different points.",
+    "Keep the helper as it is.",
+    "",
+    "Which of the two should change?",
+  ].join("\n");
+  const at = (s) => `2026-11-16T10:00:${String(s).padStart(2, "0")}.000Z`;
+  const lines = [
+    { type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, message: { role: "user", content: "Fix the cart total" } },
+    { type: "assistant", uuid: "a1", timestamp: at(5), sessionId: "s", message: { id: "m1", role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "Looking at the cart." }, { type: "tool_use", id: "t1", name: "Read", input: { file_path: "cart/total.ts" } }] } },
+    { type: "queue-operation", operation: "enqueue", timestamp: at(20), sessionId: "s", content: prompt },
+    { type: "user", uuid: "u2", timestamp: at(25), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
+    { type: "queue-operation", operation: "remove", timestamp: at(26), sessionId: "s", content: prompt },
+    { type: "attachment", uuid: "q1", timestamp: at(26), sessionId: "s", attachment: { type: "queued_command", prompt, origin: { kind: "human" }, humanTurn: true, commandMode: "prompt" } },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "threads-queued-"));
+  const file = join(dir, "q.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  const turn = v.current().turns.at(-1);
+  // The reader keeps all of it.
+  expect(turn.prompt).toBe(prompt);
+  // Running and selected: the working card.
+  const key = v.turnKeys(v.rows()).at(-1);
+  v.sel = key;
+  const r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  rec = [];
+  v.workingItem(theme, r);
+  const drawn = rec;
+  rec = null;
+  const text = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  for (const w of ["I think the rounding", "billing/receipt.ts", "Keep the helper", "Which of the two should change?"]) expect(text).toContain(w);
+  // The quote is drawn behind its bar, without its "> ".
+  expect(r.shape.kinds?.[0]).toBe("q");
+  expect(text).not.toContain("> The checkout");
+  expect(v.estimate(r)).toBeGreaterThan(8 + 12 + 6 * 22);
+});
+
+// The owner's fault, 16 Nov: the viewer drew a quote as "> " text. A run of quote lines is drawn as
+// the bubble draws it: no marker, muted, behind one bar.
+test("the image viewer draws a prompt's quote without its marker, muted, behind one bar beside the run", () => {
+  const prompt = "> The chips wrap on tablet and the receipt line breaks.\n> They also clip on the phone.\nI think the width is fixed. [Image #41]\n\nWhich file sets it?";
+  const { calls, size } = viewer({ turn: { ...VIEW_TURN, prompt } });
+  size(1600, 1000);
+  const drawn = calls();
+  const strings = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  const all = strings.join(" ");
+  expect(all).toContain("The chips wrap on tablet");
+  expect(all).toContain("They also clip on the phone.");
+  expect(all).toContain("Which file sets it?");
+  expect(strings.some((x) => /^ {0,3}>/.test(x))).toBe(false);
+  // One bar for the run of two quote lines: an absolute box 2 px wide.
+  const bars = drawn.filter((e, i) => e[0] === "absolute" && drawn.slice(i, i + 8).some((x) => x[0] === "w" && x[1] === 2));
+  expect(bars.length).toBe(1);
+  // The quote is in the bubble's muted ink; the person's own words in its ink.
+  expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });

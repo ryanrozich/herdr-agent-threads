@@ -4247,6 +4247,8 @@ export default class Threads extends View {
   // The person's message in its bubble on the right (an agent's outlined, on the left), as
   // plain text in the bubble's ink. A line with an [Image #N] label is drawn a word at a
   // time, so the label can be marked (the image on screen) and clicked (goes to its image).
+  // A run of quote lines ("> ") is drawn as the bubble draws it: without the marker, muted
+  // and smaller, behind one bar (an absolute box as tall as the run, since its lines wrap).
   galleryPrompt(t, turn, rt, L) {
     const g = this.gal;
     const shown = g.images[g.i]?.n;
@@ -4262,15 +4264,27 @@ export default class Threads extends View {
         .when(j >= 0, (el) => el.on_click((_e, cx) => { cx.stop_propagation(); this.galleryGo(j, cx); }))
         .child(p.t);
     };
-    const line = (text, li) => {
+    const line = (text, li, color = ink) => {
       const pieces = labelPieces(text);
-      if (!pieces.some((p) => p.n != null)) return div().min_h(rt.line).text_color(ink).child(text || " ");
+      if (!pieces.some((p) => p.n != null)) return div().min_h(rt.line).text_color(color).child(text || " ");
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
-        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
+        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " "))))));
     };
+    const QUOTE = /^ {0,3}>\s?/;
+    const sub = turn.sub ?? t.muted;
+    const blocks = [];
+    for (let li = 0; li < lines.length; li++) {
+      if (!QUOTE.test(lines[li])) { blocks.push(line(lines[li], li)); continue; }
+      const quoted = [];
+      for (; li < lines.length && QUOTE.test(lines[li]); li++) quoted.push(line(lines[li].replace(QUOTE, ""), li, sub));
+      li--;
+      blocks.push(div().relative().min_w(0).pl(QUOTE_INSET).text_size(rt.small)
+        .child(div().absolute().left(0).top(3).bottom(3).w(2).rounded(1).bg(turn.agent ? sub : alpha(ink, 0.28)))
+        .children(quoted));
+    }
     const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
-      .children(lines.map(line))
+      .children(blocks)
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
       .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
     const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
@@ -5793,8 +5807,8 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
-        const g = this.workingGeom(r.turn);
-        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line
+        const g = this.workingGeom(r.turn, r.shape);
+        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.promptH
           + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T;
@@ -6616,27 +6630,38 @@ export default class Threads extends View {
   // The running turn when selected: the message in full (up to 6 lines), the strip under
   // it, the live line with its tokens, and a note on where the reply will appear. Every line
   // has a fixed height, so the drawn height is the estimate (F3).
+  // The selected running turn. Its message is drawn as its closed row draws it (promptBlock
+  // from the row's shape): whole, every paragraph, with a quote behind its bar. It used to be
+  // the prompt's first lines as plain text, which cut a quoted prompt to its quote line.
   workingItem(t, r) {
     const { turn, key } = r;
-    const g = this.workingGeom(turn);
+    const g = this.workingGeom(turn, r.shape);
+    const sh = r.shape;
+    const bt = this.bubbleLook(t, turn.agent).theme;
+    const body = sh
+      ? [this.promptBlock(bt, turn, sh, true), ...(sh.pMore ? [this.moreLine(bt)] : [])]
+      : [div().h(g.promptH).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(g.prompt)];
     return this.rowFrame(t, true, this.h.is_focused(), true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize, this.chars())),
+      this.bubble(t, turn, body, sh?.bubbleW ?? bubbleMax(this.width, this.prefs.textSize, this.chars())),
       this.youStrip(t, turn, key, true),
       this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
     ], r.split ? ROW.GAP : ROW.PAD_T);
   }
-  workingGeom(turn) {
+  // sh: the row's shape, whose prompt lines the card draws; without one, the prompt's first
+  // lines as plain text.
+  workingGeom(turn, sh = null) {
     const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
     const tw = bubbleMax(this.width, this.prefs.textSize, this.chars()) - 2 * ROW.BUBBLE_PX;
-    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
+    const lines = sh ? Math.max(1, sh.p) : Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
+    const promptH = lines * this.rt().line + (sh?.pMore ? ROW.MORE : 0);
     const st = this.status();
     const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
       : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
         : "This turn has no final reply yet. It may have been stopped.";
     const note = this.wrapped(noteText, this.inner(), 6.0);
-    return { prompt, lines, note, noteText };
+    return { prompt, lines, promptH, note, noteText };
   }
 
   // A day: its name, date and shown turns centred between two hairlines, 10 px below the
