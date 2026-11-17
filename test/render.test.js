@@ -2691,9 +2691,14 @@ test("the first press shows the head even when the place would show under it; a 
   cx.timers = [];
   draw(v, cx);
   cx.flush();
-  // The head lands like a place: an item further down first, then the head at the top.
+  // The head lands like a place: an item further down first, then the head near the top but
+  // clear of the floating top (an earlier item at the top, the head under it).
   const head = v.rows().findIndex((r) => r.key === a);
-  expect(scrolled.at(-1)).toEqual([head, "top"]);
+  const [j, how] = scrolled.at(-1);
+  expect(how).toBe("top");
+  expect(j).toBeLessThanOrEqual(head);
+  const y = (v.slotsMemo ?? []).slice(j, head).reduce((x, n) => x + n, 0);
+  expect(j === head || y >= 32).toBe(true);
   expect(scrolled[0][0]).toBeGreaterThan(head);
   expect(v.rows().some((r) => r.kind === "resume")).toBe(false);
   // The view moves before the second press: the press shows the head again.
@@ -5883,6 +5888,8 @@ test("a settings change in a long session reshapes rows over several frames, the
 
 test("the rail card: a hovered tick shows the day, time and number, two lines of its prompt and three of its reply, beside it on the left", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
+  // The default pane at the reading width, or wider than the column.
+  v.paneW = Math.max(573, v.width + 80);
   v.listH = 600;
   draw(v, cx);
   const ks = keys();
@@ -6000,6 +6007,8 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
+  // The default pane at the reading width, or wider than the column.
+  v.paneW = Math.max(573, v.width + 80);
   v.listH = 600;
   draw(v, cx);
   const ks = keys();
@@ -6035,12 +6044,16 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
-  // A click selects the turn and puts its top at the top of the pane, as a pin return does.
+  // A click selects the turn and brings it level with the tick: its first line at about the
+  // tick's height (railTickY), the turn's top 18 px above that.
   v.follow = true;
+  const tickY = v.railTickY(ks[0]);
+  expect(tickY).toBeGreaterThan(0);
+  expect(tickY).toBeLessThan(v.listH);
   v.railJump(ks[0], cx);
   expect(v.sel).toBe(ks[0]);
   expect(v.follow).toBe(false);
-  expect(v.scrollTo).toEqual({ key: ks[0], how: "head" });
+  expect(v.scrollTo).toEqual({ key: ks[0], how: "head", at: Math.max(0, tickY - 18) });
   // A search keeps every tick and dims the ones it leaves out.
   const word = v.findTurn(ks[0]).prompt.split(/\s+/).find((w) => w.length > 5);
   v.query = word;
@@ -7018,4 +7031,52 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(bars.length).toBe(1);
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
+});
+
+test("a rail click lands the turn level with its tick, clear of the floating top; a narrow pane hides the rail", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  expect(v.railShown()).toBe(true);
+  // The ticks are centred in the list's box, so the middle one is near the middle.
+  const mid = ks[Math.floor(ks.length / 2)];
+  expect(Math.abs(v.railTickY(mid) - 300)).toBeLessThan(60);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  v.railJump(mid, cx);
+  const want = v.scrollTo.at;
+  draw(v, cx);
+  cx.flush();
+  const rows = v.rows();
+  const slots = v.slotsMemo;
+  const head = rows.findIndex((r) => r.key === mid);
+  const [j, how] = scrolled.at(-1);
+  // Where the turn's top lands: under the items from j, or centred.
+  const y = how === "center" ? (600 - slots[head]) / 2 : slots.slice(j, head).reduce((x, n) => x + n, 0);
+  expect(y).toBeGreaterThanOrEqual(32);
+  const best = Math.min(...[0, ...Array.from({ length: head }, (_, k) => slots.slice(head - 1 - k, head).reduce((x, n) => x + n, 0))]
+    .filter((z) => z >= 32 && z + Math.min(slots[head], 48) <= 600).map((z) => Math.abs(z - want)));
+  expect(Math.abs(y - want)).toBeLessThanOrEqual(best);
+  // A pane too narrow for a whole Comfortable line hides the rail: 549 px at 14 px text.
+  const { railMinPane } = await import("../mods/agent-threads/ui.js");
+  expect(v.prefs.textSize).toBe(14);
+  expect(railMinPane(14)).toBe(549);
+  v.paneW = 548;
+  expect(v.railShown()).toBe(false);
+  v.paneW = 549;
+  expect(v.railShown()).toBe(true);
+  // The default pane at the reading width (573 px) keeps it.
+  v.paneW = 573;
+  expect(v.railShown()).toBe(true);
+});
+
+test("Rail side lists Left on the left and Right on the right", async () => {
+  const { v } = await pinPane("--extra", "2");
+  rec = [];
+  v.railSideRow(theme, (x) => x);
+  const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
+  rec = null;
+  expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
 });

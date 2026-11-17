@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, splitTables, tableNeed, tableCells, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railRoom, landPlan, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -778,7 +778,7 @@ export default class Threads extends View {
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
-      railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
+      railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
       contrast: this.contrastList(),
       // Each theme's selected-turn fill and text-selection colour, for the highlight check.
       textSel: this.textSel ?? null, press: { moved: Math.round(this.pressMoved ?? 0), count: this.pressCount ?? 1 },
@@ -3824,6 +3824,17 @@ export default class Threads extends View {
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
     if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
+    // Tests only: "debugRailJump:3" is a click on the turn #3 tick (railJump), and reports
+    // the tick's height in px (railJumpAt) for the rig to compare with where the turn lands.
+    if (this.debug && name.startsWith("debugRailJump:")) {
+      const n = name.slice(14);
+      this.railTicks();
+      const k = this.railMemo?.all.find((x) => String(x.turns[0].turn.n) === n);
+      if (!k) return true;
+      this.railJumpAt = this.railTickY(k.key);
+      this.railJump(k.key, cx);
+      return true;
+    }
     // Tests only: "debugRailCard:3" opens the rail card of the turn #3 tick, as a hover
     // would ("debugRailCard:-" closes it), since the test window has no pointer.
     if (this.debug && name.startsWith("debugRailCard:")) {
@@ -5003,14 +5014,14 @@ export default class Threads extends View {
         .child(`This pane is narrower than Comfortable (${narrowPx} px), so all three look the same here.`)));
   }
 
-  // Rail side: Right (the default) or Left, as the Width row's segments.
+  // Rail side: Left or Right (the default), in that order, as the Width row's segments.
   railSideRow(t, label) {
     const cur = this.railLeft() ? "left" : "right";
     return h_flex().gap(6).items_center()
       .child(svg(ICON("panel-right")).size(13).flex_none().text_color(t.muted))
       .child(label("Rail side"))
       .child(h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
-        .children(["right", "left"].map((w) => div().id(`th-rail-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
+        .children(["left", "right"].map((w) => div().id(`th-rail-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
           .flex().items_center().cursor_pointer().text_size(12)
           .bg(w === cur ? t.hover : alpha(t.hover, 0)).text_color(w === cur ? t.foreground : t.muted)
           .hover((st) => st.bg(t.hover))
@@ -5274,8 +5285,12 @@ export default class Threads extends View {
         i = lead(i);
         let j = i;
         for (let below = 0; j + 1 < rows.length && below < this.listH; j++) below += slots[j];
+        // Clear of the floating top, which covers the list's first TOP_BAND px: an earlier item
+        // at the top (a short way, a quarter of the pane at most), or level with a rail tick.
+        const minTop = this.floating() ? TOP_BAND : 0;
+        const p = landPlan(slots, i, this.listH, st.at ?? minTop, minTop, st.at != null ? this.listH : this.listH / 4);
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(i, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(p.j, p.how); cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
@@ -7162,9 +7177,11 @@ export default class Threads extends View {
   // the list's height and 540 px (ui.js railWindow) that follows the turns on screen. Turns
   // on screen are brighter, the selected turn's tick is longer, a pinned turn's takes the
   // accent colour and the running turn's pulses. A search dims the turns it leaves out. A
-  // click puts the turn's top at the top of the pane, as a pin return does.
+  // click brings the turn level with its tick (railJump).
+  // A pane too narrow for a whole Comfortable line hides the rail (ui.js railRoom), as Codex
+  // hides its side rail.
   railShown() {
-    return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1;
+    return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1 && railRoom(this.pw(), this.prefs.textSize);
   }
   // The ticks are made once per list of turns and set of pins; on each draw only the window,
   // the selection and the turns on screen are worked out, and only the ticks in the window
@@ -7398,13 +7415,31 @@ export default class Threads extends View {
       .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().font_medium().text_color(t.foreground).child(c.body)))
       .when(Boolean(c.reply), (el) => el.child(div().text_size(12).line_height("17px").max_h(51).overflow_hidden().text_color(t.muted).child(c.reply))));
   }
+  // A click on a tick (or its card) brings the turn level with the tick, where the eyes are
+  // (landPlan): its first line about the tick's height, never under the floating top.
   railJump(key, cx) {
+    const y = this.railTickY(key);
     this.toList();
     this.sel = key;
     this.follow = false;
     this.toBottom = false;
-    this.scrollTo = { key, how: "head" };
+    this.scrollTo = { key, how: "head", ...(y == null ? {} : { at: Math.max(0, y - ROW.PAD_T - 10) }) };
     cx.notify();
+  }
+  // A drawn tick's middle, in px down the list's box: the rail's ticks are centred in it,
+  // RAIL.PAD in from each end, with a 9 px row past each cut end.
+  railTickY(key) {
+    const { L, ticks, cut } = this.railTicks();
+    let y = cut ? L.pitch : 0;
+    let at = null;
+    for (const k of ticks) {
+      if (k.dayStart) y += RAIL.DAY;
+      if (k.key === key) at = y + L.pitch / 2;
+      y += L.pitch;
+    }
+    if (at == null) return null;
+    const total = y + (cut ? L.pitch : 0);
+    return RAIL.PAD + Math.max(0, (this.listH - 2 * RAIL.PAD - total) / 2) + at;
   }
 
   // The fill of a surface drawn over the list (the pill, the rail card, the ? sheet, a toast):

@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, landPlan, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
@@ -982,4 +982,17 @@ test("splitTables and tableNeed: a table is its own part, and wants each column 
   expect(tableNeed(md.split("\n\n")[1], 8)).toBe(6 * 8 + TABLE_CELL_PAD + 18 * 8 + TABLE_CELL_PAD);
   // A long cell counts 40 characters; the rest wraps.
   expect(tableNeed(`| a |\n|---|\n| ${"x".repeat(90)} |`, 10)).toBe(TABLE_COL_CHARS * 10 + TABLE_CELL_PAD);
+});
+
+test("landPlan: an earlier item at the top puts an item lower; the option nearest want, clear of minTop", () => {
+  const slots = [100, 40, 20, 300, 80];
+  // i 3: at the top (y 0), under item 2 (20), 1 (60), 0 (160), or centred in 600 (150).
+  expect(landPlan(slots, 3, 600, 0)).toEqual({ j: 3, how: "top", y: 0 });
+  expect(landPlan(slots, 3, 600, 32, 32, 150)).toEqual({ j: 1, how: "top", y: 60 });
+  expect(landPlan(slots, 3, 600, 152, 32)).toEqual({ j: 3, how: "center", y: 150 });
+  expect(landPlan(slots, 3, 600, 170, 32)).toEqual({ j: 0, how: "top", y: 160 });
+  // Nothing fits: the item at the top.
+  expect(landPlan([500, 300], 1, 600, 32, 32, 140)).toEqual({ j: 1, how: "top", y: 0 });
+  // Room for some of the item under it: 560 down in a 600 px list leaves only 40.
+  expect(landPlan([560, 100], 1, 600, 560, 32).y).not.toBe(560);
 });
