@@ -6685,6 +6685,9 @@ test("the rail's window: 9 px a tick in a long session, at most 540 px, followin
   rec = []; v.railView(theme); const r = rec; rec = null;
   expect(r.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-tick-") && !String(e[1]).startsWith("th-tick-card")).length).toBe(w.ticks.length);
   expect(r).toContainEqual(["id", "th-rail-up"]);
+  // Each mark slides a change of width over 90 ms, natively (no timer in the mod).
+  expect(r.filter((e) => e[0] === "transition" && e[1] === "width").length).toBe(w.ticks.length);
+  expect(r).toContainEqual(["transition", "width", { duration: 90, easing: "ease-out" }]);
   expect(r).toContainEqual(["tooltip", `Pinned #${v.findTurn(ks[5]).n} above`]);
   // A press on the dot brings the pin into the window, and the list stays.
   const scroll = v.scrollTo;
