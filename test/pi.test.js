@@ -5,11 +5,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/core/turns.js";
 import { harnessOf, harnessOfFile, idOfFile, piStartMs, piFolder, piArgv, pickOpenCode } from "../mods/agent-threads/harness.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const imager = join(root, "mods/agent-threads/image.sh");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==";
 const ID = "00000000-0000-7000-8000-000000000002";
@@ -251,11 +251,11 @@ test("level 3: Pi calls carry their ids, and calls.sh reads each one's input, ou
   for (const e of ev) apply(s, e);
   // An id with a | (OpenAI's Responses API through Pi) is kept, and read as plain text.
   expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["call_r1", "call_b1|fc_9"]);
-  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), file, "pi", "call_r1", "call_b1|fc_9"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), file, "pi", "call_r1", "call_b1|fc_9"], { encoding: "utf8" }).split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => x.in)).toEqual(["src/cart.ts", "bun test cart"]);
   const outs = got.filter((x) => x.k === "out");
   expect(outs.map((x) => [x.id, x.err, x.ms, x.lines])).toEqual([["call_r1", false, 4, 1], ["call_b1|fc_9", true, 2350, 2]]);
   expect(outs[1].out).toBe("1 fail\nexpected 3");
   // | alone is not an id that matches every line.
-  expect(execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), file, "pi", "|"], { encoding: "utf8" })).toBe("");
+  expect(execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), file, "pi", "|"], { encoding: "utf8" })).toBe("");
 });

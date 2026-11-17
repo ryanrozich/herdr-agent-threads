@@ -11,7 +11,7 @@ import { pickCodexDaemon, claudeAttach, opencodeAttach } from "../mods/agent-thr
 
 const root = join(import.meta.dir, "..");
 const locator = join(root, "mods/agent-threads/locate.sh");
-const oc = join(root, "mods/agent-threads/opencode.sh");
+const oc = join(root, "mods/agent-threads/core/opencode.sh");
 const ID = "00000000-0000-4000-8000-0000000000d1";
 const ID2 = "00000000-0000-4000-8000-0000000000d2";
 const SUB = "00000000-0000-4000-8000-0000000000d3";
