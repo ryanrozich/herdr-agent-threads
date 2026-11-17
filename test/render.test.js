@@ -7021,7 +7021,7 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
 
-test("the probe looks at no more than its share of rows a frame: a part far from the top is found over frames, then nothing is due", async () => {
+test("the probe looks at no more than its share of rows a frame: a part far from the top is found over frames, then nothing is due; the nearest parts stay first", async () => {
   const { v, cx } = await longSession(2000);
   v.debug = false;
   v.width = 545;
@@ -7050,12 +7050,13 @@ test("the probe looks at no more than its share of rows a frame: a part far from
   }
   expect(found).toBeTruthy();
   expect(calls).toBeGreaterThan(1);
-  // Measured: the walk starts over and finds nothing, over frames, then stays quiet.
+  // Measured: the walk goes on from the rows it knows are clean, finds nothing, and the
+  // probe is quiet.
   v.meas.set(parts[0].key, { sig: v.partSig(parts[0]), h: 20 });
   v.measVer++;
-  let frames = 0;
-  do { sigs = 0; expect(v.probeDue().length).toBe(0); expect(sigs).toBeLessThanOrEqual(300); frames++; } while (frames < 20 && v.probeLeft !== 0);
-  expect(frames).toBeGreaterThan(1);
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBeLessThanOrEqual(300);
   expect(v.probeLeft).toBe(0);
   sigs = 0;
   expect(v.probeDue().length).toBe(0);
@@ -7081,3 +7082,24 @@ test("the probe's walk goes on past measured rows while measures keep coming in"
   }
   expect(found).toBe(true);
 });
+
+test("the probe's walk starts over at the top when the rows change, and asks again for a part that has not reported", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  v.meas = new Map();
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  const turns = v.baseRows.filter((r) => r.kind === "turn");
+  v.topKey = turns[150].key;
+  const first = v.probeDue().map(([r]) => r.key);
+  expect(first.length).toBe(16);
+  // Not reported yet: the same parts again, nearest first (up to three tries each).
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
+  // The rows changed: from the top again.
+  v.probeList();
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
+});
+

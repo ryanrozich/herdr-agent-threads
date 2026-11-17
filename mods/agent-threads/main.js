@@ -113,7 +113,7 @@ const SHAPE_FIRST = 40;
 const PROBE_MAX = 16;
 // Rows probeDue looks at in one frame. With every part near the top measured, its walk went
 // on to every row: 45 to 48 ms in one frame at 6,000 turns on the rig, after each rebuild.
-// 300 rows took 7 to 8 ms there; the next frame goes on from there.
+// 300 rows took 7 to 8 ms there; the next frame goes on from there (probeWalk).
 const PROBE_WALK = 300;
 // Herdr stops a draw that runs past its time (about 50 ms) and keeps the last frame that
 // worked, so a draw that never fits would leave the pane blank for good. A row whose draw was
@@ -5896,7 +5896,7 @@ export default class Threads extends View {
     if (was?.sig === sig && was.h === h) return;
     // Every closed row's reply block is measured: a cap under the turns a long session has
     // made the probe measure the same parts again and again.
-    if (this.meas.size > 20000) this.meas.clear();
+    if (this.meas.size > 20000) { this.meas.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
     this.meas.set(key, { sig, h });
     this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
@@ -5925,12 +5925,11 @@ export default class Threads extends View {
     const rows = this.baseRows ?? [];
     const n = rows.length;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
-    // A walk left at PROBE_WALK goes on where it stopped while the rows, their layout and the
-    // top stay. A new measure does not start it over: it only settles a part already passed,
-    // and starting over at each one never got past the measured rows near the top.
-    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}`;
-    const was = this.probeWalk?.key === wk ? this.probeWalk : null;
-    const d0 = was ? was.d : 0;
+    // Within the clean radius of the top row nothing was due, and while the rows, their
+    // layout and the top stay, a new measure only settles parts: the walk starts there.
+    // Measures and tries cleared (probeEpoch) start it from the top again.
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}`;
+    const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
     const visit = (r) => {
       const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
       if (!part) return;
@@ -5942,22 +5941,22 @@ export default class Threads extends View {
       want.push([part, sig, k]);
     };
     let d = d0;
+    let clean = d0;
     let seen = 0;
     for (; d < n && seen < PROBE_WALK; d++) {
       if (top + d < n) { visit(rows[top + d]); seen++; }
       if (d > 0 && top - d >= 0) { visit(rows[top - d]); seen++; }
-      if (want.length >= PROBE_MAX) { d++; break; }
+      if (!want.length) clean = d + 1;
+      if (want.length >= PROBE_MAX) break;
     }
-    // Every row looked at, on both sides of the top.
-    const covered = top + d >= n && top - d < 0;
-    const found = (was?.found ?? 0) + want.length;
-    this.probeWalk = covered ? null : { key: wk, d, found };
+    this.probeWalk = { key: wk, clean };
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
-    // A pass that found parts is followed by one that finds none before the probe is quiet.
-    this.probeLeft = !covered || found > 0 ? 1 : 0;
-    this.probeQuiet = covered && !found ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
-    if (this.probeTries.size > 4000) this.probeTries.clear();
+    // Nothing due anywhere: quiet. Otherwise parts wait, or rows are not looked at yet.
+    const done = top + clean >= n && top - clean < 0;
+    this.probeLeft = done ? 0 : 1;
+    this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
+    if (this.probeTries.size > 4000) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
     return out.map(([r, sig]) => [r, sig]);
   }
 
