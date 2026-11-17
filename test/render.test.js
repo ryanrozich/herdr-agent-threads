@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -5816,7 +5816,7 @@ test("a settings change in a long session reshapes rows over several frames, the
   expect(v.shapeLeft).toBe(0);
 });
 
-test("the rail card: a hovered tick shows its turn's number and time over two lines of its prompt, beside it on the left", async () => {
+test("the rail card: a hovered tick shows the day, time and number, two lines of its prompt and three of its reply, beside it on the left", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.listH = 600;
   draw(v, cx);
@@ -5837,10 +5837,26 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
   const turn = v.findTurn(ks[1]);
   const c = v.railCard(ticks[1]);
-  expect(c.head).toMatch(new RegExp(`^#${turn.n} · \\d`));
+  // The first line: the day leads (muted), then the time and the number (dim).
+  expect(c.day).toBe(railDay(turn.ts));
+  expect(c.rest).toMatch(new RegExp(`^\\d{1,2}:\\d\\d\\s[AP]M · #${turn.n}$`));
+  expect(r).toContainEqual(["child", c.day]);
+  expect(r).toContainEqual(["child", c.rest]);
   expect(c.body.length).toBeGreaterThan(0);
-  expect(c.body.length).toBeLessThanOrEqual(2 * 40);
-  expect(r.some((e) => e[0] === "child" && e[1] === c.head)).toBe(true);
+  expect(c.body.length).toBeLessThanOrEqual(2 * 46);
+  // The reply on three lines at most, flattened, in the muted colour.
+  expect(c.reply.length).toBeGreaterThan(0);
+  expect(c.reply.length).toBeLessThanOrEqual(3 * 50);
+  expect(c.reply).not.toMatch(/[*`#|]/);
+  expect(r).toContainEqual(["child", c.reply]);
+  expect(r.some((e) => e[0] === "w" && e[1] === 300)).toBe(true);
+  // The peak: the hovered tick at its peak (24 px, 16 in this gutter under 40 px), its
+  // neighbours less by the square of how near they are.
+  const look = railLook(v.side());
+  const ws = r.filter((e) => e[0] === "w").map((e) => e[1]);
+  expect(look.peak).toBe(v.side() < 40 ? 16 : 24);
+  expect(ws).toContain(look.peak);
+  expect(ws).toContain(railSwell(look.mark, look.peak, v.railTicks().L.pitch));
   hovers[0](false, cx);
   expect(v.railHover).toBe(ks[1]);
   hovers[1](false, cx);
@@ -5855,11 +5871,29 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   v.sel = ks[2];
   v.action("pin", cx);
   ({ ticks } = v.railTicks());
-  expect(v.railCard(ticks[2]).head).toMatch(/ · pinned$/);
+  expect(v.railCard(ticks[2]).pinned).toBe(true);
+  expect(v.railCard(ticks[1]).pinned).toBe(false);
+  // While a card is open, p pins the card's turn, not the selected one.
+  v.railHover = ks[3];
+  v.action("pin", cx);
+  ({ ticks } = v.railTicks());
+  expect(ticks[3].pinned).toBe(true);
+  expect(ticks[2].pinned).toBe(true);
+  v.railHover = null;
+  // Rail side Left: the lane on the left edge, the card anchored on its left centre.
+  v.prefs = { ...v.prefs, railSide: "left" };
+  v.railHover = ks[1];
+  rec = []; v.railView(theme); r = rec; rec = null;
+  expect(r.some((e) => e[0] === "anchor" && e[1] === "left_center")).toBe(true);
+  const lk = railLook(v.side());
+  expect(r.some((e) => e[0] === "pl" && e[1] === RAIL.CARD_GAP + Math.max(0, lk.peak + lk.right - lk.lane))).toBe(true);
+  expect(r).toContainEqual(["left", 0]);
+  v.prefs = { ...v.prefs, railSide: "right" };
+  v.railHover = null;
   v.listH = 12;
   ({ ticks } = v.railTicks());
   expect(ticks[0].turns.length).toBeGreaterThan(1);
-  expect(v.railCard(ticks[0]).head).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
+  expect(v.railCard(ticks[0]).rest).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
@@ -5895,7 +5929,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(v.side()).toBeGreaterThan(56);
   rec = []; v.railView(theme); const wide = rec; rec = null;
   expect(wide.filter((e) => e[0] === "w").map((e) => e[1])).toEqual(expect.arrayContaining([32, 10, 16]));
-  expect(wide.some((e) => e[0] === "pr" && e[1] === 14)).toBe(true);
+  expect(wide.some((e) => e[0] === "right" && e[1] === 14)).toBe(true);
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
