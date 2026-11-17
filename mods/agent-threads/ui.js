@@ -1834,11 +1834,12 @@ export function columnResize(c, m, d) {
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
 
-// The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane,
-// 340 to 400 px (PIN_COL_WANT), so a compact row shows about 40 characters of its prompt a
-// line (the row's text is the column less PIN_ROW's 54 px of padding and badge). A pane
-// under 580 px gives the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at
-// least PIN_MAIN_MIN if Herdr takes all the room from it. Mostly it does not: with
+// The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane
+// and a step (PIN_STEP) more, 380 to 440 px (PIN_COL_WANT), so a compact row shows about 48
+// characters of its prompt a line (the row's text is the column less PIN_ROW's 54 px of
+// padding and badge); the owner found one step narrower too tight. A pane under 620 px gives
+// the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at least
+// PIN_MAIN_MIN less a step if Herdr takes all the room from it: 373 px beside a 573 px pane. Mostly it does not: with
 // readingWidth on, Threads sits at its reading width (about 570 px at text size 14) and
 // Herdr takes the column's room from the terminal beside it. A pane from
 // PIN_SPLIT_MIN (480 px, so a pane set to 500 that measures a pixel or two less still
@@ -1846,14 +1847,14 @@ export function columnResize(c, m, d) {
 // room from the pane's neighbours as well as from Threads. A width the owner set with - and =
 // (kept), up to 640 px with Threads at least PIN_MAIN_MIN, wins. Returns the column's
 // width, or null.
-export const PIN_COL = Object.freeze([240, 400]);
-export const PIN_COL_WANT = 340;
+export const PIN_COL = Object.freeze([240, 440]);
+export const PIN_COL_WANT = 380;
 export const PIN_MAIN_MIN = 240;
 export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
 export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
-  const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4)));
-  const room = Math.round(width) - PIN_MAIN_MIN;
+  const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4) + PIN_STEP));
+  const room = Math.round(width) - PIN_MAIN_MIN + (kept > 0 ? 0 : PIN_STEP);
   return Math.max(PIN_COL[0], Math.min(want, room, kept > 0 ? 640 : PIN_COL[1]));
 }
 
