@@ -8613,3 +8613,87 @@ test("no rules: the two types that fill a rule in dashed boxes, and Use opens on
     expect(v.ruleEdit).toBe(null);
   } finally { done(v); }
 });
+
+const ABCD = ["A", "B", "C", "D"].map((n) => ({ name: n, pattern: `\\b${n}-(\\d+)\\b`, url: `https://${n.toLowerCase()}.example/$1` }));
+
+test("an open rule follows its rule when the list changes under it: Keep never writes over another rule", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    // Open C, remove A from its row, keep C: C changes, D stays.
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.removeRule(0, cx);
+    expect(v.ruleEdit.at).toBe(1);
+    typeIn(v, "example", "C-7", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.example ?? null])).toEqual([["B", null], ["C", "C-7"], ["D", null]]);
+    // A hand edit that adds a rule above: the open rule follows it.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...ABCD] }));
+    expect(v.ruleEdit.at).toBe(3);
+    typeIn(v, "name", "C2", cx);
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "B", "C2", "D"]);
+    // A hand edit that changes the open rule: it becomes a new rule where it was, typed text kept.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    typeIn(v, "example", "C-9", cx);
+    v.applyPrefs(JSON.stringify({ links: [ABCD[0], ABCD[1], { ...ABCD[2], url: "https://c.example/x/$1" }, ABCD[3]] }));
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleEdit.lost]).toEqual([null, 2, true]);
+    expect(strsOf(cardOf(v))).toContain("This rule changed in the file or was removed. Keep rule adds it as a new rule.");
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.url])).toEqual([["A", ABCD[0].url], ["B", ABCD[1].url], ["C", ABCD[2].url], ["C", "https://c.example/x/$1"], ["D", ABCD[3].url]]);
+  } finally { done(v); }
+});
+
+test("Undo puts a removed rule back beside the same neighbor, whatever was added meanwhile", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    v.removeRule(2, cx); // C, after B
+    await settleAll(cx);
+    // A rule kept above it, here and by hand.
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    v.duplicateRule();
+    v.keepRule(cx);
+    await settleAll(cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "D"]);
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "C", "D"]);
+    // The first rule removed goes back before the rule that followed it.
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0].name).toBe("A");
+    v.applyPrefs(JSON.stringify({ links: [{ name: "Y", pattern: "\\bY-(\\d+)\\b", url: "https://y.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name).slice(0, 3)).toEqual(["Y", "X", "A"]);
+  } finally { done(v); }
+});
+
+test("a rule whose address is on github.com links only when the session's origin is on GitHub; elsewhere it says why", async () => {
+  const { v, cx } = await rulesPane([
+    { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." },
+    { name: "MR", pattern: "!(\\d+)\\b", url: "https://gitlab.com/{repo}/-/merge_requests/$1", example: "See !12." },
+  ]);
+  try {
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme", host: "gitlab.com" };
+    expect(v.linkOne("Merged in #58 and !12.").md).not.toContain("github.com");
+    expect(v.linkOne("Merged in #58 and !12.").md).toContain("https://gitlab.com/acme/exports/-/merge_requests/12");
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    v.closeRule();
+    v.remote = { ...v.remote, host: "github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, host: "ssh.github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+  } finally { done(v); }
+});
