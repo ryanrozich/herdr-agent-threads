@@ -1696,6 +1696,37 @@ export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CAR
 // The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
 // tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
 // the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
+// Where to put item i when the list can only bring an item to its top or its centre: i
+// itself at the top (y 0), an earlier item k at the top (i then sits lower by the slots from
+// k to i), or i centred. The option nearest want, with i at least minTop down (clear of the
+// floating top) and no more than maxY, and room for some of i under it. i at the top when
+// none fits.
+export function landPlan(slots, i, listH, want, minTop = 0, maxY = listH) {
+  const h = slots[i] ?? 0;
+  const ok = (y) => y >= minTop && y <= maxY && y + Math.min(h, 48) <= listH;
+  const opts = [{ j: i, how: "top", y: 0 }];
+  let y = 0;
+  for (let k = i - 1; k >= 0 && y <= listH; k--) {
+    y += slots[k] ?? 0;
+    opts.push({ j: k, how: "top", y });
+  }
+  if (h < listH) opts.push({ j: i, how: "center", y: (listH - h) / 2 });
+  let best = null;
+  for (const o of opts) if (ok(o.y) && (!best || Math.abs(o.y - want) < Math.abs(best.y - want))) best = o;
+  return best ?? opts[0];
+}
+// The rail shows only in a pane that holds a whole Comfortable reading line (MEASURE
+// characters at the text size) inside its gutters: a narrower pane is already squeezing the
+// line, and the rail gives it the room, as Codex hides its side rail. 549 px at 14 px.
+export function railRoom(paneW, size = TEXT_SIZE) {
+  return paneW - 2 * gutter(paneW) >= readType(size, MEASURE).measure;
+}
+// The narrowest pane that shows the rail at a text size.
+export function railMinPane(size = TEXT_SIZE) {
+  let w = 200;
+  while (!railRoom(w, size) && w < 4000) w++;
+  return w;
+}
 export function railLook(side) {
   const small = side < 40;
   return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14, peak: small ? RAIL.PEAK_SMALL : RAIL.PEAK };
