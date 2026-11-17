@@ -6,6 +6,9 @@
 # "out","lines"} for its result (at most 24 KB of text, and its whole line count). The panel
 # keeps these in memory only: nothing is written here, and nothing is saved.
 # --tail reads only the transcript's last 4 MB, for the newest call of a group still running.
+# With THREADS_ARGS=1 (the ATIF export, core/atif.js) it also prints each call's whole input
+# as {"id","k":"args","args"}: an object, a JSON value that is not one as {"value"}, a Codex
+# custom tool's text as {"input"}, or {"id","k":"args","unread":true} when it is not JSON.
 # Claude Code: the tool_use and tool_result blocks with these ids. Codex: the calls and outputs
 # with these call ids.
 set -eu
@@ -47,7 +50,8 @@ case $harness in
       | if .type == "tool_use" and (.id as $i | $want | index($i)) != null then
           {id: .id, k: "in", ts: $l.timestamp,
            in: ((.input // {}) | if type == "object" then (.command // .file_path // .path // .pattern // .query // .url // .description // .prompt // tojson) else . end
-                | tostring | .[0:400])}
+                | tostring | .[0:400])},
+          (select($ENV.THREADS_ARGS == "1") | {id: .id, k: "args", args: ((.input // {}) | if type == "object" then . else {value: .} end)})
         elif .type == "tool_result" and (.tool_use_id as $i | $want | index($i)) != null then
           (.content | text) as $o
           | {id: .tool_use_id, k: "out", ts: $l.timestamp, err: (.is_error == true), out: $o[0:24576], lines: ($o | split("\n") | length)}
@@ -77,11 +81,20 @@ case $harness in
           | if ($files | length) != 0 then ($files | join(", ")) elif $cmd then $cmd else ($i | firstline) end
         end | tostring | .[0:400];
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and (.type == "input_text" or .type == "output_text" or .type == "text")) | .text) | join("\n")) elif . == null then "" else tojson end;
+      # The whole input, as Harbor reads it: arguments JSON, a custom tool text as input.
+      def args:
+        if .type == "function_call" then
+          (.arguments // "{}") as $r
+          | (if ($r | type) == "string" then (try ($r | fromjson) catch "\u0000unread") else $r end) as $a
+          | if $a == "\u0000unread" then {unread: true} elif ($a | type) == "object" then {args: $a} else {args: {value: $a}} end
+        elif .type == "local_shell_call" then {args: (.action // {})}
+        else {args: {input: (.input // "" | tostring)}} end;
       ($ids | split(" ") | map(select(. != ""))) as $want
       | (fromjson? // empty) | select(type == "object" and .type == "response_item") | . as $l | ($l.payload // {}) as $p
       | select(($p.call_id | type) == "string" and (($p.call_id) as $i | $want | index($i)) != null)
       | if ($p.type == "function_call" or $p.type == "custom_tool_call" or $p.type == "local_shell_call") then
-          {id: $p.call_id, k: "in", ts: $l.timestamp, in: ($p | input)}
+          {id: $p.call_id, k: "in", ts: $l.timestamp, in: ($p | input)},
+          (select($ENV.THREADS_ARGS == "1") | {id: $p.call_id, k: "args"} + ($p | args))
         elif ($p.type == "function_call_output" or $p.type == "custom_tool_call_output") then
           ($p.output | if type == "string" then (fromjson? // .) else . end) as $o
           | (if ($o | type) == "object" and ($o | has("output")) then ($o.output | text) else ($o | text) end) as $t
@@ -102,7 +115,10 @@ case $harness in
           ($m.content? // empty) | arrays | .[] | select(type == "object" and .type == "toolCall" and ((.id // "") as $i | $want | index($i)) != null)
           | {id: .id, k: "in", ts: $l.timestamp,
              in: ((.arguments // {}) | (if type == "string" then (fromjson? // .) else . end)
-                  | if type == "object" then (.command // .path // .file_path // .pattern // .query // .url // tojson) else . end | tostring | .[0:400])}
+                  | if type == "object" then (.command // .path // .file_path // .pattern // .query // .url // tojson) else . end | tostring | .[0:400])},
+            (select($ENV.THREADS_ARGS == "1") | {id: .id, k: "args"}
+              + ((.arguments // {}) | if type == "string" then (try fromjson catch "\u0000unread") else . end
+                 | if . == "\u0000unread" then {unread: true} elif type == "object" then {args: .} else {args: {value: .}} end))
         elif $m.role == "toolResult" and (($m.toolCallId // "") as $i | $want | index($i)) != null then
           ($m.content | text) as $o
           | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: ($m.isError == true), out: $o[0:24576], lines: ($o | split("\n") | length)}
@@ -122,7 +138,8 @@ case $harness in
       | if $l.type == "PLANNER_RESPONSE" then
           ($calls[$l.step_index | tostring] // [])[] | . as $w | ($l.tool_calls[$w.i]? // empty) | select(type == "object")
           | {id: $w.id, k: "in", ts: $l.created_at,
-             in: ((.args // {}) | if type == "object" then (.CommandLine // .Path // .query // .Query // .Url // .Message // .TaskId // tojson) else . end | tostring | .[0:400])}
+             in: ((.args // {}) | if type == "object" then (.CommandLine // .Path // .query // .Query // .Url // .Message // .TaskId // tojson) else . end | tostring | .[0:400])},
+            (select($ENV.THREADS_ARGS == "1") | {id: $w.id, k: "args", args: ((.args // {}) | if type == "object" then . else {value: .} end)})
         elif $l.type == "GENERIC" then
           ($results[$l.step_index | tostring] // [])[] | . as $w
           | (($l.content // "") | tostring | split("\n")) as $lines

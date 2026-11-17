@@ -101,11 +101,16 @@ while :; do
       # ignores the same lines if one gets through. A call's output line becomes a short "_x"
       # line: its time, its call id, and whether the start or end of the output says it failed
       # (an exit code other than 0, success false, the failure lines calls.sh reads).
+      # A subagent's rollout starts with a copy of its parent's history. The ATIF export reads
+      # one from its own first line on (THREADS_FROM_ORDINAL, session_meta's
+      # subagent_history_start_ordinal), as Harbor does; the panel never sets it.
       # A subagent's thread names it in session_meta, near the start of the first line.
       nick=$(head -c 4096 "$file" | LC_ALL=C grep -m 1 -o '"agent_nickname":"[^"\\]*"' | head -n 1 | cut -d '"' -f 4) || nick=""
       { [ -z "$nick" ] || jq -cn --arg t "$nick" '{k: "an", t: $t[0:80]}'
       head -c "$used" "$tmp" \
-        | LC_ALL=C perl -ne 'if (/"type":"(?:function_call_output|custom_tool_call_output)"/) {
+        | LC_ALL=C perl -ne 'BEGIN { $from = $ENV{THREADS_FROM_ORDINAL}; $from = undef unless defined $from && $from =~ /^\d+$/ }
+            next if defined $from && (!/^\{"timestamp":"[^"\\]{0,40}","ordinal":(\d+)/ || $1 < $from);
+            if (/"type":"(?:function_call_output|custom_tool_call_output)"/) {
               my ($id) = /"call_id":"([0-9A-Za-z_.:|-]{1,200})"/; next unless defined $id;
               my ($ts) = /^\{"timestamp":"([^"\\]{1,40})"/;
               my $w = substr($_, 0, 4096) . substr($_, -1024);
