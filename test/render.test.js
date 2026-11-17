@@ -7909,13 +7909,15 @@ test("y in a pane from 480 px splits the Trajectory pane beside it, 560 px, kept
   settleRows(v, cx);
   const pick = flaky(v);
   v.sel = pick;
+  // Pins an earlier test left for this session would open the Pinned column by itself.
+  v.splitAsk = null;
   log = [];
   v.key(keyEv("y"), cx);
   // This pane stays the chat; the split carries the view and the selected turn goes ahead.
   expect(v.ledger()).toBe(false);
   const split = log.find(([, n]) => n === "pane.split");
   expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
-  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: pick, pane: "p2" });
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: pick, by: v.selId });
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   v.settleSplit();
   expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
@@ -7962,7 +7964,17 @@ test("y in a pane from 480 px splits the Trajectory pane beside it, 560 px, kept
   expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
 });
 
-test("the chat and its Trajectory pane select the same turn: a move in one moves the other", async () => {
+// The chat, and its Trajectory pane made from its props (view "trajectory") on the same
+// transcript, with no settle: a test starts it while its read is still going.
+function trajTwin() {
+  state.props = { ...state.props, view: "trajectory" };
+  const w = new Threads();
+  const wx = makeCx();
+  w.init(state.props, wx);
+  return { w, wx };
+}
+
+test("the chat and its Trajectory pane select the same turn: a move in one moves the other, and a new pane takes the chat's turn even while it reads", async () => {
   const { v, cx } = await pane(twoFails());
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   state.shared["threads.trajByTerminal"] = { t4: { pane: "p3" } };
@@ -7970,42 +7982,145 @@ test("the chat and its Trajectory pane select the same turn: a move in one moves
   settleRows(v, cx);
   const turns = v.turnKeys(v.rows());
   v.sel = turns[0];
+  v.follow = false;
+  // The 1 s timer finds the Trajectory pane open; the chat links and writes its turn.
+  v.watchTraj();
   v.syncSel(cx);
-  state.props = { ...state.props, view: "trajectory" };
-  const w = new Threads();
-  const wx = makeCx();
-  w.init(state.props, wx);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[0], by: v.selId });
+  // The Trajectory pane looks before its read is done, and again after it picked the newest
+  // turn by itself (jumpLatest): it takes the chat's turn and never writes its own pick.
+  const { w, wx } = trajTwin();
+  w.syncSel(wx);
   await settle(w);
+  w.syncSel(wx);
   settleRows(w, wx);
   w.syncSel(wx);
   expect(w.sel).toBe(turns[0]);
+  expect(state.shared["threads.turnSel"].t4.by).toBe(v.selId);
+  v.syncSel(cx);
+  expect(v.sel).toBe(turns[0]);
   // The chat moves: the Trajectory selects that turn's heading.
   v.key(keyEv("j"), cx);
   v.syncSel(cx);
-  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[1], pane: "p2" });
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[1], by: v.selId });
   w.syncSel(wx);
   expect([w.sel, w.tsel]).toEqual([turns[1], turns[1]]);
-  // A move inside the turn (one of its steps) moves nothing in the chat.
+  // A move inside the turn (one of its steps) writes nothing.
+  const before = state.shared["threads.turnSel"].t4;
   w.key(keyEv("j"), wx);
-  expect(w.sel).toBe(turns[1]);
   w.syncSel(wx);
-  const at = state.shared["threads.turnSel"].t4.at;
+  expect(state.shared["threads.turnSel"].t4).toBe(before);
   // The Trajectory moves to another turn: the chat selects it and brings it on screen.
   w.ledgerPick(turns[3], true, wx);
   w.syncSel(wx);
-  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[3], pane: "p3" });
-  expect(state.shared["threads.turnSel"].t4.at).toBeGreaterThanOrEqual(at);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turns[3], by: w.selId });
   v.viewRange = [0, 0];
   v.syncSel(cx);
   expect(v.sel).toBe(turns[3]);
   expect(v.scrollTo).toMatchObject({ key: turns[3], how: "center" });
   // Nothing new: neither pane moves or writes again.
-  const before = state.shared["threads.turnSel"].t4;
+  const last = state.shared["threads.turnSel"].t4;
   v.scrollTo = null;
   v.syncSel(cx);
   w.syncSel(wx);
-  expect(state.shared["threads.turnSel"].t4).toBe(before);
+  expect(state.shared["threads.turnSel"].t4).toBe(last);
   expect(v.scrollTo).toBe(null);
+  // A write drops the entries of terminals that are gone and of a day ago.
+  state.shared["threads.turnSel"] = { ...state.shared["threads.turnSel"], t9: { key: "0:1", by: "x", at: Date.now() }, t4old: { key: "0:1", by: "y", at: 1 } };
+  state.terminals.push({ address: "t4old", status: "idle", name: "claude" });
+  v.key(keyEv("k"), cx);
+  v.syncSel(cx);
+  expect(Object.keys(state.shared["threads.turnSel"])).toEqual(["t4"]);
+});
+
+test("a turn the chat read before its Trajectory pane did waits there, and is selected once the pane reads it", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, rest } = grownFixture();
+  const { v, cx } = await pane(file);
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p3" } };
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  settleRows(v, cx);
+  // Both on the first turn, away from the newest, so nothing follows the new one by itself.
+  v.sel = v.turnKeys(v.rows())[0];
+  v.follow = false;
+  const { w, wx } = trajTwin();
+  await settle(w);
+  settleRows(w, wx);
+  v.watchTraj();
+  v.syncSel(cx);
+  w.syncSel(wx);
+  expect(w.sel).toBe(v.sel);
+  expect(w.follow).toBe(false);
+  // A turn comes in: the chat reads it first and selects it.
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  settleRows(v, cx);
+  const fresh = v.turnKeys(v.rows()).at(-1);
+  v.sel = fresh;
+  v.syncSel(cx);
+  expect(state.shared["threads.turnSel"].t4.key).toBe(fresh);
+  // Not read in the Trajectory yet: it stays where it was, and the turn waits.
+  w.syncSel(wx);
+  expect(w.findTurn(fresh)).toBe(null);
+  expect(w.sel).not.toBe(fresh);
+  w.read(wx);
+  await settle(w);
+  settleRows(w, wx);
+  w.syncSel(wx);
+  expect([w.sel, w.tsel]).toEqual([fresh, fresh]);
+});
+
+test("after a restart, with every map empty, a key in the Trajectory pane tells it which pane it is, and the chat is then the other", async () => {
+  const { v } = await pane(twoFails());
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared = {};
+  v.myPane = null;
+  const { w, wx } = trajTwin();
+  await settle(w);
+  // Two Threads panes no map claims: neither can tell which it is.
+  expect([v.me(), w.me()]).toEqual([null, null]);
+  focusNow = { pane: "p3", terminal: null };
+  try {
+    w.key(keyEv("j"), wx);
+  } finally { focusNow = null; }
+  expect(w.me().pane).toBe("p3");
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(v.me().pane).toBe("p2");
+  expect(w.mainPane().pane).toBe("p2");
+  // y in the Trajectory pane goes back to the chat; the chat finds its Trajectory pane.
+  log = [];
+  w.key(keyEv("y"), wx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  v.watchTraj();
+  expect(v.trajOpen).toBe(true);
+  // The same for a Pinned pane (props view "pinned").
+  state.shared = {};
+  state.props = { ...state.props, view: "pinned" };
+  const u = new Threads();
+  const ux = makeCx();
+  u.init(state.props, ux);
+  await settle(u);
+  focusNow = { pane: "p3", terminal: null };
+  try { u.key(keyEv("j"), ux); } finally { focusNow = null; }
+  expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
+});
+
+test("with no Trajectory pane, syncSel reads nothing: no shared state, no panes", async () => {
+  const { v, cx } = await pane(twoFails());
+  settleRows(v, cx);
+  v.watchTraj();
+  expect(v.trajOpen).toBe(false);
+  const reads = { n: 0 };
+  const real = state.shared;
+  state.shared = new Proxy(real, { get(o, k) { if (k === "threads.turnSel") reads.n++; return o[k]; } });
+  const keys = v.turnKeys(v.rows());
+  const p0 = hostReads.panes;
+  try {
+    for (let i = 0; i < 10; i++) { v.sel = keys[i % 3]; v.syncSel(cx); }
+  } finally { state.shared = real; }
+  expect([reads.n, hostReads.panes - p0]).toEqual([0, 0]);
 });
 
 test("the Trajectory always shows agent messages, marked apart, and reads none of the chat's settings for it", async () => {
