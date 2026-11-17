@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railRoom, landPlan, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railRoom, landPlan, landExact, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -163,6 +163,9 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
 const TOP_BAND = 32;
+// The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
+// jump (once its scroll is done) and faded out over FADE ms.
+const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 600 };
 // The day pill over the list shows while you scroll, and goes this long after you stop.
 const DAY_PILL_MS = 1500;
 const PDAY_H = 30; // a day header in the Pinned view
@@ -754,6 +757,7 @@ export default class Threads extends View {
     const snap = {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
+      landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
@@ -1204,7 +1208,7 @@ export default class Threads extends View {
     const until = Date.now() + 400;
     this.pinResume = null;
     this.pinAgain = first && !again ? key : null;
-    this.scrollTo = again ? { key: first, how: "land", or: rest, head: key, until, resume: true } : { key, how: "head", until };
+    this.scrollTo = again ? { key: first, how: "land", or: rest, head: key, until, resume: true, flash: true } : { key, how: "head", until, flash: true };
     if (first && !again && !hidden) this.say(`Press ${i + 1} again for where you left off`, "pin", cx, 3000);
     this.placeHold = until + 300;
     this.placeBase = null;
@@ -1648,7 +1652,7 @@ export default class Threads extends View {
     const gap = this.floating() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -1672,6 +1676,9 @@ export default class Threads extends View {
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
+      // A rail click's landing (landExact): the first row is lift px taller for the frame of
+      // the scroll, far above the view, then its own height again.
+      if (this.landLift > 0 && this.slotsMemo.length) this.slotsMemo[0] += Math.ceil(this.landLift);
       this.fitKey = fit;
       // A closed running pin in the Pinned view is a compact row with live off, but its
       // reply line carries the clock, so it counts as shown too.
@@ -2675,7 +2682,7 @@ export default class Threads extends View {
     const key = `${si}:${turn.answeredIn}`;
     this.sel = key;
     this.follow = false;
-    this.scrollTo = { key, how: "center" };
+    this.scrollTo = { key, how: "center", flash: true };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
@@ -5037,7 +5044,7 @@ export default class Threads extends View {
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
     if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
-    this.sel = key; this.follow = false; this.scrollTo = { key, how: "center" };
+    this.sel = key; this.follow = false; this.scrollTo = { key, how: "center", flash: true };
   }
 
   // The first turn of the day before or after the selected turn's day.
@@ -5215,6 +5222,10 @@ export default class Threads extends View {
       for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
       if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
       this.scrollTo = null;
+      // A jump the person asked for (a rail tick or card, a pin return, #n in the search, Go to
+      // that reply) flashes the turn it lands on, after the scroll (a second press's follow-up
+      // scroll flashes instead).
+      if (i >= 0 && st.flash && !(how === "land" && st.resume)) this.flashTurn(rowTurnKey(rows[i]) ?? rows[i].key, cx);
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
       const lead = (k) => (rows[k - 1]?.kind === "wtop" && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
@@ -5222,7 +5233,7 @@ export default class Threads extends View {
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
         this.pinResume = { key: st.head, part: rows[i].key };
-        this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400 };
+        this.scrollTo = { key: `resume:${st.head}`, how: "land", or: [rows[i].key], until: Date.now() + 400, flash: st.flash };
         i = -1;
         cx.timer.after(0, (cx) => cx.notify());
       }
@@ -5256,9 +5267,20 @@ export default class Threads extends View {
         // Clear of the floating top, which covers the list's first TOP_BAND px: an earlier item
         // at the top (a short way, a quarter of the pane at most), or level with a rail tick.
         const minTop = this.floating() ? TOP_BAND : 0;
-        const p = landPlan(slots, i, this.listH, st.at ?? minTop, minTop, st.at != null ? this.listH : this.listH / 4);
+        // A rail click lands the turn's top level with its tick (landExact). Other jumps take an
+        // earlier item at the top a short way up (landPlan), and when none fits, the turn's top
+        // just under the floating top, never under it.
+        let p = st.at == null ? landPlan(slots, i, this.listH, minTop, minTop, this.listH / 4) : null;
+        if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
+        const lift = p.lift ?? 0;
+        this.landed = { key: rows[i]?.key ?? null, ...p };
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(p.j, p.how); cx.notify(); });
+        cx.timer.after(48, (cx) => {
+          if (lift > 0) { this.landLift = lift; this.fitKey = null; }
+          this.scroll.scroll_to_item(p.j, p.how);
+          cx.notify();
+        });
+        if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
@@ -5984,9 +6006,12 @@ export default class Threads extends View {
       }
       // A plain row keeps the slot its Markdown measured, which is taller: it sits at the
       // slot's foot, so its end is next to the rows below it.
+      const fl = this.flash && x && (rowTurnKey(x) ?? x.key) === this.flash.key ? this.flash : null;
       out.push(v_flex().w_full().h(h).overflow_hidden()
         .when(Boolean(held), (el) => el.justify_end())
         .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
+        .when(Boolean(fl), (el) => el.relative().child(div().id(`th-flash-${fl.n}-${x.key}`).absolute().top(0).left(0).size_full()
+          .bg(alpha(t.accent, FLASH.ALPHA)).opacity(fl.on ? 1 : 0).transition("opacity", { duration: FLASH.FADE, easing: "ease-out" })))
         .child(body));
     }
     return out;
@@ -7323,13 +7348,24 @@ export default class Threads extends View {
   }
   // A click on a tick (or its card) brings the turn level with the tick, where the eyes are
   // (landPlan): its first line about the tick's height, never under the floating top.
+  // The flash on a turn a jump landed on: a tint of accent over its items (FLASH.ALPHA), drawn
+  // at full strength once the scroll is done, then faded out by Herdr itself (transition on
+  // opacity, FLASH.FADE ms), then dropped. No rows change and no timer redraws the fade.
+  flashTurn(key, cx) {
+    if (!key) return;
+    const n = (this.flashN ?? 0) + 1;
+    this.flashN = n;
+    cx.timer.after(FLASH.AFTER, (cx) => { if (this.flashN === n) { this.flash = { key, on: true, n }; cx.notify(); } });
+    cx.timer.after(FLASH.AFTER + 40, (cx) => { if (this.flashN === n && this.flash) { this.flash = { ...this.flash, on: false }; cx.notify(); } });
+    cx.timer.after(FLASH.AFTER + 40 + FLASH.FADE + 60, (cx) => { if (this.flashN === n) { this.flash = null; cx.notify(); } });
+  }
   railJump(key, cx) {
     const y = this.railTickY(key);
     this.toList();
     this.sel = key;
     this.follow = false;
     this.toBottom = false;
-    this.scrollTo = { key, how: "head", ...(y == null ? {} : { at: Math.max(0, y - ROW.PAD_T - 10) }) };
+    this.scrollTo = { key, how: "head", flash: true, ...(y == null ? {} : { at: Math.max(0, y - ROW.PAD_T - 10) }) };
     cx.notify();
   }
   // A drawn tick's middle, in px down the list's box: the rail's ticks are centred in it,

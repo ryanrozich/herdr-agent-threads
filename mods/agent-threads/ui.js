@@ -1715,6 +1715,22 @@ export function landPlan(slots, i, listH, want, minTop = 0, maxY = listH) {
   for (const o of opts) if (ok(o.y) && (!best || Math.abs(o.y - want) < Math.abs(best.y - want))) best = o;
   return best ?? opts[0];
 }
+// Where to scroll so item i's top is want px down a list that can only put an item's top at
+// its top edge: the nearest earlier item k whose top is at least want above item i's, at the
+// top, then lift px more. The list keeps its offset in px, so the view asks for the scroll
+// with lift px added to its first row for one frame and then takes them away: everything
+// moves up by lift and item i lands at want, with the end of the item above it showing over
+// it, as a scroll by hand would show it. When everything above item i is shorter than want,
+// the list's start is at the top and item i is as low as it can be. { j, how, y, lift }: y
+// is where item i's top lands.
+export function landExact(slots, i, want) {
+  let y = 0;
+  for (let k = i; k >= 0; k--) {
+    if (k < i) y += slots[k] ?? 0;
+    if (y >= want) return { j: k, how: "top", y: want, lift: y - want };
+  }
+  return { j: 0, how: "top", y, lift: 0 };
+}
 // The rail shows only in a pane that holds a whole Comfortable reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
 // line, and the rail gives it the room, as Codex hides its side rail. 549 px at 14 px.

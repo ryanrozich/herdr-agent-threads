@@ -2403,7 +2403,7 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   // Open, the note goes to the answer.
   v.goToAnswer(cut);
   expect(v.sel).toBe("0:2");
-  expect(v.scrollTo).toEqual({ key: "0:2", how: "center" });
+  expect(v.scrollTo).toEqual({ key: "0:2", how: "center", flash: true });
   const listed = (q) => { v.query = q; return v.rows().filter((r) => r.kind === "turn").map((r) => r.turn.n); };
   // The answer's words list the row cut off, and its words list the answer.
   expect(listed("marine mammal")).toEqual([1, 2]);
@@ -2587,7 +2587,13 @@ test("a second press goes on to a place far down the turn, under a line that say
   cx.flush();
   expect(scrolled.length).toBe(2);
   expect(scrolled[0][0]).toBeGreaterThan(line);
-  expect(scrolled[1]).toEqual([line, "top"]);
+  // The line's top just under the floating top, never under it: an earlier item at the top,
+  // lifted by the rest for one frame (landExact).
+  const minTop = v.floating() ? 32 : 0;
+  expect(v.landed).toMatchObject({ key: `resume:${a}`, y: minTop });
+  const sl = v.slotsMemo;
+  expect(scrolled[1]).toEqual([v.landed.j, "top"]);
+  expect(sl.slice(v.landed.j, line).reduce((x, n) => x + n, 0) - v.landed.lift).toBe(minTop);
   draw(v, cx);
 });
 
@@ -5965,7 +5971,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.railJump(ks[0], cx);
   expect(v.sel).toBe(ks[0]);
   expect(v.follow).toBe(false);
-  expect(v.scrollTo).toEqual({ key: ks[0], how: "head", at: Math.max(0, tickY - 18) });
+  expect(v.scrollTo).toEqual({ key: ks[0], how: "head", flash: true, at: Math.max(0, tickY - 18) });
   // A search keeps every tick and dims the ones it leaves out.
   const word = v.findTurn(ks[0]).prompt.split(/\s+/).find((w) => w.length > 5);
   v.query = word;
@@ -6641,7 +6647,11 @@ test("a scroll to a closed turn with pasted images lands on its tiles, the item 
     cx.timers = [];
     draw(v, cx);
     cx.flush();
-    expect(scrolled.at(-1)).toEqual([tiles, "top"]);
+    // The tiles' top just under the floating top (landExact when no earlier item fits).
+    const minTop = v.floating() ? 32 : 0;
+    expect(v.landed).toMatchObject({ key: `imgs:${key}`, y: minTop });
+    expect(scrolled.at(-1)).toEqual([v.landed.j, "top"]);
+    expect(v.slotsMemo.slice(v.landed.j, tiles).reduce((x, n) => x + n, 0) - (v.landed.lift ?? 0)).toBe(minTop);
   }
 });
 
@@ -6852,6 +6862,75 @@ test("a rail click lands the turn level with its tick, clear of the floating top
   expect(v.railShown()).toBe(true);
 });
 
+// The owner's fault on PR 73, 16 Nov: a click on a tick whose turn had a tall turn above it,
+// and was itself taller than the pane, put the turn at the very top with its first lines
+// under the top row. The list can only put an item's top at its top edge, and no earlier item
+// started near the tick; the turn now lands level with it (landExact, one frame of lift).
+test("a rail click lands a tall turn level with its tick when the turn above it is tall too", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = 675;
+  v.listH = 1000;
+  draw(v, cx);
+  const ks = keys();
+  const mid = ks[Math.floor(ks.length / 2)];
+  const prev = ks[ks.indexOf(mid) - 1];
+  // Both turns are long: a 30-line prompt each, and the one above with a long reply.
+  for (const k of [prev, mid]) {
+    const turn = v.findTurn(k);
+    turn.prompt = Array.from({ length: 30 }, (_, i) => `line ${i + 1} of the long paste about the checkout total`).join("\n");
+    turn.shapeKey = null;
+  }
+  v.rowsKey = null;
+  draw(v, cx);
+  let rows = v.rows();
+  let slots = v.slotsMemo;
+  const head = rows.findIndex((r) => r.key === mid);
+  const want = Math.round(Math.max(32, v.railTickY(mid) - 8 - 10));
+  // The case: the item above is taller than the room over the tick, and the turn is taller
+  // than the pane, so no item's top lands within a line of the tick.
+  expect(slots[head - 1]).toBeGreaterThan(want + 22);
+  expect(slots[head]).toBeGreaterThan(1000 - want);
+  const scrolled = [];
+  v.scroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  cx.timers = [];
+  v.railJump(mid, cx);
+  draw(v, cx);
+  expect(v.landed).toMatchObject({ key: mid, y: want, how: "top" });
+  const { j, lift } = v.landed;
+  expect(j).toBe(head - 1);
+  expect(lift).toBe(slots[head - 1] - want);
+  // The scroll to the earlier item comes with its lift on the first row, for that frame.
+  const first = slots[0];
+  cx.flush(48);
+  expect(scrolled.at(-1)).toEqual([j, "top"]);
+  expect(v.landLift).toBe(lift);
+  draw(v, cx);
+  expect(v.slotsMemo[0]).toBe(first + lift);
+  // The list kept its offset in px (top of item j plus lift): with the lift gone, the turn's
+  // top is want px down, the end of the turn above over it.
+  cx.flush(120);
+  expect(v.landLift).toBe(0);
+  draw(v, cx);
+  rows = v.rows();
+  slots = v.slotsMemo;
+  expect(slots[0]).toBe(first);
+  const offset = slots.slice(0, j).reduce((x, n) => x + n, 0) + lift;
+  const top = slots.slice(0, head).reduce((x, n) => x + n, 0);
+  expect(top - offset).toBe(want);
+});
+
+test("landExact: the nearest earlier item at least want above, lifted by the rest", async () => {
+  const { landExact } = await import("../mods/agent-threads/ui.js");
+  // Item 3 to 300 px down: item 2 (40) is short of it, item 1 (40 + 600) past it by 340.
+  expect(landExact([100, 600, 40, 900], 3, 300)).toEqual({ j: 1, how: "top", y: 300, lift: 340 });
+  // An exact fit needs no lift.
+  expect(landExact([100, 260, 40, 900], 3, 300)).toEqual({ j: 1, how: "top", y: 300, lift: 0 });
+  // Want 0: the item itself at the top.
+  expect(landExact([100, 600], 1, 0)).toEqual({ j: 1, how: "top", y: 0, lift: 0 });
+  // Everything above is shorter than want: the list's start at the top.
+  expect(landExact([50, 60, 900], 2, 300)).toEqual({ j: 0, how: "top", y: 110, lift: 0 });
+});
+
 test("Rail side lists Left on the left and Right on the right", async () => {
   const { v } = await pinPane("--extra", "2");
   rec = [];
@@ -6859,4 +6938,55 @@ test("Rail side lists Left on the left and Right on the right", async () => {
   const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
   rec = null;
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
+});
+
+// The owner's idea, 16 Nov: after a jump, the pair landed on gets a soft tint that fades out
+// fast, to draw the eye to it. It changes no row and redraws nothing for the fade: Herdr runs
+// the opacity transition itself.
+test("a jump flashes the turn it lands on: an accent tint on its items, faded by a transition, then gone", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "4");
+  draw(v, cx);
+  const ks = keys();
+  const key = ks[1];
+  v.open = new Set([key]);
+  v.rowsKey = null;
+  draw(v, cx);
+  v.scroll = { scroll_to_item() {}, scroll_to_bottom() {} };
+  const rowsKey = v.rowsKey;
+  cx.timers = [];
+  v.railJump(key, cx);
+  draw(v, cx);
+  // Nothing before the scroll is done.
+  expect(v.flash ?? null).toBe(null);
+  const rows = v.rows();
+  const mine = rows.map((r, i) => [r, i]).filter(([r]) => r.turn && `${r.si}:${r.turn.n}` === key).map(([, i]) => i);
+  expect(mine.length).toBeGreaterThan(3); // an open turn: several items
+  const layers = () => {
+    rec = [];
+    v.listItems(theme, rows, rows.map(() => 100), { start: 0, end: rows.length }, true, false);
+    const c = rec; rec = null;
+    return c.map((e, i) => [e, i]).filter(([e]) => e[0] === "id" && String(e[1]).startsWith("th-flash-")).map(([e, i]) => ({ id: e[1], calls: c.slice(i, i + 12) }));
+  };
+  cx.flush(140);
+  expect(v.flash).toMatchObject({ key, on: true });
+  let ls = layers();
+  // One layer per item of that turn, and none on the others.
+  expect(ls.length).toBe(mine.length);
+  for (const l of ls) {
+    expect(l.calls).toContainEqual(["bg", alphaForTest(theme.accent, 0.14)]);
+    expect(l.calls).toContainEqual(["opacity", 1]);
+    expect(l.calls).toContainEqual(["transition", "opacity", { duration: 600, easing: "ease-out" }]);
+  }
+  cx.flush(180);
+  expect(v.flash.on).toBe(false);
+  ls = layers();
+  for (const l of ls) expect(l.calls).toContainEqual(["opacity", 0]);
+  cx.flush(900);
+  expect(v.flash).toBe(null);
+  expect(layers()).toHaveLength(0);
+  // The rows were never rebuilt for it.
+  expect(v.rowsKey).toBe(rowsKey);
+  // A pin return, #n in the search and Go to that reply flash too; a plain move does not.
+  v.action("prev", cx);
+  expect(v.scrollTo?.flash).toBeFalsy();
 });
