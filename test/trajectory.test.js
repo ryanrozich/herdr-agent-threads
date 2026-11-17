@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
-import { trajectory } from "../mods/agent-threads/core/trajectory.js";
+import { trajectory, trajectories } from "../mods/agent-threads/core/trajectory.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -74,7 +74,10 @@ for (const [name, read] of AGENTS) {
   test(`trajectory: ${name}'s session folds into turns, step groups and cells, as the golden file has it`, () => {
     const s = read();
     expect(s.turns.length).toBeGreaterThan(0);
-    const got = s.turns.map((t) => trajectory(s, t));
+    const got = trajectories(s);
+    // Each turn has its stable id, and no two share one.
+    expect(new Set(got.map((t) => t.id)).size).toBe(got.length);
+    expect(got.every((t) => typeof t.id === "string" && t.id.split("|").length === 3)).toBe(true);
     // Every cell has a start and an end, a number or null; a tool's result is joined by its id.
     for (const t of got) {
       expect(t.groups[0]).toMatchObject({ title: "Message", cells: [{ kind: "user" }] });
@@ -99,4 +102,32 @@ test("trajectory: a Claude Code subagent call carries its run, joined by the cal
   expect(sub.length).toBeGreaterThan(0);
   expect(sub.some((c) => c.subagent.agent && c.subagent.agent !== c.call && c.subagent.state)).toBe(true);
   for (const c of sub) expect(c.subagent.steps).toBeNull();
+});
+
+test("stable ids: a session read again from the top, or whose tail is rewritten, gives every turn the id it had", () => {
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const turn = (sec, text, answer) => [
+    { k: "p", o: "human", t: text, ts: ts(sec) },
+    { k: "t", t: answer },
+    { k: "s", ts: ts(sec + 1) },
+  ];
+  // Two turns with the same prompt in the same second (a repeat) count apart.
+  const events = [...turn(1, "Fix the cart total", "Done."), ...turn(3, "Run the tests", "All pass."),
+    ...turn(5, "again", "One."), ...turn(5, "again", "Two."), ...turn(8, "Ship it", "Shipped.")];
+  const read = (evs) => { const s = newSession("s", "f"); for (const e of evs) apply(s, e); return s; };
+  const ids = (s) => trajectories(s).map((t) => `${t.n} ${t.id}`);
+  const whole = read(events);
+  expect(whole.turns.length).toBe(5);
+  const first = ids(whole);
+  expect(first[2].split("|")[2]).toBe("1");
+  expect(first[3].split("|")[2]).toBe("2");
+  // Read again from the top.
+  expect(ids(read(events))).toEqual(first);
+  // The tail rewritten while it streams: two turns settled, the rest dropped and read again
+  // (rewindTail, as for OpenCode), first cut short and then whole.
+  const s = read([...events.slice(0, 6), { k: "settle" }]);
+  for (const e of events.slice(6, 9)) apply(s, e);
+  rewindTail(s);
+  for (const e of events.slice(6)) apply(s, e);
+  expect(ids(s)).toEqual(first);
 });
