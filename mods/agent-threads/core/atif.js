@@ -98,15 +98,21 @@ function turnSteps(turn, tr, next, results) {
     extra: clean({ ...base, sender: turn.agent && turn.sender ? clean({ ...turn.sender }) ?? undefined : undefined, images: turn.images?.length || undefined }),
   }));
   steps[0].message = prompt.text ?? "";
+  // The step the last group became, while calls with no text before them may still join it:
+  // the panel keeps subagent calls in a group apart from the commands around them, but they
+  // came from the same model reply, so they are one step here.
+  let open = null;
   for (const g of groups) {
     const msg = g.cells.find((c) => c.kind === "message" || c.kind === "context");
     const tools = g.cells.filter((c) => c.kind === "tool");
     const more = g.cells.find((c) => c.kind === "more");
-    const stepId = next + steps.length;
-    const toolCalls = [];
-    const res = [];
+    const join = open && !msg && tools.length && g.title !== "Update";
+    const stepId = join ? open.st.step_id : next + steps.length;
+    const toolCalls = join ? open.toolCalls : [];
+    const res = join ? open.res : [];
+    const skip = join ? open.toolCalls.length : 0;
     tools.forEach((c, i) => {
-      const id = c.call ?? `${tr.id ?? turn.n}#${stepId}.${i + 1}`;
+      const id = c.call ?? `${tr.id ?? turn.n}#${stepId}.${skip + i + 1}`;
       const got = c.call ? results?.get(c.call) : null;
       const args = got?.args && typeof got.args === "object" && !Array.isArray(got.args) ? got.args : null;
       const unread = results && !args ? (got?.unread ? "not JSON" : "not read") : undefined;
@@ -126,13 +132,24 @@ function turnSteps(turn, tr, next, results) {
         }),
       }));
     });
+    if (join) {
+      const st = open.st;
+      st.timestamp ??= iso(tools.find((c) => c.start != null)?.start);
+      if (st.timestamp === undefined) delete st.timestamp;
+      st.tool_calls = toolCalls;
+      st.observation = res.length ? { results: res } : undefined;
+      if (!st.observation) delete st.observation;
+      if (more?.count) st.extra = { ...st.extra, calls_not_listed: (st.extra?.calls_not_listed ?? 0) + more.count };
+      continue;
+    }
     const start = msg?.start ?? tools.find((c) => c.start != null)?.start;
-    agentStep({ timestamp: iso(start), message: msg?.text, tool_calls: toolCalls, results: res }, {
+    const st = agentStep({ timestamp: iso(start), message: msg?.text, tool_calls: toolCalls, results: res }, {
       kind: g.title === "Update" ? "background_update" : undefined,
       end_ts: iso(msg?.end),
       cut: msg?.cut ? STEP_TEXT : undefined,
       calls_not_listed: more?.count,
     });
+    open = g.title === "Update" ? null : { st, toolCalls, res };
   }
   // The turn's tokens, time and ending on its last agent step.
   const last = steps.length > 1 ? steps[steps.length - 1] : null;
@@ -180,7 +197,8 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
   return clean({
     schema_version: ATIF_VERSION,
     session_id: id === undefined ? s.id ?? undefined : id ?? undefined,
-    trajectory_id: trajectoryId,
+    // A root with nested subagents names itself too, as Harbor's does.
+    trajectory_id: trajectoryId ?? (subs.length ? (id === undefined ? s.id ?? undefined : id ?? undefined) : undefined),
     agent: clean({ name: AGENT_NAMES[agent] ?? agent, version, model_name: model ?? undefined, extra: { reader: "agent-threads" } }),
     steps,
     notes: results
@@ -227,6 +245,17 @@ async function main(argv) {
       const n = fs.readSync(fd, b, 0, b.length, 0);
       const l = b.subarray(0, n).toString("utf8").split("\n")[0];
       return JSON.parse(l);
+    } catch { return null; } finally { if (fd != null) fs.closeSync(fd); }
+  };
+
+  // Claude Code writes its version on each conversation line: the first one in the first 256 KB.
+  const claudeVersion = (f) => {
+    let fd = null;
+    try {
+      fd = fs.openSync(f, "r");
+      const b = Buffer.alloc(262144);
+      const n = fs.readSync(fd, b, 0, b.length, 0);
+      return b.subarray(0, n).toString("utf8").match(/"version":"([0-9][0-9A-Za-z.+-]{0,39})"/)?.[1] ?? null;
     } catch { return null; } finally { if (fd != null) fs.closeSync(fd); }
   };
 
@@ -321,6 +350,7 @@ async function main(argv) {
     const meta = agent === "codex" ? head(path) : null;
     const thread = meta?.type === "session_meta" && typeof meta.payload?.id === "string" ? meta.payload.id : null;
     const root = opts.root ?? (agent === "codex" ? thread : s.id) ?? s.id;
+    const version = agent === "codex" ? meta?.payload?.cli_version : agent === "claude" ? claudeVersion(path) : null;
     let kids = null;
     for (const tr of trajectories(s)) for (const g of tr.groups) for (const c of g.cells) {
       if (c.kind !== "tool" || !c.call) continue;
@@ -342,7 +372,7 @@ async function main(argv) {
       if (t) r.sub = t; else r.subMissing = true;
       results.set(c.call, r);
     }
-    return atif(s, { agent, results, id: opts.id, trajectoryId: opts.trajectoryId });
+    return atif(s, { agent, results, id: opts.id ?? root, trajectoryId: opts.trajectoryId, version: typeof version === "string" && version ? version.slice(0, 40) : "unknown" });
   };
 
   if (agent !== "opencode" && !fs.existsSync(file)) { console.error("no transcript"); return 3; }
