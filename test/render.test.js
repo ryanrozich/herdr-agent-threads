@@ -6778,6 +6778,69 @@ test("draw time: a session of 2,000 turns draws well inside Herdr's time, and re
   expect(rebuild).toBeLessThan(25);
 });
 
+test("a reply's table may run wider than the reading line, centred on it, up to the pane less its gutters, open or closed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 1400;
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const key = keys.at(-2);
+  const turn = v.findTurn(key);
+  const table = [
+    "| Region | Service | Current | Target | Owner and rotation | Notes for the change window |",
+    "|---|---|---|---|---|---|",
+    "| us-east-1 | checkout-api | 4.12.3 | 4.13.0 | Payments platform, rotation A | Drain traffic through the canary pool first |",
+  ].join("\n");
+  turn.after = [`Here is the plan:\n\n${table}\n\nWhich region first?`];
+  turn.shapeKey = null;
+  v.rowsKey = null;
+  draw(v, cx);
+  const extraOf = (row) => v.tableExtra(row);
+  // Closed: the turn's reply draws its table as a block of its own, wider by extra, half of
+  // it on each side.
+  let rows = v.rows();
+  const closed = rows.find((r) => r.kind === "turn" && r.key === key);
+  const extra = extraOf(closed);
+  expect(v.pw()).toBeGreaterThan(v.width);
+  expect(extra).toBeGreaterThan(0);
+  expect(extra % 2).toBe(0);
+  // Never past the pane: half fits beside the column on each side, less the gutter.
+  // Clear of the rail's lane too, on both sides.
+  const lane = v.railShown() ? 32 : 0;
+  expect(v.railShown()).toBe(true);
+  expect(extra / 2).toBeLessThanOrEqual(v.colLeft() - lane);
+  expect(v.colLeft() + ROW.PAD_X + v.prose() + extra / 2).toBeLessThanOrEqual(v.pw() - ROW.PAD_X - lane);
+  let at = rows.indexOf(closed);
+  rec = [];
+  v.listItems(theme, rows, rows.map(() => 400), { start: at, end: at + 1 }, true, false);
+  let drawn = rec;
+  rec = null;
+  expect(drawn).toContainEqual(["w", v.prose() + extra]);
+  expect(drawn).toContainEqual(["ml", -extra / 2]);
+  // The item is wider by extra and padded by half on each side, so its other parts stay put.
+  expect(drawn).toContainEqual(["max_w", v.width + extra]);
+  expect(drawn).toContainEqual(["px", extra / 2]);
+  // Open: the table is an item of its own, drawn the same way.
+  v.open.add(key);
+  v.rowsKey = null;
+  draw(v, cx);
+  rows = v.rows();
+  const md = rows.filter((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`));
+  expect(md.map((r) => Boolean(r.table))).toEqual([false, true, false]);
+  expect(md[1].src).toBe(table);
+  expect(extraOf(md[1])).toBe(extra);
+  expect(extraOf(md[0])).toBe(0);
+  at = rows.indexOf(md[1]);
+  rec = [];
+  v.listItems(theme, rows, rows.map(() => 400), { start: at, end: at + 1 }, true, false);
+  drawn = rec;
+  rec = null;
+  expect(drawn).toContainEqual(["w", v.prose() + extra]);
+  expect(v.partSig(md[1])).toContain(`|t${extra}`);
+  // A pane no wider than the column leaves the table on the reading line.
+  v.paneW = v.width;
+  expect(extraOf(md[1])).toBe(0);
+});
+
 test("the rail's window: 9 px a tick in a long session, at most 540 px, following the list, faded ends, dots for a pin or the running turn past an end", async () => {
   const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
   v.listH = 900;

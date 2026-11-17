@@ -8,7 +8,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
@@ -953,6 +953,23 @@ test("level 3 paths: relative to the working folder inside it, from ~ elsewhere,
   // A folder given with a trailing slash, and a root or empty folder, which shortens nothing.
   expect(shortPaths("/home/dev/acme-web/a.ts", "/home/dev/acme-web/", home)).toBe("a.ts");
   expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
+});
+
+test("splitTables and tableNeed: a table is its own part, and wants each column as wide as its longest cell, up to 40 characters", () => {
+  const md = "Intro.\n\n| Region | Notes |\n|---|:--:|\n| us | short |\n| eu | a much longer note |\n\nAfter the table.";
+  expect(splitTables(md)).toEqual([
+    { text: "Intro.", table: false },
+    { text: "| Region | Notes |\n|---|:--:|\n| us | short |\n| eu | a much longer note |", table: true },
+    { text: "After the table.", table: false },
+  ]);
+  // Pipes in prose, or a pipe row with no rule under it, are not a table.
+  expect(splitTables("a | b")).toEqual([{ text: "a | b", table: false }]);
+  expect(splitTables("| a |\n| b |")).toEqual([{ text: "| a |\n| b |", table: false }]);
+  expect(tableCells(md.split("\n\n")[1])).toEqual([["Region", "Notes"], ["us", "short"], ["eu", "a much longer note"]]);
+  // "Region" 6 and "a much longer note" 18 characters, at 8 px, plus padding per column.
+  expect(tableNeed(md.split("\n\n")[1], 8)).toBe(6 * 8 + TABLE_CELL_PAD + 18 * 8 + TABLE_CELL_PAD);
+  // A long cell counts 40 characters; the rest wraps.
+  expect(tableNeed(`| a |\n|---|\n| ${"x".repeat(90)} |`, 10)).toBe(TABLE_COL_CHARS * 10 + TABLE_CELL_PAD);
 });
 
 test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
