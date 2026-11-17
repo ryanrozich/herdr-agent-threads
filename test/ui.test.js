@@ -7,8 +7,8 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, landPlan, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
@@ -871,12 +871,14 @@ test("level 3 helpers: a call's time, its output's lines and box height, and its
   const big = Array.from({ length: 1000 }, () => "y").join("\n");
   expect(outLines(big).lines.length).toBe(OUT.MAX);
   expect(outLines(big).cut).toBe(true);
-  // Heights: padding, border, margins, one line at least, at most OUT.SHOW lines in view, and
-  // the dim line when the output is longer than the box holds.
+  // Heights: padding, border, margins, one row at least, and the wrapped rows in view (OUT.SHOW
+  // until Show all, which is its own row now, as is the viewer link for a longer output).
   expect(outHeight(outLines(""))).toBe(8 * 2 + 2 + 16 + 4);
   expect(outHeight(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
-  expect(outHeight(outLines(big))).toBe(8 * 2 + 2 + 12 * 16 + 4 + 22);
+  expect(outHeight(outLines(big))).toBe(8 * 2 + 2 + 12 * 16 + 4);
   expect(outHeight(outLines("a\nb"))).toBe(8 * 2 + 2 + 2 * 16 + 4);
+  expect(outHeight(box, 30)).toBe(8 * 2 + 2 + 30 * 16 + 4);
+  expect(outHeight(outLines(""), 0)).toBe(8 * 2 + 2 + 16 + 4);
   // The language an output is coloured as.
   expect(outLang('{"a": [1, 2]}')).toBe("json");
   expect(outLang("{not json")).toBe(null);
@@ -955,21 +957,6 @@ test("level 3 paths: relative to the working folder inside it, from ~ elsewhere,
   expect(shortPaths("/etc/hosts", "/", "")).toBe("/etc/hosts");
 });
 
-test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
-  const { railDay, railSwell, flattenMd, RAIL } = await import("../mods/agent-threads/ui.js");
-  const now = new Date(2026, 10, 16, 12).getTime();
-  expect(railDay(now, now)).toBe("Today");
-  expect(railDay(now - 86400000, now)).toBe("Yesterday");
-  expect(railDay(new Date(2026, 10, 13, 11, 20).getTime(), now)).toBe("Fri 13 Nov");
-  expect(railDay(new Date(2025, 11, 28, 14, 5).getTime(), now)).toBe("Sun 28 Dec 2025");
-  expect(railDay(null, now)).toBe(null);
-  expect([0, 9, 18, 27, 36, 50].map((d) => railSwell(10, RAIL.PEAK, d))).toEqual([24, 18, 13.5, 11, 10, 10]);
-  expect(railSwell(8, RAIL.PEAK_SMALL, 0)).toBe(16);
-  expect(RAIL.CARD_W).toBe(300);
-  expect(flattenMd("Here:\n\n| Step | State | Takes |\n|---|:--:|---|\n| build | **ok** | 2s |\n\nDone.")).toBe("Here: Step · State · Takes · build · ok · 2s Done.");
-  expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
-});
-
 test("splitTables and tableNeed: a table is its own part, and wants each column as wide as its longest cell, up to 40 characters", () => {
   const md = "Intro.\n\n| Region | Notes |\n|---|:--:|\n| us | short |\n| eu | a much longer note |\n\nAfter the table.";
   expect(splitTables(md)).toEqual([
@@ -987,6 +974,21 @@ test("splitTables and tableNeed: a table is its own part, and wants each column 
   expect(tableNeed(`| a |\n|---|\n| ${"x".repeat(90)} |`, 10)).toBe(TABLE_COL_CHARS * 10 + TABLE_CELL_PAD);
 });
 
+test("round 7: the rail card's day, the peak's widths, and a table flattened for the card", async () => {
+  const { railDay, railSwell, flattenMd, RAIL } = await import("../mods/agent-threads/ui.js");
+  const now = new Date(2026, 10, 16, 12).getTime();
+  expect(railDay(now, now)).toBe("Today");
+  expect(railDay(now - 86400000, now)).toBe("Yesterday");
+  expect(railDay(new Date(2026, 10, 13, 11, 20).getTime(), now)).toBe("Fri 13 Nov");
+  expect(railDay(new Date(2025, 11, 28, 14, 5).getTime(), now)).toBe("Sun 28 Dec 2025");
+  expect(railDay(null, now)).toBe(null);
+  expect([0, 9, 18, 27, 36, 50].map((d) => railSwell(10, RAIL.PEAK, d))).toEqual([24, 18, 13.5, 11, 10, 10]);
+  expect(railSwell(8, RAIL.PEAK_SMALL, 0)).toBe(16);
+  expect(RAIL.CARD_W).toBe(300);
+  expect(flattenMd("Here:\n\n| Step | State | Takes |\n|---|:--:|---|\n| build | **ok** | 2s |\n\nDone.")).toBe("Here: Step · State · Takes · build · ok · 2s Done.");
+  expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
+});
+
 test("landPlan: an earlier item at the top puts an item lower; the option nearest want, clear of minTop", () => {
   const slots = [100, 40, 20, 300, 80];
   // i 3: at the top (y 0), under item 2 (20), 1 (60), 0 (160), or centred in 600 (150).
@@ -998,4 +1000,21 @@ test("landPlan: an earlier item at the top puts an item lower; the option neares
   expect(landPlan([500, 300], 1, 600, 32, 32, 140)).toEqual({ j: 1, how: "top", y: 0 });
   // Room for some of the item under it: 560 down in a 600 px list leaves only 40.
   expect(landPlan([560, 100], 1, 600, 560, 32).y).not.toBe(560);
+});
+
+test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and still fits them", () => {
+  expect(MONO_EM).toBeGreaterThan(0.6);
+  expect(wrapCap("bun test", 20, 6)).toEqual({ text: "bun test", rows: 1, cut: false });
+  expect(wrapCap("", 20, 6)).toEqual({ text: "", rows: 1, cut: false });
+  const long = "x".repeat(100);
+  const a = wrapCap(long, 20, 3);
+  expect(a).toMatchObject({ rows: 3, cut: true });
+  expect(a.text.endsWith("…")).toBe(true);
+  expect(codeRows(a.text, 20)).toBeLessThanOrEqual(3);
+  // Lines that fill the rows exactly leave room for the ellipsis on the last.
+  const b = wrapCap(`${"a".repeat(20)}\n${"b".repeat(20)}\nc`, 20, 2);
+  expect(codeRows(b.text, 20)).toBe(2);
+  expect(b.text.startsWith("a".repeat(20))).toBe(true);
+  // Words wrap as codeRows counts them.
+  expect(wrapCap("aaaa bbbb cccc dddd eeee ffff gggg", 10, 2).text).toBe("aaaa bbbb cccc dddd…");
 });

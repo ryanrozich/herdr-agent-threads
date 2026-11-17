@@ -503,6 +503,33 @@ export function fencedBlock(block) {
   return { lang: m[2].trim().split(/\s+/)[0] || "", text: m[3] };
 }
 
+// A mono character's width in ems, for counting wrapped rows of code, a tool's output and
+// a call's command. Most terminal fonts are 0.6 em; a little over, so a count runs long
+// (a spare blank row) rather than short (a cut last row).
+export const MONO_EM = 0.62;
+
+// Text cut to `max` wrapped rows of `per` characters (codeRows' wrapping): the text, its
+// rows (at most max), and whether it was cut. A cut text ends in an ellipsis.
+export function wrapCap(text, per, max) {
+  const src = String(text ?? "");
+  const all = codeRows(src, per);
+  if (all <= max) return { text: src, rows: Math.max(1, all), cut: false };
+  const p = Math.max(8, Math.floor(per));
+  const out = [];
+  let used = 0;
+  for (const line of src.split("\n")) {
+    const n = codeRows(line, p);
+    if (used + n <= max) { out.push(line); used += n; if (used === max) break; continue; }
+    const room = (max - used) * p - 1;
+    if (room > 0) out.push(line.slice(0, room));
+    used = max;
+    break;
+  }
+  let kept = out.join("\n").replace(/\s+$/, "");
+  while (kept && codeRows(`${kept}…`, p) > max) kept = kept.slice(0, -1).replace(/\s+$/, "");
+  return { text: `${kept}…`, rows: max, cut: true };
+}
+
 export function codeRows(text, per) {
   const p = Math.max(8, Math.floor(per));
   let rows = 0;
@@ -1579,8 +1606,6 @@ export function focusTarget(panes, terminal, myTab) {
 // anywhere in a box counts (a list item takes one click handler, so click() tells the
 // icons apart by the press position). STRIP_CHAR is an 11.5 px label's character.
 export const ICON_BOX = 22;
-// The info icon on a turn that is not selected: always shown, at this opacity.
-export const INFO_DIM = 0.5;
 export const STRIP_CHAR = 6.6;
 
 // The strip under an open turn's reply: copy and quote from the left, the first glyph on the
@@ -1680,11 +1705,11 @@ export function outLines(out, all = true, lines = 0) {
 // The output box's height: its lines, or one line saying there are none, inside its padding
 // and 1 px border, 2 px above and below, and the Show all row when lines are left out or all
 // of them show.
-// The box shows up to OUT.SHOW lines and scrolls inside past that; under it, a dim line when
-// the output is longer than OUT.MAX lines.
-export function outHeight(box) {
-  const n = Math.max(1, Math.min(OUT.SHOW, box.lines.length));
-  return OUT.PAD * 2 + 2 + n * OUT.LINE + 4 + (box.cut ? OUT.MORE : 0);
+// Lines wrap, and nothing scrolls inside: the box shows `shown` wrapped rows (OUT.SHOW
+// until Show all, which is its own list item).
+export function outHeight(box, shown = Math.min(OUT.SHOW, box.lines.length)) {
+  const n = Math.max(1, Math.min(shown, box.lines.length ? shown : 1));
+  return OUT.PAD * 2 + 2 + n * OUT.LINE + 4;
 }
 // The language a call's output is coloured as, for Herdr's editor, or null for plain text:
 // JSON that parses, a unified diff, or a file read whose path has a known extension (not when
@@ -1762,6 +1787,22 @@ export function landPlan(slots, i, listH, want, minTop = 0, maxY = listH) {
   let best = null;
   for (const o of opts) if (ok(o.y) && (!best || Math.abs(o.y - want) < Math.abs(best.y - want))) best = o;
   return best ?? opts[0];
+}
+// Where to scroll so item i's top is want px down a list that can only put an item's top at
+// its top edge: the nearest earlier item k whose top is at least want above item i's, at the
+// top, then lift px more. The list keeps its offset in px, so the view asks for the scroll
+// with lift px added to its first row for one frame and then takes them away: everything
+// moves up by lift and item i lands at want, with the end of the item above it showing over
+// it, as a scroll by hand would show it. When everything above item i is shorter than want,
+// the list's start is at the top and item i is as low as it can be. { j, how, y, lift }: y
+// is where item i's top lands.
+export function landExact(slots, i, want) {
+  let y = 0;
+  for (let k = i; k >= 0; k--) {
+    if (k < i) y += slots[k] ?? 0;
+    if (y >= want) return { j: k, how: "top", y: want, lift: y - want };
+  }
+  return { j: 0, how: "top", y, lift: 0 };
 }
 // The rail shows only in a pane that holds a whole Comfortable reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
