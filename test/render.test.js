@@ -5075,6 +5075,9 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 });
 
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
+// Drops the queued timers and the marks that say a frame is queued: a timer dropped with its
+// mark still set would never be asked for again, and the rows would stop where they are.
+function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; }
 function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
@@ -5828,9 +5831,10 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
     // The reshaping time a draw gets follows the last draw's cost on the real clock: start
-    // from a quick one, so the counts below do not depend on how busy the machine is.
+    // from a quick one, so the counts below do not depend on how busy the machine is. On a slow
+    // machine the draws above may leave a frame queued: dropTimers drops it with its mark.
     v.frameBase = 0;
-    cx.timers = [];
+    dropTimers(v, cx);
     // A scroll asked for now waits for the reshaping, and a return's wait for the probe
     // (until) starts after it.
     v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
@@ -5865,7 +5869,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(v.scrollTo).toBe(null);
     // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
     v.action("agents", cx);
-    cx.timers = [];
+    dropTimers(v, cx);
     draw(v, cx);
     for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
     expect(shown().some((r) => r.shape.blank)).toBe(true);
