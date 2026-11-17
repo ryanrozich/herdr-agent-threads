@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 9,
   "ts": 1793524802000,
   "origin": "human",
   "prompt": "Which pages still load the old analytics script?",
@@ -67,6 +68,7 @@
  },
  {
   "n": 2,
+  "v": 12,
   "ts": 1793524866000,
   "origin": "human",
   "prompt": "Remove it from all three",

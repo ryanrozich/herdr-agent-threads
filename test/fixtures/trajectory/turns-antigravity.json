@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 12,
   "ts": 1793526000000,
   "origin": "human",
   "prompt": "Why does the search box lose its text when I go back?",
@@ -71,6 +72,7 @@
  },
  {
   "n": 2,
+  "v": 17,
   "ts": 1793526060000,
   "origin": "human",
   "prompt": "Yes, do it",

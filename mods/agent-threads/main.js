@@ -1635,21 +1635,23 @@ export default class Threads extends View {
     const status = this.status();
     const P = this.prefs;
     const sess = this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",");
-    const rest = [
-      [...this.open].join(","), [...this.full].join(","), [...this.lineOpen].join(","), [...this.lineTouched].join(","), [...this.groupOpen].join(","), [...this.groupTouched].join(","), this.filterText(), status,
-      [...this.callOpen].join(","), [...this.callAll].join(","), this.callVer ?? 0,
+    // What the rows depend on besides the sessions: the open and shown parts of each turn
+    // (turnSets, every key starting with its turn's key, which a splice can follow), then the rest.
+    const other = [
+      this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
+    const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
     const key = `${sess}|${rest}`;
     // Rows left with an old shape (SHAPE_MS) are reshaped where they are; the rest stay.
     if (this.rowsKey === key && this.baseRows && this.reshapeDue) {
       this.reshapeDue = false;
       if (!this.reshapeStale(status)) this.rowsKey = null;
     }
-    if (this.rowsKey !== key || !this.baseRows) this.buildStep(status, key, rest);
+    if (this.rowsKey !== key || !this.baseRows) this.buildStep(status, key, rest, other);
     // Only the running turn depends on the selection (one-line row, or the card when
     // selected), and it is always the last item, so moving the selection rebuilds nothing.
     // The running turn's own row: last, or followed by its open steps.
@@ -1703,9 +1705,10 @@ export default class Threads extends View {
   // new ones are all built; a build that only gained turns at the end since its last slice
   // goes on where it stopped. Building every row of a 6,000-turn session in one draw took
   // longer than Herdr's time for a draw, which stopped it every time.
-  buildStep(status, key, rest) {
+  buildStep(status, key, rest, other = null) {
     let job = this.rowJob;
     if (job && job.key !== key) job = job.rest === rest && this.jobGoesOn(job) ? job : null;
+    if (!job && other != null && this.spliceRows(status, key, rest, other)) return;
     if (job) {
       job.key = key;
       // One slice a frame: rows() is asked for more than once in a draw.
@@ -1714,6 +1717,7 @@ export default class Threads extends View {
       this.shapeStart();
       this.shapeLeft = 0;
       this.otherLeft = 0;
+      this.againOpen = false;
       this.reshapeDue = false;
       this.shapeInView(status);
       // Only the newest turns changed (a turn came in, the running one grew, the next piece
@@ -1722,7 +1726,7 @@ export default class Threads extends View {
       const index = from ? new Map(this.baseIndex) : new Map();
       if (from) for (let i = from.row; i < this.baseRows.length; i++) index.delete(this.baseRows[i].key);
       job = this.rowJob = {
-        key, rest, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
+        key, rest, other, sessions: this.sessions.slice(), vers: this.sessions.map((x) => x.version),
         from: from ? { ...from, rows: this.baseRows, railRows: this.railTurns } : null,
         stale: from ? (this.staleRows ?? []).filter((i) => i < from.row) : [],
         sizes: from ? this.baseSizes.slice(0, from.row) : [],
@@ -1736,7 +1740,8 @@ export default class Threads extends View {
     const out = this.buildRows(status, job.from, b0 + this.buildMax());
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
-    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.height(out[i])); job.index.set(out[i].key, i); }
+    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.cachedH.get(i) ?? this.height(out[i])); job.index.set(out[i].key, i); }
+    for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
     const res = this.buildInfo.resume;
     if (res) {
       job.from = { ...res, rows: out, railRows: this.buildRail, own: true };
@@ -1753,7 +1758,8 @@ export default class Threads extends View {
     this.baseIndex = job.index;
     this.staleRows = job.stale;
     this.probeList();
-    this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks };
+    this.rowBuild = { rest, sessions: this.sessions.slice(), lens: this.sessions.map((x) => x.turns.length), vers: this.sessions.map((x) => x.version), multi: this.buildInfo.multi, marks: this.buildInfo.marks,
+      other: job.other ?? null, sets: this.turnSets().map((x) => new Set(x)), callVer: this.callVer ?? 0 };
     this.rowsKey = key;
     this.fitKey = null;
     // The selection is on a turn the list no longer shows: agent turns were hidden, or a
@@ -1842,6 +1848,7 @@ export default class Threads extends View {
     // spent the rest wait as they are, without a look at each.
     const stale = this.staleRows ?? [];
     const order = this.follow ? stale.slice().reverse() : stale;
+    const cg = order.length ? this.closedLookNow() : null;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
       if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft += order.length - k; for (; k < order.length; k++) left.push(order[k]); break; }
@@ -1854,6 +1861,11 @@ export default class Threads extends View {
       const nr = { ...r, shape: sh };
       this.baseRows[i] = nr;
       this.baseSizes[i] = this.height(nr);
+      // A closed turn of one row, shaped at last: kept for the next rebuild (closedCached), as
+      // if the build had shaped it. Most rows of a long session are shaped this way.
+      if (cg && !r.live && !r.last && !r.split && this.open.has(r.key) === false) {
+        (this.turnCache ??= new Map()).set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
+      }
     }
     this.staleRows = left;
     this.probeList();
@@ -1888,6 +1900,9 @@ export default class Threads extends View {
   // built over several frames, each inside Herdr's time for a draw.
   buildRows(status, from = null, until = 0) {
     this.buildInfo = { multi: false, marks: [], resume: null };
+    // Closed turns' rows and sizes from earlier builds (closedCached), for this slice.
+    this.cachedH = new Map();
+    this.cacheNew = [];
     if (this.view === "pinned") { const rows = this.pinnedRows(status); this.buildRail = this.railTurns; return rows; }
     const out = !from ? [] : from.own ? from.rows : from.rows.slice(0, from.row);
     // The rail's turns: every shown turn, with the ones a search leaves out marked.
@@ -1902,6 +1917,9 @@ export default class Threads extends View {
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
     const fromSi = from ? from.si ?? lastSi : 0;
+    // What every closed row depends on besides its own turn; none while a search is on.
+    const cg = this.closedLookNow();
+    if (!from && this.turnCache && this.turnCache.size > 2 * this.sessions.reduce((n, x) => n + x.turns.length, 0) + 100) this.turnCache.clear();
     for (let si = fromSi; si < this.sessions.length; si++) {
       const s = this.sessions[si];
       const first = Boolean(from) && si === fromSi;
@@ -1967,11 +1985,7 @@ export default class Threads extends View {
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
-        const item = { kind: "turn", key, turn, s, si, last, live };
-        if (live) this.liveRows(item, out);
-        else if (this.open.has(key)) this.expanded(item, out);
-        else this.closedRows(item, out);
-        if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
+        this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
       }
       flush();
       // Built from inside a day band: the band's day item, kept, counts its turns again.
@@ -1988,6 +2002,142 @@ export default class Threads extends View {
   // ("wtop", keyed imgs:<turn>), as a running turn's are, so a click on a tile opens the review
   // at that image (a list item has one click handler), and the row follows without its meta
   // line ("split").
+  // One shown turn's rows: running, open or closed, and the wake line under the newest.
+  turnRows(item, ti, out, status, cg) {
+    const { key, turn, s, si, last, live } = item;
+    if (live) this.liveRows(item, out);
+    else if (this.open.has(key)) this.expanded(item, out);
+    else if (cg && !last) this.closedCached(item, out, cg);
+    else this.closedRows(item, out);
+    if (this.waking(s, si, ti, status)) out.push({ kind: "wake", key: `wk:${key}`, turn, s });
+  }
+
+  // The sets that say which parts of each turn are open or shown. Every key in them starts
+  // with its turn's key ("<session>:<number>", "l:" first for an update shown whole).
+  turnSets() { return [this.open, this.full, this.lineOpen, this.lineTouched, this.groupOpen, this.groupTouched, this.callOpen, this.callAll]; }
+
+  // A turn opened or closed, or a part of one (a group, a call, a whole prompt), and nothing
+  // else changed: only that turn's rows are built again and put in place of its old ones.
+  // Building every row walks every turn, 12 ms at 2,000 turns on the rig even with each
+  // closed turn's rows kept (closedCached). Returns false when a full build is needed.
+  spliceRows(status, key, rest, other) {
+    const b = this.rowBuild;
+    const cg = this.closedLookNow();
+    // A cleared rowsKey asks for every row to be built.
+    if (this.rowsKey == null || !b?.sets || b.other !== other || !cg || !this.baseRows?.length || !this.baseIndex) return false;
+    const S = this.sessions;
+    if (S.length !== b.sessions.length) return false;
+    for (let i = 0; i < S.length; i++) if (S[i] !== b.sessions[i] || S[i].version !== b.vers[i] || S[i].turns.length !== b.lens[i]) return false;
+    // The turns whose parts changed. New call details (callVer) change every open turn and
+    // the running one.
+    const keys = new Set();
+    const now = this.turnSets();
+    const turnOf = (k) => { const p = String(k).replace(/^l:/, "").split(":"); return `${p[0]}:${p[1]}`; };
+    for (let i = 0; i < now.length; i++) {
+      for (const k of now[i]) if (!b.sets[i].has(k)) keys.add(turnOf(k));
+      for (const k of b.sets[i]) if (!now[i].has(k)) keys.add(turnOf(k));
+    }
+    // New call details, or interim texts and estimates left out of time in open turns.
+    const again = this.againOpen;
+    this.againOpen = false;
+    if (again) this.otherLeft = 0;
+    if ((this.callVer ?? 0) !== b.callVer || again) {
+      for (const k of this.open) keys.add(k);
+      for (const r of this.baseRows) if (r.live) keys.add(r.turnKey ?? r.key);
+    }
+    // None: new call details with no turn open or running to show them, or the same keys in
+    // another order (a part closed and opened again): nothing to build.
+    if (keys.size > 8) return false;
+    // Each turn's rows: a run of rows that carry it, found from its row (or its image row).
+    const runs = [];
+    for (const k of keys) {
+      const at = this.baseIndex.get(k) ?? this.baseIndex.get(`imgs:${k}`);
+      const r = at != null ? this.baseRows[at] : null;
+      // Not shown (an agent turn while they are hidden): its parts draw nothing.
+      if (!r) { if (this.findTurn(k)) continue; return false; }
+      if (!r.turn || r.si == null || !r.s) return false;
+      let a = at;
+      let z = at;
+      while (a > 0 && this.baseRows[a - 1].turn === r.turn) a--;
+      while (z + 1 < this.baseRows.length && this.baseRows[z + 1].turn === r.turn) z++;
+      runs.push({ k, a, z, r });
+    }
+    runs.sort((x, y) => y.a - x.a);
+    this.shapeStart();
+    const stale = new Set(this.staleRows ?? []);
+    let marks = b.marks;
+    for (const { k, a, z, r } of runs) {
+      const { turn, s, si } = r;
+      const ti = s.turns[turn.n - 1] === turn ? turn.n - 1 : s.turns.indexOf(turn);
+      if (ti < 0) return false;
+      const out = [];
+      this.buildStale = [];
+      this.cachedH = new Map();
+      this.cacheNew = [];
+      this.turnRows({ kind: "turn", key: k, turn, s, si, last: Boolean(r.last), live: Boolean(r.live) }, ti, out, status, cg);
+      const sizes = out.map((x, j) => this.cachedH.get(j) ?? this.height(x));
+      for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => sizes[e.at + j]);
+      const gone = z - a + 1;
+      const d = out.length - gone;
+      for (let i = a; i <= z; i++) this.baseIndex.delete(this.baseRows[i].key);
+      this.baseRows.splice(a, gone, ...out);
+      this.baseSizes.splice(a, gone, ...sizes);
+      // The new rows, and every row after them when the count changed.
+      const to = d === 0 ? a + out.length : this.baseRows.length;
+      for (let i = a; i < to; i++) this.baseIndex.set(this.baseRows[i].key, i);
+      // Rows that wait to be reshaped, and the places a later build can start, move with it.
+      const moved = new Set();
+      for (const i of stale) { if (i < a) moved.add(i); else if (i > z) moved.add(i + d); }
+      for (const i of this.buildStale) moved.add(a + i);
+      stale.clear();
+      for (const i of moved) stale.add(i);
+      if (d) marks = marks.map((m) => (m.row > a || (m.dayRow != null && m.dayRow > a) ? { ...m, row: m.row > a ? m.row + d : m.row, dayRow: m.dayRow != null && m.dayRow > a ? m.dayRow + d : m.dayRow } : m));
+    }
+    this.rowJob = null;
+    this.staleRows = [...stale].sort((x, y) => x - y);
+    this.buildStale = this.staleRows;
+    this.rowBuild = { ...b, rest, marks, sets: now.map((x) => new Set(x)), callVer: this.callVer ?? 0 };
+    this.rowsKey = key;
+    this.fitKey = null;
+    this.probeList();
+    if (this.reselect || this.selHidden()) this.reselectVisible();
+    return true;
+  }
+
+  // A closed turn's rows from the last build that made them, while nothing they depend on
+  // has changed: the turn (its version, turn.v, which the reader moves on every event that
+  // touches it), what every closed row depends on (closedLook), its session's place, and the
+  // probe's measures of its parts (turnMeas). A click that opens one turn, or a new line
+  // in the newest, then builds only the turns that changed, not every row of the session
+  // (step 3 of the session model). Open, running and last turns are always built: they
+  // ask for calls and editors as they build.
+  closedCached(item, out, cg) {
+    const { key, turn, s, si } = item;
+    const sig = this.closedSig(key, turn, si, cg);
+    const tc = (this.turnCache ??= new Map());
+    const c = tc.get(key);
+    // A turn sent back to be shaped again (shapeKey cleared) is built again too.
+    if (c && c.turn === turn && c.s === s && c.sig === sig && c.sizes && turn.shapeKey != null && c.shape === turn.shapeMemo) {
+      for (let j = 0; j < c.rows.length; j++) { this.cachedH.set(out.length, c.sizes[j]); out.push(c.rows[j]); }
+      return;
+    }
+    const at = out.length;
+    this.closedRows(item, out);
+    // A row given an old shape for now is reshaped in place later: not kept.
+    if (this.shapeStale) { tc.delete(key); return; }
+    const e = { turn, s, sig, rows: out.slice(at), sizes: null, at, shape: turn.shapeMemo };
+    tc.set(key, e);
+    this.cacheNew.push(e);
+  }
+  closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.turnMeas?.get(key) ?? 0}`; }
+  // Whether the rows as built can be kept per turn: not while a search, the outline or the
+  // Pinned view shapes them.
+  closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
+  closedLook() {
+    // The pane's width and the rail set how far a wide table may grow (tableExtra).
+    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`;
+  }
+
   closedRows(item, out) {
     const shape = this.shape(item.turn);
     if (this.shapeStale) (this.buildStale ??= []).push(out.length + (shape.thumbs ? 1 : 0));
@@ -4541,7 +4691,8 @@ export default class Threads extends View {
         this.shapeNext = false;
         // Closed rows are reshaped where they are; interim texts and estimates left out of
         // time are in open turns, which a rebuild brings back.
-        if (this.otherLeft) this.rowsKey = null; else this.reshapeDue = true;
+        // Only the open and running turns are built again (spliceRows), or every row if not.
+        if (this.otherLeft) { this.againOpen = true; this.rowsKey = this.rowsKey == null ? null : "again"; } else this.reshapeDue = true;
         cx.notify();
       });
     }
@@ -6106,7 +6257,7 @@ export default class Threads extends View {
     if (was?.sig === sig && was.h === h) return;
     // Every closed row's reply block is measured: a cap under the turns a long session has
     // made the probe measure the same parts again and again.
-    if (this.meas.size > 20000) this.meas.clear();
+    if (this.meas.size > 20000) { this.meas.clear(); this.measEpoch = (this.measEpoch ?? 0) + 1; }
     this.meas.set(key, { sig, h });
     this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key.startsWith("wyou:") ? key.slice(5) : key;
@@ -6115,6 +6266,8 @@ export default class Threads extends View {
     if (r?.key === rowKey) {
       this.baseSizes[i] = this.height(r);
       this.sizesVer = (this.sizesVer ?? 0) + 1;
+      // The turn's kept rows (closedCached) have the old size: built again next time.
+      if (r.turn && r.si != null) { const tk = `${r.si}:${r.turn.n}`; (this.turnMeas ??= new Map()).set(tk, (this.turnMeas.get(tk) ?? 0) + 1); }
     }
     cx.notify();
   }

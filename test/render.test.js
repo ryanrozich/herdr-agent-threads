@@ -7444,6 +7444,98 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
 
+test("a rebuild keeps a closed turn's rows until the turn, its measures or the look change", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  for (let i = 0; i < 40; i++) draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const rowOf = (k) => v.baseRows.find((r) => r.kind === "turn" && r.key === k);
+  const sizeOf = (k) => v.baseSizes[v.baseRows.indexOf(rowOf(k))];
+  const [a, b] = [keys.at(-10), keys.at(-6)];
+  // A closed turn whose reply is Markdown, measured by the probe.
+  const c = keys.slice(-5, -1).find((k) => rowOf(k)?.shape?.md != null);
+  const before = { a: rowOf(a), b: rowOf(b), c: rowOf(c) };
+  expect(before.a && before.b && before.c).toBeTruthy();
+  // Opening another turn rebuilds the rows: the closed ones are the same objects.
+  v.open.add(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(a)).toBe(before.a);
+  expect(rowOf(b)).toBe(before.b);
+  // The reader changed one turn (a new version): only that one is built again.
+  const tb = v.findTurn(b);
+  tb.after = [`${tb.after?.[0] ?? ""}\n\nOne more line from the agent.`];
+  tb.v += 1;
+  v.open.delete(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(a)).toBe(before.a);
+  expect(rowOf(b)).not.toBe(before.b);
+  expect(rowOf(b).shape).not.toBe(before.b.shape);
+  // A new measure of a closed turn's reply: its kept rows carry the old size, so it is built
+  // again with the measured one.
+  const rc = rowOf(c);
+  const part = v.cmdFor(rc);
+  v.probed(part.key, v.partSig(part), { height: 400 * v.zoom() }, cx);
+  v.open.add(keys.at(-8));
+  draw(v, cx);
+  expect(rowOf(c)).not.toBe(rc);
+  expect(sizeOf(c)).toBe(rc.shape.mdBase + 400);
+  // A new width: every row is built again.
+  const wa = rowOf(a);
+  v.width += 40;
+  for (let i = 0; i < 20; i++) draw(v, cx);
+  expect(rowOf(a)).not.toBe(wa);
+});
+
+test("opening or closing a turn, or a part of one, puts only its rows in place, the same as building every row", async () => {
+  // Ten days of turns: day bands, and the places a later build can start (marks) after them.
+  const { v, cx } = await pane(fixture("--extra", "250", "--gap", "3600", "--images"));
+  for (let i = 0; i < 40; i++) { if (v.shapeLeft > 0) v.reshapeDue = true; draw(v, cx); }
+  const keys = v.turnKeys(v.rows());
+  const marks = () => JSON.stringify(v.rowBuild.marks.map((m) => [m.ti, m.row, m.dayRow]));
+  const view = (rows, sizes) => rows.map((r, i) => `${r.key} ${r.kind} ${sizes[i]}`);
+  const full = () => {
+    // The same state built from nothing.
+    const w = { rows: v.baseRows, sizes: v.baseSizes, index: v.baseIndex, build: v.rowBuild, key: v.rowsKey };
+    v.rowBuild = null; v.rowsKey = null; v.rowJob = null;
+    v.rows();
+    while (v.rowJob) { v.renders++; v.rows(); }
+    const got = { rows: view(v.baseRows, v.baseSizes), index: [...v.baseIndex].sort().join(), marks: marks() };
+    Object.assign(v, { baseRows: w.rows, baseSizes: w.sizes, baseIndex: w.index, rowBuild: w.build, rowsKey: w.key, fitKey: null });
+    return got;
+  };
+  let spliced = 0;
+  const step = (name, fn) => {
+    fn();
+    const was = v.rowBuild;
+    v.rows();
+    if (v.rowBuild !== was && v.rowBuild.sessions === was.sessions) spliced++;
+    const want = full();
+    expect({ name, rows: view(v.baseRows, v.baseSizes) }).toEqual({ name, rows: want.rows });
+    expect([...v.baseIndex].sort().join()).toBe(want.index);
+    expect(marks()).toBe(want.marks);
+    for (const [k, i] of v.baseIndex) expect(v.baseRows[i].key).toBe(k);
+  };
+  expect(v.rowBuild.marks.length).toBeGreaterThan(3);
+  const a = keys.at(-120);
+  const b = keys.at(-5);
+  step("open a", () => v.open.add(a));
+  step("open b", () => v.open.add(b));
+  const g = v.baseRows.find((r) => r.kind === "grp" && r.key.startsWith(`gp:${b}:`));
+  if (g) step("open a group of b", () => v.setGroup(`${b}:${g.gi}`, true));
+  step("close a", () => v.open.delete(a));
+  step("whole prompt of b", () => v.full.add(b));
+  step("close b", () => { v.open.delete(b); v.full.delete(b); });
+  step("open the first", () => v.open.add(keys[0]));
+  step("close it", () => v.open.delete(keys[0]));
+  // New call details with nothing open: the rows stay as they are.
+  step("new call details", () => { v.callVer = (v.callVer ?? 0) + 1; });
+  // The same parts open in another order.
+  step("open a and b", () => { v.open.add(a); v.open.add(b); });
+  step("same, other order", () => { v.open.delete(a); v.open.add(a); });
+  // Estimates left out of time in open turns: those turns are built again, not every row.
+  step("again", () => { v.againOpen = true; v.rowsKey = "again"; });
+  expect(spliced).toBeGreaterThanOrEqual(6);
+});
+
 // PR 72 and 75 together: the running card draws the open turn's YOU part, so a message past
 // 420 px is cut there with Show all, and a press on the card opens it in place.
 test("the running card's message past 420 px is cut with Show all, and a press on the card shows it whole", async () => {
