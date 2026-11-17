@@ -58,7 +58,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
@@ -1022,6 +1022,7 @@ export default class Threads extends View {
     if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
     this.setLinks(x.links, x.linkList, x.linkCount);
+    if (this.ruleEdit || this.ruleUndo) this.followRules(this.fileLinks());
   }
   setLinks(rules, list, count) {
     this.linkCount = count;
@@ -1170,9 +1171,34 @@ export default class Threads extends View {
     const l = parseLinks(raw);
     this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
     this.setLinks(l.rules, l.list, raw.length);
+    this.followRules(raw);
     const chain = this.changePrefs({}, cx, { links: raw });
     chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
     return chain;
+  }
+  // The list changed, here or in the file: the open rule and the Undo line follow their
+  // rules by what they hold, not by place (the nearest same rule, for twins). An open rule
+  // that is gone from the list (changed in the file, or removed) becomes a new, unkept rule
+  // where it was, with what was typed in it.
+  followRules(raw) {
+    const keys = raw.map((r) => JSON.stringify(r));
+    const near = (key, at) => {
+      let best = -1;
+      keys.forEach((k, i) => { if (k === key && (best < 0 || Math.abs(i - at) < Math.abs(best - at))) best = i; });
+      return best;
+    };
+    const e = this.ruleEdit;
+    if (e && e.at != null) {
+      const i = near(e.key, e.at);
+      if (i >= 0) e.at = i;
+      else Object.assign(e, { insertAt: Math.min(e.at, raw.length), at: null, key: null, lost: true, touched: true, typeOpen: false });
+    }
+    const u = this.ruleUndo;
+    if (u) {
+      const before = u.prev != null ? near(u.prev, u.at - 1) : -1;
+      const after = u.next != null ? near(u.next, u.at) : -1;
+      u.at = before >= 0 ? before + 1 : after >= 0 ? after : Math.min(u.at, raw.length);
+    }
   }
   // A draft as the file's rule: the keys in a fixed order, the optional ones only when set,
   // and any key this version does not know kept from the rule it replaces.
@@ -1209,7 +1235,7 @@ export default class Threads extends View {
     } else if (from) d = { ...from, name: from.name ? `${from.name} copy`.slice(0, 40) : "" };
     else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
-    const e = { at, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
+    const e = { at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
       shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
     this.ruleEdit = e;
     this.ruleHover = null;
@@ -1279,8 +1305,9 @@ export default class Threads extends View {
     const url = d.url.trim();
     const rule = { n: 0, name: d.name || "This rule", re: new RegExp(d.pattern, "g"), url, host: templateHost(url), repo: /\{(repo|owner)\}/.test(url) };
     if (!d.example) return { line: "Type an example to see what this rule links." };
-    if (rule.repo && !this.remote.repo) return { pieces: [{ t: d.example }], under: "This session has no repository, so this rule links nothing here." };
-    const ctx = { repo: this.remote.repo, owner: this.remote.owner };
+    const away = this.repoAway(rule);
+    if (away) return { pieces: [{ t: d.example }], under: away };
+    const ctx = this.linkCtx();
     const pieces = linkPieces(d.example, [rule], ctx);
     const hit = pieces.find((p) => p.url)?.url ?? null;
     if (!hit) return { pieces, under: "Finds nothing in its example" };
@@ -1306,6 +1333,7 @@ export default class Threads extends View {
       return false;
     }
     const raw = this.fileLinks();
+    this.followRules(raw);
     const o = this.ruleObject(e.draft, e.base);
     if (e.at != null) raw[e.at] = o;
     else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
@@ -1326,8 +1354,12 @@ export default class Threads extends View {
   removeRule(at, cx) {
     const raw = this.fileLinks();
     if (at < 0 || at >= raw.length) return;
+    const key = (r) => (r === undefined ? null : JSON.stringify(r));
+    const prev = at > 0 ? key(raw[at - 1]) : null;
+    const next = key(raw[at + 1]);
     const [rule] = raw.splice(at, 1);
-    this.ruleUndo = { at, rule, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
+    // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
+    this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
     this.ruleHover = null;
     this.writeLinks(raw, cx);
@@ -1336,6 +1368,7 @@ export default class Threads extends View {
     const u = this.ruleUndo;
     if (!u) return;
     const raw = this.fileLinks();
+    this.followRules(raw);
     raw.splice(Math.min(u.at, raw.length), 0, u.rule);
     this.ruleUndo = null;
     this.writeLinks(raw, cx);
@@ -1346,7 +1379,7 @@ export default class Threads extends View {
     if (!e || e.at == null || e.at < 1) return;
     const raw = this.fileLinks();
     [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
-    e.at -= 1;
+    e.at -= 1; // so the twin nearest the new place is the one followed
     this.writeLinks(raw, cx);
     this.ruleCheck();
   }
@@ -1988,7 +2021,7 @@ export default class Threads extends View {
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
+      this.linksVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
@@ -2482,7 +2515,7 @@ export default class Threads extends View {
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
   closedLook() {
     // The pane's width and the rail set how far a wide table may grow (tableExtra).
-    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`;
+    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.repoSig()}`;
   }
 
   closedRows(item, out) {
@@ -3989,7 +4022,7 @@ export default class Threads extends View {
       const r = await exec("git", ["-C", cwd, "remote", "get-url", "origin"]).catch(() => null);
       this.repoLooking = false;
       const p = r && r.code === 0 ? parseRemote(r.stdout) : null;
-      this.remote = { key, repo: p?.repo ?? null, owner: p?.owner ?? null, why: p ? `origin on ${p.host}` : r?.code === 0 ? "origin is not a repo URL" : "no git remote origin" };
+      this.remote = { key, repo: p?.repo ?? null, owner: p?.owner ?? null, host: p?.host ?? null, why: p ? `origin on ${p.host}` : r?.code === 0 ? "origin is not a repo URL" : "no git remote origin" };
       cx.notify();
     });
   }
@@ -3998,11 +4031,11 @@ export default class Threads extends View {
   // repo change. The caps (20,000 characters, 25 links) are for the whole reply.
   linkedSegs(key, segs) {
     if (!this.links.length) return null;
-    const sig = `${this.linksVer}|${this.remote.repo ?? ""}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
+    const sig = `${this.linksVer}|${this.repoSig()}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
     const memo = (this.linkMemo ??= new Map());
     const m = memo.get(key);
     if (m?.sig === sig) return m.out;
-    const ctx = { repo: this.remote.repo, owner: this.remote.owner };
+    const ctx = this.linkCtx();
     let chars = 20000;
     let matches = 25;
     const out = segs.map((seg) => {
@@ -4024,7 +4057,7 @@ export default class Threads extends View {
   // Link rules lengthen the text; past 4,000 characters it stays as written, since Herdr
   // draws nothing for Markdown over 4,096.
   stepLinks(st) {
-    const ver = `${this.linksVer}|${this.links.length}|${this.remote.repo ?? ""}|${this.remote.owner ?? ""}`;
+    const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
     this.stepLinked ??= new WeakMap();
     const known = this.stepLinked.get(st);
     if (known?.ver === ver) return known.lk;
@@ -4040,7 +4073,10 @@ export default class Threads extends View {
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return lk;
   }
-  linkOne(md) { return this.links.length ? linkify(md, this.links, { repo: this.remote.repo, owner: this.remote.owner }) : { md, links: 0 }; }
+  // What link rules fill {repo} and {owner} from: the terminal's origin, with its host.
+  linkCtx() { return { repo: this.remote.repo, owner: this.remote.owner, host: this.remote.host ?? null }; }
+  repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
+  linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
 
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
   // first layout block that shows the terminal, which can be another pane than the one
@@ -6134,17 +6170,26 @@ export default class Threads extends View {
         .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy"))
         .child(this.button(t, "th-rule-remove", "Remove", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); })));
     return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
-      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(t.muted).child("New rule, not kept yet")))
+      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
+        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")))
       .child(typeBlock)
       .children(RULE_FIELDS.map(field))
       .when(Boolean(result), (el) => el.child(result))
       .child(buttons);
   }
 
+  // Why a rule that needs the session's repository links nothing here, or null.
+  repoAway(rule) {
+    if (!rule?.repo) return null;
+    if (!this.remote.repo) return "This session has no repository, so this rule links nothing here.";
+    if (!repoFits(rule, this.linkCtx())) return `This repository is on ${this.remote.host}, not GitHub, so this rule links nothing here.`;
+    return null;
+  }
+
   // What a rule does to its own example, kept until the rules or the repository change:
   // { pieces, under } when it makes a link (the address under), or { line, under }.
   ruleExample(r) {
-    const k = `${this.linksVer}|${this.linkListVer ?? 0}|${this.remote.repo ?? ""}`;
+    const k = `${this.linksVer}|${this.linkListVer ?? 0}|${this.repoSig()}`;
     if (this.ruleExKey !== k) { this.ruleExKey = k; this.ruleExMemo = new Map(); }
     if (r.rule?.slow) return r.example ? { pieces: [{ t: r.example }], under: null } : { line: "No example yet", under: r.pattern || null };
     const hit = this.ruleExMemo.get(r);
@@ -6152,9 +6197,9 @@ export default class Threads extends View {
     let out;
     if (!r.example) out = { line: "No example yet", under: r.pattern || null };
     else if (!r.rule) out = { pieces: [{ t: r.example }], under: null };
-    else if (r.rule.repo && !this.remote.repo) out = { pieces: [{ t: r.example }], under: "This session has no repository, so this rule links nothing here." };
+    else if (this.repoAway(r.rule)) out = { pieces: [{ t: r.example }], under: this.repoAway(r.rule) };
     else {
-      const pieces = linkPieces(r.example, [r.rule], { repo: this.remote.repo, owner: this.remote.owner });
+      const pieces = linkPieces(r.example, [r.rule], this.linkCtx());
       const url = pieces.find((p) => p.url)?.url ?? null;
       out = url ? { pieces, under: url } : { pieces, under: "Finds nothing in its example" };
     }
@@ -6890,14 +6935,14 @@ export default class Threads extends View {
     // does not read on a coloured bubble. There the message is plain text in the bubble's
     // ink, quotes behind their bar, as for a filter match.
     const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
-    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
+    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
     const max = r.full ? FULL_PROMPT_CHARS / 8 : 4000;
     const parts = plain ? promptParts(c.text, max) : null;
     const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
-      : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
+      : promptMd(c.text, { links: this.links, ...this.linkCtx(), max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
     const bmax = bubbleMax(this.width, this.prefs.textSize, this.chars());
@@ -7046,10 +7091,10 @@ export default class Threads extends View {
   partSig(r, base = this.sigBase()) {
     const head = `${base}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
