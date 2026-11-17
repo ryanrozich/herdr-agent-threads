@@ -46,15 +46,18 @@ const ps = (args) => {
 const base0 = (comm) => (comm.trim().split(/\s+/)[0] ?? "").split("/").pop();
 
 // Each process as { pid, ppid, start, comm }: lstart is five words ("Mon Nov 17 15:04:01
-// 2026"), read as a time in ms, so the command name is what follows them.
+// 2026"), read as a time in ms, so the command name is what follows them. A row whose start
+// does not parse is left out and counted; the cleanup reports the count.
+let unread = 0;
 function table(args) {
   const out = [];
   for (const line of ps(args).split("\n")) {
     const w = line.trim().split(/\s+/);
-    if (w.length < 7) continue;
     const [pid, ppid] = w.slice(0, 2).map(Number);
-    const start = Date.parse(w.slice(2, 7).join(" "));
-    if (pid > 0 && Number.isFinite(start)) out.push({ pid, ppid, start, comm: base0(w.slice(7).join(" ")) });
+    if (!(pid > 0)) continue;
+    const start = w.length >= 7 ? Date.parse(w.slice(2, 7).join(" ")) : Number.NaN;
+    if (Number.isFinite(start)) out.push({ pid, ppid, start, comm: base0(w.slice(7).join(" ")) });
+    else unread++;
   }
   return out;
 }
@@ -90,32 +93,39 @@ function leftovers() {
   return rows.filter((r) => ours.has(r.pid) && r.pid > 1 && !ancestors.has(r.pid) && !(r.comm === "ps" && r.ppid === process.pid));
 }
 
-// The listed processes are paused first (SIGSTOP), and children they forked since the list
-// was read are found and paused too, so none can start another unseen; then SIGTERM and
-// SIGCONT, and SIGKILL for what is left after about a second. Before the pause and before
-// SIGKILL the list is read again and a process is skipped when it is not the one listed: its
-// parent and start time must match, before SIGKILL its start time only (its parent may have
-// died of the SIGTERM). Start times may differ by a second: lstart has whole seconds, and
-// Linux derives it from the boot time, which can move.
+// SIGTERM, up to a second's wait, then SIGKILL for what is left. The list is read again first
+// (one ps over every process): a process is skipped when its parent or start time changed,
+// and children the listed processes started since the list was made are added. Before
+// SIGKILL a second scan adds children the survivors started meanwhile (they get SIGTERM and
+// the same wait), and each process's start time is checked again (its parent may have died
+// of the SIGTERM). Start times may differ by a second: lstart has whole seconds, and Linux
+// derives it from the boot time, which can move.
 function stop(list) {
-  const same = (rs, parent) => {
-    if (!rs.length) return [];
-    const now = new Map(snapshot(rs.map((r) => r.pid)).map((r) => [r.pid, r]));
-    return rs.filter((r) => { const n = now.get(r.pid); return n && Math.abs(n.start - r.start) <= 1000 && (!parent || n.ppid === r.ppid); });
-  };
+  if (!list.length) return;
   const signal = (rs, sig) => { for (const r of rs) { try { process.kill(r.pid, sig); } catch {} } };
-  const held = [];
-  let batch = same(list, true);
-  for (let round = 0; round < 5 && batch.length; round++) {
-    signal(batch, "SIGSTOP");
-    held.push(...batch);
-    const pids = new Set(held.map((r) => r.pid));
-    batch = snapshot().filter((r) => pids.has(r.ppid) && !pids.has(r.pid) && r.pid !== process.pid);
-  }
-  signal(held, "SIGTERM");
-  signal(held, "SIGCONT");
-  for (let i = 0; i < 20 && held.some((r) => alive(r.pid)); i++) Bun.sleepSync(50);
-  signal(same(held, false), "SIGKILL");
+  const wait = (rs) => { for (let i = 0; i < 20 && rs.some((r) => alive(r.pid)); i++) Bun.sleepSync(50); };
+  const sameStart = (a, b) => Math.abs(a.start - b.start) <= 1000;
+  // Children (and theirs) of the given processes in this snapshot that are not in it yet.
+  const children = (rows, of) => {
+    const pids = new Set(of.map((r) => r.pid));
+    const out = [];
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const r of rows) if (pids.has(r.ppid) && !pids.has(r.pid) && r.pid !== process.pid && !(r.comm === "ps" && r.ppid === process.pid)) { pids.add(r.pid); out.push(r); grew = true; }
+    }
+    return out;
+  };
+  let rows = snapshot();
+  const now = new Map(rows.map((r) => [r.pid, r]));
+  const sent = list.filter((r) => { const n = now.get(r.pid); return n && n.ppid === r.ppid && sameStart(n, r); });
+  sent.push(...children(rows, sent));
+  signal(sent, "SIGTERM");
+  wait(sent);
+  rows = snapshot();
+  const late = children(rows, sent.filter((r) => alive(r.pid)));
+  if (late.length) { signal(late, "SIGTERM"); wait(late); sent.push(...late); rows = snapshot(); }
+  const still = new Map(rows.map((r) => [r.pid, r]));
+  signal(sent.filter((r) => still.has(r.pid) && sameStart(still.get(r.pid), r)), "SIGKILL");
 }
 
 let done = false;
@@ -124,6 +134,7 @@ function cleanup() {
   done = true;
   stop(leftovers());
   try { rmSync(root, { recursive: true, force: true }); } catch {}
+  if (unread) console.error(`preload: ${unread} ps rows had a start time this file could not read; those processes were not checked`);
 }
 
 // bun test does not fire process "exit"; an afterAll in a preload runs once, after every file.
