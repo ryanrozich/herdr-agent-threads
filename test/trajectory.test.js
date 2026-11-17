@@ -1,17 +1,18 @@
-// bun test: each agent's synthetic session, read by its own reader and folded into the
-// trajectory shape (trajectory.js), against a golden file in test/fixtures/trajectory.
+// bun test: each agent's synthetic session, read by its own reader, its turns and the turns
+// folded into the trajectory shape (core/trajectory.js), against golden files in
+// test/fixtures/trajectory.
 // UPDATE=1 bun test test/trajectory.test.js writes the golden files again.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/turns.js";
-import { trajectory } from "../mods/agent-threads/trajectory.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
+import { trajectory } from "../mods/agent-threads/core/trajectory.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
-const opencode = join(root, "mods/agent-threads/opencode.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
+const opencode = join(root, "mods/agent-threads/core/opencode.sh");
 const golden = join(root, "test/fixtures/trajectory");
 
 // The sessions: make-fixture.js for Claude Code (with its subagent turn), make-agents.js for
@@ -52,6 +53,14 @@ function readOpencode(ref) {
   return s;
 }
 
+// The golden file's text, written when missing or with UPDATE=1.
+function same(name, value) {
+  const file = join(golden, name);
+  const text = `${JSON.stringify(value, null, 1)}\n`;
+  if (process.env.UPDATE || !existsSync(file)) { mkdirSync(golden, { recursive: true }); writeFileSync(file, text); }
+  expect(text).toBe(readFileSync(file, "utf8"));
+}
+
 const AGENTS = [
   ["claude", () => readFile(claude, "claude")],
   ["codex", () => readFile(codex, "codex")],
@@ -76,10 +85,10 @@ for (const [name, read] of AGENTS) {
         if (c.kind === "tool" && c.call) expect(c.result).toEqual({ call: c.call });
       }
     }
-    const file = join(golden, `${name}.json`);
-    const text = `${JSON.stringify(got, null, 1)}\n`;
-    if (process.env.UPDATE || !existsSync(file)) { mkdirSync(golden, { recursive: true }); writeFileSync(file, text); }
-    expect(text).toBe(readFileSync(file, "utf8"));
+    same(`${name}.json`, got);
+    // The turns themselves, as the reader builds them today: the session model's later steps
+    // (a store with indexes, stable ids, times on steps) must keep them, or say what changed.
+    same(`turns-${name}.json`, s.turns);
   });
 }
 

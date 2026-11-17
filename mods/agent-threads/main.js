@@ -49,7 +49,7 @@ import {
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
-} from "./turns.js";
+} from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
@@ -464,7 +464,7 @@ async function resolveOpenCode({ argv, pid, cwd, cwds, cmd, title }, current) {
   const who = { harness: "opencode", claude: false, live: true, pid, cwd };
   const program = { what: "Program in pane", detail: `${cmd}${pid ? ` · pid ${pid}` : ""}`, ok: true };
   const script = async (...args) => {
-    const r = await exec("sh", [SCRIPT("opencode.sh"), ...args]).catch(() => null);
+    const r = await exec("sh", [SCRIPT("core/opencode.sh"), ...args]).catch(() => null);
     return r && r.code === 0 ? r.stdout.trim() : null;
   };
   const db = await script("db");
@@ -596,9 +596,9 @@ async function resolveAntigravity({ argv, pid, cwd, cmd }) {
 // What a session's file takes to read one chunk.
 function readArgs(file, offset, chunk) {
   const h = harnessOfFile(file);
-  if (h === "opencode") return [SCRIPT("opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
-  if (h === "codex" || h === "pi" || h === "cursor" || h === "antigravity") return [SCRIPT("extract.sh"), file, String(offset), String(chunk), h];
-  return [SCRIPT("extract.sh"), file, String(offset), String(chunk)];
+  if (h === "opencode") return [SCRIPT("core/opencode.sh"), "read", dbOfFile(file), idOfFile(file), String(offset), String(chunk)];
+  if (h === "codex" || h === "pi" || h === "cursor" || h === "antigravity") return [SCRIPT("core/extract.sh"), file, String(offset), String(chunk), h];
+  return [SCRIPT("core/extract.sh"), file, String(offset), String(chunk)];
 }
 
 // ---- the panel --------------------------------------------------------------------------
@@ -2096,7 +2096,7 @@ export default class Threads extends View {
         const got = new Map();
         let ok = false;
         try {
-          const r = await exec("sh", [SCRIPT("calls.sh"), ...(job.tail ? ["--tail"] : []), job.file, harnessOfFile(job.file), ...job.ids]);
+          const r = await exec("sh", [SCRIPT("core/calls.sh"), ...(job.tail ? ["--tail"] : []), job.file, harnessOfFile(job.file), ...job.ids]);
           ok = r.code === 0;
           for (const l of ok ? r.stdout.split("\n") : []) {
             let x = null;

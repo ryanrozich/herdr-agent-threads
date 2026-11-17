@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const script = join(import.meta.dir, "../mods/agent-threads/calls.sh");
+const script = join(import.meta.dir, "../mods/agent-threads/core/calls.sh");
 const run = (...args) => {
   const r = spawnSync("sh", [script, ...args], { encoding: "utf8" });
   return { code: r.status, lines: r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l)), err: r.stderr };

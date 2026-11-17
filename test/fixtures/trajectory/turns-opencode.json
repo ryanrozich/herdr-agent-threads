@@ -1,0 +1,117 @@
+[
+ {
+  "n": 1,
+  "ts": 1793524200000,
+  "origin": "human",
+  "prompt": "Rename useCart to useBasket everywhere",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`."
+  ],
+  "tools": 2,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "grep": 1,
+   "edit": 1
+  },
+  "steps": [
+   {
+    "k": "group",
+    "calls": [
+     "grep",
+     "edit"
+    ],
+    "count": 2,
+    "ids": [
+     "call_grep",
+     "call_edit"
+    ]
+   }
+  ],
+  "usage": {
+   "msg_a1": {
+    "i": 30400,
+    "o": 540,
+    "cr": 22000,
+    "cc": 0
+   }
+  },
+  "model": "glm-5.3",
+  "effort": null,
+  "durationMs": 38000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793524238000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null,
+  "by": "build"
+ },
+ {
+  "n": 2,
+  "ts": 1793524295000,
+  "origin": "human",
+  "prompt": "Update the README example too",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "The README's **Cart state** example now imports `useBasket`."
+  ],
+  "tools": 1,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "edit": 1
+  },
+  "steps": [
+   {
+    "k": "group",
+    "calls": [
+     "edit"
+    ],
+    "count": 1,
+    "ids": [
+     "call_edit"
+    ]
+   }
+  ],
+  "usage": {
+   "msg_a2": {
+    "i": 31800,
+    "o": 210,
+    "cr": 30000,
+    "cc": 0
+   }
+  },
+  "model": "glm-5.3",
+  "effort": null,
+  "durationMs": 17000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793524312000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null,
+  "by": "build"
+ }
+]

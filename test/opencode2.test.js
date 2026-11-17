@@ -7,10 +7,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, rewindTail, parseChunk, replaced, reply, stats } from "../mods/agent-threads/turns.js";
+import { newSession, apply, rewindTail, parseChunk, replaced, reply, stats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
-const script = join(root, "mods/agent-threads/opencode.sh");
+const script = join(root, "mods/agent-threads/core/opencode.sh");
 const imager = join(root, "mods/agent-threads/image.sh");
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==";
 const SID = "ses_0002demo";
@@ -259,7 +259,7 @@ test("2.x level 3: calls carry their ids, and calls.sh reads each one's input, o
   o.db.close();
   const s = read(o);
   expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["call_s1", "call_r1"]);
-  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), `${o.path}#${SID}`, "opencode", "call_s1", "call_r1"], { encoding: "utf8" })
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), `${o.path}#${SID}`, "opencode", "call_s1", "call_r1"], { encoding: "utf8" })
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["call_s1", "bun test cart"], ["call_r1", "src/gone.ts"]]);
   const outs = got.filter((x) => x.k === "out");
