@@ -5148,10 +5148,11 @@ test("the probe takes the parts nearest the top of the pane first, walking out b
   expect(due.length).toBe(16);
   expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key.replace(/^cmd:/, "")) - at) <= 16)).toBe(true);
-  // All measured: nothing due, and the next call does not walk the rows again.
+  // All measured: nothing due, within a few frames (the walk ends its pass, then one pass
+  // finds nothing), and then the next call does not walk the rows again.
   for (const r of v.probeRows) v.meas.set(r.key, { sig: v.partSig(r), h: 20 });
   v.measVer = (v.measVer ?? 0) + 1;
-  expect(v.probeDue().length).toBe(0);
+  for (let i = 0; i < 6 && v.probeLeft !== 0; i++) expect(v.probeDue().length).toBe(0);
   expect(v.probeLeft).toBe(0);
   const visit = v.partSig.bind(v);
   let sigs = 0;
@@ -7018,4 +7019,65 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(bars.length).toBe(1);
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
+});
+
+test("the probe looks at no more than its share of rows a frame: a part far from the top is found over frames, then nothing is due", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  // Every part measured but the first turn's, far above the top at the end of the list.
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  expect(parts.length).toBeGreaterThan(500);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  v.measVer = (v.measVer ?? 0) + 1;
+  const sig = v.partSig.bind(v);
+  let sigs = 0;
+  v.partSig = (...a) => { sigs++; return sig(...a); };
+  let found = null;
+  let calls = 0;
+  for (; calls < 20 && !found; calls++) {
+    sigs = 0;
+    const due = v.probeDue();
+    // At most 300 rows, of which only turns with a reply are parts.
+    expect(sigs).toBeLessThanOrEqual(300);
+    if (!due.length) expect(v.probeLeft).toBe(1);
+    found = due.find(([r]) => r.key === parts[0].key) ?? null;
+  }
+  expect(found).toBeTruthy();
+  expect(calls).toBeGreaterThan(1);
+  // Measured: the walk starts over and finds nothing, over frames, then stays quiet.
+  v.meas.set(parts[0].key, { sig: v.partSig(parts[0]), h: 20 });
+  v.measVer++;
+  let frames = 0;
+  do { sigs = 0; expect(v.probeDue().length).toBe(0); expect(sigs).toBeLessThanOrEqual(300); frames++; } while (frames < 20 && v.probeLeft !== 0);
+  expect(frames).toBeGreaterThan(1);
+  expect(v.probeLeft).toBe(0);
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBe(0);
+});
+
+test("the probe's walk goes on past measured rows while measures keep coming in", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  let found = false;
+  // A measure of some part comes in every frame, as while the newest parts are measured.
+  for (let i = 0; i < 40 && !found; i++) {
+    found = v.probeDue().some(([r]) => r.key === parts[0].key);
+    v.measVer = (v.measVer ?? 0) + 1;
+  }
+  expect(found).toBe(true);
 });

@@ -111,6 +111,10 @@ const SHAPE_FIRST = 40;
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
 // interrupted). The rest are measured over the next frames.
 const PROBE_MAX = 16;
+// Rows probeDue looks at in one frame. With every part near the top measured, its walk went
+// on to every row: 45 to 48 ms in one frame at 6,000 turns on the rig, after each rebuild.
+// 300 rows took 7 to 8 ms there; the next frame goes on from there.
+const PROBE_WALK = 300;
 // Herdr stops a draw that runs past its time (about 50 ms) and keeps the last frame that
 // worked, so a draw that never fits would leave the pane blank for good. A row whose draw was
 // stopped is drawn plainly for CUT_MS (its Markdown as plain text), and
@@ -5921,6 +5925,12 @@ export default class Threads extends View {
     const rows = this.baseRows ?? [];
     const n = rows.length;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
+    // A walk left at PROBE_WALK goes on where it stopped while the rows, their layout and the
+    // top stay. A new measure does not start it over: it only settles a part already passed,
+    // and starting over at each one never got past the measured rows near the top.
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}`;
+    const was = this.probeWalk?.key === wk ? this.probeWalk : null;
+    const d0 = was ? was.d : 0;
     const visit = (r) => {
       const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
       if (!part) return;
@@ -5931,16 +5941,22 @@ export default class Threads extends View {
       if ((this.probeTries.get(k) ?? 0) >= 3) return;
       want.push([part, sig, k]);
     };
-    let more = false;
-    for (let d = 0; d < n; d++) {
-      if (top + d < n) visit(rows[top + d]);
-      if (d > 0 && top - d >= 0) visit(rows[top - d]);
-      if (want.length >= PROBE_MAX) { more = top + d + 1 < n || top - d - 1 >= 0; break; }
+    let d = d0;
+    let seen = 0;
+    for (; d < n && seen < PROBE_WALK; d++) {
+      if (top + d < n) { visit(rows[top + d]); seen++; }
+      if (d > 0 && top - d >= 0) { visit(rows[top - d]); seen++; }
+      if (want.length >= PROBE_MAX) { d++; break; }
     }
+    // Every row looked at, on both sides of the top.
+    const covered = top + d >= n && top - d < 0;
+    const found = (was?.found ?? 0) + want.length;
+    this.probeWalk = covered ? null : { key: wk, d, found };
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
-    this.probeLeft = more || want.length > out.length ? 1 : 0;
-    this.probeQuiet = want.length ? null : { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 };
+    // A pass that found parts is followed by one that finds none before the probe is quiet.
+    this.probeLeft = !covered || found > 0 ? 1 : 0;
+    this.probeQuiet = covered && !found ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
     if (this.probeTries.size > 4000) this.probeTries.clear();
     return out.map(([r, sig]) => [r, sig]);
   }
