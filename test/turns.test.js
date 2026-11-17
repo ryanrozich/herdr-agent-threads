@@ -5,10 +5,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const fixture = join(root, "test/fixtures/session.jsonl");
 
 function read(file, base, session = newSession("s", file)) {
@@ -221,7 +221,7 @@ test("reads match a reference slice at an unaligned offset", () => {
   const used = parseChunk(out).used;
   const slice = text.subarray(next, next + 5000);
   expect(used).toBe(slice.lastIndexOf(10) + 1);
-  const ref = execFileSync("sh", ["-c", 'jq -Rc -f "$1"', "x", join(root, "mods/agent-threads/extract.jq")], { input: slice.subarray(0, used), encoding: "utf8" });
+  const ref = execFileSync("sh", ["-c", 'jq -Rc -f "$1"', "x", join(root, "mods/agent-threads/core/extract.jq")], { input: slice.subarray(0, used), encoding: "utf8" });
   expect(parseChunk(out).events).toEqual(parseChunk(ref).events);
 });
 
@@ -558,7 +558,7 @@ test("senderOf stays under 5 ms for the busy fixture's prompts with JIT off", ()
   const file = join(dir, "p.json");
   writeFileSync(file, JSON.stringify(prompts("--busy", "130").map((e) => [e.o, e.t])));
   const script = join(dir, "time.js");
-  writeFileSync(script, `import { senderOf } from ${JSON.stringify(join(root, "mods/agent-threads/turns.js"))};
+  writeFileSync(script, `import { senderOf } from ${JSON.stringify(join(root, "mods/agent-threads/core/turns.js"))};
 const ps = JSON.parse(require("fs").readFileSync(${JSON.stringify(file)}, "utf8"));
 for (const [o, t] of ps.slice(0, 50)) senderOf(o, t);
 let best = Infinity;
@@ -589,7 +589,7 @@ test("reply() is every text block after the last tool call, joined with a blank 
 });
 
 test("steps: interim text and groups of calls in order, the reply apart, and caps on size", async () => {
-  const { STEP_TEXT, STEP_CALLS, STEP_MAX } = await import("../mods/agent-threads/turns.js");
+  const { STEP_TEXT, STEP_CALLS, STEP_MAX } = await import("../mods/agent-threads/core/turns.js");
   const s = newSession("00000000-0000-4000-8000-0000000000aa", "/x.jsonl");
   const ev = [
     { k: "p", o: "human", t: "Fix the cart total", ts: "2026-11-01T09:00:00.000Z" },
@@ -670,7 +670,7 @@ test("subagent calls make a step group of their own, apart from the commands aro
   const { readFileSync } = await import("node:fs");
   const { AGENT_CALL } = await import("../mods/agent-threads/ui.js");
   // turns.js keeps its own copy of ui.js's pattern: the two must be the same.
-  expect(readFileSync(new URL("../mods/agent-threads/turns.js", import.meta.url), "utf8")).toContain(`const AGENT_CALL = ${AGENT_CALL};`);
+  expect(readFileSync(new URL("../mods/agent-threads/core/turns.js", import.meta.url), "utf8")).toContain(`const AGENT_CALL = ${AGENT_CALL};`);
   const s = newSession("00000000-0000-4000-8000-00000000000b", "x.jsonl");
   apply(s, { k: "p", o: "human", t: "Check the calendar code", ts: "2026-11-01T09:00:00.000Z" });
   for (const n of ["Bash", "Read", "Agent", "Agent", "Agent", "Bash", "TaskCreate", "Task"]) apply(s, { k: "u", n, id: `toolu_${n}` });
