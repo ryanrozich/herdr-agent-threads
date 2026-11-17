@@ -8,7 +8,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, landPlan, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, headerButtonWidth, columnResize, codeRows,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState,
 } from "../mods/agent-threads/ui.js";
@@ -442,13 +442,16 @@ test("cardLabelColor: muted where it reads at 4.5:1 on the card, else foreground
   }
 });
 
-test("the Pinned column: from 480 px, 40% of Threads, 340 to 400 px, never under 240 or leaving Threads under 240", () => {
+test("the Pinned column: from 480 px, 40% of Threads and a step, 380 to 440 px, never under 240 or leaving Threads under 200", () => {
   expect(PIN_SPLIT_MIN).toBe(480);
-  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 240], [498, 258], [571, 331], [580, 340], [700, 340], [820, 340], [900, 360], [960, 384], [1000, 400], [1600, 400]]) {
+  // One step (PIN_STEP, one press of =) wider than it opened before: 373 px beside the
+  // 573 px reading-width pane, where it opened at 333.
+  expect(PIN_STEP).toBe(40);
+  for (const [w, px] of [[0, null], [380, null], [479, null], [480, 280], [498, 298], [571, 371], [573, 373], [580, 380], [700, 380], [820, 380], [900, 400], [960, 424], [1000, 440], [1600, 440]]) {
     expect(pinColumn(w)).toBe(px);
-    if (px) { expect(w - px).toBeGreaterThanOrEqual(240); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
-    // A compact row's text (the column less 54 px) holds about 40 prompt characters from 580 px.
-    if (w >= 580) expect((px - 54) / 6.7).toBeGreaterThanOrEqual(40);
+    if (px) { expect(w - px).toBeGreaterThanOrEqual(200); expect(px).toBeGreaterThanOrEqual(PIN_COL[0]); }
+    // A compact row's text (the column less 54 px) holds about 45 prompt characters from 580 px.
+    if (w >= 580) expect((px - 54) / 6.7).toBeGreaterThanOrEqual(48);
   }
   // A width the owner left the column at wins, within 240 to 640 px and Threads at least 240.
   for (const [w, kept, px] of [[1000, 300, 300], [1000, 460, 460], [600, 500, 360], [571, 300, 300], [1600, 700, 640], [500, 200, 240], [470, 300, null]]) {
