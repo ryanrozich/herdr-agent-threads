@@ -84,7 +84,7 @@ Press `q`. The reply goes into your prompt as a `>` quote, with a blank line und
 
 ### Know what the agent is doing
 
-Beside the agent's badge, the header says Working, Needs you, Done or Exited. Click it to go to the terminal. Only Claude Code reports its state live; for the other agents the header shows only Done or Exited, and nothing while a turn runs. While you read further up, a Jump to latest pill floats at the bottom of the list, with a dot when something new arrived below.
+At the top left of the pane, the agent's state says Working, Needs you, Done or Exited. Click it to go to the terminal. Only Claude Code reports its state live; for the other agents the state shows only Done or Exited, and nothing while a turn runs. Search, Pinned and Settings show at the top right while the pointer is in the pane. While you read further up, a Jump to latest pill floats at the bottom of the list, with a dot when something new arrived below.
 
 <a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own" width="400"></a>
 
