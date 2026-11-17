@@ -56,7 +56,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
@@ -2669,13 +2669,26 @@ export default class Threads extends View {
   }
   // From a row cut off to the row that has its answer. An open filter stays: threadMatches
   // lists that row whenever it lists this one.
+  // A turn answered together with a later one (answeredBy) goes to that turn the same way:
+  // opened, with the start of its reply at the top of the pane.
   goToAnswer(turn) {
     const si = this.sessions.findIndex((x) => x.turns[turn.n - 1] === turn);
-    if (si < 0 || !turn.answeredIn) return;
-    const key = `${si}:${turn.answeredIn}`;
+    const n = turn.answeredIn ?? turn.answeredBy;
+    if (si < 0 || !n) return;
+    const key = `${si}:${n}`;
+    if (turn.answeredIn) {
+      this.sel = key;
+      this.follow = false;
+      this.scrollTo = { key, how: "center" };
+      return;
+    }
+    if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
-    this.scrollTo = { key, how: "center" };
+    // "land": scroll_to_item alone brings an item to the nearest edge, which showed the end
+    // of a tall reply below the view. It waits up to 400 ms for the opened parts' measures,
+    // since a short estimate lets the list clamp at its end.
+    this.scrollTo = { key: `md:${key}:0`, how: "land", or: [`md:${key}:0.0`, `cc:${key}:0`, key], until: Date.now() + 400 };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
@@ -3525,6 +3538,10 @@ export default class Threads extends View {
     }
     if (kind === "you") { this.full.has(id) ? this.full.delete(id) : this.full.add(id); this.sel = id; return cx.notify(); }
     // Collapse closes the turn and lands on its row, as Esc does.
+    if (kind === "nr") {
+      const turn = this.findTurn(id);
+      if (turn?.answeredIn || turn?.answeredBy) { this.sel = id; this.goToAnswer(turn); return cx.notify(); }
+    }
     if (kind === "fold") { if (this.open.has(id)) this.toggle(id, cx); else this.sel = id; return cx.notify(); }
     if (kind === "lt") {
       if (!this.findTurn(id)) return;
@@ -5919,7 +5936,7 @@ export default class Threads extends View {
   noReplyText(turn) {
     if (turn.answeredIn) return `Answered in #${turn.answeredIn}. This turn itself ended with: ${turn.errors.at(-1)}`;
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
-      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
+      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}. Go to that reply` : "No final reply.");
   }
 
   // The list's items for the range on screen. An error thrown here blanks the whole list
@@ -6118,7 +6135,9 @@ export default class Threads extends View {
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(5).items_center().text_size(12).min_w(0)
-        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
+        // On a narrow line the agent's name gives way (it shrinks and truncates); the time after
+        // it never does, so "Worked for" is never shown without its time.
+        .when(Boolean(name), (el) => el.child(div().min_w(0).max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
         .child(div().flex_none().text_color(bad ? t.blocked : t.dim).child(this.workText(turn)))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim))
         .child(div().flex_1())
@@ -6126,9 +6145,11 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
+  // Always shown: dim at half strength on the other turns ("hover"), dim on the selected
+  // turn, accent while its card shows. A hover style alone did not show on the owner's machine.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
-      .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
+      .child(svg(ICON("info")).size(12).text_color(state === "on" ? t.accent : t.dim).when(state === "hover", (e) => e.opacity(INFO_DIM)));
   }
   // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
   // corner under the icon's right edge, or its bottom right corner over it when the line is
@@ -6148,14 +6169,12 @@ export default class Threads extends View {
       .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
   }
   // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
-  // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
-  // the pointer is on the line).
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (drawn at half
+  // strength; resting the pointer on it shows the card).
   infoState(key) {
     if (this.sel !== key) return "hover";
     return this.detailsOpen ? "on" : "sel";
   }
-  // A line on a turn not selected shows its info icon while the pointer is on it.
-  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
   // The list item whose Worked for line the card opens beside: an open turn's line, or a
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
@@ -6175,6 +6194,9 @@ export default class Threads extends View {
     const d = turn.durationMs ? fmtDuration(turn.durationMs) : null;
     if (turn.interrupted) return d ? `Stopped after ${d}` : "Stopped";
     if (this.failed(turn)) return d ? `Failed after ${d}` : "Failed";
+    // A turn the agent answered together with a later one has no time of its own: the line
+    // says where its answer is, not a bare "Worked".
+    if (!d && turn.answeredBy) return `Answered with #${turn.answeredBy}`;
     return d ? `Worked for ${d}` : "Worked";
   }
   toggleLine(key, live = false) {
@@ -6336,7 +6358,7 @@ export default class Threads extends View {
         ], sh.bubbleW),
       ]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
-        : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
+        : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
@@ -6719,7 +6741,7 @@ export default class Threads extends View {
         // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
-        return this.lineInfo(t, tkey, v_flex().pt(ROW.GAP))
+        return v_flex().pt(ROW.GAP)
           .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.lineIcon(t, r.key, tkey, probe)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
@@ -6744,10 +6766,10 @@ export default class Threads extends View {
           .when(this.latestCut(r), (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show all")));
       }
       case "noreply":
-        if (turn.answeredIn && !probe) {
-          return div().id(`th-answer-${r.key}`).mt(6).text_size(12.5).text_color(t.accent).cursor_pointer()
-            .on_click((_e, cx) => { cx.stop_propagation(); this.goToAnswer(turn); cx.notify(); })
-            .child(this.noReplyText(turn));
+        // A link: the list's own item click (click, "nr") goes to the answer, since a list
+        // item can register no handler of its own.
+        if ((turn.answeredIn || turn.answeredBy) && !probe) {
+          return div().mt(6).text_size(12.5).text_color(t.accent).cursor_pointer().child(this.noReplyText(turn));
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
       case "cmd":
