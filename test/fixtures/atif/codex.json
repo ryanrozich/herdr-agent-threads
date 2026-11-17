@@ -1,0 +1,189 @@
+{
+ "schema_version": "ATIF-v1.7",
+ "session_id": "s",
+ "agent": {
+  "name": "codex",
+  "version": "unknown",
+  "model_name": "gpt-5.5-codex",
+  "extra": {
+   "reader": "agent-threads"
+  }
+ },
+ "steps": [
+  {
+   "step_id": 1,
+   "timestamp": "2026-11-01T09:00:00.000Z",
+   "source": "user",
+   "message": "Why is the order total a cent off when there are three or more items?",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793523600|7dqfbf|1"
+   }
+  },
+  {
+   "step_id": 2,
+   "timestamp": "2026-11-01T09:00:04.000Z",
+   "source": "agent",
+   "model_name": "gpt-5.5-codex",
+   "reasoning_effort": "medium",
+   "message": "Checking how the cart adds up tax.",
+   "tool_calls": [
+    {
+     "tool_call_id": "call_c1",
+     "function_name": "exec_command",
+     "arguments": {},
+     "extra": {
+      "input": "rg -n lineTax cart",
+      "started": "2026-11-01T09:00:06.000Z"
+     }
+    },
+    {
+     "tool_call_id": "call_c2",
+     "function_name": "exec_command",
+     "arguments": {},
+     "extra": {
+      "input": "bun test cart/total.test.ts",
+      "started": "2026-11-01T09:00:08.000Z"
+     }
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "call_c1",
+      "extra": {
+       "result_ts": "2026-11-01T09:00:07.000Z",
+       "failed": false
+      }
+     },
+     {
+      "source_call_id": "call_c2",
+      "extra": {
+       "result_ts": "2026-11-01T09:00:09.000Z",
+       "failed": true
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793523600|7dqfbf|1"
+   }
+  },
+  {
+   "step_id": 3,
+   "timestamp": "2026-11-01T09:00:17.000Z",
+   "source": "agent",
+   "model_name": "gpt-5.5-codex",
+   "reasoning_effort": "medium",
+   "message": "Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793523600|7dqfbf|1",
+    "end_ts": "2026-11-01T09:00:17.000Z",
+    "duration_ms": 41000
+   },
+   "metrics": {
+    "prompt_tokens": 48200,
+    "completion_tokens": 620,
+    "cached_tokens": 41000,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 1
+    }
+   }
+  },
+  {
+   "step_id": 4,
+   "timestamp": "2026-11-01T09:01:27.000Z",
+   "source": "user",
+   "message": "Yes, and add a test with three items at $3.33",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793523687|vi3zol|1"
+   }
+  },
+  {
+   "step_id": 5,
+   "timestamp": "2026-11-01T09:01:29.000Z",
+   "source": "agent",
+   "model_name": "gpt-5.5-codex",
+   "reasoning_effort": "medium",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "call_p1",
+     "function_name": "apply_patch",
+     "arguments": {},
+     "extra": {
+      "input": "cart/total.ts, cart/total.test.ts",
+      "started": "2026-11-01T09:01:29.000Z"
+     }
+    },
+    {
+     "tool_call_id": "call_c3",
+     "function_name": "exec_command",
+     "arguments": {},
+     "extra": {
+      "input": "bun test",
+      "started": "2026-11-01T09:01:31.000Z"
+     }
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "call_p1",
+      "extra": {
+       "result_ts": "2026-11-01T09:01:30.000Z",
+       "failed": false
+      }
+     },
+     {
+      "source_call_id": "call_c3",
+      "extra": {
+       "result_ts": "2026-11-01T09:01:32.000Z",
+       "failed": false
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793523687|vi3zol|1"
+   }
+  },
+  {
+   "step_id": 6,
+   "timestamp": "2026-11-01T09:01:45.000Z",
+   "source": "agent",
+   "model_name": "gpt-5.5-codex",
+   "reasoning_effort": "medium",
+   "message": "Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass.",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793523687|vi3zol|1",
+    "end_ts": "2026-11-01T09:01:45.000Z",
+    "duration_ms": 63000
+   },
+   "metrics": {
+    "prompt_tokens": 52100,
+    "completion_tokens": 910,
+    "cached_tokens": 47000,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 1
+    }
+   }
+  }
+ ],
+ "notes": "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
+ "final_metrics": {
+  "total_prompt_tokens": 100300,
+  "total_completion_tokens": 1530,
+  "total_cached_tokens": 88000,
+  "total_steps": 6
+ }
+}
