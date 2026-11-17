@@ -56,7 +56,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
@@ -1825,6 +1825,7 @@ export default class Threads extends View {
     for (const r of this.baseRows ?? []) {
       if (PROBED.has(r.kind)) probed.push(r);
       else if (r.kind === "turn" && r.shape?.md != null) cmds.push(this.cmdFor(r));
+      else if (r.live && (r.kind === "working" || r.kind === "wrow")) probed.push(this.workYou(r));
     }
     return probed.concat(cmds);
   }
@@ -3573,6 +3574,14 @@ export default class Threads extends View {
     this.toList();
     if (/^\d+$/.test(kind)) {
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
+      // The selected running card whose message is taller than YOU_MAX: Show all and Show
+      // less (ya:, which the open turn shares), as a press on an open turn's bubble does.
+      const lr = this.sel === key ? this.baseRows?.find((x) => x.key === key && x.live && x.kind === "working") : null;
+      if (lr && this.youMd(this.workYou(lr)).long) {
+        const k = `ya:${key}`;
+        this.full.has(k) ? this.full.delete(k) : this.full.add(k);
+        return cx.notify();
+      }
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -5774,6 +5783,11 @@ export default class Threads extends View {
 
   // A collapsed row's reply block, as a probe part of its own: "cmd:<turn key>".
   cmdRow(r) { return { kind: "cmd", key: `cmd:${r.key}`, turn: r.turn, md: r.shape.md, est: r.shape.mdEst }; }
+  // The running turn's message, drawn on its card (workingItem) as an open turn's YOU part
+  // draws it: whole, as Markdown, every paragraph and quote. It is measured by the probe like
+  // that part, under its own key, while the turn runs, selected or not, so selecting the
+  // turn (which rebuilds nothing) finds it measured.
+  workYou(r) { return { ...r, kind: "you", key: `wyou:${r.key}`, full: true, less: false, all: this.full.has(`ya:${r.key}`) }; }
 
   // First-frame estimate of Markdown at the reading width: reading lines, a paragraph gap
   // between blocks, and one spare line so it does not run short. The probe's measure
@@ -5982,8 +5996,10 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
+        // The message is the open turn's YOU part (workYou): its measure, or its estimate.
         const g = this.workingGeom(r.turn, r.shape);
-        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.promptH
+        const y = this.workYou(r);
+        return (r.split ? ROW.GAP : ROW.PAD_T) + (this.measured(y) ?? this.youHeight(y))
           + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T;
@@ -6072,7 +6088,7 @@ export default class Threads extends View {
     if (this.meas.size > 20000) this.meas.clear();
     this.meas.set(key, { sig, h });
     this.measVer = (this.measVer ?? 0) + 1;
-    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key;
+    const rowKey = key.startsWith("cmd:") ? key.slice(4) : key.startsWith("wyou:") ? key.slice(5) : key;
     const i = this.baseIndex?.get(rowKey);
     const r = i != null ? this.baseRows[i] : null;
     if (r?.key === rowKey) {
@@ -6099,7 +6115,8 @@ export default class Threads extends View {
     const n = rows.length;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
     const visit = (r) => {
-      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r) : null;
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
+        : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
       if (!part) return;
       const sig = this.partSig(part, base);
       const m = this.meas?.get(part.key);
@@ -6382,11 +6399,12 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
-  // Always shown: dim at half strength on the other turns ("hover"), dim on the selected
-  // turn, accent while its card shows. A hover style alone did not show on the owner's machine.
+  // Always shown, in the line's label colour (dim, about 3:1) on every turn, accent while its
+  // card shows. A hover style alone did not show on the owner's machine, and at half strength
+  // it fell under 2:1 in every theme.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
-      .child(svg(ICON("info")).size(12).text_color(state === "on" ? t.accent : t.dim).when(state === "hover", (e) => e.opacity(INFO_DIM)));
+      .child(svg(ICON("info")).size(12).text_color(state === "on" ? t.accent : t.dim));
   }
   // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
   // corner under the icon's right edge, or its bottom right corner over it when the line is
@@ -6811,20 +6829,15 @@ export default class Threads extends View {
   // The running turn when selected: the message in full (up to 6 lines), the strip under
   // it, the live line with its tokens, and a note on where the reply will appear. Every line
   // has a fixed height, so the drawn height is the estimate (F3).
-  // The selected running turn. Its message is drawn as its closed row draws it (promptBlock
-  // from the row's shape): whole, every paragraph, with a quote behind its bar. It used to be
-  // the prompt's first lines as plain text, which cut a quoted prompt to its quote line.
+  // The selected running turn. Its message is drawn as an open turn's YOU part (workYou):
+  // whole, as Markdown, every paragraph, with each quote in full behind its bar and an
+  // agent's name inside its bubble. It used to be the closed row's lines, which ran the
+  // paragraphs together and cut a long quote.
   workingItem(t, r) {
     const { turn, key } = r;
     const g = this.workingGeom(turn, r.shape);
-    const sh = r.shape;
-    const bt = this.bubbleLook(t, turn.agent).theme;
-    const body = sh
-      ? [this.promptBlock(bt, turn, sh, true), ...(sh.pMore ? [this.moreLine(bt)] : [])]
-      : [div().h(g.promptH).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(g.prompt)];
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.bubble(t, turn, body, sh?.bubbleW ?? bubbleMax(this.width, this.prefs.textSize, this.chars())),
+      this.partContent(t, this.workYou(r), false),
       this.youStrip(t, turn, key, true),
       this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
