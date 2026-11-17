@@ -9,7 +9,7 @@
 // A turn's number can change when the way rows are built changes, so a pin keeps a
 // fingerprint: the prompt's time in seconds, a hash of its text, and a count for repeats.
 
-import { reply, firstLine } from "./turns.js";
+import { reply, firstLine } from "./core/turns.js";
 
 export const PIN_LIMIT = 5; // the keys 1 to 5
 export const PIN_TEXT = 80; // characters of the prompt kept, shown when the turn is gone

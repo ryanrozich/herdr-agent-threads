@@ -2,7 +2,7 @@
 // (no Herdr imports), so the tests run them under bun. harness.js has the same for Codex and
 // OpenCode.
 
-import { fmtTime } from "./turns.js";
+import { fmtTime } from "./core/turns.js";
 
 export const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const validId = (id) => typeof id === "string" && ID_RE.test(id);

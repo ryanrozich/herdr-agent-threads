@@ -6,11 +6,11 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, stats, replaced } from "../mods/agent-threads/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, stats, replaced } from "../mods/agent-threads/core/turns.js";
 import { harnessOf, harnessOfFile, idOfFile, agyFile, agyBrain, agyArgv, HARNESS, MARKS } from "../mods/agent-threads/harness.js";
 
 const root = join(import.meta.dir, "..");
-const extractor = join(root, "mods/agent-threads/extract.sh");
+const extractor = join(root, "mods/agent-threads/core/extract.sh");
 const locator = join(root, "mods/agent-threads/locate.sh");
 const ID = "00000000-0000-4000-8000-0000000000a9";
 
@@ -194,7 +194,7 @@ test("level 3: a call is named by its planner step and place, and calls.sh reads
   const f = file(body);
   const s = read(f, 1 << 20);
   expect(s.turns[0].steps.find((x) => x.k === "group").ids).toEqual(["s1.0", "s1.1"]);
-  const got = execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), f, "antigravity", "s1.0", "s1.1", "s9.0"], { encoding: "utf8" })
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), f, "antigravity", "s1.0", "s1.1", "s9.0"], { encoding: "utf8" })
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["s1.0", "/home/dev/shop/src/cart.ts"], ["s1.1", "bun test cart"]]);
   // The result's text leaves out its time lines; its time is when it completed.
@@ -203,5 +203,5 @@ test("level 3: a call is named by its planner step and place, and calls.sh reads
     ["s1.1", false, "Command output:\n1 fail\nexpected 3", "2026-01-05T09:07:09-06:00"],
   ]);
   // An id that is not s<step>.<i> matches nothing.
-  expect(execFileSync("sh", [join(root, "mods/agent-threads/calls.sh"), f, "antigravity", "call_1"], { encoding: "utf8" })).toBe("");
+  expect(execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), f, "antigravity", "call_1"], { encoding: "utf8" })).toBe("");
 });

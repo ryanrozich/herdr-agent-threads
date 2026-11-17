@@ -6,7 +6,7 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
@@ -416,7 +416,7 @@ test("the probe is clipped and transparent, never invisible()", async () => {
 
 // A session built from extractor events, put in place of the fixture's.
 async function scripted(events) {
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000a", v.current().file);
   for (const e of events) apply(s, e);
@@ -436,7 +436,7 @@ test("a live agent turn that finishes while hidden hands the selection back (F1)
   v.follow = true;
   v.jumpLatest(true);
   expect(v.sel).toBe("0:2"); // the live agent turn shows while it runs
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(s, { k: "t", t: "Noted." });
   apply(s, { k: "d", ms: 500, ts: at(3) });
   draw(v, cx);
@@ -4828,7 +4828,7 @@ test("the header shows the agent's state beside the badge: Working, Needs you, D
   state.terminals[0].status = "working";
   expect(word()).toBe("Done");
   expect(v.stateTip(v.agentStateNow())).toBe("Codex finished its newest turn. Codex reports no live status, so this is read from the transcript.");
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(v.current(), { k: "p", o: "human", t: "One more change", ts: "2026-11-01T10:00:00.000Z" });
   expect(v.current().turns.at(-1).done).toBeFalsy();
   expect(word()).toBe(null);
@@ -5215,7 +5215,7 @@ test("a long session's rows are built over several frames, the old rows shown ti
 });
 
 test("a new turn in a long session rebuilds only from the last mark: the rows match a full build", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx, s } = await longSession(450);
   v.debug = false;
   v.width = 545;
@@ -5356,7 +5356,7 @@ test("no dot when the new end of the list draws on screen, or when the list foll
   // The reply to the newest turn counts as new too: its turn ends.
   const { v } = await scripted([{ k: "p", o: "human", t: "Fix the cart total", ts: at(0) }]);
   const before = v.newestSig();
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   apply(v.current(), { k: "t", t: "Fixed." });
   apply(v.current(), { k: "d", ms: 900, ts: at(1) });
   v.noteNew(before);
@@ -6446,7 +6446,7 @@ test("a turn with hundreds of interim texts opens within Herdr's time: links and
 });
 
 test("subagents open while the turn runs: their rows show without a press, the person's close stays, and the finished turn folds them into one line", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, s, cx } = await scripted([
     { k: "p", o: "human", t: "Review the calendar code", ts: at(0) },
     { k: "u", n: "Bash", id: "toolu_b" },
@@ -6497,7 +6497,7 @@ test("subagents open while the turn runs: their rows show without a press, the p
 });
 
 test("a running turn is open while it runs: its steps arrive in order, the group still running says so, Working… closes it; it closes when done unless the person chose", async () => {
-  const { apply } = await import("../mods/agent-threads/turns.js");
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, s } = await scripted([
     { k: "p", o: "human", t: "Fix the cart total", ts: at(0) }, { k: "t", t: "Looking at the cart." }, { k: "u", n: "Read" }, { k: "u", n: "Bash" },
   ]);
@@ -6563,7 +6563,7 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
     use("toolu_a2", "Bash", { command: "bun run lint" }, 4), res("toolu_a2", "lint: 2 errors", 5, true),
     use("toolu_a3", "Read", { file_path: "src/cart.ts" }, 7), res("toolu_a3", "export const total = 1;", 7)];
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000c", file);
   for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
@@ -6665,7 +6665,7 @@ test("level 3: a group claims no check or red mark until its calls are read; onc
     use("toolu_e3", "Bash", { command: "bun run lint --fix" }, 5), res("toolu_e3", "fixed", 6),
     use("toolu_e4", "Bash", { command: "bun run lint" }, 7), res("toolu_e4", "clean", 8)];
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000e", file);
   for (const e of [{ k: "p", o: "human", t: "Fix the lint", ts: ts(0) },
@@ -6726,7 +6726,7 @@ test("level 3 while a turn runs: the running group names what runs now; an open 
   const ts = (s) => new Date(Date.now() - 60000 + s * 1000).toISOString();
   const use = { type: "assistant", timestamp: ts(1), message: { id: "msg_b1", role: "assistant", content: [{ type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "bun run e2e" } }] } };
   writeFileSync(file, `${JSON.stringify(use)}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000d", file);
   apply(s, { k: "p", o: "human", t: "Run the e2e suite", ts: ts(0) });

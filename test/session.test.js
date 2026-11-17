@@ -1,7 +1,7 @@
 // bun test: session mapping helpers (pure, no Herdr).
 import { test, expect } from "bun:test";
 import { argvSession, slug, validId, recordSession, decide, dividerLabel, candidates, claudePaths } from "../mods/agent-threads/session.js";
-import { newSession } from "../mods/agent-threads/turns.js";
+import { newSession } from "../mods/agent-threads/core/turns.js";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";

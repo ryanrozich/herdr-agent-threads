@@ -1,0 +1,102 @@
+[
+ {
+  "n": 1,
+  "start": 1793526000000,
+  "end": 1793526012000,
+  "done": true,
+  "groups": [
+   {
+    "title": "Message",
+    "cells": [
+     {
+      "kind": "user",
+      "text": "Why does the search box lose its text when I go back?",
+      "start": 1793526000000,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 1",
+    "cells": [
+     {
+      "kind": "tool",
+      "tool": "grep_search",
+      "call": "s1.0",
+      "result": {
+       "call": "s1.0"
+      },
+      "start": null,
+      "end": null
+     },
+     {
+      "kind": "tool",
+      "tool": "view_file",
+      "call": "s3.0",
+      "result": {
+       "call": "s3.0"
+      },
+      "start": null,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 2",
+    "cells": [
+     {
+      "kind": "message",
+      "text": "The search page keeps its text in component state, which resets when the page mounts again on back.\n\nKeeping it in the URL (`?q=`) fixes both back and reload:\n\n- `SearchBox` reads `q` from the URL on mount\n- typing updates `q` with `replace`, so it adds no history entry\n\nShall I make the change?",
+      "start": null,
+      "end": 1793526012000
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "n": 2,
+  "start": 1793526060000,
+  "end": 1793526068000,
+  "done": true,
+  "groups": [
+   {
+    "title": "Message",
+    "cells": [
+     {
+      "kind": "user",
+      "text": "Yes, do it",
+      "start": 1793526060000,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 1",
+    "cells": [
+     {
+      "kind": "tool",
+      "tool": "replace_file_content",
+      "call": "s7.0",
+      "result": {
+       "call": "s7.0"
+      },
+      "start": null,
+      "end": null
+     }
+    ]
+   },
+   {
+    "title": "Step 2",
+    "cells": [
+     {
+      "kind": "message",
+      "text": "Done. `SearchBox` now keeps the query in `?q=`, and going back restores it.",
+      "start": null,
+      "end": 1793526068000
+     }
+    ]
+   }
+  ]
+ }
+]
