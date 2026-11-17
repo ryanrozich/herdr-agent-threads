@@ -1377,10 +1377,17 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
-test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", () => {
+test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", async () => {
   const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
-  execFileSync("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-    env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore", timeout: 120000,
+  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
+  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
+  await new Promise((resolve, reject) => {
+    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
+      env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
+    });
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.on("error", reject);
+    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
   });
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);

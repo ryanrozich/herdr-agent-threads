@@ -2,12 +2,15 @@
 
 ```sh
 bun test                                   # extractor, turn assembly, session mapping, drawing helpers, read-only rule
+sh test/leftover-check.sh                  # bun test, failing if the run leaves a temp file or a process behind
 bun test/make-fixture.js out.jsonl [id] [cwd] [flags]   # synthetic transcript; flags in the file header
 bun test/make-big.js out.jsonl 600 [real|noisy|dense]   # very large synthetic transcript, for timing
 sh test/scan-private.sh                    # before committing: no home paths, names, emails, real ids or sidebars (PNGs via tesseract)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test`, and gitleaks over the new commits. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
+
+Each `bun test` run keeps its temp files in one folder, `threads-run-<pid>-*` under `$TMPDIR`, and removes it, along with any process it started that is still alive, when it ends or is stopped (`test/preload.js`, loaded through `bunfig.toml`). Tests make temp folders with `mkdtempSync(join(tmpdir(), ...))` as before; they land in the run's folder.
 
 ```sh
 bunx @biomejs/biome@2.6.4 lint
