@@ -3004,7 +3004,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   draw(v, cx);
 });
 
-test("v in a pane from 480 px splits the Pinned column beside it, 340 px at 700, kept apart from the main pane; v moves between them", async () => {
+test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700, kept apart from the main pane; v moves between them", async () => {
   const { v, cx } = await pinPane("--extra", "6");
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
@@ -3022,7 +3022,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, 340 px at 700,
   v.settleSplit();
   expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
-  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 340 }]]);
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 380 }]]);
   // The header's Pinned button says the column is open, and v or a click focuses it.
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
   log = [];
@@ -3392,7 +3392,7 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   log = [];
   v.settleSplit();
-  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 384 }], ["pane.focus", { pane: "p2" }]]);
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 424 }], ["pane.focus", { pane: "p2" }]]);
   draw(v, cx);
   // The owner closes the column: the next pin does not open it again, and v still does.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
@@ -3446,7 +3446,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   first.v.action("pin", first.cx); // at 380 px: no column
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   const file = await saved();
-  for (const [width, px] of [[479, null], [498, 258]]) {
+  for (const [width, px] of [[479, null], [498, 298]]) {
     log = [];
     recordFiles[PINS] = JSON.stringify(file);
     const w = new Threads();
