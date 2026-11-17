@@ -90,7 +90,7 @@ Press `a` to show messages other agents sent the session, such as a subagent's r
 
 ### Make it yours
 
-Press `,` for settings, a card over the list with two tabs: General (text size, the rail's side, the key hints, the two message colors, link rules, the quote key and the file) and Chat (agent messages, how many lines a row shows, the time, and the reading width: Comfortable, Wide or Full, which `Shift w` also steps). You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with two tabs: General (text size, the rail's side, the key hints, the two message colors, link rules, the quote key and the file) and Chat (agent messages, how many lines a row shows, the time, and the reading width: Comfortable, Wide or Full, which `Shift w` also steps). You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
