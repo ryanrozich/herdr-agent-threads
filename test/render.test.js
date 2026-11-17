@@ -514,7 +514,7 @@ test("a turn answered together with a later one: its line says so, and its note 
   expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
 });
 
-test("the info icon is always shown: dim at half strength on other turns, dim on the selected one, accent with its card open, and no handler", async () => {
+test("the info icon is always shown: dim, like the line's label, on every turn, accent with its card open, and no handler", async () => {
   const { v } = await pane(fixture("--extra", "2"));
   const keys = v.turnKeys(v.rows());
   const [a, b] = keys.slice(-2);
@@ -524,7 +524,8 @@ test("the info icon is always shown: dim at half strength on other turns, dim on
   const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
   const other = drawn("hover");
   expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
-  expect(other).toContainEqual(["opacity", 0.5]);
+  // The label's colour with no fade (about 3:1; at half strength it was under 2:1).
+  expect(other.some((e) => e[0] === "opacity")).toBe(false);
   // No hover style and no handler: neither shows on the owner's machine inside a list row.
   expect(other.some((e) => e[0] === "hover" || /^on_/.test(String(e[0])))).toBe(false);
   const sel = drawn("sel");
@@ -1839,14 +1840,15 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
   const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed turn: its row's line has the icon, dim when selected, at half strength otherwise.
+  // A closed turn: its row's line has the icon, dim, with no fade.
   v.sel = key;
   expect(icons(rowOf())).toContain("info.svg");
   v.sel = null;
   let c = rowOf();
   expect(icons(c)).toContain("info.svg");
   let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // An open turn with its line closed: the icon too.
   v.open = new Set([key]);
   v.sel = key;
@@ -1857,7 +1859,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   expect(v.infoState(key)).toBe("hover");
   c = partOfLine();
   at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["text_color", theme.dim]);
+  expect(c.slice(at + 1, at + 5).some((e) => e[0] === "opacity")).toBe(false);
   // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
