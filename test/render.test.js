@@ -91,7 +91,7 @@ mock.module("gpui-base", () => ({
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
-  TextView: { markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
+  TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
 // ("in"), so a test can time the synchronous stretches between awaits.
@@ -937,6 +937,79 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
   cx.flush();
   await settleCx(cx);
   expect(v.lastQuote).toMatchObject({ source: "reply" });
+});
+
+// The owner's go, 17 Nov: highlight by drag in any turn, open or closed. A press and drag
+// selects; only a click that does not move opens the turn.
+test("a closed turn's message and reply start select by drag, a click that does not move opens it, and q quotes what ⌘C copied from either", async () => {
+  const { v, cx } = await quotePane();
+  const keys = v.turnKeys(v.rows());
+  const k = keys.find((x) => !v.open.has(x));
+  expect(k).toBeTruthy();
+  const turn = v.findTurn(k);
+  v.toggle(keys.find((x) => v.open.has(x)), cx);
+  v.sel = k;
+  draw(v, cx);
+  const row = v.rows().find((r) => r.key === k);
+  expect(row.kind).toBe("turn");
+  // Drawn: the message and the reply start are selectable text views.
+  const v0 = views.length;
+  v.rowItem(theme, row, false);
+  const drawn = views.slice(v0);
+  const sel = (x) => x.calls.some(([n, on]) => n === "selectable" && on === true);
+  const msg = drawn.filter((x) => x.id.startsWith("th-sp-"));
+  const rep = drawn.filter((x) => x.id.startsWith("th-cmd-cmd:") || x.id.startsWith("th-sr-"));
+  expect(msg.length).toBeGreaterThan(0);
+  expect(rep.length).toBeGreaterThan(0);
+  expect([...msg, ...rep].every(sel)).toBe(true);
+  // A drag selects: the turn is selected and stays closed. A double press too.
+  v.sel = keys.find((x) => x !== k);
+  v.pressMoved = 40; v.pressCount = 1;
+  v.click(k, cx);
+  expect([v.sel, v.open.has(k)]).toEqual([k, false]);
+  v.pressMoved = 0; v.pressCount = 2;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(false);
+  // ⌘C copied part of its message: q quotes that.
+  const words = (t) => t.replace(/[*_`#>]/g, "").split(/\s+/).filter(Boolean).slice(1, 4).join(" ");
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(turn.prompt);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // Part of its reply: that.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = words(v.replyText(turn));
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "selection", pasted: true });
+  // A highlight with nothing copied: a mod cannot read it (Herdr issue 1110), so q quotes the
+  // whole reply.
+  v.notePress(cx);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  await settleCx(cx);
+  expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
+  // A click that does not move opens it.
+  v.pressMoved = 0; v.pressCount = 1;
+  v.click(k, cx);
+  expect(v.open.has(k)).toBe(true);
+  // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
+  // agent's message, a stop's reason) stays a plain line, in its own colour.
+  const v2 = views.length;
+  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
+  // While a search marks its hits, the lines are plain, so the marks still show.
+  v.query = turn.prompt.split(/\s+/)[0];
+  const v1 = views.length;
+  v.rowItem(theme, { ...row, shape: v.shape(turn) }, false);
+  expect(views.slice(v1).some((x) => x.id.startsWith("th-sp-"))).toBe(false);
+  v.query = "";
 });
 
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {

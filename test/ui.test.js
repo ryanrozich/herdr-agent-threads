@@ -10,7 +10,7 @@ import {
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
-  keySheet, fitHints, hintWidth, agentState,
+  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -1017,4 +1017,17 @@ test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and stil
   expect(b.text.startsWith("a".repeat(20))).toBe(true);
   // Words wrap as codeRows counts them.
   expect(wrapCap("aaaa bbbb cccc dddd eeee ffff gggg", 10, 2).text).toBe("aaaa bbbb cccc dddd…");
+});
+
+test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines, each chunk within MD_MAX bytes", () => {
+  expect(htmlLine("a  b")).toBe("a&nbsp; b");
+  expect(htmlLine(" x<y> & z")).toBe("&nbsp;x&lt;y&gt; &amp; z");
+  expect(htmlLine("\tq")).toBe("&nbsp;&nbsp;&nbsp; q");
+  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one<br>two", n: 2 }]);
+  const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of a long pasted prompt, with é and ü in it`);
+  const c = htmlChunks(lines);
+  expect(c.length).toBeGreaterThan(1);
+  expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
+  for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
+  expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
 });
