@@ -83,8 +83,10 @@ function violations(modDir, installSh, recipe = join(root, "RECIPE.md")) {
       if (/exec\(\s*["'`](hc|herdr-app|osascript|tmux)["'`]/.test(line)) out.push(`${at} exec of a controller`);
       for (const m of line.matchAll(/(?<![\w.$])exec\(\s*["'`]([^"'`]+)["'`]/g)) {
         if (m[1] === "git") { if (!/exec\("git", \["-C", cwd, "remote", "get-url", "origin"\]\)/.test(line)) out.push(`${at} git other than remote get-url`); }
-        // open only for the README link on an unread agent's page (harness.js UNREAD).
-        else if (m[1] === "open") { if (!/exec\("open", \[u\.url\]\)/.test(line)) out.push(`${at} open other than the README link`); }
+        // open only for the README link on an unread agent's page (harness.js UNREAD), and
+        // open or xdg-open for the settings file (the settings card's Open).
+        else if (m[1] === "open") { if (!/exec\("open", \[(u\.url|this\.prefsPath\(\))\]\)/.test(line)) out.push(`${at} open other than the README link`); }
+        else if (m[1] === "xdg-open") { if (!/exec\("xdg-open", \[this\.prefsPath\(\)\]\)/.test(line)) out.push(`${at} xdg-open other than the settings file`); }
         else if (m[1] !== "sh") out.push(`${at} exec of ${m[1]}`);
       }
       if (/\bhc\s+(send|type|run|kill|label|write|paste|keys)\b/.test(line)) out.push(`${at} hc write verb in a shell`);
@@ -166,6 +168,7 @@ test("the check catches a second paste, a submit in the quote, a quote command a
   expect(inject(`${src}\nrun("terminal.send", { text: "x" });\n`).some((x) => x.includes("terminal.send"))).toBe(true);
   expect(inject(`${src}\nexec("git", ["push"]);\n`).some((x) => x.includes("git other than remote get-url"))).toBe(true);
   expect(inject(`${src}\nexec("open", [file]);\n`).some((x) => x.includes("open other than the README link"))).toBe(true);
+  expect(inject(`${src}\nexec("xdg-open", [file]);\n`).some((x) => x.includes("xdg-open other than the settings file"))).toBe(true);
   // A quote command in RECIPE.md.
   writeFileSync(main, src);
   const recipe = join(dir, "RECIPE.md");

@@ -100,7 +100,7 @@ const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
-    if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
+    if (cmd === "open" || cmd === "xdg-open") { log.push([cmd, ...args]); return { code: 0, stdout: "", stderr: "" }; }
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
@@ -108,8 +108,10 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
-// What the pane wrote to settings.json (the viewer keeps its panel choice there).
+// What the pane wrote to settings.json (the viewer keeps its panel choice there). With
+// keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
+let keepSettings = false;
 function execReal(cmd, args) {
     try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
     catch (e) { return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
@@ -120,7 +122,7 @@ function herdrRest() { return {
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
-    if (p.endsWith("settings.json")) settingsWrites.push(text);
+    if (p.endsWith("settings.json")) { settingsWrites.push(text); if (keepSettings) recordFiles[p] = text; }
     if (!p.endsWith("pins.json")) return null;
     if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
     recordFiles[p] = text;
@@ -1126,11 +1128,12 @@ test("long messages show in full by default: no Show more anywhere, and Shorten 
   expect(sh.pMore).toBe(false);
   expect(sh.md.length).toBeGreaterThanOrEqual(v.replyText(long).length - 10);
   expect(strings(() => v.rowItem(theme, row(), false))).not.toContain("Show more");
-  // The panel: the switch, and no line steppers while it is off.
-  v.settingsOpen = true;
+  // The card's Chat tab: the switch, with no hint that repeats it, and no line steppers while it is off.
+  v.action("settings", cx);
+  expect(v.setTab).toBe("chat");
   let panel = strings(() => v.render(cx));
   expect(panel).toContain("Shorten long messages");
-  expect(panel).toContain("Every message and reply shows in full.");
+  expect(panel).not.toContain("Every message and reply shows in full.");
   expect(panel).not.toContain("Reply lines");
   // On: the row is cut to its line limits with Show more, and the steppers show.
   v.action("truncate", cx);
@@ -4030,9 +4033,12 @@ test("names: none over your message, none over a reply (one agent), who replied 
   expect(v.agentName(row.turn)).toBe("Agent");
   // There is no name setting: the settings panel has no name field, and the image viewer
   // heads your turn "You".
-  v.settingsOpen = true;
-  rec = []; v.settingsPanel(theme); const panel = rec; rec = null;
-  expect(panel).not.toContainEqual(["child", "Your name"]);
+  v.setSettings(true);
+  for (const tab of ["general", "chat"]) {
+    v.setTab = tab;
+    rec = []; v.settingsCard(theme); const panel = rec; rec = null;
+    expect(panel).not.toContainEqual(["child", "Your name"]);
+  }
   expect(v.viewerTurn(row.turn).who).toBe("You");
 });
 
@@ -4248,15 +4254,24 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   v.action("width:wide", cx);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect(v.action("width:huge", cx)).toBe(false);
-  // The settings panel: a Width row with the three choices, the chosen one first in colour;
-  // in a pane narrower than Comfortable's column, a line says all three look the same.
+  // The card's Chat tab: a Width row with the three choices, each with its icon, then the
+  // pane and its reading column as a line, with the characters a line; in a pane narrower
+  // than the column, the line says it looks like Full here.
   v.paneW = 420;
-  rec = []; v.settingsPanel(theme); const sp = rec; rec = null;
+  v.action("settings", cx);
+  rec = []; v.settingsCard(theme); const sp = rec; rec = null;
   const ids = sp.filter((e) => e[0] === "id").map((e) => e[1]);
-  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full"]));
+  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full", "th-set-ruler"]));
+  const icons = sp.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(icons).toEqual(expect.arrayContaining(["width-comfortable.svg", "width-wide.svg", "width-full.svg"]));
   const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(texts).toContain("Keep the pane at this width");
-  expect(texts).toContain("This pane is narrower than Comfortable (573 px), so all three look the same here.");
+  expect(texts).toContain("Up to 90 characters a line. This pane has room for less, so it looks like Full here.");
+  v.paneW = 900;
+  expect(v.widthNote()).toBe("Up to 90 characters a line.");
+  v.prefs = { ...v.prefs, width: "full" };
+  expect(v.widthNote()).toBe("Text runs the whole pane.");
+  v.closeSettings();
 });
 
 test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
@@ -5395,6 +5410,7 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   expect(labelAt).toBeGreaterThan(arrowAt);
   v.toast = { text: "x", at: 1 };
   rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
   expect(tb2).toBe(38 + 6 + 28 + 10);
@@ -5654,7 +5670,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(v.keysOpen).toBe(true);
   v.key(keyEv("?", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
   expect(v.keysOpen).toBe(false);
-  // The footer's "? keys" and the sheet's close button.
+  // The footer's "? keys" (with the key hints on) and the sheet's close button.
+  v.prefs = { ...v.prefs, keyHints: true };
   const f = frame(v, cx);
   handlerAfterId(f, "th-keys-hint", "on_click")({}, cx);
   expect(v.keysOpen).toBe(true);
@@ -5679,7 +5696,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 30 * 25 + 4 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 31 * 25 + 4 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -6897,13 +6914,14 @@ test("the floating top: no header row, the state top left at every width, icons 
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
   v.h.is_focused = () => false;
-  // Settings open: in the flow under the band, ending with the agent, the counts and the title.
+  // Settings open: a card over the list, not in its flow (the list does not move), with the
+  // agent, the counts and the title at its foot.
   v.settingsOpen = true;
   calls = drawn();
   ids = idsOf(calls);
-  expect(ids.indexOf("th-top")).toBeGreaterThan(-1);
-  expect(ids.indexOf("th-top")).toBeLessThan(ids.indexOf("threads-listbox"));
-  expect(ids).toContain("th-about");
+  expect(ids).not.toContain("th-top");
+  expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  expect(ids.indexOf("th-about")).toBeGreaterThan(ids.indexOf("th-set-card"));
   expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
   v.settingsOpen = false;
   // A search field opens under the band too.
@@ -7397,12 +7415,16 @@ test("landExact: the nearest earlier item at least want above, lifted by the res
 });
 
 test("Rail side lists Left on the left and Right on the right", async () => {
-  const { v } = await pinPane("--extra", "2");
+  const { v, cx } = await pinPane("--extra", "2");
+  v.action("settings", cx);
+  v.setTab = "general";
   rec = [];
-  v.railSideRow(theme, (x) => x);
+  v.settingsCard(theme);
   const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
+  const icons = rec.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   rec = null;
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
+  expect(icons).toEqual(expect.arrayContaining(["panel-left.svg", "panel-right.svg"]));
 });
 
 // The owner, 17 Nov: "it would be cool if the card went away when we click on it so it doesn't
@@ -7874,4 +7896,384 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   h.init(state.props, hcx);
   rec = []; h.render(hcx); const hd = rec; rec = null;
   expect(hd.some(([n, x]) => n === "child" && x === p.note)).toBe(true);
+});
+
+// ---- the settings card (chat-look rounds 8 to 10, trajectory-5 section 9) ----
+
+// The handler named `name` set on the element with this id, before the next element's id.
+function onOf(calls, id, name) {
+  const at = calls.findIndex((e) => e[0] === "id" && e[1] === id);
+  if (at < 0) return null;
+  for (let j = at + 1; j < calls.length && calls[j][0] !== "id"; j++) if (calls[j][0] === name) return calls[j].at(-1);
+  return null;
+}
+const strsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+const idsIn = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
+const cardOf = (v) => { rec = []; v.settingsCard(theme); const c = rec; rec = null; return c; };
+
+test("the settings card: over the list, opens on Chat with the keyboard, closes on a press outside, the x, Esc or the comma", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  const before = focusCalls;
+  v.key(keyEv(","), cx);
+  expect(v.settingsOpen).toBe(true);
+  expect(v.setTab).toBe("chat");
+  expect(focusCalls).toBeGreaterThan(before); // the pane has the keyboard, so one Esc closes it
+  let c = frame(v, cx);
+  const ids = idsIn(c);
+  // A clear layer over the pane, then the card, both after the list: the list does not move.
+  expect(ids.indexOf("th-set-catch")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  expect(ids).toEqual(expect.arrayContaining(["th-set-card", "th-set-close", "th-set-tab-general", "th-set-tab-chat", "th-set-preview", "th-set-foot", "th-set-keys"]));
+  expect(ids.filter((x) => x.startsWith("th-set-tab-"))).toEqual(["th-set-tab-general", "th-set-tab-chat"]);
+  expect(ids).not.toContain("th-top");
+  // 440 px at most, and the pane less 10 px each side when narrower.
+  expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 4]).toEqual(["w", 440]);
+  v.paneW = 360;
+  expect(v.setCardW()).toBe(340);
+  v.paneW = 573;
+  // A press on the card stays in it; a press anywhere else in the pane closes it, and selects nothing.
+  const sel = v.sel;
+  let stopped = 0;
+  const ev = { ...cx, stop_propagation() { stopped++; } };
+  onOf(c, "th-set-card", "on_click")({}, ev);
+  expect(v.settingsOpen).toBe(true);
+  onOf(c, "th-set-catch", "on_click")({}, ev);
+  expect(v.settingsOpen).toBe(false);
+  expect(v.sel).toBe(sel);
+  expect(stopped).toBe(2);
+  // The x.
+  v.action("settings", cx);
+  c = frame(v, cx);
+  const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-close");
+  c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.settingsOpen).toBe(false);
+  // Esc, from the list or from the quote key field, which hands the keyboard back.
+  v.action("settings", cx);
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  v.action("settings", cx);
+  v.quoteInput.handlers.focus({}, cx);
+  expect(v.fieldFocused).toBe("quote");
+  const f0 = focusCalls;
+  v.key(keyEv("escape"), cx);
+  expect([v.settingsOpen, v.fieldFocused]).toEqual([false, null]);
+  expect(focusCalls).toBe(f0 + 1);
+  // A press in another pane: Herdr's press-outside handler on the card.
+  v.action("settings", cx);
+  c = frame(v, cx);
+  onOf(c, "th-set-card", "on_mouse_down_out")({}, cx);
+  expect(v.settingsOpen).toBe(false);
+  // The comma again, and the tabs.
+  v.key(keyEv(","), cx);
+  v.key(keyEv(","), cx);
+  expect(v.settingsOpen).toBe(false);
+  v.action("settings", cx);
+  c = frame(v, cx);
+  onOf(c, "th-set-tab-general", "on_click")({}, cx);
+  expect(v.setTab).toBe("general");
+  // It opens on Chat each time.
+  v.closeSettings(); v.action("settings", cx);
+  expect(v.setTab).toBe("chat");
+  draw(v, cx);
+});
+
+test("General holds text, rail side, key hints, the two message colors, link rules, the quote key and the file; Chat holds messages and the width", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4", "--agents"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "general";
+  const g = cardOf(v);
+  const gs = strsOf(g);
+  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "Your messages", "Agent messages", "Link rules", "Quote key", "Open", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
+  for (const s of ["Show agent messages", "Width", "Shorten long messages", "Always show time", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(s);
+  // Headings in the keys sheet's style, US spelling; the rows lost their icons.
+  expect(gs).not.toContain("Colours");
+  const icons = g.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  for (const gone of ["bot.svg", "clock.svg", "scissors.svg", "fold-horizontal.svg", "move-horizontal.svg"]) expect(icons).not.toContain(gone);
+  // A color's name is its dot's tooltip: amber is the agent default now.
+  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Amber · default")).toBe(true);
+  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Plain · default")).toBe(true);
+  v.setTab = "chat";
+  const ch = strsOf(cardOf(v));
+  for (const s of ["Messages", "Layout", "Show agent messages", "Shorten long messages", "Always show time", "Width", "Comfortable", "Wide", "Full", "Keep the pane at this width", "Reset to defaults"]) expect(ch).toContain(s);
+  for (const s of ["Your messages", "Agent messages", "Text size", "Quote key", "Copy path", "Rail side"]) expect(ch).not.toContain(s);
+  // The hidden count sits beside its switch; the two hints that repeated a switch are gone.
+  expect(ch.some((x) => /\d+ (hidden|folded)/.test(x))).toBe(true);
+  expect(ch).not.toContain("A message's time shows when its turn is selected.");
+  // The line counts sit under their switch only while it is on.
+  expect(ch).not.toContain("Prompt lines");
+  v.action("truncate", cx);
+  expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Prompt lines", "Reply lines"]));
+});
+
+test("the preview follows text size, both colors, the time, hidden agent messages and the rail's side", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  const pv = () => { rec = []; v.cardPreview(theme, 440); const c = rec; rec = null; return c; };
+  let c = pv();
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "A message from an agent", "A message from you", "9:12 AM"]));
+  expect(strsOf(c)).not.toContain("9:10 AM");
+  expect(c).toContainEqual(["opacity", 0.45]);
+  expect(c).toContainEqual(["bg", "#87643A"]); // amber
+  expect(c).toContainEqual(["text_size", 14]);
+  expect(c).toContainEqual(["right", 5]);
+  v.prefs = { ...v.prefs, agentTurns: true, alwaysShowTime: true, textSize: 16, railSide: "left", agentBubbleColor: "teal" };
+  c = pv();
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent", "9:10 AM"]));
+  expect(c).not.toContainEqual(["opacity", 0.45]);
+  expect(c).toContainEqual(["bg", "#36706D"]);
+  expect(c).toContainEqual(["text_size", 16]);
+  expect(c).toContainEqual(["left", 5]);
+  // A narrow card shortens the words to keep one line.
+  v.prefs = { ...v.prefs, agentTurns: false };
+  expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From you"]));
+});
+
+test("a switch on the card shows no toast; the a key still says what it did", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--agents"));
+  v.action("settings", cx);
+  const c = frame(v, cx);
+  onOf(c, "th-set-agents", "on_click")({}, cx);
+  expect(v.prefs.agentTurns).toBe(true);
+  expect(v.toast).toBe(null);
+  v.closeSettings();
+  v.key(keyEv("a"), cx);
+  expect(v.prefs.agentTurns).toBe(false);
+  expect(v.toast.text).toBe("Agent messages hidden");
+});
+
+test("Reset covers every control on the card, is dim at the defaults, and leaves the quote key and link rules", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ quoteKey: "y", links: [{ pattern: "X-(\\d+)", url: "https://x.example/$1" }] }));
+  v.action("settings", cx);
+  const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
+  expect(v.prefsDiffer()).toBe(false);
+  expect(reset()).toContainEqual(["opacity", 0.45]);
+  for (const a of ["agents", "keyHints", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
+  v.prefs = { ...v.prefs, width: "wide" };
+  expect(v.prefsDiffer()).toBe(true);
+  expect(reset()).not.toContainEqual(["opacity", 0.45]);
+  v.action("resetSettings", cx);
+  for (const k of ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  expect(v.quoteKey).toBe("y");
+  expect(v.links.length).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+});
+const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
+
+test("the file: Copy path says Copied in its own place with no toast, and Open writes a missing file first, then opens it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.action("settings", cx);
+  v.setTab = "general";
+  let c = cardOf(v);
+  onOf(c, "th-set-copy", "on_click")({}, cx);
+  expect(cx.clip).toBe(v.prefsPath());
+  expect(v.toast).toBe(null);
+  expect(strsOf(cardOf(v))).toContain("Copied");
+  cx.flush(2000);
+  expect(strsOf(cardOf(v))).toContain("Copy path");
+  // No file yet: it is written with the current values, then opened (xdg-open on Linux).
+  // (The platform is set on the pane: another test file's mock of Herdr has no window().)
+  v.platform = () => "linux";
+  keepSettings = true;
+  log = [];
+  settingsWrites.length = 0;
+  v.prefsRaw = null;
+  cx.pending = [];
+  c = cardOf(v);
+  onOf(c, "th-set-open", "on_click")({}, cx);
+  await Promise.all(cx.pending);
+  expect(settingsWrites.length).toBe(1);
+  expect(log.filter((x) => x[0] === "xdg-open" || x[0] === "open")).toEqual([["xdg-open", v.prefsPath()]]);
+  try {
+    v.platform = () => "macos";
+    log = []; cx.pending = [];
+    v.action("openSettingsFile", cx);
+    await Promise.all(cx.pending);
+    expect(log.filter((x) => x[0] === "xdg-open" || x[0] === "open")).toEqual([["open", v.prefsPath()]]);
+    expect(settingsWrites.length).toBe(1); // the file is there now
+    v.platform = () => "windows";
+    expect(idsIn(cardOf(v))).not.toContain("th-set-open");
+  } finally { keepSettings = false; delete recordFiles[v.prefsPath()]; }
+});
+
+test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.action("settings", cx);
+  v.setTab = "general";
+  const q = v.quoteInput;
+  expect(q.value()).toBe("q");
+  settingsWrites.length = 0;
+  keepSettings = true;
+  // Typed after the old letter: the field keeps the new one alone.
+  q.set_value("qy"); q.handlers.change({}, cx);
+  expect(q.value()).toBe("y");
+  expect(v.quoteKey).toBe("y");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).quoteKey).toBe("y");
+  expect(v.quoteNote()).toBe(null);
+  // A letter Threads uses.
+  q.set_value("yj"); q.handlers.change({}, cx);
+  expect(q.value()).toBe("j");
+  expect(v.quoteKey).toBe("y");
+  expect(v.quoteNote()).toBe("j is a Threads key already. The quote key stays y.");
+  expect(strsOf(cardOf(v))).toContain("j is a Threads key already. The quote key stays y.");
+  q.set_value(""); q.handlers.change({}, cx);
+  expect(v.quoteNote()).toBe("Type one letter. The quote key stays y.");
+  q.set_value("7"); q.handlers.change({}, cx);
+  expect(v.quoteNote()).toBe("One letter, a to z. The quote key stays y.");
+  // While the field has the keyboard, j and the comma are its own.
+  q.handlers.focus({}, cx);
+  const sel = v.sel;
+  v.key(keyEv("j"), cx);
+  v.key(keyEv(","), cx);
+  expect(v.sel).toBe(sel);
+  expect(v.settingsOpen).toBe(true);
+  q.handlers.blur({}, cx);
+  expect(v.fieldFocused).toBe(null);
+  // Opened again, the field shows the key.
+  v.closeSettings(); v.action("settings", cx);
+  expect(q.value()).toBe("y");
+  expect(v.quoteNote()).toBe(null);
+  // A key the file sets reaches the field.
+  v.applyPrefs(JSON.stringify({ quoteKey: "z" }));
+  expect(q.value()).toBe("z");
+  // A file value Threads cannot use: the mod's note, under the field.
+  v.applyPrefs(JSON.stringify({ quoteKey: "i" }));
+  expect(v.quoteNote()).toMatch(/^quoteKey "i" is not a free letter/);
+  keepSettings = false;
+  delete recordFiles[v.prefsPath()];
+});
+
+test("Shift w steps the width with the toast that names all three; inside the card a width change shows none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 900;
+  expect(v.prefs.width).toBe("comfortable");
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("wide");
+  expect(v.toast.icon).toBe("width-wide");
+  expect(v.toast.widths).toEqual({ cur: "wide", tight: false });
+  rec = []; v.toastView(theme); let c = rec; rec = null;
+  expect(strsOf(c)).toEqual(["Comfortable", "Wide", "Full"]);
+  expect(c).toContainEqual(["font_semibold"]);
+  // A second press changes the words in place, and the first toast's timer leaves it.
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("full");
+  const at = v.toast.at;
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("comfortable");
+  expect(v.toast.at).not.toBe(at);
+  // Too narrow for the list to change, with the pane not kept at the width: it says so, down to 420 px.
+  v.paneW = 440;
+  v.prefs = { ...v.prefs, readingWidth: false };
+  v.key(shiftW, cx);
+  expect(v.toast.widths.tight).toBe(true);
+  rec = []; v.toastView(theme); c = rec; rec = null;
+  expect(strsOf(c)).toContain("too narrow here to show");
+  v.paneW = 400;
+  rec = []; v.toastView(theme); c = rec; rec = null;
+  expect(strsOf(c)).not.toContain("too narrow here to show");
+  // With the card open the toast is drawn after it, so it sits over the card.
+  v.toast = null;
+  v.action("settings", cx);
+  v.key(shiftW, cx);
+  const f = idsIn(frame(v, cx));
+  expect(f.indexOf("th-toast-widths")).toBeGreaterThan(f.indexOf("th-set-card"));
+  // A width chosen in the card says nothing.
+  v.toast = null;
+  c = frame(v, cx);
+  onOf(c, "th-width-full", "on_click")({}, cx);
+  expect(v.prefs.width).toBe("full");
+  expect(v.toast).toBe(null);
+});
+
+test("key hints at the bottom are off by default; the switch brings the row back, and ? keys sits at the card's foot", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  expect(v.prefs.keyHints).toBe(false);
+  expect(idsIn(frame(v, cx))).not.toContain("th-footer");
+  expect(v.footSpace()).toBe(0);
+  v.action("settings", cx);
+  let c = frame(v, cx);
+  onOf(c, "th-set-keys", "on_click")({}, cx);
+  expect([v.keysOpen, v.settingsOpen]).toEqual([true, false]);
+  v.action("escape", cx);
+  v.action("settings", cx);
+  v.setTab = "general";
+  c = frame(v, cx);
+  onOf(c, "th-set-hints", "on_click")({}, cx);
+  expect(v.prefs.keyHints).toBe(true);
+  v.footerH = 38;
+  expect(idsIn(frame(v, cx))).toContain("th-footer");
+  expect(v.footSpace()).toBe(38);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573; v.rootH = 400;
+  v.action("settings", cx);
+  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-body-chat"); return c.slice(at).find((e) => e[0] === "h")[1]; };
+  const room = 400 - 32 - 8 - (36 + 32 + v.previewH() + 38 + 2);
+  expect(bodyH()).toBe(room);
+  // Measured shorter than the room: the card is as tall as its rows.
+  const c = cardOf(v);
+  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 150, width: 400 }, cx);
+  expect(bodyH()).toBe(150);
+  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 900, width: 400 }, cx);
+  expect(bodyH()).toBe(room);
+  // The key hints take their room.
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  expect(bodyH()).toBe(room - 38);
+});
+
+test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ links: [
+    { name: "Ticket", type: "ticket", description: "Our tracker", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1", example: "Fixed in ACME-412." },
+    { name: "PR", type: "pull-request", pattern: "#(\\d{1,5})\\b", url: "https://git.example/{repo}/pull/$1", example: "See #58.", on: false },
+    { name: "Broken", pattern: "x(", url: "https://x.example/$1" },
+    { name: "Bare", pattern: "\\bBUG-(\\d+)\\b", url: "https://bugs.example/$1" },
+    { name: "Miss", pattern: "\\bZED-(\\d+)\\b", url: "https://z.example/$1", example: "nothing here" },
+  ] }));
+  v.action("settings", cx);
+  v.setTab = "general";
+  const g = strsOf(cardOf(v));
+  expect(g).toEqual(expect.arrayContaining(["Link rules", "5", "1 not working"]));
+  // The row opens the page.
+  onOf(cardOf(v), "th-set-links", "on_click")({}, cx);
+  expect(v.setPage).toBe("links");
+  const c = cardOf(v);
+  const s = strsOf(c);
+  expect(idsIn(c)).toContain("th-set-back");
+  expect(idsIn(c)).not.toContain("th-set-tab-general"); // no tabs and no preview on the page
+  expect(idsIn(c)).not.toContain("th-set-preview");
+  for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Your rules · 5",
+    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412", "On",
+    "PR", "Off", "This session has no repository, so this rule links nothing here.",
+    "Broken", "Not working: pattern not valid", "Bare", "No example yet", "\\bBUG-(\\d+)\\b", "Miss", "Finds nothing in its example",
+    "When two rules match the same text, the higher one wins."]) expect(s).toContain(x);
+  expect(c).toContainEqual(["underline"]);
+  const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(icons).toEqual(expect.arrayContaining(["ticket.svg", "git-pull-request.svg", "regex.svg", "alert.svg"]));
+  // With the session's repository, the PR rule's example shows its address (and it stays off).
+  v.remote = { ...v.remote, repo: "acme/exports", owner: "acme" };
+  expect(strsOf(cardOf(v))).toContain("https://git.example/acme/exports/pull/58");
+  expect(v.links.map((r) => r.name)).toEqual(["Ticket", "Bare", "Miss"]);
+  // Esc closes the card from the page; Back returns to the tabs.
+  onOf(cardOf(v), "th-set-back", "on_click")?.({}, cx);
+  const back = cardOf(v);
+  const at = back.findIndex((e) => e[0] === "id" && e[1] === "th-set-back");
+  if (at >= 0) back.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.setPage).toBe("main");
+  v.setPage = "links";
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  // No rules: the page says so.
+  v.applyPrefs("{}");
+  v.action("settings", cx);
+  v.setPage = "links";
+  expect(strsOf(cardOf(v))).toContain("No rules yet.");
 });
