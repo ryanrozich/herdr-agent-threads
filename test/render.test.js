@@ -5893,17 +5893,11 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 // re-rendered" (interrupted in shape): every collapsed row was reshaped in one draw. Now a
 // draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
-  const { v, cx } = await paneWith(busy(), null, 1000);
+  // Agent messages with no reply of their own: hidden, and never shaped, till the toggle below.
+  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), null, 1000);
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
-  // Half the agent messages without a reply of their own, so they stay hidden till the toggle
-  // below (the rest show, folded, for their reply).
-  v.current().turns.forEach((t, i) => { if (t.agent && i % 2) t.after = []; });
-  v.current().version++;
   draw(v, cx);
-  // Every row shaped before the change below (more rows show, so the first draws leave some
-  // for later frames, whose timer the test clears).
-  for (let k = 0; k < 400 && (v.rowJob || v.shapeLeft > 0 || v.staleRows?.length); k++) { cx.flush(0); draw(v, cx); }
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);

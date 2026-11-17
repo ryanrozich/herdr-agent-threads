@@ -30,6 +30,8 @@
 //   --busy N     N rounds of a long own prompt then 9 long agent messages (hc reports and
 //                peer messages), each with a long Markdown reply: a busy supervisor session
 //                (--busy 130 is about 1,300 turns), for timing the list
+//   --quiet      with --busy: the agent messages get no reply of their own, so they stay
+//                hidden while agent messages are hidden
 //   --quotes     add prompts that quote the reply above in Markdown ("> "): quote only,
 //                comment only, quote then comment, comment then quote, interleaved, ">"
 //                with no space, nested "> >", a ">" line inside a fence, and a 40-line quote
@@ -79,6 +81,7 @@ const imagesFx = bool("--images");
 const extra = Number(flag("--extra") ?? 0);
 const only = flag("--only");
 const busy = Number(flag("--busy") ?? 0);
+const quiet = flags.includes("--quiet");
 const gap = Number(flag("--gap") ?? 300);
 const padMb = Number(flag("--pad-mb") ?? 0);
 const start = flag("--start");
@@ -196,7 +199,7 @@ for (let i = 0; i < busy; i++) {
     const k = i * 9 + j;
     const body = `${para(k, 200)}\n\n${para(k + 1, 150)}`;
     prompt(j % 2 ? `<hc from="t${j} worker">${body}</hc>` : `<agent-message from="helper-${j}">${body}</agent-message>`, j % 2 ? "human" : "peer", 20);
-    assistant([{ type: "text", text: longReply(k) }], { out: 300, secs: 4 });
+    if (!quiet) assistant([{ type: "text", text: longReply(k) }], { out: 300, secs: 4 });
     end(20000);
   }
 }
