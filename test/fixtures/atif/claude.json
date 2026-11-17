@@ -393,32 +393,7 @@
       "input": "git diff --stat",
       "started": "2026-11-01T09:17:34.000Z"
      }
-    }
-   ],
-   "observation": {
-    "results": [
-     {
-      "source_call_id": "toolu_000013_Bash",
-      "extra": {
-       "result_ts": "2026-11-01T09:17:36.000Z",
-       "failed": false
-      }
-     }
-    ]
-   },
-   "extra": {
-    "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
-   }
-  },
-  {
-   "step_id": 17,
-   "timestamp": "2026-11-01T09:17:40.000Z",
-   "source": "agent",
-   "model_name": "claude-opus-5-5",
-   "reasoning_effort": "high",
-   "message": "",
-   "tool_calls": [
+    },
     {
      "tool_call_id": "toolu_000014_Agent",
      "function_name": "Agent",
@@ -445,10 +420,26 @@
       "input": "Audit the tests",
       "started": "2026-11-01T09:17:52.000Z"
      }
+    },
+    {
+     "tool_call_id": "toolu_000017_Bash",
+     "function_name": "Bash",
+     "arguments": {},
+     "extra": {
+      "input": "bun test calendar",
+      "started": "2026-11-01T09:17:58.000Z"
+     }
     }
    ],
    "observation": {
     "results": [
+     {
+      "source_call_id": "toolu_000013_Bash",
+      "extra": {
+       "result_ts": "2026-11-01T09:17:36.000Z",
+       "failed": false
+      }
+     },
      {
       "source_call_id": "toolu_000014_Agent",
       "extra": {
@@ -487,34 +478,7 @@
         "ms": 12000
        }
       }
-     }
-    ]
-   },
-   "extra": {
-    "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
-   }
-  },
-  {
-   "step_id": 18,
-   "timestamp": "2026-11-01T09:17:58.000Z",
-   "source": "agent",
-   "model_name": "claude-opus-5-5",
-   "reasoning_effort": "high",
-   "message": "",
-   "tool_calls": [
-    {
-     "tool_call_id": "toolu_000017_Bash",
-     "function_name": "Bash",
-     "arguments": {},
-     "extra": {
-      "input": "bun test calendar",
-      "started": "2026-11-01T09:17:58.000Z"
-     }
-    }
-   ],
-   "observation": {
-    "results": [
+     },
      {
       "source_call_id": "toolu_000017_Bash",
       "extra": {
@@ -530,7 +494,7 @@
    }
   },
   {
-   "step_id": 19,
+   "step_id": 17,
    "timestamp": "2026-11-01T09:19:04.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
@@ -559,7 +523,7 @@
   "total_prompt_tokens": 847114,
   "total_completion_tokens": 3390,
   "total_cached_tokens": 805000,
-  "total_steps": 19
+  "total_steps": 17
  },
  "extra": {
   "title": "login flake",
