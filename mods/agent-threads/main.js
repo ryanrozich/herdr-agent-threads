@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -3293,7 +3293,8 @@ export default class Threads extends View {
     this.clipBefore = this.clipAtPress;
     this.clipAtPress = readClip(cx);
   }
-  // { key, text } when the clipboard holds text copied since the last press, or null.
+  // { key, text } when the clipboard holds text copied since the last press from the selected
+  // or an open turn's reply or message, or null.
   copiedPart(cx) {
     if (this.clipAtPress == null || !this.replySelectable()) return null;
     const clip = readClip(cx);
@@ -3301,7 +3302,7 @@ export default class Threads extends View {
     const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
-      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? ""));
+      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
   }
@@ -5637,6 +5638,26 @@ export default class Threads extends View {
   // Lines already clipped to fit (rowLines), each one line high, with filter matches marked.
   // A line that turns out wider than its estimate truncates instead of wrapping, so the
   // row keeps the height the list was given.
+  // A closed turn's message or reply start, as one selectable text view, so a drag selects in
+  // it as in an open reply; only a click that does not move opens the turn (click). The
+  // lines are the shape's, already cut to fit, joined with line breaks and clipped to their
+  // rows. TextView draws in the theme's text colour whatever its parent or the HTML sets
+  // (checked on the rig: neither <font color> nor a style attribute reaches it), so lines in
+  // any other colour (a quote, an agent's message, a coloured bubble, a stop's reason) stay
+  // plain lines, as do lines while a search marks its hits, or where Herdr cannot select.
+  // TextView sets its text half a px lower than a centred line (rig, 2x), hence mt(-0.5).
+  selLines(t, id, lines, color, size, lh) {
+    const ink = String(theme().foreground ?? "").toLowerCase();
+    if (this.liteDraw || !this.replySelectable() || this.filterText() || String(color ?? "").toLowerCase() !== ink) return this.lines(t, lines, color, size, lh);
+    // Escaped once per line list (the shape's, kept on the turn), and split as a long reply is,
+    // since one TextView holds at most MD_MAX bytes. A drag selects within one of them.
+    const memo = (this.htmlMemo ??= new WeakMap());
+    let chunks = memo.get(lines);
+    if (!chunks) { chunks = htmlChunks(lines); memo.set(lines, chunks); }
+    const block = (c, i) => div().w_full().h(c.n * lh).overflow_hidden()
+      .child(TextView.html(chunks.length > 1 ? `${id}-${i}` : id, c.html).selectable(true).w_full().mt(-0.5));
+    return v_flex().flex_1().min_w(0).text_size(size).line_height(`${lh}px`).text_color(color).children(chunks.map(block));
+  }
   lines(t, lines, color, size, lh) {
     const q = this.filterText();
     return v_flex().flex_1().min_w(0).text_size(size).children(lines.map((l) => {
@@ -6565,7 +6586,8 @@ export default class Threads extends View {
   }
 
   // A command's chip, then its arguments wrapping to its right.
-  promptBlock(t, turn, sh, sel = false) {
+  promptBlock(t, turn, sh, sel = false, key = null) {
+    const sl = (id, ls, c, sz) => (key ? this.selLines(t, `th-sp-${id}-${key}`, ls, c, sz, lh) : this.lines(t, ls, c, sz, lh));
     const agent = turn.agent;
     const color = agent ? t.muted : t.foreground;
     const rt = this.rt();
@@ -6574,22 +6596,22 @@ export default class Threads extends View {
     if (sh.chip) {
       return h_flex().gap(6).items_start().min_w(0)
         .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
-        .when(sh.prompt.length > 0, (el) => el.child(this.lines(t, sh.prompt, color, size, lh)));
+        .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
     // quote that is the whole prompt keeps the prompt's own colour and size.
     if (sh.kinds) {
       return v_flex().min_w(0).children(sh.prompt.map((l, i) => {
         const k = sh.kinds[i];
-        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh));
+        if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl(i, [l], color, size));
         return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
-            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, [l], color, size, lh))
-            : this.lines(t, [l], t.muted, rt.small, lh));
+            ? h_flex().flex_1().min_w(0).when(!agent, (el) => el.font_medium()).child(sl(i, [l], color, size))
+            : sl(i, [l], t.muted, rt.small));
       }));
     }
-    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(this.lines(t, sh.prompt, color, size, lh));
+    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl("p", sh.prompt, color, size));
   }
 
   // A collapsed exchange: the sender (an agent's), the message, the strip under it, the line,
@@ -6608,14 +6630,14 @@ export default class Threads extends View {
       this.youGroup(t, turn, key, sel, [
         ...(sh.thumbs && !r.split ? [this.thumbStrip(t, turn, key)] : []),
         this.bubble(t, turn, [
-          this.promptBlock(bt, turn, sh, sel),
+          this.promptBlock(bt, turn, sh, sel, key),
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
       ]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
-        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -6693,15 +6715,16 @@ export default class Threads extends View {
         .when(pinNo != null, (x) => x.child(String(pinNo)))));
   }
 
-  // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
-  // a click on the row opens the turn.
+  // A collapsed row's reply start, drawn as Markdown at the reading size. Selectable like an
+  // open reply: a drag selects, and only a click that does not move opens the turn (click).
   // Its tables may run wider than the reading line (tableBlock), each its own Markdown view.
   cmdBlock(md, id, extra = 0) {
-    if (!(extra > 0)) return this.readBlock(div()).child(this.mdView(id, md, false));
+    const sel = this.replySelectable();
+    if (!(extra > 0)) return this.readBlock(div()).child(this.mdView(id, md, sel));
     const parts = splitTables(md);
     return this.readBlock(v_flex()).gap(this.paraGap()).children(parts.map((p, i) => p.table
-      ? this.tableBlock(this.mdView(`${id}-t${i}`, p.text, false), extra)
-      : this.mdView(`${id}-p${i}`, p.text, false)));
+      ? this.tableBlock(this.mdView(`${id}-t${i}`, p.text, sel), extra)
+      : this.mdView(`${id}-p${i}`, p.text, sel)));
   }
 
   // Whether the turn's session has replies from more than one named agent (turn.by), counting
@@ -6809,7 +6832,7 @@ export default class Threads extends View {
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, turn, sh), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
+      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, turn, sh, false, key), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
       this.liveLine(t, turn),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -6977,7 +7000,7 @@ export default class Threads extends View {
               .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
             : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
-          : this.mdView(tv(`th-you-${r.key}`), y.md, false);
+          : this.mdView(tv(`th-you-${r.key}`), y.md, this.replySelectable());
         const cmd = commandParts(turn);
         const ac = style.outline ? this.agentColor(t) : bt.foreground;
         const box = y.capped ? div().h(YOU_MAX).overflow_hidden() : div();

@@ -1465,6 +1465,31 @@ function visibleMd(md) {
     .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, " ")
     .replace(LIST_MARK, "");
 }
+// One line of plain text as HTML for a TextView: escaped, with tabs as spaces and every space
+// after the first in a run, or at the start, kept as a no-break space, since HTML collapses
+// them.
+export function htmlLine(line) {
+  return String(line ?? "").replace(/\t/g, "    ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/^ | (?= )/g, "&nbsp;");
+}
+
+// Lines of plain text as HTML for stacked TextViews, each at most max UTF-8 bytes (MD_MAX, as
+// mdChunks), whole lines only: [{ html, n }] with n lines in each.
+export function htmlChunks(lines, max = MD_MAX) {
+  const out = [];
+  let cur = [];
+  let bytes = 0;
+  for (const l of lines ?? []) {
+    const h = htmlLine(l);
+    const b = utf8Len(h) + 4;
+    if (cur.length && bytes + b > max) { out.push({ html: cur.join("<br>"), n: cur.length }); cur = []; bytes = 0; }
+    cur.push(h);
+    bytes += b;
+  }
+  if (cur.length) out.push({ html: cur.join("<br>"), n: cur.length });
+  return out;
+}
+
 export function inReply(clip, reply) {
   const norm = (x) => String(x ?? "").replace(/\s+/g, " ").trim();
   const c = norm(clip);

@@ -8,9 +8,9 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, wrapCap, MONO_EM, landPlan,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
-  keySheet, fitHints, hintWidth, agentState,
+  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -989,6 +989,19 @@ test("round 7: the rail card's day, the peak's widths, and a table flattened for
   expect(flattenMd("```js\nx()\n```\nthen")).toBe("[code] then");
 });
 
+test("landPlan: an earlier item at the top puts an item lower; the option nearest want, clear of minTop", () => {
+  const slots = [100, 40, 20, 300, 80];
+  // i 3: at the top (y 0), under item 2 (20), 1 (60), 0 (160), or centred in 600 (150).
+  expect(landPlan(slots, 3, 600, 0)).toEqual({ j: 3, how: "top", y: 0 });
+  expect(landPlan(slots, 3, 600, 32, 32, 150)).toEqual({ j: 1, how: "top", y: 60 });
+  expect(landPlan(slots, 3, 600, 152, 32)).toEqual({ j: 3, how: "center", y: 150 });
+  expect(landPlan(slots, 3, 600, 170, 32)).toEqual({ j: 0, how: "top", y: 160 });
+  // Nothing fits: the item at the top.
+  expect(landPlan([500, 300], 1, 600, 32, 32, 140)).toEqual({ j: 1, how: "top", y: 0 });
+  // Room for some of the item under it: 560 down in a 600 px list leaves only 40.
+  expect(landPlan([560, 100], 1, 600, 560, 32).y).not.toBe(560);
+});
+
 test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and still fits them", () => {
   expect(MONO_EM).toBeGreaterThan(0.6);
   expect(wrapCap("bun test", 20, 6)).toEqual({ text: "bun test", rows: 1, cut: false });
@@ -1006,15 +1019,15 @@ test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and stil
   expect(wrapCap("aaaa bbbb cccc dddd eeee ffff gggg", 10, 2).text).toBe("aaaa bbbb cccc dddd…");
 });
 
-test("landPlan: an earlier item at the top puts an item lower; the option nearest want, clear of minTop", () => {
-  const slots = [100, 40, 20, 300, 80];
-  // i 3: at the top (y 0), under item 2 (20), 1 (60), 0 (160), or centred in 600 (150).
-  expect(landPlan(slots, 3, 600, 0)).toEqual({ j: 3, how: "top", y: 0 });
-  expect(landPlan(slots, 3, 600, 32, 32, 150)).toEqual({ j: 1, how: "top", y: 60 });
-  expect(landPlan(slots, 3, 600, 152, 32)).toEqual({ j: 3, how: "center", y: 150 });
-  expect(landPlan(slots, 3, 600, 170, 32)).toEqual({ j: 0, how: "top", y: 160 });
-  // Nothing fits: the item at the top.
-  expect(landPlan([500, 300], 1, 600, 32, 32, 140)).toEqual({ j: 1, how: "top", y: 0 });
-  // Room for some of the item under it: 560 down in a 600 px list leaves only 40.
-  expect(landPlan([560, 100], 1, 600, 560, 32).y).not.toBe(560);
+test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines, each chunk within MD_MAX bytes", () => {
+  expect(htmlLine("a  b")).toBe("a&nbsp; b");
+  expect(htmlLine(" x<y> & z")).toBe("&nbsp;x&lt;y&gt; &amp; z");
+  expect(htmlLine("\tq")).toBe("&nbsp;&nbsp;&nbsp; q");
+  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one<br>two", n: 2 }]);
+  const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of a long pasted prompt, with é and ü in it`);
+  const c = htmlChunks(lines);
+  expect(c.length).toBeGreaterThan(1);
+  expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
+  for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
+  expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
 });
