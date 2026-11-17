@@ -110,14 +110,24 @@ mock.module("herdr", () => ({
 let pinWrites = 0;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there).
 const settingsWrites = [];
-// A script that has not ended in 4 s is stopped and the call fails, with a line naming it: a
-// hung child ends before bun's 5 s test limit kills it as a dangling process, which says
-// nothing of which call it was (once in CI).
-const EXEC_LIMIT_MS = 4000;
+// A script that has not ended in 4 s is killed with everything it started, and the call fails
+// with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
+// process, which says nothing of which call it was (once in CI). The script runs in a process
+// group of its own under this perl, which kills the group: a timeout on the call alone stops
+// only sh, and the extractor's sh waits for its pipeline before it heeds a TERM.
+const EXEC_LIMIT_S = 4;
+const EXEC_GUARD = `my $s = shift; my $late = 0;
+my $pid = fork() // die "fork: $!";
+if (!$pid) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
+$SIG{ALRM} = sub { $late = 1; kill "KILL", -$pid; kill "KILL", $pid };
+alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
+exit 124 if $late;
+exit($st & 127 ? 128 + ($st & 127) : $st >> 8);`;
 function execReal(cmd, args) {
-    try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"], timeout: EXEC_LIMIT_MS }), stderr: "" }; }
+    const opts = { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"], timeout: (EXEC_LIMIT_S + 2) * 1000 };
+    try { return { code: 0, stdout: execFileSync("perl", ["-e", EXEC_GUARD, String(EXEC_LIMIT_S), cmd, ...args], opts), stderr: "" }; }
     catch (e) {
-      if (e.code === "ETIMEDOUT") console.error(`exec: ${cmd} ${args.join(" ")} ran past ${EXEC_LIMIT_MS} ms and was stopped`);
+      if (e.status === 124 || e.code === "ETIMEDOUT") console.error(`exec: ${cmd} ${args.join(" ")} ran past ${EXEC_LIMIT_S} s and was killed`);
       return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
     }
 }
