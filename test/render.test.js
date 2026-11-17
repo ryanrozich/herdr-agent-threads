@@ -7405,6 +7405,61 @@ test("Rail side lists Left on the left and Right on the right", async () => {
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
 });
 
+// The owner's experiment, 17 Nov: "If you clicked it, the line would briefly extend, then
+// flash, and they would all fade out together so you see which one you clicked on."
+test("a clicked rail tick grows, then shrinks back over the flash's fade, and both are dropped together", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  const look = railLook(v.side());
+  const mark = () => {
+    rec = []; v.railView(theme); const r = rec; rec = null;
+    const at = r.findIndex((e) => e[0] === "id" && e[1] === "th-mark-1");
+    const calls = r.slice(at, at + 12);
+    return { r, w: calls.find((e) => e[0] === "w")[1], tr: calls.find((e) => e[0] === "transition") };
+  };
+  const at = mark();
+  const click = at.r.slice(at.r.findIndex((e) => e[0] === "id" && e[1] === "th-tick-1")).find((e) => e[0] === "on_click")[1];
+  cx.timers = [];
+  click({}, cx);
+  // Out to the grow width at the usual slide.
+  expect(v.railGrow).toEqual({ key: ks[1], on: true });
+  let m = mark();
+  expect(m.w).toBe(look.grow);
+  expect(look.grow).toBe(v.side() < 40 ? 24 : 36);
+  expect(m.tr).toEqual(["transition", "width", { duration: 90, easing: "ease-out" }]);
+  // The scroll lands and flashes the turn; when the flash starts to fade, the tick shrinks back
+  // over the same 1200 ms.
+  cx.timers = [];
+  v.flashTurn(ks[1], cx);
+  cx.flush(140);
+  expect(v.railGrow.on).toBe(true);
+  cx.flush(180);
+  expect(v.flash.on).toBe(false);
+  expect(v.railGrow).toEqual({ key: ks[1], on: false });
+  m = mark();
+  expect(m.w).toBe(look.sel);
+  expect(m.tr).toEqual(["transition", "width", { duration: 1200, easing: "ease-out" }]);
+  // Both are dropped together.
+  cx.flush(1500);
+  expect(v.flash).toBe(null);
+  expect(v.railGrow).toBe(null);
+  expect(mark().tr).toEqual(["transition", "width", { duration: 90, easing: "ease-out" }]);
+  // With no flash (the jump found nothing), the tick shrinks after 2 s and is dropped.
+  cx.timers = [];
+  click({}, cx);
+  expect(v.railGrow.on).toBe(true);
+  const keep = cx.timers.find((x) => x.ms === 2000);
+  cx.timers = [];
+  keep.fn(cx);
+  expect(v.railGrow).toEqual({ key: ks[1], on: false });
+  expect(cx.timers.map((x) => x.ms)).toEqual([1260]);
+  cx.timers[0].fn(cx);
+  expect(v.railGrow).toBe(null);
+});
+
 // The owner, 17 Nov: "it would be cool if the card went away when we click on it so it doesn't
 // obscure what we're pulling up."
 test("a click on a rail tick closes its card, and it stays closed while the pointer stays on that tick", async () => {
