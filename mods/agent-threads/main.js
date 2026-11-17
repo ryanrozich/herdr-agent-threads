@@ -165,7 +165,7 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 const TOP_BAND = 32;
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
-const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 600 };
+const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 1200 };
 // The day pill over the list shows while you scroll, and goes this long after you stop.
 const DAY_PILL_MS = 1500;
 const PDAY_H = 30; // a day header in the Pinned view
@@ -7391,13 +7391,17 @@ export default class Threads extends View {
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
         const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
+          .on_click((_e, cx) => { cx.stop_propagation(); this.railCardClose(k.key); this.railJump(k.key, cx); })
           .child(left ? mark.left(look.right) : mark.right(look.right));
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
         return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
-          if (on) { this.railHover = k.key; this.railLeave = null; cx.notify(); return; }
+          // A click closed this tick's card (railCardClose): it stays closed until the pointer
+          // leaves the tick.
+          if (on && this.railQuiet === k.key) return;
+          if (on) { this.railHover = k.key; this.railLeave = null; this.railQuiet = null; cx.notify(); return; }
+          if (this.railQuiet === k.key) this.railQuiet = null;
           if (this.railHover !== k.key || this.railCardOn) return;
           // The card stays 200 ms after the pointer leaves its tick, so it can cross to the
           // card (whose own hover then keeps it); another tick's hover cancels the wait.
@@ -7453,6 +7457,14 @@ export default class Threads extends View {
     cx.timer.after(FLASH.AFTER, (cx) => { if (this.flashN === n) { this.flash = { key, on: true, n }; cx.notify(); } });
     cx.timer.after(FLASH.AFTER + 40, (cx) => { if (this.flashN === n && this.flash) { this.flash = { ...this.flash, on: false }; cx.notify(); } });
     cx.timer.after(FLASH.AFTER + 40 + FLASH.FADE + 60, (cx) => { if (this.flashN === n) { this.flash = null; cx.notify(); } });
+  }
+  // A click on a tick closes its card, so the card does not cover the turn the click brings
+  // up, and keeps it closed while the pointer stays on that tick (railQuiet).
+  railCardClose(key) {
+    this.railHover = null;
+    this.railCardOn = false;
+    this.railLeave = null;
+    this.railQuiet = key;
   }
   railJump(key, cx) {
     const y = this.railTickY(key);
