@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -362,16 +362,19 @@ test("the working card's estimate uses the 22 px prompt and 20 px note lines it 
     // The smallest it can be: padding, one prompt line in the bubble, the strip under it,
     // the live line, one note line, padding.
     expect(est).toBeGreaterThanOrEqual(8 + 12 + 22 + 6 + 16 + 6 + 24 + 6 + 20 + 10);
-    // Each prompt line counts 21 px at the bubble's text width, each note line 20 px.
-    const g = v.workingGeom(r.turn);
-    expect(est).toBe(8 + 12 + g.lines * 22 + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
-    const tw = (await import("../mods/agent-threads/ui.js")).bubbleMax(width) - 20;
-    expect(g.lines).toBe(Math.max(1, Math.min(6, v.wrapped(g.prompt, tw, 6.2))));
+    // Each prompt line of the row's shape (as its closed row draws it) counts 22 px, each note
+    // line 20 px.
+    const g = v.workingGeom(r.turn, r.shape);
+    expect(g.lines).toBe(r.shape.p);
+    expect(est).toBe(8 + 12 + g.promptH + 6 + 16 + 6 + 24 + 6 + g.note * 20 + 10);
+    expect(g.promptH).toBe(r.shape.p * 22 + (r.shape.pMore ? 18 : 0));
     rec = [];
     v.workingItem(theme, r);
     const lh = rec.filter(([n]) => n === "line_height").map(([, x]) => x);
+    // Prompt lines are 22 px rows (promptBlock), the note sets 20 px lines.
+    const hs = rec.filter(([n]) => n === "h").map(([, x]) => x);
     rec = null;
-    expect(lh).toContain("22px");
+    expect(hs.filter((x) => x === 22).length).toBeGreaterThanOrEqual(r.shape.p);
     expect(lh).toContain("20px");
   }
   expect(seen).toBe(3);
@@ -477,6 +480,90 @@ test("a prompt answered together with a hidden agent message borrows its reply (
   v.prefs = { ...v.prefs, agentTurns: true };
   draw(v, cx);
   expect(v.shape(t1).reply.join(" ")).toBe("Answered together with #2");
+});
+
+test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "First question", ts: at(0) },
+    { k: "p", o: "human", t: "A second thought", ts: at(1) },
+    { k: "t", t: "An answer to both." },
+    { k: "d", ms: 2000, ts: at(2) },
+  ]);
+  const t1 = v.current().turns[0];
+  expect(t1.answeredBy).toBe(2);
+  // No time of its own: not a bare "Worked".
+  expect(v.workText(t1)).toBe("Answered with #2");
+  expect(v.workText(v.current().turns[1])).toBe("Worked for 2s");
+  // Opened, its note is a link (in the accent colour, with a click).
+  v.sel = "0:1";
+  v.action("open", cx);
+  const note = v.rows().find((r) => r.kind === "noreply" && r.key.includes("0:1"));
+  expect(note).toBeTruthy();
+  rec = [];
+  v.partContent(theme, note, false);
+  const drawn = rec;
+  rec = null;
+  expect(drawn).toContainEqual(["text_color", theme.accent]);
+  expect(v.noReplyText(t1)).toContain("Go to that reply");
+  // The link opens the answering turn with the start of its reply at the top.
+  v.goToAnswer(t1);
+  expect(v.sel).toBe("0:2");
+  expect(v.open.has("0:2")).toBe(true);
+  expect(v.scrollTo).toMatchObject({ key: "md:0:2:0", how: "land" });
+  draw(v, cx);
+  expect(v.rows().some((r) => r.key === "md:0:2:0")).toBe(true);
+});
+
+test("the info icon is always shown: dim at half strength on other turns, dim on the selected one, accent with its card open, and no handler", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const keys = v.turnKeys(v.rows());
+  const [a, b] = keys.slice(-2);
+  v.sel = b;
+  expect(v.infoState(a)).toBe("hover");
+  expect(v.infoState(b)).toBe("sel");
+  const drawn = (state) => { rec = []; v.infoIcon(theme, state); const c = rec; rec = null; return c; };
+  const other = drawn("hover");
+  expect(other.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
+  expect(other).toContainEqual(["opacity", 0.5]);
+  // No hover style and no handler: neither shows on the owner's machine inside a list row.
+  expect(other.some((e) => e[0] === "hover" || /^on_/.test(String(e[0])))).toBe(false);
+  const sel = drawn("sel");
+  expect(sel.filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.dim]]);
+  expect(sel.some((e) => e[0] === "opacity")).toBe(false);
+  expect(drawn("on").filter((e) => e[0] === "text_color")).toEqual([["text_color", theme.accent]]);
+});
+
+test("no list row registers an event handler: Herdr throws on one inside the item renderer", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  draw(v, cx);
+  // Two turns with no reply of their own: one answered together with a later turn, one cut
+  // off and answered in a later one. Their notes link to the answer.
+  const ks = v.turnKeys(v.rows());
+  const s = v.current();
+  const [t1, t2] = [v.findTurn(ks[1]), v.findTurn(ks[3])];
+  t1.after = []; t1.answeredBy = t1.n + 1; t1.shapeKey = null;
+  t2.after = []; t2.answeredIn = t2.n + 1; t2.errors = ["cut off"]; t2.shapeKey = null;
+  expect(s.turns.includes(t1)).toBe(true);
+  v.rowsKey = null;
+  // Open every turn, select one, and draw every row the list has.
+  for (const k of v.turnKeys(v.rows())) v.open.add(k);
+  v.sel = v.turnKeys(v.rows()).at(-2);
+  const rows = v.rows();
+  rec = [];
+  v.listItems(theme, rows, v.slotsMemo ?? rows.map(() => 40), { start: 0, end: rows.length }, true, false);
+  const drawn = rec;
+  rec = null;
+  const handlers = drawn.filter((e) => /^on_/.test(String(e[0])));
+  expect(rows.length).toBeGreaterThan(10);
+  expect(rows.filter((r) => r.kind === "noreply").length).toBeGreaterThanOrEqual(2);
+  expect(handlers.map((e) => e[0])).toEqual([]);
+  // The note's link works through the list's own item click.
+  v.click(`nr:${ks[1]}`, cx);
+  expect(v.sel).toBe(`${ks[1].split(":")[0]}:${t1.n + 1}`);
+  expect(v.scrollTo?.key).toBe(`md:${v.sel}:0`);
+  expect(v.scrollTo?.how).toBe("land");
+  v.click(`nr:${ks[3]}`, cx);
+  expect(v.sel).toBe(`${ks[3].split(":")[0]}:${t2.n + 1}`);
 });
 
 test("an agent row's sender label leaves room for the time and #n at 240 px (R6)", async () => {
@@ -1752,15 +1839,14 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   const partOfLine = () => { rec = []; v.partContent(theme, v.rows().find((r) => r.key === `rhead:${key}`), false); const c = rec; rec = null; return c; };
   const rowOf = () => { rec = []; v.rowItem(theme, v.rows().find((r) => r.key === key), true); const c = rec; rec = null; return c; };
   const icons = (c) => c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  // A closed turn: its row's line has the icon, dim when selected, revealed by the pointer
-  // otherwise (no colour of its own, inside a hover reveal).
+  // A closed turn: its row's line has the icon, dim when selected, at half strength otherwise.
   v.sel = key;
   expect(icons(rowOf())).toContain("info.svg");
   v.sel = null;
   let c = rowOf();
   expect(icons(c)).toContain("info.svg");
   let at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
   // An open turn with its line closed: the icon too.
   v.open = new Set([key]);
   v.sel = key;
@@ -1770,9 +1856,8 @@ test("Turn card: every settled Worked for line has the info icon, on the selecte
   v.sel = null;
   expect(v.infoState(key)).toBe("hover");
   c = partOfLine();
-  expect(c.some((e) => e[0] === "id" && e[1] === `rh:${key}`)).toBe(true);
   at = c.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("info.svg"));
-  expect(c.slice(at + 1, at + 4).some((e) => e[0] === "text_color")).toBe(false);
+  expect(c.slice(at + 1, at + 5)).toContainEqual(["opacity", 0.5]);
   // A press at the line's right end opens the card on that turn and leaves the line closed.
   v.pressX = right - 6;
   v.click(`rhead:${key}`, cx);
@@ -3004,7 +3089,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   draw(v, cx);
 });
 
-test("v in a pane from 480 px splits the Pinned column beside it, about a third wide, kept apart from the main pane; v moves between them", async () => {
+test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700, kept apart from the main pane; v moves between them", async () => {
   const { v, cx } = await pinPane("--extra", "6");
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } }; // as the launcher records it
@@ -3022,7 +3107,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, about a third 
   v.settleSplit();
   expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
-  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 252 }]]);
+  expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.focus").map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 380 }]]);
   // The header's Pinned button says the column is open, and v or a click focuses it.
   expect(v.headerButtons().find((b) => b[0] === "th-pinned").slice(2, 7)).toEqual(["Go to the Pinned column (v)", "pinned", true, null, "Pinned"]);
   log = [];
@@ -3289,7 +3374,7 @@ test("Pinned view: each closed pin is a compact row, its digit, number, time, tw
   expect(state.shared["threads.debug"].t4.detail.filter((x) => x.startsWith("pin#")).length).toBe(3);
 });
 
-test("Pinned column: five pins, one day apart, fit a 240 to 320 px column at a 1150 px window without scrolling", async () => {
+test("Pinned column: five pins, one day apart, fit a 240 to 400 px column at a 1150 px window without scrolling", async () => {
   const { v, cx } = await pinsShown(["--only", "5", "--gap", "86400"], [4, 2, 0, 3, 1]);
   for (const width of [240, 280, 320, 400]) {
     v.width = width;
@@ -3392,7 +3477,7 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   log = [];
   v.settleSplit();
-  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 320 }], ["pane.focus", { pane: "p2" }]]);
+  expect(log.map((x) => x.slice(1))).toEqual([["layout.resize", { id: "p3", px: 424 }], ["pane.focus", { pane: "p2" }]]);
   draw(v, cx);
   // The owner closes the column: the next pin does not open it again, and v still does.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
@@ -3406,6 +3491,39 @@ test("the first pin opens the Pinned column when there is room and keeps the key
   expect(log.filter(([, n]) => n === "pane.split").length).toBe(1);
 });
 
+test("the Pinned column keeps the width the owner leaves it at, not the split's own resize", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.width = 960;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  // In the column: its first sizes (Herdr's default, then the split's resize) are not kept.
+  const col = new Threads();
+  col.pinnedPane = true;
+  col.me = () => ({ pane: "p3" });
+  col.paneW = 250;
+  col.shareWidth();
+  col.paneW = 382;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toBeUndefined();
+  // Once settled, a drag to 298 px is kept as Herdr's size, the frame included.
+  col.firstSizeAt = Date.now() - 2000;
+  col.paneW = 298;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"]).toEqual({ px: 300 });
+  // The next column opens at that width.
+  log = [];
+  v.key(keyEv("v"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 300 }]);
+  // The fit button's own resize of the column is not taken as the owner's choice.
+  state.shared["threads.pinWidth"] = { px: 300, hold: Date.now() + 1500 };
+  col.paneW = 340;
+  col.shareWidth();
+  expect(state.shared["threads.pinWidth"].px).toBe(300);
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+});
+
 test("Threads opening with pins opens the Pinned column once, from 480 px, and not under it", async () => {
   const first = await pinPane("--extra", "6");
   log = [];
@@ -3413,7 +3531,7 @@ test("Threads opening with pins opens the Pinned column once, from 480 px, and n
   first.v.action("pin", first.cx); // at 380 px: no column
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   const file = await saved();
-  for (const [width, px] of [[479, null], [498, 240]]) {
+  for (const [width, px] of [[479, null], [498, 298]]) {
     log = [];
     recordFiles[PINS] = JSON.stringify(file);
     const w = new Threads();
@@ -3572,10 +3690,8 @@ test("the person's bubble is plain and an agent's plum by default, and the panel
   expect(you().style.fill).toBe("#e6e6e614");
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
-  v.action("youName:Sam", cx);
-  expect(v.prefs.youName).toBe("Sam");
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", youName: "You", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -3685,8 +3801,8 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   draw(v, cx);
 });
 
-test("names: yours over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+test("names: none over your message, none over a reply (one agent), who replied in a mixed session, Agent when the session records none", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
   const row = v.rows().find((r) => r.kind === "turn" && !r.turn.agent);
   const drawn = (r) => { rec = []; v.rowItem(theme, r, true); const c = rec; rec = null; return c.filter((x) => x[0] === "child" && typeof x[1] === "string").map((x) => x[1]); };
   expect(v.current().agentName).toBe("shop-agent");
@@ -3721,33 +3837,12 @@ test("names: yours over your message, none over a reply (one agent), who replied
   expect(v.agentName({ ...row.turn, by: "plan" })).toBe("plan");
   v.current().agentName = null;
   expect(v.agentName(row.turn)).toBe("Agent");
-  // The settings panel's field: typing names you, Esc gives the keys back.
-  const field = v.nameInput;
-  expect(field.value()).toBe("You");
-  field.handlers.focus({}, cx);
-  expect(v.naming).toBe(true);
-  const pins = v.pinnedAll().length;
-  expect(v.key(keyEv("p"), cx)).toBeUndefined(); // the field types it; no pin
-  expect(v.pinnedAll().length).toBe(pins);
-  field.set_value("  Sam ");
-  field.handlers.change({}, cx);
-  expect(v.prefs.youName).toBe("Sam");
-  // Your name heads the turn in the image viewer; the list draws no name over your message.
-  expect(drawn(row)).not.toContain("Sam");
-  expect(v.key(keyEv("escape"), cx)).toBe(true);
-  expect(v.naming).toBe(false);
-  expect(field.value()).toBe("Sam");
-  // A cleared field shows the name in use again when it loses the keys.
-  field.handlers.focus({}, cx);
-  field.set_value("");
-  field.handlers.change({}, cx);
-  field.handlers.blur({}, cx);
-  expect(field.value()).toBe("Sam");
+  // There is no name setting: the settings panel has no name field, and the image viewer
+  // heads your turn "You".
   v.settingsOpen = true;
-  draw(v, cx);
-  v.action("resetSettings", cx);
-  expect(field.value()).toBe("You");
-  await new Promise((r) => setTimeout(r, 20));
+  rec = []; v.settingsPanel(theme); const panel = rec; rec = null;
+  expect(panel).not.toContainEqual(["child", "Your name"]);
+  expect(v.viewerTurn(row.turn).who).toBe("You");
 });
 
 
@@ -4945,6 +5040,9 @@ test("rows left unshaped by stopped renders: past the draw's time the rest are n
   v.shape = function (...a) { calls++; return shape.apply(this, a); };
   const reshape = v.reshape;
   v.reshape = function (...a) { done++; const out = reshape.apply(this, a); this.shapeSpent = done >= 10 ? 1e9 : 0; return out; };
+  // The draw's time is the counted one above, not the clock: shape() also adds its own
+  // elapsed time, which on a slow CI runner could pass the 2 to 12 ms limit by itself.
+  v.shapeBudget = 1e6;
   v.shapeSpent = 0;
   done = 0;
   calls = 0;
@@ -5783,7 +5881,7 @@ test("a settings change in a long session reshapes rows over several frames, the
   expect(v.shapeLeft).toBe(0);
 });
 
-test("the rail card: a hovered tick shows its turn's number and time over two lines of its prompt, beside it on the left", async () => {
+test("the rail card: a hovered tick shows the day, time and number, two lines of its prompt and three of its reply, beside it on the left", async () => {
   const { v, cx, keys } = await pinPane("--extra", "6");
   v.listH = 600;
   draw(v, cx);
@@ -5796,22 +5894,75 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(false);
   expect(r.some((e) => e[0] === "tooltip")).toBe(false);
   // Pointing at a tick opens its card; leaving it closes it.
-  const hovers = r.filter((e) => e[0] === "on_hover").map((e) => e[1]);
-  expect(hovers.length).toBe(ticks.length);
+  // The first hover report is the rail's own (it holds the window); then one per tick.
+  const all = r.filter((e) => e[0] === "on_hover").map((e) => e[1]);
+  expect(all.length).toBe(ticks.length + 1);
+  const hovers = all.slice(1);
+  all[0](true, cx);
+  expect(v.railOn).toBe(true);
+  all[0](false, cx);
+  expect(v.railOn).toBe(false);
   hovers[1](true, cx);
   expect(v.railHover).toBe(ks[1]);
   rec = []; v.railView(theme); r = rec; rec = null;
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(true);
   const turn = v.findTurn(ks[1]);
   const c = v.railCard(ticks[1]);
-  expect(c.head).toMatch(new RegExp(`^#${turn.n} · \\d`));
+  // The first line: the day leads (muted), then the time and the number (dim).
+  expect(c.day).toBe(railDay(turn.ts));
+  expect(c.rest).toMatch(new RegExp(`^\\d{1,2}:\\d\\d\\s[AP]M · #${turn.n}$`));
+  expect(r).toContainEqual(["child", c.day]);
+  expect(r).toContainEqual(["child", c.rest]);
   expect(c.body.length).toBeGreaterThan(0);
-  expect(c.body.length).toBeLessThanOrEqual(2 * 40);
-  expect(r.some((e) => e[0] === "child" && e[1] === c.head)).toBe(true);
+  expect(c.body.length).toBeLessThanOrEqual(2 * 46);
+  // The reply on three lines at most, flattened, in the muted colour.
+  expect(c.reply.length).toBeGreaterThan(0);
+  expect(c.reply.length).toBeLessThanOrEqual(3 * 50);
+  expect(c.reply).not.toMatch(/[*`#|]/);
+  expect(r).toContainEqual(["child", c.reply]);
+  expect(r.some((e) => e[0] === "w" && e[1] === 300)).toBe(true);
+  // The peak: the hovered tick at its peak (24 px, 16 in this gutter under 40 px), its
+  // neighbours less by the square of how near they are.
+  const look = railLook(v.side());
+  const ws = r.filter((e) => e[0] === "w").map((e) => e[1]);
+  expect(look.peak).toBe(v.side() < 40 ? 16 : 24);
+  expect(ws).toContain(look.peak);
+  expect(ws).toContain(railSwell(look.mark, look.peak, v.railTicks().L.pitch));
   hovers[0](false, cx);
   expect(v.railHover).toBe(ks[1]);
+  // Leaving the tick keeps the card 200 ms, so the pointer can cross to it; then it closes.
+  cx.timers.length = 0;
   hovers[1](false, cx);
+  expect(v.railHover).toBe(ks[1]);
+  expect(cx.timers.map((x) => x.ms)).toEqual([200]);
+  cx.timers[0].fn(cx);
   expect(v.railHover).toBe(null);
+  // Another tick's hover before the wait ends cancels it.
+  hovers[1](true, cx);
+  cx.timers.length = 0;
+  hovers[1](false, cx);
+  hovers[2](true, cx);
+  cx.timers[0].fn(cx);
+  expect(v.railHover).toBe(ks[2]);
+  // The pointer on the card keeps it: the wait finds the card hovered and leaves it open.
+  v.railHover = ks[1];
+  v.railCardOn = true;
+  cx.timers.length = 0;
+  hovers[1](false, cx);
+  expect(cx.timers.length).toBe(0);
+  expect(v.railHover).toBe(ks[1]);
+  // The card's pin pins its turn; a second press unpins it.
+  rec = []; v.railView(theme); const rc = rec; rec = null;
+  const at = rc.findIndex((e) => e[0] === "id" && e[1] === "th-rail-card-pin");
+  expect(at).toBeGreaterThan(-1);
+  expect(rc.slice(at).find((e) => e[0] === "tooltip")[1]).toBe(`Pin #${turn.n} (p)`);
+  const press = rc.slice(at).find((e) => e[0] === "on_click")[1];
+  press({}, cx);
+  expect(v.isPinnedTurn(turn)).toBe(true);
+  press({}, cx);
+  expect(v.isPinnedTurn(turn)).toBe(false);
+  v.railCardOn = false;
+  v.railHover = null;
   // The test command opens it by turn number, since the test window has no pointer.
   v.debug = true;
   v.action(`debugRailCard:${turn.n}`, cx);
@@ -5822,11 +5973,29 @@ test("the rail card: a hovered tick shows its turn's number and time over two li
   v.sel = ks[2];
   v.action("pin", cx);
   ({ ticks } = v.railTicks());
-  expect(v.railCard(ticks[2]).head).toMatch(/ · pinned$/);
+  expect(v.railCard(ticks[2]).pinned).toBe(true);
+  expect(v.railCard(ticks[1]).pinned).toBe(false);
+  // While a card is open, p pins the card's turn, not the selected one.
+  v.railHover = ks[3];
+  v.action("pin", cx);
+  ({ ticks } = v.railTicks());
+  expect(ticks[3].pinned).toBe(true);
+  expect(ticks[2].pinned).toBe(true);
+  v.railHover = null;
+  // Rail side Left: the lane on the left edge, the card anchored on its left centre.
+  v.prefs = { ...v.prefs, railSide: "left" };
+  v.railHover = ks[1];
+  rec = []; v.railView(theme); r = rec; rec = null;
+  expect(r.some((e) => e[0] === "anchor" && e[1] === "left_center")).toBe(true);
+  const lk = railLook(v.side());
+  expect(r.some((e) => e[0] === "pl" && e[1] === RAIL.CARD_GAP + Math.max(0, lk.peak + lk.right - lk.lane))).toBe(true);
+  expect(r).toContainEqual(["left", 0]);
+  v.prefs = { ...v.prefs, railSide: "right" };
+  v.railHover = null;
+  // Every tick is one turn at any height: no tick stands for several.
   v.listH = 12;
   ({ ticks } = v.railTicks());
-  expect(ticks[0].turns.length).toBeGreaterThan(1);
-  expect(v.railCard(ticks[0]).head).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
+  expect(ticks.every((k) => k.turns.length === 1)).toBe(true);
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
@@ -5836,7 +6005,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   const ks = keys();
   expect(v.railShown()).toBe(true);
   let { L, ticks } = v.railTicks();
-  expect(L.per).toBe(1);
+  expect(L.pitch).toBe(9);
   expect(ticks.map((k) => k.key)).toEqual(ks);
   // No scrollbar in the body any more, and the rail is drawn in it.
   rec = []; v.render(cx); const drawn = rec; rec = null;
@@ -5862,7 +6031,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   expect(v.side()).toBeGreaterThan(56);
   rec = []; v.railView(theme); const wide = rec; rec = null;
   expect(wide.filter((e) => e[0] === "w").map((e) => e[1])).toEqual(expect.arrayContaining([32, 10, 16]));
-  expect(wide.some((e) => e[0] === "pr" && e[1] === 14)).toBe(true);
+  expect(wide.some((e) => e[0] === "right" && e[1] === 14)).toBe(true);
   expect(r.some((e) => e[0] === "bg" && e[1] === theme.accent)).toBe(true);
   // One-line tooltips: number, time, pinned, the prompt's start.
   expect(v.railTip(ticks[1])).toMatch(new RegExp(`^#${v.findTurn(ks[1]).n} · .+ · pinned · `));
@@ -6670,4 +6839,183 @@ test("a reply's table may run wider than the reading line, centred on it, up to 
   // A pane no wider than the column leaves the table on the reading line.
   v.paneW = v.width;
   expect(extraOf(md[1])).toBe(0);
+});
+
+test("the rail's window: 9 px a tick in a long session, at most 540 px, following the list, faded ends, dots for a pin or the running turn past an end", async () => {
+  const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
+  v.listH = 900;
+  draw(v, cx);
+  const ks = keys();
+  expect(ks.length).toBe(150);
+  // Pin an early turn, then follow the newest turn: the window rests at the end.
+  v.sel = ks[5];
+  v.action("pin", cx);
+  v.sel = ks.at(-1);
+  v.follow = true;
+  let w = v.railTicks();
+  expect(w.cut).toBe(true);
+  expect(w.ticks.length).toBeLessThanOrEqual(58);
+  expect(w.ticks.at(-1).key).toBe(ks.at(-1));
+  expect(w.ticks.every((k) => k.turns.length === 1)).toBe(true);
+  // The top end is cut, so its three ticks fade; the bottom is the real last turn.
+  expect(w.ticks.slice(0, 3).map((k) => k.fade)).toEqual([0.25, 0.5, 0.75]);
+  expect(w.ticks.at(-1).fade).toBe(1);
+  // The pin above the window shows as a dot there.
+  expect(w.dotTop).toEqual({ i: 5, live: false });
+  expect(w.dotBottom).toBe(null);
+  // Only the window's ticks are drawn, with a row at each end.
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  expect(r.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-tick-") && !String(e[1]).startsWith("th-tick-card")).length).toBe(w.ticks.length);
+  expect(r).toContainEqual(["id", "th-rail-up"]);
+  // Each mark slides a change of width over 90 ms, natively (no timer in the mod).
+  expect(r.filter((e) => e[0] === "transition" && e[1] === "width").length).toBe(w.ticks.length);
+  expect(r).toContainEqual(["transition", "width", { duration: 90, easing: "ease-out" }]);
+  expect(r).toContainEqual(["tooltip", `Pinned #${v.findTurn(ks[5]).n} above`]);
+  // A press on the dot brings the pin into the window, and the list stays.
+  const scroll = v.scrollTo;
+  v.railReveal(5, cx);
+  w = v.railTicks();
+  expect(w.ticks.some((k) => k.i === 5)).toBe(true);
+  expect(v.scrollTo).toBe(scroll);
+  // It stays there until the list moves; then the window follows the list again.
+  v.follow = false;
+  drawRange(v, 100, 106);
+  v.viewRange = [100, 106];
+  w = v.railTicks();
+  expect(w.ticks.some((k) => k.i === 5)).toBe(false);
+  const on = w.ticks.filter((k) => k.inView).map((k) => k.i);
+  expect(on.length).toBeGreaterThan(0);
+  expect(Math.min(...on) - w.top).toBeGreaterThanOrEqual(RAIL.SPARE);
+  // While the pointer is on the rail, the window holds where it is.
+  const top = w.top;
+  v.railOn = true;
+  v.viewRange = [0, 4];
+  expect(v.railTicks().top).toBe(top);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(0);
+});
+
+test("the wheel on the rail moves its window a tick at a time and stops there, so the list stays; the pointer on the card holds it too", async () => {
+  const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
+  v.listH = 900;
+  draw(v, cx);
+  const ks = keys();
+  v.sel = ks.at(-1);
+  v.follow = true;
+  const w = v.railTicks();
+  const top = w.top;
+  let stopped = 0;
+  const wcx = { ...cx, stop_propagation() { stopped++; }, notify() {} };
+  // The rail's handler is the one after its hover report.
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  const wheel = r.find((e) => e[0] === "on_scroll_wheel")[1];
+  // 9 px of upward travel is one tick earlier; 4 px is not yet one, and the rest carries.
+  wheel({ delta: { x: 0, y: 4 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  wheel({ delta: { x: 0, y: 5 }, touch_phase: "moved" }, wcx);
+  expect(v.railOn).toBe(true);
+  expect(v.railTicks().top).toBe(top - 1);
+  wheel({ delta: { x: 0, y: 27 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 4);
+  // A wheel that counts lines: a line a tick, down towards later turns.
+  wheel({ delta: { x: 0, y: -40 }, delta_lines: { x: 0, y: -2 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top - 2);
+  expect(stopped).toBe(4);
+  // The list did not move or stop following.
+  expect(v.follow).toBe(true);
+  // It never goes past either end.
+  wheel({ delta: { x: 0, y: 9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(0);
+  wheel({ delta: { x: 0, y: -9000 }, touch_phase: "moved" }, wcx);
+  expect(v.railTicks().top).toBe(top);
+  // Off the rail the window follows the list again.
+  v.railOn = false;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // The pointer on a card holds the window, and the tick's hover leaving does not close it.
+  v.railHover = ks[140];
+  v.railCardOn = true;
+  wheel({ delta: { x: 0, y: 90 }, touch_phase: "moved" }, wcx);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(top - 10);
+  v.railCardOn = false;
+  expect(v.railTicks().top).toBe(top);
+  // A short session has nothing to move: the wheel goes on to the list.
+  const short = await pinPane("--extra", "6");
+  short.v.listH = 600;
+  draw(short.v, short.cx);
+  short.v.railTicks();
+  stopped = 0;
+  short.v.railWheel({ delta: { x: 0, y: 30 }, touch_phase: "moved" }, wcx);
+  expect(stopped).toBe(0);
+});
+
+// The owner's fault, 16 Nov: a prompt typed while the agent worked (Claude Code queues it and
+// writes it as a queued_command attachment) showed only its quote line, as plain text, while
+// its turn ran and was selected.
+test("a queued prompt that opens with a quote shows whole on the running turn's card, the quote behind its bar", async () => {
+  const prompt = [
+    "> The checkout total rounds each line before it sums them, so a cart of three items at 3.335 shows a cent more than the receipt does.",
+    "I think the rounding should happen once, at the end, the way the receipt does it.",
+    "Can you check where the line totals are built?",
+    "",
+    "The receipt code is in billing/receipt.ts and the cart code is in cart/total.ts.",
+    "Both use the same money helper but call it at different points.",
+    "Keep the helper as it is.",
+    "",
+    "Which of the two should change?",
+  ].join("\n");
+  const at = (s) => `2026-11-16T10:00:${String(s).padStart(2, "0")}.000Z`;
+  const lines = [
+    { type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, message: { role: "user", content: "Fix the cart total" } },
+    { type: "assistant", uuid: "a1", timestamp: at(5), sessionId: "s", message: { id: "m1", role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "Looking at the cart." }, { type: "tool_use", id: "t1", name: "Read", input: { file_path: "cart/total.ts" } }] } },
+    { type: "queue-operation", operation: "enqueue", timestamp: at(20), sessionId: "s", content: prompt },
+    { type: "user", uuid: "u2", timestamp: at(25), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
+    { type: "queue-operation", operation: "remove", timestamp: at(26), sessionId: "s", content: prompt },
+    { type: "attachment", uuid: "q1", timestamp: at(26), sessionId: "s", attachment: { type: "queued_command", prompt, origin: { kind: "human" }, humanTurn: true, commandMode: "prompt" } },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "threads-queued-"));
+  const file = join(dir, "q.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  draw(v, cx);
+  const turn = v.current().turns.at(-1);
+  // The reader keeps all of it.
+  expect(turn.prompt).toBe(prompt);
+  // Running and selected: the working card.
+  const key = v.turnKeys(v.rows()).at(-1);
+  v.sel = key;
+  const r = v.rows().find((x) => x.key === key);
+  expect(r.kind).toBe("working");
+  rec = [];
+  v.workingItem(theme, r);
+  const drawn = rec;
+  rec = null;
+  const text = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]).join(" ");
+  for (const w of ["I think the rounding", "billing/receipt.ts", "Keep the helper", "Which of the two should change?"]) expect(text).toContain(w);
+  // The quote is drawn behind its bar, without its "> ".
+  expect(r.shape.kinds?.[0]).toBe("q");
+  expect(text).not.toContain("> The checkout");
+  expect(v.estimate(r)).toBeGreaterThan(8 + 12 + 6 * 22);
+});
+
+// The owner's fault, 16 Nov: the viewer drew a quote as "> " text. A run of quote lines is drawn as
+// the bubble draws it: no marker, muted, behind one bar.
+test("the image viewer draws a prompt's quote without its marker, muted, behind one bar beside the run", () => {
+  const prompt = "> The chips wrap on tablet and the receipt line breaks.\n> They also clip on the phone.\nI think the width is fixed. [Image #41]\n\nWhich file sets it?";
+  const { calls, size } = viewer({ turn: { ...VIEW_TURN, prompt } });
+  size(1600, 1000);
+  const drawn = calls();
+  const strings = drawn.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  const all = strings.join(" ");
+  expect(all).toContain("The chips wrap on tablet");
+  expect(all).toContain("They also clip on the phone.");
+  expect(all).toContain("Which file sets it?");
+  expect(strings.some((x) => /^ {0,3}>/.test(x))).toBe(false);
+  // One bar for the run of two quote lines: an absolute box 2 px wide.
+  const bars = drawn.filter((e, i) => e[0] === "absolute" && drawn.slice(i, i + 8).some((x) => x[0] === "w" && x[1] === 2));
+  expect(bars.length).toBe(1);
+  // The quote is in the bubble's muted ink; the person's own words in its ink.
+  expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
