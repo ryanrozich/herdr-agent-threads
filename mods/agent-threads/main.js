@@ -7260,14 +7260,21 @@ export default class Threads extends View {
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
         return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
-          if (on) this.railHover = k.key;
-          else if (this.railHover === k.key && !this.railCardOn) this.railHover = null;
-          cx.notify();
+          if (on) { this.railHover = k.key; this.railLeave = null; cx.notify(); return; }
+          if (this.railHover !== k.key || this.railCardOn) return;
+          // The card stays 200 ms after the pointer leaves its tick, so it can cross to the
+          // card (whose own hover then keeps it); another tick's hover cancels the wait.
+          const leave = (this.railLeave = {});
+          cx.timer.after(RAIL.CARD_KEEP_MS, (cx) => {
+            if (this.railLeave !== leave) return;
+            this.railLeave = null;
+            if (this.railHover === k.key && !this.railCardOn) { this.railHover = null; cx.notify(); }
+          });
         })).anchor(left ? "left_center" : "right_center").when(hot, (el) => el.content(this.railCardView(t, k).id("th-rail-card-box")
           .on_hover((on, cx) => {
             // The pointer on the card keeps it open and holds the window.
             this.railCardOn = Boolean(on);
-            if (on) this.railHover = k.key;
+            if (on) { this.railHover = k.key; this.railLeave = null; }
             else if (this.railHover === k.key && !this.railOn) { this.railHover = null; cx.notify(); }
           })));
       }))
@@ -7288,7 +7295,12 @@ export default class Threads extends View {
         .when(Boolean(c.day), (el) => el.child(div().flex_none().text_color(t.muted).child(c.day)).child(div().flex_none().text_color(t.dim).child("·")))
         .child(div().min_w(0).truncate().text_color(t.dim).child(c.rest))
         .child(div().flex_1())
-        .when(c.pinned, (el) => el.child(svg(ICON("pin")).size(11).flex_none().text_color(t.accent))))
+        // The pin: accent when pinned; a press pins or unpins the card's turn, as p does.
+        .child(div().id("th-rail-card-pin").flex_none().size(15).flex().items_center().justify_center().rounded(3).cursor_pointer()
+          .text_color(c.pinned ? t.accent : t.dim).hover((s) => s.bg(t.hover).text_color(c.pinned ? t.accent : t.foreground))
+          .tooltip(`${c.pinned ? "Unpin" : "Pin"} #${k.turns[0].turn.n} (p)`)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.togglePin(k.key, cx); cx.notify(); })
+          .child(svg(ICON("pin")).size(11))))
       .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().font_medium().text_color(t.foreground).child(c.body)))
       .when(Boolean(c.reply), (el) => el.child(div().text_size(12).line_height("17px").max_h(51).overflow_hidden().text_color(t.muted).child(c.reply))));
   }

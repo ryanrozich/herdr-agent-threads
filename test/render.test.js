@@ -5842,8 +5842,39 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   expect(ws).toContain(railSwell(look.mark, look.peak, v.railTicks().L.pitch));
   hovers[0](false, cx);
   expect(v.railHover).toBe(ks[1]);
+  // Leaving the tick keeps the card 200 ms, so the pointer can cross to it; then it closes.
+  cx.timers.length = 0;
   hovers[1](false, cx);
+  expect(v.railHover).toBe(ks[1]);
+  expect(cx.timers.map((x) => x.ms)).toEqual([200]);
+  cx.timers[0].fn(cx);
   expect(v.railHover).toBe(null);
+  // Another tick's hover before the wait ends cancels it.
+  hovers[1](true, cx);
+  cx.timers.length = 0;
+  hovers[1](false, cx);
+  hovers[2](true, cx);
+  cx.timers[0].fn(cx);
+  expect(v.railHover).toBe(ks[2]);
+  // The pointer on the card keeps it: the wait finds the card hovered and leaves it open.
+  v.railHover = ks[1];
+  v.railCardOn = true;
+  cx.timers.length = 0;
+  hovers[1](false, cx);
+  expect(cx.timers.length).toBe(0);
+  expect(v.railHover).toBe(ks[1]);
+  // The card's pin pins its turn; a second press unpins it.
+  rec = []; v.railView(theme); const rc = rec; rec = null;
+  const at = rc.findIndex((e) => e[0] === "id" && e[1] === "th-rail-card-pin");
+  expect(at).toBeGreaterThan(-1);
+  expect(rc.slice(at).find((e) => e[0] === "tooltip")[1]).toBe(`Pin #${turn.n} (p)`);
+  const press = rc.slice(at).find((e) => e[0] === "on_click")[1];
+  press({}, cx);
+  expect(v.isPinnedTurn(turn)).toBe(true);
+  press({}, cx);
+  expect(v.isPinnedTurn(turn)).toBe(false);
+  v.railCardOn = false;
+  v.railHover = null;
   // The test command opens it by turn number, since the test window has no pointer.
   v.debug = true;
   v.action(`debugRailCard:${turn.n}`, cx);
