@@ -5078,7 +5078,9 @@ const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? 
 // Drops the queued timers and the marks that say a frame is queued: a timer dropped with its
 // mark still set would never be asked for again, and the rows would stop where they are.
 function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; }
-function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
+// Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
+// 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
+function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
   const { v, cx } = await longSession(450);
