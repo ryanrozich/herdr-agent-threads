@@ -56,9 +56,9 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, INFO_DIM, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, MONO_EM, wrapCap, codeRows,
+  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, MONO_EM, wrapCap, codeRows,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -2640,11 +2640,12 @@ export default class Threads extends View {
         // so a drag can select across the paragraphs in one item but not across items, and
         // the list draws only the items in view. Link rules run on the text shown; heights use
         // the text as written. A return to a pin lands at the start of its item.
-        const parts = mdChunks(md);
-        parts.forEach((src, j) => {
+        // A table is an item of its own ("table"), so it can run wider than the reading line.
+        const parts = mdChunks(md).flatMap((src) => splitTables(src));
+        parts.forEach(({ text: src, table }, j) => {
           const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.linkOne(src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
-          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}) });
+          push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
       } else {
         used += seg.text.length;
@@ -2708,13 +2709,26 @@ export default class Threads extends View {
   }
   // From a row cut off to the row that has its answer. An open filter stays: threadMatches
   // lists that row whenever it lists this one.
+  // A turn answered together with a later one (answeredBy) goes to that turn the same way:
+  // opened, with the start of its reply at the top of the pane.
   goToAnswer(turn) {
     const si = this.sessions.findIndex((x) => x.turns[turn.n - 1] === turn);
-    if (si < 0 || !turn.answeredIn) return;
-    const key = `${si}:${turn.answeredIn}`;
+    const n = turn.answeredIn ?? turn.answeredBy;
+    if (si < 0 || !n) return;
+    const key = `${si}:${n}`;
+    if (turn.answeredIn) {
+      this.sel = key;
+      this.follow = false;
+      this.scrollTo = { key, how: "center" };
+      return;
+    }
+    if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
-    this.scrollTo = { key, how: "center" };
+    // "land": scroll_to_item alone brings an item to the nearest edge, which showed the end
+    // of a tall reply below the view. It waits up to 400 ms for the opened parts' measures,
+    // since a short estimate lets the list clamp at its end.
+    this.scrollTo = { key: `md:${key}:0`, how: "land", or: [`md:${key}:0.0`, `cc:${key}:0`, key], until: Date.now() + 400 };
   }
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
@@ -3601,6 +3615,10 @@ export default class Threads extends View {
       return cx.notify();
     }
     // Collapse closes the turn and lands on its row, as Esc does.
+    if (kind === "nr") {
+      const turn = this.findTurn(id);
+      if (turn?.answeredIn || turn?.answeredBy) { this.sel = id; this.goToAnswer(turn); return cx.notify(); }
+    }
     if (kind === "fold") { if (this.open.has(id)) this.toggle(id, cx); else this.sel = id; return cx.notify(); }
     if (kind === "lt") {
       if (!this.findTurn(id)) return;
@@ -4364,6 +4382,8 @@ export default class Threads extends View {
   // The person's message in its bubble on the right (an agent's outlined, on the left), as
   // plain text in the bubble's ink. A line with an [Image #N] label is drawn a word at a
   // time, so the label can be marked (the image on screen) and clicked (goes to its image).
+  // A run of quote lines ("> ") is drawn as the bubble draws it: without the marker, muted
+  // and smaller, behind one bar (an absolute box as tall as the run, since its lines wrap).
   galleryPrompt(t, turn, rt, L) {
     const g = this.gal;
     const shown = g.images[g.i]?.n;
@@ -4379,15 +4399,27 @@ export default class Threads extends View {
         .when(j >= 0, (el) => el.on_click((_e, cx) => { cx.stop_propagation(); this.galleryGo(j, cx); }))
         .child(p.t);
     };
-    const line = (text, li) => {
+    const line = (text, li, color = ink) => {
       const pieces = labelPieces(text);
-      if (!pieces.some((p) => p.n != null)) return div().min_h(rt.line).text_color(ink).child(text || " ");
+      if (!pieces.some((p) => p.n != null)) return div().min_h(rt.line).text_color(color).child(text || " ");
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
-        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(ink).child(w.replace(/\s$/, " "))))));
+        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " "))))));
     };
+    const QUOTE = /^ {0,3}>\s?/;
+    const sub = turn.sub ?? t.muted;
+    const blocks = [];
+    for (let li = 0; li < lines.length; li++) {
+      if (!QUOTE.test(lines[li])) { blocks.push(line(lines[li], li)); continue; }
+      const quoted = [];
+      for (; li < lines.length && QUOTE.test(lines[li]); li++) quoted.push(line(lines[li].replace(QUOTE, ""), li, sub));
+      li--;
+      blocks.push(div().relative().min_w(0).pl(QUOTE_INSET).text_size(rt.small)
+        .child(div().absolute().left(0).top(3).bottom(3).w(2).rounded(1).bg(turn.agent ? sub : alpha(ink, 0.28)))
+        .children(quoted));
+    }
     const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
-      .children(lines.map(line))
+      .children(blocks)
       .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
       .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
     const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
@@ -5422,7 +5454,7 @@ export default class Threads extends View {
       .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
         .on_scroll_wheel((e) => this.listWheel(e))
-        .child(h_flex().size_full().justify_center().child(div().h_full().w_full().max_w(this.pw() > this.width + 1 ? this.width : this.pw() + 1000)
+        .child(h_flex().size_full().justify_center().child(div().h_full().w_full()
           .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
             .track_scroll(this.scroll)
@@ -5628,6 +5660,41 @@ export default class Threads extends View {
   rt() { return readType(this.prefs.textSize); }
   charW(at13) { return at13 * (this.rt().size / 13); }
   prose() { return Math.max(120, readWidth(this.width, this.prefs.textSize, this.chars())); }
+  // A table may run wider than the reading line, as wide as its columns want (ui.js
+  // tableNeed), centred on the line, up to the pane less the column's gutter on each side:
+  // the px it takes past the reading line. For a table item (r.table), or a closed turn's
+  // reply that holds tables (its widest); 0 otherwise, or when the pane has no room.
+  tableExtra(r) {
+    const md = r?.table ? (r.src ?? r.md) : r?.kind === "cmd" ? r.md : r?.kind === "turn" ? r.shape?.md : null;
+    if (!md?.includes("|")) return 0;
+    const memo = (this.tableMemo ??= new Map());
+    let need = memo.get(md);
+    if (need == null) {
+      need = 0;
+      for (const p of r.table ? [{ text: md, table: true }] : splitTables(md)) if (p.table) need = Math.max(need, tableNeed(p.text, this.charW(MD_CHAR)));
+      memo.set(md, need);
+      if (memo.size > 200) memo.delete(memo.keys().next().value);
+    }
+    // The reply's line starts at the column's left plus its gutter; each side may grow out to
+    // the pane's edge less the same gutter, and less the rail's lane on both sides (it is on
+    // one, and the table stays centred on the line).
+    const lane = this.railShown() ? RAIL.LANE : 0;
+    const left = this.colLeft() - lane;
+    const right = this.pw() - this.colLeft() - 2 * ROW.PAD_X - this.prose() - lane;
+    const half = Math.floor(Math.max(0, Math.min(left, right, (need - this.prose()) / 2)));
+    return 2 * half;
+  }
+  // A table drawn extra px wider than the reading line, half of it on each side.
+  tableBlock(el, extra) { return extra > 0 ? div().flex_none().w(this.prose() + extra).ml(-extra / 2).child(el) : el; }
+  // A table's height before it is measured: Herdr gives its columns equal widths and wraps
+  // each cell, so each row is as tall as its longest cell's lines, plus the cell padding.
+  tableHeight(r) {
+    const rows = tableCells(r.src ?? r.md);
+    const cols = Math.max(1, ...rows.map((x) => x.length));
+    const { line } = this.rt();
+    const per = Math.max(1, Math.floor(((this.prose() + this.tableExtra(r)) / cols - 16) / this.charW(MD_CHAR)));
+    return rows.reduce((h, x) => h + 16 + line * Math.max(1, ...x.map((c) => Math.ceil(c.length / per))), 0);
+  }
   perLine() { return Math.max(8, Math.floor(rowTextWidth(this.width, false, this.prefs.textSize, this.chars()) / this.charW(YOU_CHAR))); }
   // A reading block: the reading size and line, at most a reading line wide.
   readBlock(el) { const { size, line } = this.rt(); return this.readFont(el.w_full().max_w(this.prose()).text_size(size).line_height(`${line}px`)).opacity(READ_INK); }
@@ -5878,8 +5945,8 @@ export default class Threads extends View {
       case "note": return 34;
       case "resume": return 30;
       case "working": {
-        const g = this.workingGeom(r.turn);
-        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.lines * this.rt().line
+        const g = this.workingGeom(r.turn, r.shape);
+        return (r.split ? ROW.GAP : ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0)) + 2 * ROW.BUBBLE_PY + g.promptH
           + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
       }
       case "head": return ROW.PAD_T;
@@ -5889,7 +5956,7 @@ export default class Threads extends View {
       case "lhead": return 14 + TV_LINE;
       case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
-      case "md": return (r.gap ?? 6) + this.mdHeight(r.src ?? r.md);
+      case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       case "seltext": return 6 + 22 + r.boxH;
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
@@ -5931,8 +5998,8 @@ export default class Threads extends View {
       case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}`;
-      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
+      case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
@@ -6059,7 +6126,7 @@ export default class Threads extends View {
   noReplyText(turn) {
     if (turn.answeredIn) return `Answered in #${turn.answeredIn}. This turn itself ended with: ${turn.errors.at(-1)}`;
     return turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}.`
-      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}; the reply is there.` : "No final reply.");
+      : turn.errors.at(-1) ?? (turn.answeredBy ? `${this.agent().short} answered this together with #${turn.answeredBy}. Go to that reply` : "No final reply.");
   }
 
   // The list's items for the range on screen. An error thrown here blanks the whole list
@@ -6109,10 +6176,16 @@ export default class Threads extends View {
       }
       // A plain row keeps the slot its Markdown measured, which is taller: it sits at the
       // slot's foot, so its end is next to the rows below it.
-      out.push(v_flex().w_full().h(h).overflow_hidden()
-        .when(Boolean(held), (el) => el.justify_end())
-        .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
-        .child(body));
+      // The list spans the pane and each item sits in the reading column, centred. An item
+      // with a wide table (tableExtra) is wider by it, padded by half on each side, so its
+      // other parts stay in the column and the table reaches past it (tableBlock). Herdr
+      // clips an item on both axes, even with overflow_y_hidden.
+      const ex = this.tableExtra(x);
+      out.push(h_flex().w_full().h(h).justify_center()
+        .child(v_flex().w_full().max_w(this.width + ex).when(ex > 0, (el) => el.px(ex / 2)).h_full().overflow_hidden()
+          .when(Boolean(held), (el) => el.justify_end())
+          .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
+          .child(body)));
     }
     return out;
   }
@@ -6258,7 +6331,9 @@ export default class Threads extends View {
     const pinned = this.isPinnedTurn(turn);
     return v_flex().h(ROW.LINE).w_full().max_w(this.prose()).min_w(0).border_b_1().border_color(t.border)
       .child(h_flex().h(17).gap(5).items_center().text_size(12).min_w(0)
-        .when(Boolean(name), (el) => el.child(div().flex_none().max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
+        // On a narrow line the agent's name gives way (it shrinks and truncates); the time after
+        // it never does, so "Worked for" is never shown without its time.
+        .when(Boolean(name), (el) => el.child(div().min_w(0).max_w(160).truncate().font_semibold().text_color(t.muted).child(name)).child(div().flex_none().text_color(t.dim).child("·")))
         .child(div().flex_none().text_color(bad ? t.blocked : t.dim).child(this.workText(turn)))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim))
         .child(div().flex_1())
@@ -6266,9 +6341,11 @@ export default class Threads extends View {
         .when(pinNo != null, (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(String(pinNo))))
         .when(Boolean(info), (el) => el.child(info.el ?? this.infoIcon(t, info.state))));
   }
+  // Always shown: dim at half strength on the other turns ("hover"), dim on the selected
+  // turn, accent while its card shows. A hover style alone did not show on the owner's machine.
   infoIcon(t, state) {
     return div().flex_none().w(ICON_BOX).h(17).flex().items_center().justify_end()
-      .child(svg(ICON("info")).size(12).when(state !== "hover", (e) => e.text_color(state === "on" ? t.accent : t.dim)));
+      .child(svg(ICON("info")).size(12).text_color(state === "on" ? t.accent : t.dim).when(state === "hover", (e) => e.opacity(INFO_DIM)));
   }
   // The info icon of a turn's line, for item itemKey, and the card's anchor: its top right
   // corner under the icon's right edge, or its bottom right corner over it when the line is
@@ -6288,14 +6365,12 @@ export default class Threads extends View {
       .trigger(this.infoIcon(t, state)).content(this.detailsCard(t, turn, up, true)) };
   }
   // The info icon's state on a turn's settled Worked for line, open or closed: "on" while the
-  // card shows this turn, "sel" on the selected turn, "hover" on the others (it shows while
-  // the pointer is on the line).
+  // card shows this turn, "sel" on the selected turn, "hover" on the others (drawn at half
+  // strength; resting the pointer on it shows the card).
   infoState(key) {
     if (this.sel !== key) return "hover";
     return this.detailsOpen ? "on" : "sel";
   }
-  // A line on a turn not selected shows its info icon while the pointer is on it.
-  lineInfo(t, key, el) { return this.infoState(key) === "hover" ? this.reveal(t, el.id(`rh:${key}`)) : el; }
   // The list item whose Worked for line the card opens beside: an open turn's line, or a
   // closed turn's row. Null for a running turn, the outline and the Pinned view.
   detailsAnchor(key) {
@@ -6315,6 +6390,9 @@ export default class Threads extends View {
     const d = turn.durationMs ? fmtDuration(turn.durationMs) : null;
     if (turn.interrupted) return d ? `Stopped after ${d}` : "Stopped";
     if (this.failed(turn)) return d ? `Failed after ${d}` : "Failed";
+    // A turn the agent answered together with a later one has no time of its own: the line
+    // says where its answer is, not a bare "Worked".
+    if (!d && turn.answeredBy) return `Answered with #${turn.answeredBy}`;
     return d ? `Worked for ${d}` : "Worked";
   }
   toggleLine(key, live = false) {
@@ -6476,9 +6554,9 @@ export default class Threads extends View {
         ], sh.bubbleW),
       ]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
-        : this.lineInfo(t, key, div().w_full()).child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
+        : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
-        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.lines(t, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -6558,8 +6636,13 @@ export default class Threads extends View {
 
   // A collapsed row's reply start, drawn as Markdown at the reading size. Not selectable:
   // a click on the row opens the turn.
-  cmdBlock(md, id) {
-    return this.readBlock(div()).child(this.mdView(id, md, false));
+  // Its tables may run wider than the reading line (tableBlock), each its own Markdown view.
+  cmdBlock(md, id, extra = 0) {
+    if (!(extra > 0)) return this.readBlock(div()).child(this.mdView(id, md, false));
+    const parts = splitTables(md);
+    return this.readBlock(v_flex()).gap(this.paraGap()).children(parts.map((p, i) => p.table
+      ? this.tableBlock(this.mdView(`${id}-t${i}`, p.text, false), extra)
+      : this.mdView(`${id}-p${i}`, p.text, false)));
   }
 
   // Whether the turn's session has replies from more than one named agent (turn.by), counting
@@ -6687,27 +6770,38 @@ export default class Threads extends View {
   // The running turn when selected: the message in full (up to 6 lines), the strip under
   // it, the live line with its tokens, and a note on where the reply will appear. Every line
   // has a fixed height, so the drawn height is the estimate (F3).
+  // The selected running turn. Its message is drawn as its closed row draws it (promptBlock
+  // from the row's shape): whole, every paragraph, with a quote behind its bar. It used to be
+  // the prompt's first lines as plain text, which cut a quoted prompt to its quote line.
   workingItem(t, r) {
     const { turn, key } = r;
-    const g = this.workingGeom(turn);
+    const g = this.workingGeom(turn, r.shape);
+    const sh = r.shape;
+    const bt = this.bubbleLook(t, turn.agent).theme;
+    const body = sh
+      ? [this.promptBlock(bt, turn, sh, true), ...(sh.pMore ? [this.moreLine(bt)] : [])]
+      : [div().h(g.promptH).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(g.prompt)];
     return this.rowFrame(t, true, this.h.is_focused(), true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.bubble(t, turn, [div().h(g.lines * this.rt().line).overflow_hidden().text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(this.bubbleLook(t, turn.agent).theme.foreground).child(g.prompt)], bubbleMax(this.width, this.prefs.textSize, this.chars())),
+      this.bubble(t, turn, body, sh?.bubbleW ?? bubbleMax(this.width, this.prefs.textSize, this.chars())),
       this.youStrip(t, turn, key, true),
       this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
     ], r.split ? ROW.GAP : ROW.PAD_T);
   }
-  workingGeom(turn) {
+  // sh: the row's shape, whose prompt lines the card draws; without one, the prompt's first
+  // lines as plain text.
+  workingGeom(turn, sh = null) {
     const prompt = clipPrompt(turn.prompt, PROMPT_LINES, this.perLine(), PROMPT_CHARS).text;
     const tw = bubbleMax(this.width, this.prefs.textSize, this.chars()) - 2 * ROW.BUBBLE_PX;
-    const lines = Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
+    const lines = sh ? Math.max(1, sh.p) : Math.max(1, Math.min(6, this.wrapped(prompt, tw, this.charW(YOU_CHAR))));
+    const promptH = lines * this.rt().line + (sh?.pMore ? ROW.MORE : 0);
     const st = this.status();
     const noteText = st === "blocked" ? `${this.agent().short} is waiting for you in the terminal.`
       : st === "working" ? `No final reply yet. It appears here when ${this.agent().short} finishes this turn.`
         : "This turn has no final reply yet. It may have been stopped.";
     const note = this.wrapped(noteText, this.inner(), 6.0);
-    return { prompt, lines, note, noteText };
+    return { prompt, lines, promptH, note, noteText };
   }
 
   // A day: its name, date and shown turns centred between two hairlines, 10 px below the
@@ -6859,7 +6953,7 @@ export default class Threads extends View {
         // Under the message, before the reply: the line ("Worked for 2m 31s"), then what the
         // reply does not show, wrapping ("🔔 144 background updates · 🤖 shared with agent
         // message #4").
-        return this.lineInfo(t, tkey, v_flex().pt(ROW.GAP))
+        return v_flex().pt(ROW.GAP)
           .child(this.workLine(t, turn, this.pinNumber(turn), this.lineIsOpen(tkey, false), this.lineIcon(t, r.key, tkey, probe)))
           .when(this.captionParts(turn).length > 0, (el) => el.child(h_flex().mt(6).gap_x(6).flex_wrap().items_center().text_size(11.5).text_color(t.dim)
             .children(this.captionParts(turn).map(([icon, text], i) => h_flex().h(18).gap(4).items_center()
@@ -6884,14 +6978,14 @@ export default class Threads extends View {
           .when(this.latestCut(r), (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show all")));
       }
       case "noreply":
-        if (turn.answeredIn && !probe) {
-          return div().id(`th-answer-${r.key}`).mt(6).text_size(12.5).text_color(t.accent).cursor_pointer()
-            .on_click((_e, cx) => { cx.stop_propagation(); this.goToAnswer(turn); cx.notify(); })
-            .child(this.noReplyText(turn));
+        // A link: the list's own item click (click, "nr") goes to the answer, since a list
+        // item can register no handler of its own.
+        if ((turn.answeredIn || turn.answeredBy) && !probe) {
+          return div().mt(6).text_size(12.5).text_color(t.accent).cursor_pointer().child(this.noReplyText(turn));
         }
         return div().mt(6).text_size(12.5).text_color(t.dim).child(this.noReplyText(turn));
       case "cmd":
-        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`));
+        return this.cmdBlock(r.md, tv(`th-cmd-${r.key}`), this.tableExtra(r));
       case "md":
         // The reply at its own height: no scroll inside the card, so its start never scrolls
         // out of view and its end is never cut (C3).
@@ -6903,7 +6997,7 @@ export default class Threads extends View {
             .child(div().min_w(0).child("Herdr could not draw this part as Markdown, so it shows as plain text.")))
           .child(this.readBlock(div()).text_color(t.foreground).child(r.src ?? r.md));
         return this.readBlock(div().mt(r.gap ?? 6))
-          .child(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()));
+          .child(this.tableBlock(this.mdView(tv(`th-md-${r.key}`), r.md, this.replySelectable()), this.tableExtra(r)));
       case "seltext": {
         const st = this.selEditor?.st;
         return v_flex().mt(6)

@@ -228,6 +228,52 @@ function packed(pieces, sep, max) {
   if (last) out.push(last);
   return out;
 }
+// A Markdown table: lines that start with "|", the second of them a rule (TABLE_RULE).
+const tableLine = (l) => l.trim().startsWith("|");
+// A Markdown block split into its tables and the text around them, in order:
+// [{ text, table }]. A table is its own part so the list can let it run wider than the
+// reading line (tableNeed). Empty parts are dropped; text keeps its own blank lines.
+export function splitTables(md) {
+  const lines = String(md ?? "").split("\n");
+  const out = [];
+  let buf = [];
+  const flush = (table) => {
+    const text = buf.join("\n").replace(/^\n+|\n+$/g, "");
+    if (text.trim()) out.push({ text, table });
+    buf = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (tableLine(lines[i]) && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && tableLine(lines[i + 1])) {
+      flush(false);
+      let j = i;
+      while (j < lines.length && tableLine(lines[j])) buf.push(lines[j++]);
+      flush(true);
+      i = j - 1;
+    } else buf.push(lines[i]);
+  }
+  flush(false);
+  return out.length ? out : [{ text: String(md ?? ""), table: false }];
+}
+// A table's cells, row by row, without the rule line.
+export function tableCells(md) {
+  return String(md ?? "").split("\n").filter((l) => tableLine(l) && !TABLE_RULE.test(l))
+    .map((l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()));
+}
+// The width a table would like, in px: each column as wide as its longest cell, up to
+// TABLE_COL_CHARS characters (a longer cell wraps), plus Herdr's cell padding.
+export const TABLE_COL_CHARS = 40;
+export const TABLE_CELL_PAD = 26;
+export function tableNeed(md, charW) {
+  const rows = tableCells(md);
+  const cols = Math.max(0, ...rows.map((r) => r.length));
+  let w = 0;
+  for (let c = 0; c < cols; c++) {
+    const most = Math.max(1, ...rows.map((r) => Math.min(TABLE_COL_CHARS, (r[c] ?? "").length)));
+    w += most * charW + TABLE_CELL_PAD;
+  }
+  return Math.ceil(w);
+}
+
 export function mdChunks(md, max = MD_MAX) {
   const text = String(md ?? "");
   if (utf8Len(text) <= max) return [text];
@@ -1560,6 +1606,8 @@ export function focusTarget(panes, terminal, myTab) {
 // anywhere in a box counts (a list item takes one click handler, so click() tells the
 // icons apart by the press position). STRIP_CHAR is an 11.5 px label's character.
 export const ICON_BOX = 22;
+// The info icon on a turn that is not selected: always shown, at this opacity.
+export const INFO_DIM = 0.5;
 export const STRIP_CHAR = 6.6;
 
 // The strip under an open turn's reply: copy and quote from the left, the first glyph on the
@@ -1859,11 +1907,12 @@ export function columnResize(c, m, d) {
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
 
-// The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane,
-// 340 to 400 px (PIN_COL_WANT), so a compact row shows about 40 characters of its prompt a
-// line (the row's text is the column less PIN_ROW's 54 px of padding and badge). A pane
-// under 580 px gives the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at
-// least PIN_MAIN_MIN if Herdr takes all the room from it. Mostly it does not: with
+// The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane
+// and a step (PIN_STEP) more, 380 to 440 px (PIN_COL_WANT), so a compact row shows about 48
+// characters of its prompt a line (the row's text is the column less PIN_ROW's 54 px of
+// padding and badge); the owner found one step narrower too tight. A pane under 620 px gives
+// the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at least
+// PIN_MAIN_MIN less a step if Herdr takes all the room from it: 373 px beside a 573 px pane. Mostly it does not: with
 // readingWidth on, Threads sits at its reading width (about 570 px at text size 14) and
 // Herdr takes the column's room from the terminal beside it. A pane from
 // PIN_SPLIT_MIN (480 px, so a pane set to 500 that measures a pixel or two less still
@@ -1871,14 +1920,14 @@ export function columnResize(c, m, d) {
 // room from the pane's neighbours as well as from Threads. A width the owner set with - and =
 // (kept), up to 640 px with Threads at least PIN_MAIN_MIN, wins. Returns the column's
 // width, or null.
-export const PIN_COL = Object.freeze([240, 400]);
-export const PIN_COL_WANT = 340;
+export const PIN_COL = Object.freeze([240, 440]);
+export const PIN_COL_WANT = 380;
 export const PIN_MAIN_MIN = 240;
 export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
 export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
-  const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4)));
-  const room = Math.round(width) - PIN_MAIN_MIN;
+  const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4) + PIN_STEP));
+  const room = Math.round(width) - PIN_MAIN_MIN + (kept > 0 ? 0 : PIN_STEP);
   return Math.max(PIN_COL[0], Math.min(want, room, kept > 0 ? 640 : PIN_COL[1]));
 }
 
