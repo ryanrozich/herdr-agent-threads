@@ -1011,19 +1011,24 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
   // The fence is its own code item, untouched; the last prose part has only a URL, an
   // autolink and code, so it gets no link.
   expect(v.rows().find((r) => r.kind === "code").seg.text).toBe("git log --grep ACME-9");
-  // Code blocks do not wrap: the editor's soft_wrap is off, so a long line scrolls sideways
-  // inside the block, and the box is as tall as its lines.
+  // Code blocks wrap (nothing in the list scrolls on its own): the editor's soft_wrap is on,
+  // and the box is as tall as its wrapped rows, up to CODE_LINES (12) until Show all.
   const code = v.rows().find((r) => r.kind === "code");
-  expect(code).toMatchObject({ rows: 1, shown: 1, caption: false });
+  expect(code).toMatchObject({ rows: 1, shown: 1, more: false });
   expect(v.codeBoxH(code)).toBe(36);
   v.makeCode(code.key.split(":").slice(1, 3).join(":"));
-  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: false, readonly: true, value: "git log --grep ACME-9" });
+  expect(editors.at(-1).opts).toMatchObject({ soft_wrap: true, readonly: true, value: "git log --grep ACME-9" });
   const long = `cd ~/acme-try && ${"git fetch && ".repeat(12)}./install.sh`;
+  const per = v.codePer();
   const shape = v.codeShape(long);
-  expect(shape.rows).toBe(1);
-  expect(shape.shown).toBe(1);
-  expect(shape.caption).toBe(false);
-  expect(v.codeShape(Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"))).toMatchObject({ rows: 20, shown: 12, caption: true });
+  expect(per).toBe(Math.floor((v.prose() - 18) / (12 * 0.62)));
+  expect(shape.rows).toBe((await import("../mods/agent-threads/ui.js")).codeRows(long, per));
+  expect(shape.rows).toBeGreaterThan(1);
+  expect(shape.shown).toBe(shape.rows);
+  expect(shape.more).toBe(false);
+  const tall = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+  expect(v.codeShape(tall)).toMatchObject({ rows: 20, shown: 12, more: true, all: false });
+  expect(v.codeShape(tall, true)).toMatchObject({ rows: 20, shown: 20, more: true, all: true });
   // The label is the fence's language, or nothing: never "code".
   const head = v.rows().find((r) => r.kind === "codehead");
   rec = []; v.partContent(theme, head, false); const hs = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); rec = null;
@@ -1505,7 +1510,7 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
   } finally { herdrSettings = { font_family: "Mono" }; }
 });
 
-test("V3b: reply and latest TextViews never scroll, and only the YOU box over 420 px does", async () => {
+test("V3b: reply, latest and YOU TextViews never scroll; a message over 420 px is cut there with Show all, which a press opens in place", async () => {
   const { v, cx } = await pane(fixture("--extra", "2", "--latest", "--langs", "--long", "--blocks"));
   v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" }; // Markdown in the message: the plain look
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
@@ -1516,10 +1521,31 @@ test("V3b: reply and latest TextViews never scroll, and only the YOU box over 42
   expect(md.length).toBeGreaterThan(5);
   for (const x of md) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   const you = views.filter((x) => x.id.startsWith("th-you-"));
-  const scrolls = you.filter((x) => x.calls.some(([n, a]) => n === "scrollable" && a === true));
-  expect(scrolls.length).toBeGreaterThan(0); // the 40-line prompt with Show all
-  for (const x of scrolls) expect(v.youMd(v.rows().find((r) => `th-you-${r.key}` === x.id)).capped).toBe(true);
+  expect(you.length).toBeGreaterThan(0);
+  for (const x of you) expect(x.calls.some(([n, a]) => n === "scrollable" && a === true)).toBe(false);
   for (const x of views.filter((y) => y.id.startsWith("th-probe-"))) expect(x.calls.some(([n]) => n === "scrollable")).toBe(false);
+  // The 40-line prompt: its first 420 px, cut, no scrolling box, and Show all in the bubble.
+  const capped = v.rows().find((r) => r.kind === "you" && v.youMd(r).capped);
+  expect(capped).toBeTruthy();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  let d = drawn(capped);
+  expect(d.some(([n]) => n === "overflow_y_scrollbar" || n === "overflow_scroll")).toBe(false);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(true);
+  expect(d.some(([n, a]) => n === "child" && a === "Show all")).toBe(true);
+  const h0 = v.estimate(capped);
+  // A press on the bubble (the list's item click) opens the rest in place; another closes it.
+  v.click(capped.key, cx);
+  const open = v.rows().find((r) => r.key === capped.key);
+  expect(open.all).toBe(true);
+  const y = v.youMd(open);
+  expect(y).toMatchObject({ capped: false, long: true });
+  expect(y.bodyH).toBeGreaterThan(420);
+  expect(v.estimate(open)).toBeGreaterThan(h0);
+  d = drawn(open);
+  expect(d.some(([n, a]) => n === "h" && a === 420)).toBe(false);
+  expect(d.some(([n, a]) => n === "child" && a === "Show less")).toBe(true);
+  v.click(capped.key, cx);
+  expect(v.youMd(v.rows().find((r) => r.key === capped.key)).capped).toBe(true);
 });
 
 test("V3b: the first-frame estimate is never under the reading-line reference, and at most a line and 18 px over", async () => {
@@ -6395,31 +6421,46 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   // A group of one, open, is the call's own row, with no group line over it.
   expect(v.rows().some((r) => r.key === `gp:${a}:2`)).toBe(false);
   expect(detail(`cl:${a}:2:0`)).toBe("call#1 one src/cart.ts · <0.1s [closed]");
-  // A click on a call opens its output: every line in a box 12 lines tall that scrolls inside
-  // and sideways, with no Show all.
+  // A click on a call opens its output: its lines wrap, in a box 12 rows tall that does not
+  // scroll (the lines run on, cut, at their full height), and Show all under it is its own
+  // list item.
   v.click(`cl:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/^cout#1 ok lines 30\/30 plain h\d+ \| line 1 ⏎ line 2 ⏎ line 3$/);
   const box = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(box).toMatchObject({ rows: 30, shown: 12 });
   expect(v.height(box)).toBe(8 * 2 + 2 + 12 * 16 + 4);
   rec = []; v.partContent(theme, box, false); const bc = rec; rec = null;
-  expect(bc.some((e) => e[0] === "overflow_scroll")).toBe(true);
-  expect(bc.some((e) => e[0] === "whitespace_nowrap")).toBe(true);
-  expect(bc.some((e) => e[0] === "child" && typeof e[1] === "string" && /^Show (all|less)/.test(e[1]))).toBe(false);
+  expect(bc.some((e) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scrollbar", "whitespace_nowrap"].includes(e[0]))).toBe(false);
+  expect(bc.some((e) => e[0] === "h" && e[1] === 30 * 16)).toBe(true);
+  const all = v.rows().find((r) => r.key === `oa:${a}:0:0`);
+  expect(all).toMatchObject({ kind: "oall", left: 18, all: false });
+  expect(v.height(all)).toBe(26);
+  rec = []; v.partContent(theme, all, false); const ac = rec; rec = null;
+  expect(ac.some((e) => e[0] === "child" && e[1] === "Show all · 18 more rows")).toBe(true);
   // A click on the box only selects its turn.
   v.click(`co:${a}:0:0`, cx);
   expect(detail(`co:${a}:0:0`)).toMatch(/lines 30\/30/);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
+  // Show all shows every row in place; Show less goes back to 12.
+  v.click(`oa:${a}:0:0`, cx);
+  const opened = v.rows().find((r) => r.key === `co:${a}:0:0`);
+  expect(opened.shown).toBe(30);
+  expect(v.height(opened)).toBe(8 * 2 + 2 + 30 * 16 + 4);
+  expect(v.rows().find((r) => r.key === `oa:${a}:0:0`)).toMatchObject({ all: true });
+  v.click(`oa:${a}:0:0`, cx);
+  expect(v.rows().find((r) => r.key === `co:${a}:0:0`).shown).toBe(12);
   // → opens every call's output; ← closes the outputs, then the groups.
   v.action("deeper", cx);
   expect(v.rows().filter((r) => r.kind === "cout").length).toBe(3);
   expect(detail(`co:${a}:0:1`)).toMatch(/^cout#1 ok lines 1\/1 plain h\d+ \| lint: 2 errors$/);
   // The read file has a known extension: between frames its output gets a read-only editor
-  // that colours it as js and does not wrap; plain text stays plain.
+  // that colours it as js and wraps; plain text stays plain.
   const before = editors.length;
   draw(v, cx);
   cx.flush(0);
   draw(v, cx);
   const ed = editors.slice(before).find((e) => e.opts.language === "js");
-  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: false, value: "export const total = 1;" });
+  expect(ed?.opts).toMatchObject({ readonly: true, soft_wrap: true, value: "export const total = 1;" });
   expect(detail(`co:${a}:2:0`)).toMatch(/ editor js h\d+/);
   expect(detail(`co:${a}:0:1`)).toMatch(/ plain h\d+/);
   v.action("shallower", cx);
@@ -6652,7 +6693,7 @@ test("level 3 lines draw paths from the terminal's working folder, or from ~, an
   // The call line, the group's current call and each output line go through it; the
   // transcript and the call entries keep the full text.
   const src = readFileSync(new URL("../mods/agent-threads/main.js", import.meta.url), "utf8");
-  expect(src).toContain(".child(this.short(callText(r.name, c?.input)))");
+  expect(src).toContain("wrapCap(this.short(callText(r.name, c?.input))");
   expect(src).toContain("current: last?.input ? this.short(callText(");
   expect(src).toContain(".child(this.short(l) || \" \")");
 });
@@ -6801,4 +6842,109 @@ test("the wheel on the rail moves its window a tick at a time and stops there, s
   stopped = 0;
   short.v.railWheel({ delta: { x: 0, y: 30 }, touch_phase: "moved" }, wcx);
   expect(stopped).toBe(0);
+});
+
+// The owner's choice A and B, 16 Nov: nothing inside the list scrolls on its own, since Herdr
+// passes the wheel on to the list after an inner box uses it and a row cannot stop it. Code,
+// a call's command and a tool's output wrap; a tall code block and a long output show their
+// start and Show all, a list item of its own; an output longer than the panel holds opens in
+// a viewer outside the list, whose output scrolls on its own and holds the wheel.
+test("no list row scrolls on its own: code and commands wrap, Show all opens the rest in place, a long output opens a viewer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-inner-"));
+  const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const use = (id, name, input, s) => ({ type: "assistant", timestamp: ts(s), message: { id: `msg_${id}`, role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id, content, s) => ({ type: "user", timestamp: ts(s), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: false }] } });
+  const longCmd = `cd ~/acme-web && ${"bun run build --filter=packages/checkout && ".repeat(14)}bun test`;
+  const huge = Array.from({ length: 500 }, (_, i) => `ok ${i + 1} cart total rounds once`).join("\n");
+  const lines = [use("toolu_b1", "Bash", { command: longCmd }, 1), res("toolu_b1", huge, 3),
+    use("toolu_b2", "Bash", { command: "bun run lint" }, 4), res("toolu_b2", "a\nb\nc", 5)];
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000d", file);
+  const code = Array.from({ length: 30 }, (_, i) => `export const step${i} = ${i};`).join("\n");
+  for (const e of [{ k: "p", o: "human", t: "Fix the cart total", ts: ts(0) },
+    { k: "u", n: "Bash", id: "toolu_b1" }, { k: "u", n: "Bash", id: "toolu_b2" },
+    { k: "t", t: `Done.\n\n\`\`\`js\n${code}\n\`\`\`` }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.toggle(a, cx);
+  v.action("deeper", cx);
+  await settled();
+  v.action("deeper", cx);
+  await settled();
+  v.click(`cl:${a}:0:0`, cx);
+  v.click(`cl:${a}:0:1`, cx);
+  await settled();
+  const rows = v.rows();
+  const drawn = (r) => { rec = []; v.partContent(theme, r, false); const d = rec; rec = null; return d; };
+  const scrolling = (d) => d.some(([n, x]) => ["overflow_scroll", "overflow_x_scroll", "overflow_y_scroll", "overflow_y_scrollbar", "overflow_x_scrollbar"].includes(n) || (n === "scrollable" && x === true));
+  // Every row, everything open: no scrolling box, and no handler.
+  for (const r of rows) {
+    const d = drawn(r);
+    expect([r.key, scrolling(d)]).toEqual([r.key, false]);
+    expect([r.key, d.filter(([n]) => /^on_/.test(n)).map(([n]) => n)]).toEqual([r.key, []]);
+  }
+  // The long command wraps, up to 6 lines, its row as tall as its lines; the short one is one line.
+  const long = rows.find((r) => r.kind === "call" && r.id === "toolu_b1");
+  const sh = v.callShape(long);
+  expect(sh.rows).toBe(6);
+  expect(sh.text.endsWith("…")).toBe(true);
+  expect(v.height(long)).toBe((long.one ? 4 + 22 : 20) + 5 * 16);
+  const short = rows.find((r) => r.kind === "call" && r.id === "toolu_b2");
+  expect(v.callShape(short).rows).toBe(1);
+  expect(v.height(short)).toBe(short.one ? 4 + 22 : 20);
+  // The 500-line output is more than the panel holds (400 lines): 12 rows, then a link to
+  // open all of it in a viewer.
+  const big = rows.find((r) => r.kind === "cout" && r.id === "toolu_b1");
+  expect(big.shown).toBe(12);
+  const link = rows.find((r) => r.kind === "oall" && r.id === "toolu_b1");
+  expect(link).toMatchObject({ view: true, total: 500 });
+  expect(drawn(link).some(([n, x]) => n === "child" && x === "Open all 500 lines in a viewer")).toBe(true);
+  // The 3-line output needs no Show all.
+  expect(rows.some((r) => r.kind === "oall" && r.id === "toolu_b2")).toBe(false);
+  // The 30-line code block: 12 rows in view, the editor at its full height inside, then Show all.
+  const box = rows.find((r) => r.kind === "code");
+  expect(box).toMatchObject({ rows: 30, shown: 12, more: true });
+  const bd = drawn(box);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 30 * 20 + 16)).toBe(true);
+  expect(bd.some(([n, x]) => n === "h" && x === 12 * 20 + 6)).toBe(true); // the clip ends at row 12
+  const more = rows.find((r) => r.kind === "codeall");
+  expect(drawn(more).some(([n, x]) => n === "child" && x === "Show all · 18 more rows")).toBe(true);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key)).toMatchObject({ shown: 30, all: true });
+  expect(v.height(v.rows().find((r) => r.key === box.key))).toBe(30 * 20 + 16);
+  v.click(more.key, cx);
+  expect(v.rows().find((r) => r.key === box.key).shown).toBe(12);
+  // The link opens the output viewer outside the list.
+  overlays.length = 0;
+  v.click(link.key, cx);
+  expect(overlays).toHaveLength(1);
+  expect(overlays[0]).toMatchObject({ mod: "agent-threads", kind: "dialog", props: { output: { title: "#1 · Bash", lines: 500, total: 500 } } });
+  expect(overlays[0].props.output.text).toBe(huge);
+  // The viewer: the call, its line count, all of it in a read-only editor that wraps and numbers
+  // its lines, in a box that holds the wheel; Esc closes it.
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov9", output: overlays[0].props.output } };
+  const g = new Threads();
+  const gcx = makeCx();
+  const before = editors.length;
+  g.init(state.props, gcx);
+  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: true, line_numbers: true, value: huge });
+  rec = []; g.render(gcx); const gd = rec; rec = null;
+  const texts = gd.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts).toContain("#1 · Bash");
+  expect(texts).toContain("500 lines");
+  expect(handlerAfterId(gd, "th-output-body", "on_scroll_wheel")).toBeTruthy();
+  let stopped = false;
+  handlerAfterId(gd, "th-output-body", "on_scroll_wheel")({}, { ...gcx, stop_propagation: () => { stopped = true; } });
+  expect(stopped).toBe(true);
+  handlerAfterId(gd, "th-output", "on_key_down")({ key: "escape" }, gcx);
+  expect(closed).toContain("ov9");
+  expect(() => g.close()).not.toThrow();
 });
