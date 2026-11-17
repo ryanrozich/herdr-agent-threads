@@ -82,6 +82,29 @@ function stretches(list, t0, span, min = 0.006) {
   return out;
 }
 
+// Every row of a list h px tall, so the list can be given one number for its sizes: Herdr's
+// v_virtual_list takes at most 10,000 sizes as an array (a 6,000-turn Trajectory has about
+// 41,000 rows), and any count as one number. The spacer under a short list becomes as many
+// h px fillers as fit in it (floor, so the list still fits); the gap under the floating top,
+// the tail and any other row taller than h keep an h px first slot, followed by fillers
+// (ceil). Fillers keep a spacer's, gap's or tail's kind, else are "fill"; their keys are
+// "<key>:<k>". Returns the rows and sizes as they were when every row is h px already.
+export function evenRows(rows, sizes, h = LEDGER_ROW) {
+  if (sizes.every((x) => x === h)) return { rows, sizes };
+  const out = [];
+  const hs = [];
+  rows.forEach((r, i) => {
+    if (sizes[i] === h) { out.push(r); hs.push(h); return; }
+    const pad = r.kind === "spacer" || r.kind === "gap" || r.kind === "tail";
+    const n = r.kind === "spacer" ? Math.floor(sizes[i] / h) : Math.max(1, Math.ceil(sizes[i] / h));
+    for (let k = 0; k < n; k++) {
+      out.push(k > 0 ? { kind: pad ? r.kind : "fill", key: `${r.key}:${k}`, h } : pad ? { ...r, h } : r);
+      hs.push(h);
+    }
+  });
+  return { rows: out, sizes: hs };
+}
+
 // At most n stretches: the closest neighbours are joined until n are left, for a drawing
 // that makes an element per stretch (the line without vector paths).
 export function coarse(segs, n = 40) {

@@ -66,7 +66,8 @@ const never = () => new Promise(() => {});
 // The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
 // test sets this (n) => { start, end }.
 let listWindow = null;
-// What the last v_virtual_list was given: its sizes and item keys.
+// What the last v_virtual_list was given: its sizes (one per item, also when it was given one
+// number for all of them, kept in as) and item keys.
 let lastList = null;
 // settings(): the person's Herdr settings (zoom, fonts).
 let herdrSettings = { font_family: "Mono" };
@@ -86,7 +87,11 @@ mock.module("gpui-base", () => ({
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
-    lastList = { sizes: [...sizes], keys: [], draw };
+    // As Herdr: item_sizes is an array of at most 10,000 entries, or one number for every item.
+    if (Array.isArray(sizes) && sizes.length > 10000) throw new Error("item_sizes may contain at most 10000 entries");
+    const as = typeof sizes === "number" ? sizes : null;
+    if (as != null) sizes = new Array(n).fill(as);
+    lastList = { sizes: [...sizes], keys: [], draw, as };
     for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
@@ -7683,7 +7688,8 @@ test("the probe's walk starts over at the top when the rows change, and asks aga
 
 // ---- the Trajectory (y) ------------------------------------------------------------------
 
-// Two of the scripted sessions, a day apart, in one transcript: two failed calls.
+// Two of the scripted sessions, a day apart, in one transcript: two failed calls and a
+// subagent run that ended failed.
 function twoFails() {
   const a = fixture("--extra", "2", "--subagents");
   const b = fixture("--start", "2026-11-02T09:12:00Z");
@@ -8031,6 +8037,59 @@ test("the Trajectory always shows agent messages, marked apart, and reads none o
   w.syncSel(wx);
   v.syncSel(cx);
   expect(v.sel).toBe(chatSel);
+});
+
+// Herdr's v_virtual_list takes at most 10,000 sizes as an array (the stub throws past that, as
+// Herdr does) and any count as one number. The Trajectory gives one number, so its many rows
+// draw: every item is 24 px, the gap and the tail as 24 px fillers.
+test("a 2,000-turn Trajectory (over 10,000 rows) gives the list one size and draws, also after a rail jump", { timeout: 60000 }, async () => {
+  const { v, cx } = await pane(fixture("--extra", "2000"), { view: "trajectory" });
+  v.paneW = 600; v.rootH = 1100; v.listH = 1000;
+  listWindow = (m) => ({ start: Math.max(0, m - 27), end: m });
+  try {
+    settleRows(v, cx);
+    const rows = v.rows();
+    expect(rows.length).toBeGreaterThan(10000);
+    expect(() => draw(v, cx)).not.toThrow();
+    expect(lastList.as).toBe(24);
+    expect(rows.every((r) => v.height(r) === 24)).toBe(true);
+    // The floating top's 32 px gap: two 24 px fillers before the first heading.
+    expect(rows.slice(0, 3).map((r) => r.kind)).toEqual(["gap", "gap", "trh"]);
+    const heads = rows.filter((r) => r.kind === "trh");
+    expect(v.rowIndex(heads[0].key)).toBe(2);
+    // A rail jump far up: the turn lands at an item's top (no row is lifted for a frame), and
+    // every draw on the way still gives the list one size.
+    const far = heads[40].key;
+    v.railJump(far, cx);
+    expect(() => { draw(v, cx); cx.flush(200, 10); draw(v, cx); }).not.toThrow();
+    expect(v.landLift ?? 0).toBe(0);
+    expect(v.landed?.key).toBe(far);
+    expect(lastList.as).toBe(24);
+    expect(v.ledgerSel()).toBe(far);
+  } finally { listWindow = null; }
+  // The chat of the same session, for the record: one row per closed turn and its day band.
+  const { v: c, cx: ccx } = await pane(fixture("--extra", "2000"));
+  settleRows(c, ccx);
+  console.log(`chat ${c.rows().length} rows for ${c.current().turns.length} turns`);
+});
+
+test("a short Trajectory sits at the bottom on 24 px fillers that fit the pane, and the array of sizes is never given", async () => {
+  const { evenRows } = await import("../mods/agent-threads/ledger.js");
+  const { v, cx } = await pane(fixture("--only", "2"), { view: "trajectory" });
+  v.listH = 1000;
+  settleRows(v, cx);
+  draw(v, cx);
+  const rows = v.rows();
+  const pad = rows.filter((r) => r.kind === "spacer");
+  const built = rows.length - pad.length;
+  expect(pad.length).toBe(Math.floor((1000 - (built - 1) * 24 - 24) / 24));
+  expect(pad.length * 24 + built * 24).toBeLessThanOrEqual(1000);
+  expect(lastList.as).toBe(24);
+  // evenRows: a taller row keeps a first slot and is followed by fillers; all 24 px rows are left as they are.
+  const r = evenRows([{ kind: "divider", key: "div:1" }, { kind: "trh", key: "1:1" }], [36, 24]);
+  expect(r.rows.map((x) => [x.kind, x.key])).toEqual([["divider", "div:1"], ["fill", "div:1:1"], ["trh", "1:1"]]);
+  const same = [[{ kind: "trh" }], [24]];
+  expect(evenRows(...same).rows).toBe(same[0]);
 });
 
 // The Trajectory of a long session: its rows are built in slices of the chat's build time

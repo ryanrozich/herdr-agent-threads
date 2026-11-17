@@ -65,7 +65,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse, evenRows } from "./ledger.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The rows that stand for a turn, keyed by the turn's own key: the chat's, the outline's and
@@ -1718,6 +1718,13 @@ export default class Threads extends View {
         rows = [{ kind: "gap", key: "gap", h: gap }, ...rows];
         sizes = [gap, ...sizes];
       }
+      // The Trajectory: every item LEDGER_ROW px, given to the list as one number (evenSize),
+      // since Herdr takes at most 10,000 sizes as an array (ledger.js evenRows).
+      this.evenSize = null;
+      if (this.ledger()) {
+        ({ rows, sizes } = evenRows(rows, sizes));
+        this.evenSize = LEDGER_ROW;
+      }
       this.rowsMemo = rows;
       this.indexedRows = rows;
       this.sizesMemo = sizes;
@@ -1727,7 +1734,7 @@ export default class Threads extends View {
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
       // A rail click's landing (landExact): the first row is lift px taller for the frame of
       // the scroll, far above the view, then its own height again.
-      if (this.landLift > 0 && this.slotsMemo.length) this.slotsMemo[0] += Math.ceil(this.landLift);
+      if (this.landLift > 0 && this.slotsMemo.length && !this.evenSize) this.slotsMemo[0] += Math.ceil(this.landLift);
       this.fitKey = fit;
       // A closed running pin in the Pinned view is a compact row with live off, but its
       // reply line carries the clock, so it counts as shown too.
@@ -1914,7 +1921,9 @@ export default class Threads extends View {
   // first): a search over every row for each one drawn took 1 ms a row in a long session.
   rowIndex(key) {
     const rows = this.rowsMemo ?? [];
-    const off = rows[0]?.kind === "spacer" || rows[0]?.kind === "gap" ? 1 : 0;
+    // The rows before the built ones: a spacer or a gap (several in the Trajectory, evenRows).
+    let off = 0;
+    while (rows[off]?.kind === "spacer" || rows[off]?.kind === "gap") off++;
     const i = this.baseIndex?.get(key);
     if (i != null && rows[i + off]?.key === key) return i + off;
     if (key !== "spacer" && key !== "gap" && key !== "tail" && rows === this.indexedRows) return -1;
@@ -6043,6 +6052,9 @@ export default class Threads extends View {
         // just under the floating top, never under it.
         let p = st.at == null ? landPlan(slots, i, this.listH, minTop, minTop, this.listH / 4) : null;
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
+        // Every item one size (the Trajectory): no row can be lifted for a frame, so the turn
+        // lands at the item's top, up to a row under the tick.
+        if (this.evenSize && p.lift) p = { ...p, y: p.y + p.lift, lift: 0 };
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
         cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
@@ -6095,7 +6107,7 @@ export default class Threads extends View {
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
         .on_scroll_wheel((e) => this.listWheel(e))
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full()
-          .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
+          .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, this.evenSize ?? slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
             .track_scroll(this.scroll)
             .on_item_click((key, cx) => this.click(key, cx))
@@ -6596,6 +6608,7 @@ export default class Threads extends View {
       case "spacer": return r.h;
       case "gap": return r.h;
       case "tail": return r.h;
+      case "fill": return r.h;
       case "turn": return r.shape.height - this.splitCut(r);
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
@@ -6604,11 +6617,12 @@ export default class Threads extends View {
       case "trh": case "tr": return LEDGER_ROW;
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize, this.chars());
-      case "divider": return 36;
+      // In the Trajectory every row is LEDGER_ROW (evenRows), these too.
+      case "divider": return this.ledger() ? LEDGER_ROW : 36;
       case "day": return 46;
       case "pday": return PDAY_H;
-      case "hidden": return 28;
-      case "note": return 34;
+      case "hidden": return this.ledger() ? LEDGER_ROW : 28;
+      case "note": return this.ledger() ? LEDGER_ROW : 34;
       case "resume": return 30;
       case "working": {
         // The message is the open turn's YOU part (workYou): its measure, or its estimate.
@@ -6938,6 +6952,7 @@ export default class Threads extends View {
       case "spacer": return div();
       case "gap": return div();
       case "tail": return div();
+      case "fill": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
       case "trh": return this.ledgerHead(t, r);
@@ -6946,12 +6961,12 @@ export default class Threads extends View {
       case "wtop": return this.workingTop(t, r, focusedPanel);
       case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
-      case "divider": return this.dividerItem(t, r);
+      case "divider": return this.ledger() ? this.dividerItem(t, r).py(0).h(LEDGER_ROW) : this.dividerItem(t, r);
       case "day": return this.dayItem(t, r);
       case "pday": return this.pinDayItem(t, r);
-      case "hidden": return h_flex().px(16).h(26).gap(6).items_center().text_size(12).text_color(t.dim)
+      case "hidden": return h_flex().px(16).h(this.ledger() ? LEDGER_ROW : 26).gap(6).items_center().text_size(12).text_color(t.dim)
         .child(svg(ICON("unfold")).size(12)).child(`${plural(r.n, "turn")} hidden`);
-      case "note": return div().px(16).py(8).text_size(12).text_color(t.dim).child(r.text);
+      case "note": return div().px(16).text_size(12).text_color(t.dim).when(this.ledger(), (el) => el.h(LEDGER_ROW).flex().items_center()).when(!this.ledger(), (el) => el.py(8)).child(r.text);
       case "resume": return this.resumeItem(t, r, size);
       default: return this.cardPart(t, r, size);
     }
