@@ -9,6 +9,7 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
+  y: "view", f: "nextFail",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -21,14 +22,19 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (m.platform || m.control || m.alt || m.function) return null;
   const k = e?.key ?? "";
   // ? is Shift-/ on most layouts; Herdr may name it either way.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  if (m.shift) {
+    if (k === "g" || k === "G") return "latest";
+    if (k === "f" || k === "F") return filtering ? null : "prevFail";
+    return k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  }
   if (k === "G") return "latest";
+  if (k === "F") return filtering ? null : "prevFail";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
-// column has no outline (outline false), so its sheet leaves o out.
+// column has no outline and no Trajectory (outline false), so its sheet leaves o, y and f out.
 export function keySheet(quoteKey = "q", { outline = true } = {}) {
   const pin = (k) => quoteKey !== k;
   return [
@@ -37,6 +43,10 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
+    ...(outline ? [["Trajectory", [
+      [["y"], "Chat or Trajectory: the turns as a chat, or each step of them"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
+      [["f", "Shift f"], "Next or previous failed call"],
+    ]]] : []),
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
       [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Show or hide the turn's numbers"], [["t"], "Focus the terminal"],

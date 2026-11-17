@@ -809,20 +809,20 @@ test("the footer is one row of the most-used keys with q quote for a local termi
   expect(hints()).toEqual(["↑↓ move", "↵ open", "? keys"]);
   // quoteKey from the settings file.
   v.width = 380;
-  v.applyPrefs('{"quoteKey": "y"}');
-  expect(v.quoteKey).toBe("y");
-  expect(hints()).toContain("y quote");
-  expect(v.settingsLine()).toBe("Link rules · 0 · Quote key · y");
+  v.applyPrefs('{"quoteKey": "x"}');
+  expect(v.quoteKey).toBe("x");
+  expect(hints()).toContain("x quote");
+  expect(v.settingsLine()).toBe("Link rules · 0 · Quote key · x");
   v.applyPrefs('{"quoteKey": "jj"}');
   expect(v.quoteKey).toBe("q");
   expect(v.prefsNotes[0]).toContain('quoteKey "jj"');
-  v.key(keyEv("y"), cx); // y is no longer the quote key
+  v.key(keyEv("x"), cx); // x is no longer the quote key
   await settleCx(cx);
   expect(writes()).toEqual([]);
   // The Select-view hint names the key in use.
-  v.applyPrefs('{"quoteKey": "y"}');
+  v.applyPrefs('{"quoteKey": "x"}');
   v.toggleSelect(v.sel, cx);
-  expect(v.selectHint()).toBe("Select text, ⌘C, then y quotes it · s or Esc returns");
+  expect(v.selectHint()).toBe("Select text, ⌘C, then x quotes it · s or Esc returns");
 });
 
 test("before Herdr 0.1.13 the first click on a formatted reply says how to select, once", async () => {
@@ -5597,8 +5597,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 30 * 25 + 4 * 12 + 8);
+  v.rootH = 1300;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 33 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -7679,4 +7679,262 @@ test("the probe's walk starts over at the top when the rows change, and asks aga
   // The rows changed: from the top again.
   v.probeList();
   expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
+});
+
+// ---- the Trajectory (y) ------------------------------------------------------------------
+
+// Two of the scripted sessions, a day apart, in one transcript: two failed calls.
+function twoFails() {
+  const a = fixture("--extra", "2", "--subagents");
+  const b = fixture("--start", "2026-11-02T09:12:00Z");
+  writeFileSync(a, readFileSync(a, "utf8") + readFileSync(b, "utf8"));
+  return a;
+}
+const ledgerOnly = (v) => v.rows().filter((r) => !["spacer", "gap", "tail"].includes(r.kind));
+
+const flaky = (v) => v.rows().find((r) => r.turn?.prompt?.startsWith("Fix the flaky login")).key;
+
+test("y switches the pane to the Trajectory and back; the view is kept on the pane and the selected turn carries both ways", async () => {
+  const { v, cx } = await pane(twoFails());
+  settleRows(v, cx);
+  const turns = v.turnKeys(v.rows());
+  const pick = flaky(v);
+  v.sel = pick;
+  v.follow = false;
+  v.key(keyEv("y"), cx);
+  expect(v.ledger()).toBe(true);
+  expect(v.tsel).toBe(pick);
+  expect(v.scrollTo).toMatchObject({ key: pick, how: "head", flash: true });
+  settleRows(v, cx);
+  // Every row is a turn's heading or one of its steps, 24 px, and the list is given that.
+  const rows = ledgerOnly(v);
+  expect(rows.every((r) => r.kind === "trh" || r.kind === "tr")).toBe(true);
+  expect(rows.filter((r) => r.kind === "trh").map((r) => r.key)).toEqual(turns);
+  expect(rows.every((r) => v.height(r) === 24)).toBe(true);
+  expect(lastList.sizes.filter((h) => h === 24).length).toBeGreaterThanOrEqual(rows.length);
+  // The selected turn's heading lands at the top, clear of the floating top, and fades in.
+  expect(v.landed).toMatchObject({ key: pick });
+  cx.flush(200, 1);
+  expect(v.flash?.key).toBe(pick);
+  const snap = state.shared["threads.debug"].t4;
+  expect([snap.traj, snap.tsel]).toEqual([true, pick]);
+  expect(snap.detail).toContain("tr#4 failed 0:14 Bash | bun test login | failed 2s");
+  expect(snap.footer).toContain("f next failure");
+  // j and k move by row: into the turn's steps, with the turn still selected.
+  const own = rows.filter((r) => r.kind === "tr" && r.turn === v.findTurn(pick));
+  v.key(keyEv("j"), cx);
+  expect([v.tsel, v.sel]).toEqual([own[0].key, pick]);
+  for (let i = 1; i < own.length; i++) v.key(keyEv("down"), cx);
+  expect(v.tsel).toBe(own.at(-1).key);
+  // On into the next turn's heading, which selects that turn, and back.
+  v.key(keyEv("j"), cx);
+  const next = turns[turns.indexOf(pick) + 1];
+  expect([v.tsel, v.sel]).toEqual([next, next]);
+  v.key(keyEv("k"), cx);
+  expect([v.tsel, v.sel]).toEqual([own.at(-1).key, pick]);
+  // A press selects a row and opens nothing.
+  v.click(own[2].key, cx);
+  expect([v.tsel, v.sel, v.open.size]).toEqual([own[2].key, pick, 0]);
+  // Back to the chat: the turn that owns the selected row is selected and scrolled to.
+  v.key(keyEv("y"), cx);
+  expect(v.ledger()).toBe(false);
+  expect(v.sel).toBe(pick);
+  expect(v.scrollTo).toMatchObject({ key: pick, how: "head", flash: true });
+  settleRows(v, cx);
+  expect(v.rows().some((r) => r.kind === "tr" || r.kind === "trh")).toBe(false);
+  expect(v.rows().find((r) => r.key === pick)?.kind).toBe("turn");
+  // The rail is the same in both views.
+  v.key(keyEv("y"), cx);
+  settleRows(v, cx);
+  expect(v.railTurns.map((x) => x.key)).toEqual(turns);
+  // A rail jump selects the turn: the selection in the ledger follows it to its heading.
+  v.railJump(turns[1], cx);
+  expect(v.ledgerSel()).toBe(turns[1]);
+  // The view is kept per pane; a new pane opens on the chat.
+  const { v: w, cx: wx } = await pane(fixture("--only", "2"));
+  draw(w, wx);
+  expect(w.ledger()).toBe(false);
+  expect(v.ledger()).toBe(true);
+});
+
+test("the top row has Chat and Trajectory as words, or two icons under 420 px; a press on one switches", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.paneW = 573;
+  rec = [];
+  draw(v, cx);
+  const calls = rec;
+  rec = null;
+  expect(calls.some((c) => c[0] === "id" && c[1] === "th-view")).toBe(true);
+  expect(calls.some((c) => c[0] === "child" && c[1] === "Chat")).toBe(true);
+  expect(calls.some((c) => c[0] === "child" && c[1] === "Trajectory")).toBe(true);
+  v.paneW = 340;
+  rec = [];
+  draw(v, cx);
+  const narrow = rec;
+  rec = null;
+  expect(narrow.some((c) => c[0] === "child" && c[1] === "Trajectory")).toBe(false);
+  expect(narrow.filter((c) => c[0] === "svg").map((c) => c[1])).toEqual(expect.arrayContaining([expect.stringContaining("messages.svg"), expect.stringContaining("list.svg")]));
+  // The command for keys.json: agent-threads.view:trajectory and view:chat.
+  expect(v.action("view:trajectory", cx)).toBe(true);
+  expect(v.ledger()).toBe(true);
+  expect(v.action("view:chat", cx)).toBe(true);
+  expect(v.ledger()).toBe(false);
+  // The Pinned column has no Trajectory.
+  v.pinnedPane = true;
+  expect(v.action("view", cx)).toBe(false);
+});
+
+test("Trajectory failures: the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
+  const { v, cx } = await pane(twoFails());
+  v.paneW = 573;
+  settleRows(v, cx);
+  // In the chat f is not a key.
+  expect(v.action("nextFail", cx)).toBe(false);
+  v.action("view", cx);
+  settleRows(v, cx);
+  const rows = ledgerOnly(v);
+  const fails = rows.filter((r) => r.failed).map((r) => r.key);
+  expect(fails.length).toBe(2);
+  expect(v.ledgerSums()).toMatchObject({ failed: 2, fails });
+  // From the first row: the first failure, then the second, then it stops there.
+  v.action("first", cx);
+  expect(v.tsel).toBe(rows[0].key);
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toBe(fails[0]);
+  expect(v.sel).toBe(rows.find((r) => r.kind === "trh" && r.turn === rows.find((x) => x.key === fails[0]).turn).key);
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toBe(fails[1]);
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toBe(fails[1]);
+  // Shift f goes back, and stops at the first.
+  v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(fails[0]);
+  v.key(keyEv("F"), cx);
+  expect(v.tsel).toBe(fails[0]);
+  // The landing row fades in, by itself.
+  expect(v.scrollTo?.flash || cx.timers.some((x) => x.ms === 140)).toBe(true);
+  // Drawn: "1 of 2" in the top row while on one, the red dot, the wash and the cross on the
+  // failed row, "1 failed" in its heading, the red bar and the red stretch in the turn's line.
+  rec = [];
+  draw(v, cx);
+  let calls = rec;
+  rec = null;
+  const child = (x) => calls.some((c) => c[0] === "child" && c[1] === x);
+  expect(child("1 of 2")).toBe(true);
+  expect(child("1 failed")).toBe(true);
+  expect(child("failed")).toBe(true);
+  // The wash on the other failed row only: the selected one has the list's gray fill.
+  const wash = () => calls.filter((c) => c[0] === "bg" && c[1] === alphaForTest(theme.blocked, 0.09)).length;
+  expect(wash()).toBe(1);
+  expect(calls.some((c) => c[0] === "svg" && String(c[1]).endsWith("/x.svg"))).toBe(true);
+  const head = rows.find((r) => r.kind === "trh" && r.fails);
+  expect(calls.some((c) => c[0] === "id" && c[1] === `th-tlr-${head.key}`)).toBe(true);
+  expect(calls.some((c) => c[0] === "id" && c[1] === `th-barp-${fails[0]}`)).toBe(true);
+  // Off the failure: the wash shows, and the top row says how many.
+  v.action("first", cx);
+  rec = [];
+  draw(v, cx);
+  calls = rec;
+  rec = null;
+  expect(wash()).toBe(2);
+  expect(child("2 failed")).toBe(true);
+  // A session with no failures: no count is drawn and f does nothing.
+  const { v: w, cx: wx } = await pane(fixture("--only", "3"));
+  w.action("view", wx);
+  settleRows(w, wx);
+  rec = [];
+  draw(w, wx);
+  calls = rec;
+  rec = null;
+  expect(calls.some((c) => c[0] === "id" && c[1] === "th-fails")).toBe(false);
+  expect(w.action("nextFail", wx)).toBe(false);
+});
+
+test("Trajectory bars and times: a bar on one scale, the start from 420 px and the bar from 500 px, '?' for a time not given", async () => {
+  const { barFrac } = await import("../mods/agent-threads/ledger.js");
+  const { v, cx } = await pane(twoFails());
+  v.paneW = 573;
+  v.action("view", cx);
+  settleRows(v, cx);
+  const detail = () => state.shared["threads.debug"].t4.detail;
+  expect(detail().some((d) => /^tr#\d+ context \? /.test(d))).toBe(true);
+  expect(detail().some((d) => d.startsWith("trh#") && / line \d+\/1$/.test(d))).toBe(true);
+  rec = [];
+  draw(v, cx);
+  let calls = rec;
+  rec = null;
+  // A 2 s call's bar, drawn as a div where Herdr has no stroked path (the test stubs).
+  expect(calls.some((c) => c[0] === "w" && c[1] === `${(barFrac(2000) * 100).toFixed(2)}%`)).toBe(true);
+  expect(calls.some((c) => c[0] === "child" && c[1] === "0:14")).toBe(true);
+  // 420 px: no bars; 340 px: no start column either. The duration stays.
+  for (const [w, start, bar] of [[460, true, false], [340, false, false]]) {
+    v.paneW = w;
+    rec = [];
+    draw(v, cx);
+    calls = rec;
+    rec = null;
+    expect(calls.some((c) => c[0] === "id" && String(c[1]).startsWith("th-bar-"))).toBe(bar);
+    expect(calls.some((c) => c[0] === "child" && c[1] === "0:14")).toBe(start);
+    expect(calls.some((c) => c[0] === "child" && c[1] === "2s")).toBe(true);
+  }
+});
+
+// A call still running is in test/ledger.test.js; the fixture's running turn has its results.
+test("the Trajectory of a running turn: its heading says 'now' and 'running', and no clock ticks", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2", "--open"));
+  v.paneW = 573;
+  settleRows(v, cx);
+  expect(v.liveShown).toBe(true); // the chat's running turn has its clock
+  v.action("view", cx);
+  settleRows(v, cx);
+  const rows = ledgerOnly(v);
+  const head = rows.filter((r) => r.kind === "trh").at(-1);
+  expect(head.going).toBe(true);
+  expect(rows.filter((r) => r.kind === "tr" && r.turn === head.turn).length).toBeGreaterThan(1);
+  expect(state.shared["threads.debug"].t4.detail.find((d) => d.startsWith(`trh#${head.n} `))).toContain("running");
+  // Nothing in the ledger counts up, so the list is not redrawn every second for it.
+  expect(v.liveShown).toBe(false);
+});
+
+// The Trajectory of a long session: its rows are built in slices of the chat's build time
+// (BUILD_MS), a frame each, and a draw with nothing changed costs what is on screen. Set
+// LEDGER_TURNS=6000 for the longest sessions (the default 2,000 keeps the suite quick).
+test("draw time: the Trajectory of a 2,000-turn session builds in slices and draws well inside Herdr's time", { timeout: 300000 }, async () => {
+  const n = Number(process.env.LEDGER_TURNS ?? 2000);
+  const { v, cx } = await pane(fixture("--extra", String(n)));
+  expect(v.current().turns.length).toBeGreaterThan(n);
+  v.paneW = 573; v.rootH = 1100; v.listH = 1000;
+  v.debug = false;
+  settleRows(v, cx);
+  const frames = () => { const out = []; for (let k = 0; k < 2000; k++) { const a = performance.now(); v.render(cx); out.push(performance.now() - a); if (!v.rowJob) break; } return out; };
+  const best = (fn) => { let b = Infinity; for (let i = 0; i < 5; i++) { const a = performance.now(); fn(); b = Math.min(b, performance.now() - a); } return b; };
+  // The list draws a screen of rows at its end, as Herdr does (the stub draws every row).
+  listWindow = (m) => ({ start: Math.max(0, m - 27), end: m });
+  let m;
+  try {
+    const chatStill = best(() => v.render(cx));
+    console.log(`chat still ${chatStill.toFixed(2)}`);
+    v.action("view", cx);
+    // The build: a slice a frame, each about BUILD_MS; the rows on screen stay until it is done.
+    const build = frames();
+    const done = v.rowJob === null;
+    // Built again (a width change, the agents toggle): done turns keep their rows (ledgerMemo).
+    v.rowsKey = null;
+    const again = frames();
+    // A draw with nothing changed, one after a key, and the failures' walk over every row.
+    const still = best(() => v.render(cx));
+    const step = best(() => { v.action("prev", cx); v.render(cx); });
+    const fail = best(() => { v.sumsMemo = null; v.ledgerSums(); });
+    m = { build, done, again, still, step, fail };
+  } finally { listWindow = null; }
+  const rows = ledgerOnly(v);
+  expect(m.done).toBe(true);
+  expect(rows.filter((r) => r.kind === "trh").length).toBeGreaterThan(n);
+  const sum = (x) => x.reduce((a, b) => a + b, 0).toFixed(1);
+  const top = (x) => Math.max(...x).toFixed(1);
+  console.log(`ledger ${n} turns, ${rows.length} rows: build ${m.build.length} frames, ${sum(m.build)} ms, slowest ${top(m.build)} ms; rebuild ${m.again.length} frames, ${sum(m.again)} ms, slowest ${top(m.again)} ms; still draw ${m.still.toFixed(2)} ms, key ${m.step.toFixed(2)} ms, failures walk ${m.fail.toFixed(2)} ms`);
+  // bun runs this faster than Herdr does, so these are generous.
+  expect(Math.max(...m.build)).toBeLessThan(40);
+  expect(m.still).toBeLessThan(10);
+  expect(m.step).toBeLessThan(10);
 });

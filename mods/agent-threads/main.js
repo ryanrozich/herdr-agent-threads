@@ -42,6 +42,8 @@ import * as gpuiKit from "gpui-kit";
 // window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
 import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
+// A stroked path (the Trajectory's bars and each turn's line), where Herdr has one; divs without.
+const STROKE = PAINT && typeof gpuiKit.PathBuilder?.stroke === "function" ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -63,8 +65,12 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse } from "./ledger.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// The rows that stand for a turn, keyed by the turn's own key: the chat's, the outline's and
+// the Trajectory's heading.
+const TURN_ROWS = new Set(["turn", "head", "working", "wrow", "line", "trh"]);
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
 const rowTurnKey = (r) => (r?.turn && r.si != null ? `${r.si}:${r.turn.n}` : null);
 // The height of a step group's line and the gap above it, and of a call's row in an open
@@ -721,6 +727,11 @@ export default class Threads extends View {
     // when it opened, for Esc. Not saved across restarts.
     this.outline = false;
     this.outlineBack = null;
+    // y: the Trajectory view (the ledger, ledger.js) in place of the chat, kept on this pane
+    // while it lives; a new pane opens on the chat. tsel is the selected ledger row; sel stays
+    // the turn that owns it, so the selected turn is the same in both views.
+    this.traj = false;
+    this.tsel = null;
     this.rootH = 0;
     if (!this.terminal) { this.res = { kind: "none", tried: [] }; return; }
     this.commands(cx);
@@ -772,7 +783,7 @@ export default class Threads extends View {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
-      outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
+      traj: this.ledger(), tsel: this.ledger() ? this.ledgerSel() : null, outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
@@ -828,6 +839,10 @@ export default class Threads extends View {
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
+      // The Trajectory: "trh#4 4 calls · 1 failed · 12.2k tok · 52s" and
+      // "tr#4 failed 0:14 Bash | bun test login | failed 2s".
+      case "trh": return `trh${n} ${Object.values(headParts(r, this.pw())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.gray.length}/${r.line.red.length}` : ""}`;
+      case "tr": return `tr${n} ${r.lk} ${r.start != null ? startText(r.start) : r.startQ ? "?" : "-"} ${r.tool ?? ""} | ${r.text} | ${r.status ?? ""} ${r.dur != null ? durText(r.dur) : r.durQ ? "?" : "-"}`;
       case "head": return `head${n}${who}`;
       case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
@@ -1182,7 +1197,7 @@ export default class Threads extends View {
   // at the top would move the place up on every return. So the place holds until the top of
   // the pane moves after the landing.
   trackPlace() {
-    if (!this.sel || !this.open.has(this.sel) || this.outlined()) return;
+    if (!this.sel || !this.open.has(this.sel) || this.outlined() || this.ledger()) return;
     if (this.placeHold != null) {
       if (Date.now() < this.placeHold) return;
       this.placeHold = null;
@@ -1646,7 +1661,7 @@ export default class Threads extends View {
       Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
-      this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
+      this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "", this.ledger() ? "traj" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
     const key = `${sess}|${rest}`;
@@ -1723,7 +1738,7 @@ export default class Threads extends View {
       this.otherLeft = 0;
       this.againOpen = false;
       this.reshapeDue = false;
-      this.shapeInView(status);
+      if (!this.ledger()) this.shapeInView(status);
       // Only the newest turns changed (a turn came in, the running one grew, the next piece
       // of a long session was read): the rows before them are kept (keptFrom).
       const from = this.rowsKey != null && this.baseRows?.length ? this.keptFrom(rest) : null;
@@ -1741,7 +1756,9 @@ export default class Threads extends View {
     job.frame = this.renders;
     const b0 = now();
     const s0 = this.shapeSpent ?? 0;
-    const out = this.buildRows(status, job.from, b0 + this.buildMax());
+    // The Trajectory has several rows a turn, and each built row is sized and indexed after the
+    // slice (below): its slice stops at half the time, so the two together keep inside it.
+    const out = this.buildRows(status, job.from, b0 + this.buildMax() / (this.ledger() ? 2 : 1));
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.cachedH.get(i) ?? this.height(out[i])); job.index.set(out[i].key, i); }
@@ -1915,6 +1932,7 @@ export default class Threads extends View {
     const marks = from ? from.marks.slice() : [];
     const lastSi = this.sessions.length - 1;
     const outline = this.outlined();
+    const ledger = this.ledger();
     let maxN = 1;
     if (outline) for (const s of this.sessions) maxN = Math.max(maxN, s.turns.length ? s.turns[s.turns.length - 1].n : 1);
     const numW = outlineNumW(maxN);
@@ -1952,7 +1970,7 @@ export default class Threads extends View {
       let unmatched = first ? from.unmatched ?? 0 : 0;
       const flush = () => { if (unmatched) out.push({ kind: "hidden", key: `hid:${si}:${out.length}`, n: unmatched }); unmatched = 0; };
       for (let ti = t0; ti < s.turns.length; ti++) {
-        if (until && ti > t0 && (ti & 15) === 0 && now() > until) {
+        if (until && ti > t0 && (ledger || (ti & 15) === 0) && now() > until) {
           this.buildInfo.resume = { si, ti, row: out.length, rail: rail.length, before: band, d: day, day, dayRow, multi, unmatched, marks };
           this.buildInfo.marks = marks;
           return out;
@@ -1968,7 +1986,8 @@ export default class Threads extends View {
         if (off && !visit) continue;
         if (miss && !visit) { unmatched++; continue; }
         const d = turn.day;
-        const newDay = multi && !q && d && d !== day;
+        // The Trajectory has no day bands: each turn's heading carries its day.
+        const newDay = multi && !q && !ledger && d && d !== day;
         // Where a later rebuild can start (keptFrom): before a day band, and every BAND_MARK
         // shown turns inside one.
         if (si === lastSi && !q && !outline && (newDay || (band && band % BAND_MARK === 0))) {
@@ -1989,6 +2008,8 @@ export default class Threads extends View {
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
+        // The Trajectory: a heading, then a row per step (ledger.js), every row LEDGER_ROW px.
+        if (ledger) { this.ledgerRows(s, turn, si, live, out); continue; }
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
       }
       flush();
@@ -2136,7 +2157,7 @@ export default class Threads extends View {
   closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.turnMeas?.get(key) ?? 0}`; }
   // Whether the rows as built can be kept per turn: not while a search, the outline or the
   // Pinned view shapes them.
-  closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
+  closedLookNow() { return this.view === "pinned" || this.outlined() || this.ledger() || this.filterText() ? null : this.closedLook(); }
   closedLook() {
     // The pane's width and the rail set how far a wide table may grow (tableExtra).
     return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`;
@@ -2850,7 +2871,7 @@ export default class Threads extends View {
   // the editor's own inset, at 12 px mono.
   codePer() { return Math.max(8, Math.floor((this.prose() - 18) / (12 * MONO_EM))); }
 
-  turnKeys(rows) { return rows.filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).map((r) => r.key); }
+  turnKeys(rows) { return rows.filter((r) => TURN_ROWS.has(r.kind)).map((r) => r.key); }
 
   // The hidden agent turn whose reply this turn shares: Claude answered the person's prompt
   // and an agent message that came while it was open in one reply, or a later one after this
@@ -3042,6 +3063,291 @@ export default class Threads extends View {
     const k = back?.top && back.top !== "spacer" && back.top !== "gap" ? back.top : this.sel;
     if (k) this.scrollTo = { key: k, how: back?.top ? "land" : "center", or: this.sel ? [this.sel] : [], until: Date.now() + 400 };
     return true;
+  }
+
+  // ---- the Trajectory (y) ----
+  // The ledger shows in the list's own view, in place of the chat; the Pinned view keeps its
+  // cards and the Pinned column has no Trajectory.
+  ledger() { return Boolean(this.traj) && this.view !== "pinned" && !this.pinnedPane; }
+
+  // What a flash (a jump's landing) lights: a ledger row by itself, a chat row with its turn.
+  flashKey(r) { return r.kind === "tr" || r.kind === "trh" ? r.key : rowTurnKey(r) ?? r.key; }
+
+  // One turn's ledger rows into out. A turn that is done keeps its rows (ledgerMemo) until its
+  // turn changes, so a rebuild of a long session mostly copies; a turn with a subagent call
+  // is made again when the session moves on, since a run's state comes in later.
+  ledgerRows(s, turn, si, live, out) {
+    const m = (this.ledgerMemo ??= new WeakMap());
+    const sig = `${si}|${turn.steps?.length ?? 0}|${turn.after.length}|${turn.endTs ?? ""}|${turn.latest?.length ?? 0}|${turn.interrupted ? 1 : 0}`;
+    let e = live || !turn.done ? null : m.get(turn);
+    if (e && (e.sig !== sig || (e.sub && e.ver !== s.version))) e = null;
+    if (!e) {
+      const { rows } = ledgerTurn(s, turn, si, live);
+      e = { sig, rows, sub: rows.some((r) => r.lk === "subagent"), ver: s.version };
+      if (!live && turn.done) m.set(turn, e);
+    }
+    for (const r of e.rows) out.push(r);
+  }
+
+  // The selected ledger row's key: tsel while it is a row of the selected turn, else that
+  // turn's heading (a rail jump or a pin moved sel, and tsel follows it there).
+  ledgerSel() {
+    const i = this.tsel != null ? this.baseIndex?.get(this.tsel) : undefined;
+    const r = i != null ? this.baseRows?.[i] : null;
+    return r && r.key === this.tsel && rowTurnKey(r) === this.sel ? this.tsel : this.sel;
+  }
+
+  // Selects a ledger row. With scroll, brings it on screen when it is not (to the middle), and
+  // with flash the row fades in where it lands.
+  ledgerPick(key, scroll, cx, flash = false) {
+    const i = this.baseIndex?.get(key);
+    const r = i != null ? this.baseRows[i] : null;
+    if (!r) return false;
+    this.tsel = key;
+    this.sel = rowTurnKey(r);
+    this.follow = i === this.baseRows.length - 1;
+    if (!scroll) return true;
+    const at = this.rowIndex(key);
+    const [a, b] = this.viewRange ?? [0, 0];
+    // On screen already, clear of the floating top and the bottom edge: no scroll.
+    if (at > a + 1 && at < b - 1) { if (flash) this.flashTurn(key, cx); return true; }
+    this.scrollTo = { key, how: "center", flash };
+    return true;
+  }
+
+  // The next ledger row d rows on (heading or step), or the first or last with d = -Infinity
+  // or Infinity.
+  ledgerStep(d, cx) {
+    const rows = this.baseRows ?? [];
+    const own = (r) => r && (r.kind === "tr" || r.kind === "trh");
+    let i = this.baseIndex?.get(this.ledgerSel());
+    if (d === Infinity || d === -Infinity || i == null) {
+      i = d < 0 ? 0 : rows.length - 1;
+      while (i >= 0 && i < rows.length && !own(rows[i])) i += d < 0 ? 1 : -1;
+    } else {
+      let j = i + d;
+      while (j >= 0 && j < rows.length && !own(rows[j])) j += d;
+      if (j < 0 || j >= rows.length) return true;
+      i = j;
+    }
+    if (!own(rows[i])) return false;
+    return this.ledgerPick(rows[i].key, true, cx);
+  }
+
+  // The session's numbers (ledger.js ledgerTotals), worked out again only when the rows were
+  // built again: the failures in order, and the counts.
+  ledgerSums() {
+    const rows = this.baseRows ?? [];
+    if (this.sumsMemo?.rows !== rows || this.sumsMemo.n !== rows.length) this.sumsMemo = { rows, n: rows.length, sums: ledgerTotals(rows) };
+    return this.sumsMemo.sums;
+  }
+
+  // f and Shift f: the next or previous failed call from the selection. At the last one it
+  // stops; nothing pops up.
+  stepFail(d, cx) {
+    const fails = this.ledgerSums().fails;
+    if (!fails.length) return false;
+    const at = this.baseIndex?.get(this.ledgerSel()) ?? (d > 0 ? -1 : Infinity);
+    let to = null;
+    if (d > 0) to = fails.find((k) => (this.baseIndex.get(k) ?? -1) > at) ?? null;
+    else for (let k = fails.length - 1; k >= 0 && to == null; k--) if ((this.baseIndex.get(fails[k]) ?? Infinity) < at) to = fails[k];
+    if (to == null) return true;
+    return this.ledgerPick(to, true, cx, true);
+  }
+
+  // A key in the Trajectory: true or false when it is handled here, undefined for the chat's
+  // own handling (search, pins, settings, copy, the panels).
+  ledgerAction(name, cx) {
+    switch (name) {
+      case "prev": return this.ledgerStep(-1, cx);
+      case "next": return this.ledgerStep(1, cx);
+      case "first": return this.ledgerStep(-Infinity, cx);
+      case "latest": this.jumpLatest(true); this.tsel = null; return true;
+      case "nextFail": return this.stepFail(1, cx);
+      case "prevFail": return this.stepFail(-1, cx);
+      // Opening a row, the outline, a turn's work, Select view and the Turn card belong to
+      // the chat (opening a row here is a later round).
+      case "open": case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
+      case "prevDay": case "nextDay": return false;
+      case "outline:off": return true;
+      case "escape":
+        return this.detailsOpen || this.keysOpen || this.settingsOpen || this.choosing || this.selecting || this.filtering || this.query ? undefined : false;
+      default: return undefined;
+    }
+  }
+
+  // y, or a press on Chat or Trajectory in the top row. The selected turn carries across:
+  // into the Trajectory its heading lands at the top, selected; back in the chat the turn
+  // that owns the selected row is selected and scrolled to. The landing row fades in.
+  setTraj(on, cx) {
+    if (this.pinnedPane) return false;
+    if (Boolean(on) === this.ledger()) return true;
+    if (this.selecting) this.endSelect();
+    this.detailsOpen = false;
+    this.toBottom = false;
+    if (on) {
+      if (this.view === "pinned") this.setView("all");
+      if (this.outlined()) { this.outline = false; this.outlineBack = null; }
+      this.traj = true;
+      this.tsel = this.sel;
+    } else {
+      const k = this.ledgerSel();
+      const i = k != null ? this.baseIndex?.get(k) : undefined;
+      const r = i != null ? this.baseRows?.[i] : null;
+      if (r) this.sel = rowTurnKey(r);
+      this.traj = false;
+      this.tsel = null;
+    }
+    this.pinResume = null;
+    if (!this.sel) { this.jumpLatest(true); return true; }
+    this.follow = false;
+    this.scrollTo = { key: this.sel, how: "head", flash: true, until: Date.now() + 400 };
+    cx?.notify?.();
+    return true;
+  }
+
+  // The top row's switch: "Chat" and "Trajectory", or two icons in a narrow pane.
+  viewSwitch(t) {
+    const words = ledgerCols(this.pw()).words;
+    const on = this.ledger();
+    const part = (id, label, icon, mine, tip) => h_flex().id(id).flex_none().h(22).px(words ? 7 : 5).items_center().rounded(4).cursor_pointer()
+      .text_size(12).text_color(mine ? t.foreground : t.dim).when(mine, (el) => el.bg(t.raised))
+      .when(!mine, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
+      .tooltip(tip)
+      .on_click((_e, cx) => { cx.stop_propagation(); this.setTraj(label === "Trajectory", cx); cx.notify(); })
+      .child(words ? label : svg(ICON(icon)).size(13));
+    return h_flex().id("th-view").flex_none().h(24).p(1).gap(1).items_center().rounded(5).border_1().border_color(t.border).bg(t.background)
+      .child(part("th-view-chat", "Chat", "messages", !on, "The turns as a chat (y)"))
+      .child(part("th-view-traj", "Trajectory", "list", on, "Each step, its time and whether it failed (y)"));
+  }
+
+  // The top row's failures in the Trajectory: "2 failed", or "1 of 2" while on one, with the
+  // previous and next arrows (Shift f and f). None: nothing is drawn.
+  failStep(t) {
+    const fails = this.ledgerSums().fails;
+    if (!fails.length) return null;
+    const k = fails.indexOf(this.ledgerSel());
+    const arrow = (id, icon, tip, d) => div().id(id).flex_none().size(20).flex().items_center().justify_center().rounded(4).cursor_pointer()
+      .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
+      .on_click((_e, cx) => { cx.stop_propagation(); this.stepFail(d, cx); cx.notify(); })
+      .child(svg(ICON(icon)).size(13));
+    return h_flex().id("th-fails").flex_none().h(24).pl(6).pr(1).gap(4).items_center().rounded(5).bg(t.background)
+      .child(div().flex_none().size(6).rounded(3).bg(t.blocked))
+      .child(div().flex_none().text_size(12).text_color(t.muted).child(k >= 0 ? `${k + 1} of ${fails.length}` : `${fails.length} failed`))
+      .child(arrow("th-fail-prev", "chevron-up", "Previous failure (Shift f)", -1))
+      .child(arrow("th-fail-next", "chevron-down", "Next failure (f)", 1));
+  }
+
+  // Stretches of a row as a stroked vector path (one element however many stretches), or as
+  // a div each where Herdr has no stroked path. segs are [from, to] fractions of the width.
+  pathLayer(segs, color, w, id, h = w) {
+    const win = globalThis.window;
+    if (STROKE && typeof win?.paint_path === "function" && segs.length) {
+      try {
+        let b = STROKE.PathBuilder.stroke(w);
+        for (const [a, z] of segs) b = b.move_to(`${(a * 100).toFixed(2)}%`, "50%").line_to(`${(z * 100).toFixed(2)}%`, "50%");
+        const fill = typeof STROKE.Background?.solid === "function" ? STROKE.Background.solid(color) : color;
+        return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
+      } catch { /* the divs below */ }
+    }
+    const few = segs.length > 40 ? coarse(segs, 40) : segs;
+    return div().id(id).absolute().top(0).left(0).size_full()
+      .children(few.map(([a, z]) => div().absolute().top(Math.max(0, (h - w) / 2)).h(w).left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.5, (z - a) * 100).toFixed(2)}%`).rounded(w / 2).bg(color)));
+  }
+
+  // A turn's heading: its number and clock time (with the day when it is not today) at the
+  // left; calls, failures, tokens and the total at the right. Along its lower edge, 3 px,
+  // the turn's clock: each call a stretch of it, a failed one in red.
+  ledgerHead(t, r) {
+    const sel = this.ledgerSel() === r.key;
+    const p = headParts(r, this.pw());
+    const day = r.ts ? railDay(r.ts) : null;
+    const when = r.going ? "now" : r.ts ? `${day && day !== "Today" ? `${day} ` : ""}${fmtTime(r.ts)}` : "";
+    const kids = [];
+    for (const x of [p.calls, p.failed, p.tokens, p.total]) {
+      if (!x) continue;
+      if (kids.length) kids.push(div().flex_none().text_color(t.dim).child("·"));
+      if (x === p.failed) kids.push(div().flex_none().size(6).rounded(3).bg(t.blocked));
+      kids.push(div().flex_none().whitespace_nowrap().text_color(x === p.total && !r.timed ? t.dim : t.muted).child(x));
+    }
+    const right = h_flex().flex_none().gap(5).items_center().text_size(11.5).text_color(t.muted).children(kids);
+    const line = r.line;
+    const [pl, pr] = this.ledgerPads();
+    return h_flex().w_full().h(LEDGER_ROW).relative().pl(pl).pr(pr).gap(8).items_center().min_w(0)
+      .bg(sel ? t.selected : alpha(t.foreground, 0.035))
+      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(`#${r.n}`))
+      .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(r.going ? t.working : t.dim).child(when))
+      .child(right)
+      .when(Boolean(line), (el) => el.child(div().id(`th-tl-${r.key}`).absolute().bottom(0).left(pl).right(pr).h(3)
+        .child(div().absolute().top(0).left(0).size_full().bg(alpha(t.foreground, 0.06)))
+        .when(line.gray.length > 0, (x) => x.child(this.pathLayer(line.gray, t.dim, 3, `th-tlg-${r.key}`)))
+        .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, t.blocked, 3, `th-tlr-${r.key}`)))));
+  }
+
+  // The ledger's side padding, [left, right]: on the rail's side, clear of its lane, since
+  // the rows span the pane under it.
+  ledgerPads() {
+    const k = `${this.renders ?? 0}|${this.pw()}`;
+    if (this.padMemo?.k !== k) {
+      const lane = this.railShown() ? railLook(this.side()).lane + 4 : ROW.PAD_X;
+      this.padMemo = { k, v: this.railLeft() ? [Math.max(ROW.PAD_X, lane), ROW.PAD_X] : [ROW.PAD_X, Math.max(ROW.PAD_X, lane)] };
+    }
+    return this.padMemo.v;
+  }
+
+  // A step's mark: an icon, or a drawn dot, ring or square, in the kind's colour.
+  ledgerMark(k, color) {
+    const box = div().flex_none().size(14).flex().items_center().justify_center();
+    if (k.mark === "dot") return box.child(div().size(5).rounded(3).bg(color));
+    if (k.mark === "ring") return box.child(div().size(8).rounded(4).border_1().border_color(color).when(Boolean(k.faint), (el) => el.opacity(0.55)));
+    if (k.mark === "square") return box.child(div().size(7).rounded(1).bg(color));
+    if (k.mark) return box.child(svg(ICON(k.mark)).size(12).text_color(color));
+    return box;
+  }
+
+  // A step's row, 24 px: its start from the turn's start, its mark, its words (a call's tool
+  // in the code face, then its input), a status word, its duration and its bar. A failed call
+  // has a red cross, a red bar and a faint red wash; the word "failed" stays in the text
+  // colour. A time the transcript does not give is a dim "?"; a turn with no times leaves
+  // its time cells empty.
+  ledgerItem(t, r) {
+    const sel = this.ledgerSel() === r.key;
+    const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
+    const cols = ledgerCols(this.pw());
+    const ink = t[k.tone] ?? t.foreground;
+    const markInk = k.accent ? t[k.accent] : r.lk === "you" ? t.foreground : t.muted;
+    const startCell = r.start != null ? startText(r.start) : r.startQ ? "?" : "";
+    const durCell = r.dur != null ? durText(r.dur) : r.durQ ? "?" : "";
+    const status = r.status ?? (r.sub ? [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") : null);
+    const words = r.sender ? `${r.sender} · ${r.text}` : r.text;
+    const [pl, pr] = this.ledgerPads();
+    return h_flex().w_full().h(LEDGER_ROW).relative().pl(pl).pr(pr).gap(8).items_center().min_w(0)
+      .when(sel, (el) => el.bg(t.selected))
+      .when(!sel && r.failed, (el) => el.bg(alpha(t.blocked, 0.09)))
+      .when(!sel && !r.failed, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(cols.start, (el) => el.child(div().flex_none().w(38).text_size(11).font_family(this.mono()).text_color(t.dim).child(startCell)))
+      .child(this.ledgerMark(k, markInk))
+      .child(h_flex().flex_1().min_w(0).gap(6).items_center()
+        .when(Boolean(r.tool), (el) => el.child(div().flex_none().max_w(140).truncate().text_size(12).font_family(this.mono()).text_color(t.foreground).child(r.tool)))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(ink)
+          .when(Boolean(k.code && r.tool), (el) => el.text_size(12).font_family(this.mono()).text_color(t.muted))
+          .child(words || " ")))
+      .when(Boolean(status), (el) => el.child(div().flex_none().whitespace_nowrap().text_size(11.5).text_color(r.failed ? t.foreground : t.muted).child(status)))
+      .child(h_flex().flex_none().w(50).justify_end().text_size(11).font_family(this.mono()).text_color(r.durQ ? t.dim : t.muted).child(durCell))
+      .when(cols.bar, (el) => el.child(this.ledgerBar(t, r)));
+  }
+
+  // The bar: one rounded stroke as long as the step took on the session's one scale
+  // (ledger.js barFrac), red for a failed call, a faint dotted stretch for a time the
+  // transcript does not give, a short fading one for a call still running.
+  ledgerBar(t, r) {
+    const box = div().id(`th-bar-${r.key}`).flex_none().w(56).h(LEDGER_ROW).relative();
+    if (!["tool", "failed", "subagent", "running"].includes(r.lk)) return box;
+    const id = `th-barp-${r.key}`;
+    if (r.lk === "running") return box.child(this.pathLayer([[0, 0.3]], alpha(t.muted, 0.4), 3, id, LEDGER_ROW));
+    if (r.dur == null) return r.durQ ? box.child(this.pathLayer([[0, 0.06], [0.14, 0.2], [0.28, 0.34]], t.dim, 2, id, LEDGER_ROW)) : box;
+    return box.child(this.pathLayer([[0, barFrac(r.dur)]], r.failed ? t.blocked : t.dim, 3, id, LEDGER_ROW));
   }
 
   toggle(key, cx) {
@@ -3250,7 +3556,8 @@ export default class Threads extends View {
   syncOutEditors(cx) {
     const eds = (this.outEds ??= new Map());
     const want = new Map();
-    for (const r of this.rowsMemo ?? []) {
+    // The Trajectory shows no call output: its many rows are not walked for some.
+    for (const r of this.ledger() ? [] : this.rowsMemo ?? []) {
       if (r.kind !== "cout" || !r.box.lines.length) continue;
       const lang = this.outLangOf(r);
       if (lang) want.set(this.outKey(r), { lang, text: this.callEntry(r.si, r.id).out });
@@ -3727,6 +4034,11 @@ export default class Threads extends View {
     // The panel has the keyboard again, even if an editor's blur event was missed. A search
     // stays, and its field gives up the keys.
     this.toList();
+    // The Trajectory: a press selects the row (a heading or a step) and opens nothing.
+    if (this.ledger() && (kind === "tr" || /^\d+$/.test(kind))) {
+      this.ledgerPick(key, false, cx);
+      return cx.notify();
+    }
     if (/^\d+$/.test(kind)) {
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
       // The selected running card whose message is taller than YOU_MAX: Show all and Show
@@ -3928,6 +4240,13 @@ export default class Threads extends View {
     this.stickStep = null; // a key decides, not a frame drawn before it
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
+    if (name === "view") return this.setTraj(!this.ledger(), cx);
+    if (name === "view:chat" || name === "view:trajectory") return this.setTraj(name === "view:trajectory", cx);
+    // The Trajectory's own keys come first: its rows are many, and the turn keys are not needed.
+    if (this.ledger()) {
+      const done = this.ledgerAction(name, cx);
+      if (done !== undefined) return done;
+    } else if (name === "nextFail" || name === "prevFail") return false;
     const keys = this.turnKeys(rows);
     const at = keys.indexOf(this.sel);
     const go = (i) => {
@@ -4030,8 +4349,9 @@ export default class Threads extends View {
     if (name.startsWith("go:")) {
       this.editorFocused = false;
       this.h.focus();
-      // A pin opens in the list, at its place, so the outline gives way.
+      // A pin opens in the list, at its place, so the outline and the Trajectory give way.
       if (this.outlined() && this.pinnedList()[Number(name.slice(3)) - 1]?.turn) { this.outline = false; this.outlineBack = null; }
+      if (this.ledger() && this.pinnedList()[Number(name.slice(3)) - 1]?.turn) { this.traj = false; this.tsel = null; }
       return this.goPin(Number(name.slice(3)) - 1, cx);
     }
     if (name === "choose") {
@@ -5088,6 +5408,8 @@ export default class Threads extends View {
         .child(div().id("th-sticky-day").child(this.dayPill(t, day)))))
       .child(h_flex().absolute().top(0).left(0).right(0).h(TOP_BAND).pl(8).pr(10).gap(6).items_center()
         .child(this.floatState(t))
+        .when(this.sessions.length > 0, (el) => el.child(this.viewSwitch(t)))
+        .when(this.ledger(), (el) => { const f = this.failStep(t); return f ? el.child(f) : el; })
         .child(div().flex_1())
         .when(show, (el) => el.children(this.floatButtons().map(([id, icon, tip, act, on, count]) => {
           const b = this.iconButton(t, id, icon, tip, this.headerClick(act), on, count);
@@ -5499,7 +5821,8 @@ export default class Threads extends View {
     // no row yet, and no empty state either, which would say there is nothing while the turns
     // are still on their way.
     if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
-    if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
+    // Any turn shown: the first one found ends the look (turnKeys walked every row, every draw).
+    if (s?.loaded && !this.filterText() && this.counts().hiddenAll > 0 && !rows.some((r) => TURN_ROWS.has(r.kind))) {
       const n = this.counts().hiddenAll;
       return this.empty(t, "bot", "Nothing you typed yet",
         `Nothing you typed in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,
@@ -5562,7 +5885,7 @@ export default class Threads extends View {
       // A jump the person asked for (a rail tick or card, a pin return, #n in the search, Go to
       // that reply) flashes the turn it lands on, after the scroll (a second press's follow-up
       // scroll flashes instead).
-      if (i >= 0 && st.flash && !(how === "land" && st.resume)) this.flashTurn(rowTurnKey(rows[i]) ?? rows[i].key, cx);
+      if (i >= 0 && st.flash && !(how === "land" && st.resume)) this.flashTurn(this.flashKey(rows[i]), cx);
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
       const lead = (k) => (rows[k - 1]?.kind === "wtop" && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
@@ -6167,6 +6490,7 @@ export default class Threads extends View {
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "wake": return WAKE_H;
       case "line": return outlineHeight(this.prefs.textSize);
+      case "trh": case "tr": return LEDGER_ROW;
       case "cmd": return r.est;
       case "imgs": return 8 + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "divider": return 36;
@@ -6430,9 +6754,12 @@ export default class Threads extends View {
       // clips an item on both axes, even with overflow_y_hidden. A turn a jump landed on has
       // its flash layer over the column (flashTurn).
       const ex = this.tableExtra(x);
-      const fl = this.flash && x && (rowTurnKey(x) ?? x.key) === this.flash.key ? this.flash : null;
+      // The Trajectory's rows span the pane, not the reading column: they are columns of
+      // times and bars, not lines to read.
+      const span = x && (x.kind === "tr" || x.kind === "trh") ? Math.max(this.width, this.pw()) : this.width + ex;
+      const fl = this.flash && x && this.flashKey(x) === this.flash.key ? this.flash : null;
       out.push(h_flex().w_full().h(h).justify_center()
-        .child(v_flex().w_full().max_w(this.width + ex).when(ex > 0, (el) => el.px(ex / 2)).h_full().overflow_hidden()
+        .child(v_flex().w_full().max_w(span).when(ex > 0, (el) => el.px(ex / 2)).h_full().overflow_hidden()
           .when(Boolean(held), (el) => el.justify_end())
           .when(Boolean(dim && x && !CARD.has(x.kind)), (el) => el.opacity(0.55))
           .when(Boolean(fl), (el) => el.relative().child(div().id(`th-flash-${fl.n}-${x.key}`).absolute().top(0).left(0).size_full()
@@ -6502,6 +6829,8 @@ export default class Threads extends View {
       case "tail": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
+      case "trh": return this.ledgerHead(t, r);
+      case "tr": return this.ledgerItem(t, r);
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "wtop": return this.workingTop(t, r, focusedPanel);
       case "wake": return this.wakeRow(t, r);
@@ -7092,6 +7421,8 @@ export default class Threads extends View {
   // scrolled away (the list item at the top comes from the list's own drawing, topKey). The
   // drawing pass may not redraw the pane, so stickyDue asks the 120 ms timer to.
   stickyDay() {
+    // The Trajectory has no day bands (each heading carries its day).
+    if (this.ledger()) return null;
     const rows = this.rowsMemo ?? [];
     if (this.dayOfRows !== rows) {
       this.dayOfRows = rows;
@@ -7420,6 +7751,8 @@ export default class Threads extends View {
     const pinHint = pin ? [["p", this.sel && this.isPinned(this.sel) ? "unpin" : "pin"]] : [];
     // The outline: move, open the turn, back to the list, then search and pin.
     if (this.outlined()) return fitHints([["↑↓", "move"], ["↵", "open"], ["Esc", "list"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
+    // The Trajectory: move a row, step through failures, back to the chat.
+    if (this.ledger()) return fitHints([["↑↓", "move"], ["f", "next failure"], ["y", "chat"], ["c", "copy"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
     // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
