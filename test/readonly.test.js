@@ -64,7 +64,8 @@ function violations(modDir, installSh, recipe = join(root, "RECIPE.md")) {
   }
   // RECIPE's command list names no quote command.
   if (existsSync(recipe) && /agent-threads\.(quote|debugQuote)\b/.test(readFileSync(recipe, "utf8").replace(/`agent-threads\.debugQuote`[^\n]*debug/g, ""))) out.push("RECIPE.md names a quote command");
-  const files = readdirSync(modDir).filter((f) => /\.(js|sh|jq)$/.test(f)).map((f) => join(modDir, f));
+  // Every script in the mod, its core/ folder included.
+  const files = readdirSync(modDir, { recursive: true }).filter((f) => /\.(js|sh|jq)$/.test(f)).map((f) => join(modDir, f));
   files.push(installSh);
   for (const file of files) {
     const name = file.split("/").pop();
@@ -197,6 +198,6 @@ test("the check catches an injected terminal.send", () => {
   writeFileSync(st, `${readFileSync(join(mod, "settings.js"), "utf8")}\nexport const x = () => writeTextFile(\`\${home}/.claude/sessions/1.json\`, "", null);\n`);
   expect(violations(dir, join(root, "install.sh")).some((x) => x.startsWith("settings.js") && x.includes("file write"))).toBe(true);
   writeFileSync(st, readFileSync(join(mod, "settings.js"), "utf8"));
-  writeFileSync(join(dir, "extract.sh"), `${readFileSync(join(mod, "extract.sh"), "utf8")}\necho x > "$HOME/.claude/sessions/1.json"\n`);
+  writeFileSync(join(dir, "core/extract.sh"), `${readFileSync(join(mod, "core/extract.sh"), "utf8")}\necho x > "$HOME/.claude/sessions/1.json"\n`);
   expect(violations(dir, join(root, "install.sh")).some((x) => x.includes("writes"))).toBe(true);
 });

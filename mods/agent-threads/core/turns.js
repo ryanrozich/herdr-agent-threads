@@ -160,6 +160,8 @@ function newTurn(s, e) {
   const { sender, body } = e.cmd ? { sender: { kind: o === "human" ? "you" : o }, body: e.t ?? "" } : senderOf(e.o, e.t, typeof e.n === "string" ? e.n : null);
   return {
     n: s.turns.length + 1,
+    // The session's version when the turn last changed (apply).
+    v: s.version,
     ts: e.ts ? Date.parse(e.ts) : null,
     origin: e.o,
     prompt: body,
@@ -278,6 +280,7 @@ function linkAnswer(s, cur) {
     const t = s.turns[i];
     if (t.after.length || t.interrupted || t.answeredBy || !t.errors.length || !t.errors.every((x) => CUT_OFF.test(x))) return;
     t.answeredIn = cur.n;
+    t.v = s.version;
   }
 }
 
@@ -295,8 +298,27 @@ function closeOpen(s, cur, end, e) {
   linkAnswer(s, cur);
 }
 
-// Applies one extractor event to a session, in file order.
+// The events that change no turn: a turn's version (v) moves for every other one. Subagent
+// launches and notices (r, n) change what an open turn's subagent group shows: s.agentVer.
+const NO_TURN = new Set(["title", "an", "ctx", "settle", "b", "r", "n"]);
+
+// Applies one extractor event to a session, in file order. Every turn the event may have
+// changed (the newest, every open one, any linkAnswer marks) takes the session's version as
+// its own (turn.v), so a view can keep what it built for a turn until that turn changes.
 export function apply(s, e) {
+  const cur = s.turns[s.turns.length - 1];
+  const open = s.open.length ? s.open.slice() : null;
+  applyOne(s, e);
+  const v = s.version;
+  if (e.k === "r" || e.k === "n") { s.agentVer = v; return; }
+  if (NO_TURN.has(e.k)) return;
+  if (cur) cur.v = v;
+  const last = s.turns[s.turns.length - 1];
+  if (last) last.v = v;
+  if (open) for (const t of open) t.v = v;
+}
+
+function applyOne(s, e) {
   s.version++;
   if (e.k === "b") {
     if (s.pendingCmd?.u && s.pendingCmd.u === e.pu) promote(s);

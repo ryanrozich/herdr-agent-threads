@@ -9,57 +9,16 @@
 // A turn's number can change when the way rows are built changes, so a pin keeps a
 // fingerprint: the prompt's time in seconds, a hash of its text, and a count for repeats.
 
-import { reply, firstLine } from "./turns.js";
+import { reply, firstLine } from "./core/turns.js";
+import { turnIds, turnId } from "./core/ids.js";
+
+// The turn ids live with the reader (core/ids.js); pins and their tests use them from here too.
+export { turnIds, turnId };
 
 export const PIN_LIMIT = 5; // the keys 1 to 5
 export const PIN_TEXT = 80; // characters of the prompt kept, shown when the turn is gone
 const MAX_SESSIONS = 200;
 const MAX_AGE = 90 * 86400000;
-
-const hash = (x) => {
-  let h = 2166136261;
-  for (let i = 0; i < x.length; i++) { h ^= x.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return (h >>> 0).toString(36);
-};
-
-// A prompt's hash is kept per turn, since a live session asks again on every read.
-const bases = new WeakMap();
-// The fingerprint's first part, the prompt's time in seconds: a turn from another second
-// cannot match, so its prompt is never hashed (a pasted prompt of 950 KB took 41 ms, and
-// stopped a draw while a session loaded).
-const secOf = (turn) => (turn.ts ? String(Math.floor(turn.ts / 1000)) : "-");
-function baseOf(turn) {
-  const prompt = turn.prompt ?? "";
-  const m = bases.get(turn);
-  if (m && m.ts === turn.ts && m.len === prompt.length) return m.base;
-  const base = `${secOf(turn)}|${hash(prompt)}`;
-  bases.set(turn, { ts: turn.ts, len: prompt.length, base });
-  return base;
-}
-
-// Every turn of a session under its fingerprint; with ids, only the turns from the seconds
-// those ids name (the count for repeats only ever counts turns from the same second).
-export function turnIds(turns, ids = null) {
-  const only = ids ? new Set(Array.from(ids, (id) => String(id).split("|")[0])) : null;
-  const seen = new Map();
-  const out = new Map();
-  for (const t of turns) {
-    if (only && !only.has(secOf(t))) continue;
-    const b = baseOf(t);
-    const k = (seen.get(b) ?? 0) + 1;
-    seen.set(b, k);
-    out.set(`${b}|${k}`, t);
-  }
-  return out;
-}
-
-export function turnId(turns, turn) {
-  const b = baseOf(turn);
-  const sec = secOf(turn);
-  let k = 0;
-  for (const t of turns) { if (t !== turn && secOf(t) !== sec) continue; if (baseOf(t) === b) k++; if (t === turn) break; }
-  return `${b}|${k}`;
-}
 
 const validPin = (p) => p && typeof p === "object" && typeof p.id === "string" && p.id !== "";
 
