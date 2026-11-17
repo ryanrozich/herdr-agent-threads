@@ -9,7 +9,9 @@
 // it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
 // Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
-// is its own settings file (settings.js).
+// is its own settings file (settings.js). The Link rules page hands two kinds of web address
+// to Herdr's cx.open_url (http and https only): a rule's address (Open) and MDN's regular
+// expression cheat sheet (Reference).
 //
 // Two roles, one mod:
 // - Opened with mod.open (keys.json "mod.open:agent-threads"), it is a launcher: it
@@ -61,7 +63,7 @@ import {
   keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
@@ -184,6 +186,17 @@ const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubb
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The preview's times: 9:12 AM for yours, two minutes before for an agent's.
 const PREVIEW_AT = new Date(2000, 0, 1, 9, 12).getTime();
+// The rule editor's fields: key, label, placeholder, the most it takes.
+const RULE_FIELDS = [
+  ["name", "Name", "Ticket", 40],
+  ["description", "Description", "Optional", DESCRIPTION_MAX],
+  ["pattern", "Finds", "A pattern, such as \\bACME-(\\d+)\\b", 200],
+  ["url", "Opens", "An address, such as https://tracker.example.com/ACME-$1", 2000],
+  ["example", "Example", "Text this rule should link, such as Fixed in ACME-412.", 200],
+];
+// How long typing may stop before a rule's fault is shown (chat-look round 10).
+const REASON_PAUSE = 1500;
+const REGEX_REFERENCE = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet";
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
 const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 1200 };
@@ -707,6 +720,15 @@ export default class Threads extends View {
     this.quoteInput.on("change", (_e, cx) => { this.quoteTyped(cx); cx.notify(); });
     this.quoteInput.on("focus", (_e, cx) => { this.fieldFocused = "quote"; cx.notify(); });
     this.quoteInput.on("blur", (_e, cx) => { if (this.fieldFocused === "quote") this.fieldFocused = null; cx.notify(); });
+    this.ruleInputs = {};
+    for (const [k, , hint] of RULE_FIELDS) {
+      const inp = InputState.new({ placeholder: hint, value: "" });
+      inp.on("change", (_e, cx) => { this.ruleTyped(k, cx); cx.notify(); });
+      inp.on("focus", (_e, cx) => { this.fieldFocused = `rule-${k}`; cx.notify(); });
+      inp.on("blur", (_e, cx) => { if (this.fieldFocused === `rule-${k}`) this.fieldFocused = null; this.ruleShow(k); cx.notify(); });
+      inp.on("submit", (_e, cx) => { this.keepRule(cx); cx.notify(); });
+      this.ruleInputs[k] = inp;
+    }
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -722,6 +744,12 @@ export default class Threads extends View {
     this.fieldFocused = null;
     this.quoteFileNote = null;
     this.linkList = [];
+    // The Link rules page: the rule open in the editor (null: none), the rule just removed
+    // (for Undo), the row under the pointer, and the list just written (until the file shows it).
+    this.ruleEdit = null;
+    this.ruleUndo = null;
+    this.ruleHover = null;
+    this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
     this.links = []; // compiled link rules (settings.js parseLinks)
@@ -993,11 +1021,14 @@ export default class Threads extends View {
     // The card's field shows the key the file now holds, unless it is being typed in.
     if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
-    this.linkCount = x.linkCount;
-    this.linkList = x.linkList;
+    this.setLinks(x.links, x.linkList, x.linkCount);
+  }
+  setLinks(rules, list, count) {
+    this.linkCount = count;
+    this.linkList = list;
     this.linkListVer = (this.linkListVer ?? 0) + 1;
-    const sig = JSON.stringify(x.links.map((r) => [r.re.source, r.url]));
-    if (sig !== this.linksSig) { this.linksSig = sig; this.links = x.links; this.linksVer++; }
+    const sig = JSON.stringify(rules.map((r) => [r.re.source, r.url]));
+    if (sig !== this.linksSig) { this.linksSig = sig; this.links = rules; this.linksVer++; }
   }
 
   setPrefs(values) {
@@ -1068,6 +1099,7 @@ export default class Threads extends View {
     this.detailsOpen = false;
     this.setTab = "chat";
     this.setPage = "main";
+    this.leaveLinks();
     this.quoteDraft = null;
     this.setQuoteField(this.quoteKey);
     this.h.focus();
@@ -1076,7 +1108,14 @@ export default class Threads extends View {
   // Closes the card. A field in it that had the keyboard hands it back to the pane.
   closeSettings() {
     this.settingsOpen = false;
+    this.leaveLinks();
     this.dropField();
+  }
+  // Leaving the Link rules page: a rule open in the editor is dropped unkept, and Undo goes.
+  leaveLinks() {
+    this.ruleEdit = null;
+    this.ruleUndo = null;
+    this.ruleHover = null;
   }
   setQuoteField(v) {
     this.quoteSetting = true;
@@ -1104,6 +1143,218 @@ export default class Threads extends View {
   // hands the keyboard back to the pane, so the panel's keys work again.
   dropField() {
     if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
+  }
+
+  // ---- link rules changed on the card (chat-look round 10) ----
+
+  // Whether the card may change rules: not while the file holds text that is not settings
+  // (a hand edit in progress) or a "links" that is not a list, which a write would replace.
+  linksEditable() {
+    if (!writable(this.prefsRaw)) return false;
+    let raw = null;
+    try { raw = JSON.parse(this.prefsRaw ?? ""); } catch { return true; }
+    return raw?.links == null || Array.isArray(raw.links);
+  }
+  // The rules as the file holds them, as copies to change: the list just written while its
+  // save runs, or the fresh install's rule while there is no file.
+  fileLinks() {
+    if (this.linksPending) return this.linksPending.map((r) => (r && typeof r === "object" ? { ...r } : r));
+    if (this.prefsRaw == null || String(this.prefsRaw).trim() === "") return defaultLinks();
+    let raw = null;
+    try { raw = JSON.parse(this.prefsRaw); } catch { return []; }
+    return Array.isArray(raw?.links) ? raw.links.map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : [];
+  }
+  // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
+  writeLinks(raw, cx) {
+    this.linksPending = raw;
+    const l = parseLinks(raw);
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
+    this.setLinks(l.rules, l.list, raw.length);
+    const chain = this.changePrefs({}, cx, { links: raw });
+    chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
+    return chain;
+  }
+  // A draft as the file's rule: the keys in a fixed order, the optional ones only when set,
+  // and any key this version does not know kept from the rule it replaces.
+  ruleObject(d, base) {
+    const o = {};
+    if (d.name.trim()) o.name = d.name.trim();
+    if (d.type !== "custom") o.type = d.type;
+    const desc = d.description.replace(/\s+/g, " ").trim();
+    if (desc) o.description = desc;
+    o.pattern = d.pattern;
+    o.url = d.url.trim();
+    if (d.example) o.example = d.example;
+    if (!d.on) o.on = false;
+    const known = new Set(["name", "type", "description", "pattern", "url", "example", "on"]);
+    for (const [k, v] of Object.entries(base && typeof base === "object" ? base : {})) if (!known.has(k)) o[k] = v;
+    return o;
+  }
+  setRuleField(k, v) {
+    this.ruleSetting = true;
+    try { this.ruleInputs[k]?.set_value(v ?? ""); } finally { this.ruleSetting = false; }
+  }
+  // Opens rule `at` (its index in the file) in place, or a new rule (at null) placed at
+  // insertAt, blank or filled from `from` (Duplicate). One rule is open at a time.
+  openRule(at, from = null, insertAt = null) {
+    if (!this.linksEditable()) return;
+    const raw = this.fileLinks();
+    let d;
+    let base = null;
+    if (at != null) {
+      const r = this.linkList[at];
+      if (!r) return;
+      base = raw[at];
+      d = { name: typeof base?.name === "string" ? base.name : "", description: r.description, pattern: r.pattern, url: r.url, example: r.example, type: r.type, on: r.on };
+    } else if (from) d = { ...from, name: from.name ? `${from.name} copy`.slice(0, 40) : "" };
+    else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
+    if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+    const e = { at, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
+      shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
+    this.ruleEdit = e;
+    this.ruleHover = null;
+    for (const [k] of RULE_FIELDS) this.setRuleField(k, d[k]);
+    this.ruleCheck();
+    // A kept rule that is not working says why at once.
+    if (at != null) for (const f of ["pattern", "url"]) e.shown[f] = e.faults[f];
+  }
+  closeRule() {
+    this.ruleEdit = null;
+    if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+  }
+  // A type pressed: in a new rule whose Finds, Opens and Example are untouched it fills them
+  // (and the name, unless one was typed); otherwise it is only the label.
+  chooseType(k) {
+    const e = this.ruleEdit;
+    if (!e || !LINK_TYPES.includes(k)) return;
+    e.draft.type = k;
+    if (e.at == null && !e.touched) {
+      const tpl = LINK_TEMPLATES[k].rule;
+      const names = Object.values(LINK_TEMPLATES).map((x) => x.rule?.name).filter(Boolean);
+      for (const f of ["pattern", "url", "example"]) e.draft[f] = tpl?.[f] ?? "";
+      if (!e.draft.name || names.includes(e.draft.name)) e.draft.name = tpl?.name ?? "";
+      for (const [f] of RULE_FIELDS) this.setRuleField(f, e.draft[f]);
+      this.ruleCheck();
+    } else e.typeOpen = false;
+  }
+  // A key in one of the rule's fields. Good news at every key; a fault shows when typing
+  // stops for REASON_PAUSE, when the field is left or on Keep rule, and once shown it follows
+  // the field and goes the moment the rule runs.
+  ruleTyped(k, cx) {
+    if (this.ruleSetting) return;
+    const e = this.ruleEdit;
+    if (!e) return;
+    const max = RULE_FIELDS.find((f) => f[0] === k)?.[3] ?? 200;
+    let v = String(this.ruleInputs[k].value() ?? "");
+    if (v.length > max) { v = v.slice(0, max); this.setRuleField(k, v); }
+    e.draft[k] = v;
+    if (k === "pattern" || k === "url" || k === "example") { e.touched = true; e.typeOpen = false; }
+    this.ruleCheck();
+    const gen = ++e.gen;
+    cx.timer.after(REASON_PAUSE, (cx) => { if (this.ruleEdit === e && e.gen === gen) { this.ruleShow(k); cx.notify(); } });
+  }
+  // Shows the fault of Finds or Opens, if it has one; an empty field waits for Keep rule.
+  ruleShow(k) {
+    const e = this.ruleEdit;
+    if (!e || (k !== "pattern" && k !== "url") || !e.draft[k]) return;
+    e.shown[k] = e.faults[k];
+  }
+  // The open rule's faults, one per field, and what it does to its example. A pattern that
+  // does not run keeps the last result that did, dimmed.
+  ruleCheck() {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const url = d.url.trim();
+    const pf = d.pattern ? ruleFault({ pattern: d.pattern, url: "https://example.com/$1" }) : "no pattern";
+    const uf = url ? ruleFault({ pattern: "x(\\d)", url }) : "no url";
+    e.faults = { pattern: pf ?? (uf ? null : ruleFault({ pattern: d.pattern, url })), url: uf };
+    for (const f of ["pattern", "url"]) if (e.shown[f] != null) e.shown[f] = e.faults[f];
+    if (e.faults.pattern || e.faults.url) { e.stale = true; return; }
+    e.result = this.ruleResult(e);
+    e.lastGood = e.result;
+    e.stale = false;
+  }
+  ruleResult(e) {
+    const d = e.draft;
+    const url = d.url.trim();
+    const rule = { n: 0, name: d.name || "This rule", re: new RegExp(d.pattern, "g"), url, host: templateHost(url), repo: /\{(repo|owner)\}/.test(url) };
+    if (!d.example) return { line: "Type an example to see what this rule links." };
+    if (rule.repo && !this.remote.repo) return { pieces: [{ t: d.example }], under: "This session has no repository, so this rule links nothing here." };
+    const ctx = { repo: this.remote.repo, owner: this.remote.owner };
+    const pieces = linkPieces(d.example, [rule], ctx);
+    const hit = pieces.find((p) => p.url)?.url ?? null;
+    if (!hit) return { pieces, under: "Finds nothing in its example" };
+    // A rule higher in the list that takes the same text first.
+    const pos = e.at ?? e.insertAt;
+    const above = (this.links ?? []).filter((r) => r.n - 1 < pos);
+    let beaten = null;
+    if (above.length && !linkPieces(d.example, [...above, rule], ctx).some((p) => p.url === hit)) {
+      beaten = above.find((r) => linkPieces(d.example, [r], ctx).some((p) => p.url))?.name ?? "A rule above";
+    }
+    return { pieces, under: hit, url: hit, beaten };
+  }
+  // Keep rule (or Enter in a field): a rule that would not run stays open with its reasons,
+  // and the first faulty field takes the keys.
+  keepRule(cx) {
+    const e = this.ruleEdit;
+    if (!e) return false;
+    this.ruleCheck();
+    const bad = ["pattern", "url"].filter((f) => e.faults[f]);
+    if (bad.length) {
+      for (const f of bad) e.shown[f] = e.faults[f];
+      this.ruleInputs[bad[0]].focus();
+      return false;
+    }
+    const raw = this.fileLinks();
+    const o = this.ruleObject(e.draft, e.base);
+    if (e.at != null) raw[e.at] = o;
+    else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
+    this.closeRule();
+    this.writeLinks(raw, cx);
+    return true;
+  }
+  // The switch on a row: off keeps the rule and links nothing with it.
+  toggleRule(at, cx) {
+    const raw = this.fileLinks();
+    const o = raw[at];
+    if (!o || typeof o !== "object") return;
+    if (o.on === false) delete o.on;
+    else o.on = false;
+    this.writeLinks(raw, cx);
+  }
+  // Remove: gone at once, with Undo in its place until the page is left or another goes.
+  removeRule(at, cx) {
+    const raw = this.fileLinks();
+    if (at < 0 || at >= raw.length) return;
+    const [rule] = raw.splice(at, 1);
+    this.ruleUndo = { at, rule, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
+    if (this.ruleEdit?.at === at) this.closeRule();
+    this.ruleHover = null;
+    this.writeLinks(raw, cx);
+  }
+  undoRemove(cx) {
+    const u = this.ruleUndo;
+    if (!u) return;
+    const raw = this.fileLinks();
+    raw.splice(Math.min(u.at, raw.length), 0, u.rule);
+    this.ruleUndo = null;
+    this.writeLinks(raw, cx);
+  }
+  // Move up: the open rule one place higher, so it takes text before the rule it passes.
+  moveRuleUp(cx) {
+    const e = this.ruleEdit;
+    if (!e || e.at == null || e.at < 1) return;
+    const raw = this.fileLinks();
+    [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
+    e.at -= 1;
+    this.writeLinks(raw, cx);
+    this.ruleCheck();
+  }
+  // Duplicate: a new rule under this one, filled from it, not kept until Keep rule.
+  duplicateRule() {
+    const e = this.ruleEdit;
+    if (!e) return;
+    this.openRule(null, { ...e.draft }, (e.at ?? e.insertAt) + 1);
   }
 
   // ---- pins (pins.js has the file's format) ----
@@ -4065,7 +4316,11 @@ export default class Threads extends View {
     // A field in the settings card has the keyboard: its letters are its own, and one Esc
     // closes the card.
     if (this.fieldFocused) {
-      if (e?.key === "escape") { this.closeSettings(); cx.stop_propagation(); cx.notify(); }
+      if (e?.key === "escape") {
+        if (this.fieldFocused.startsWith("rule-")) this.closeRule();
+        else this.closeSettings();
+        cx.stop_propagation(); cx.notify();
+      }
       return;
     }
     const name = keyAction(e, this.filtering, this.quoteKey);
@@ -4188,10 +4443,11 @@ export default class Threads extends View {
       // Every control on the settings card back to its default; link rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
       case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
-      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.setPage = name.slice(13); return true;
+      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
+        if (this.settingsOpen && this.ruleEdit) { this.closeRule(); return true; }
         if (this.settingsOpen) { this.closeSettings(); return true; }
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
@@ -5464,7 +5720,7 @@ export default class Threads extends View {
 
   cardHead(t, links, close) {
     return h_flex().flex_none().h(CARD_HEAD).px(12).gap(8).items_center().border_b(1).border_color(t.border)
-      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.setPage = "main"; cx.notify(); })))
+      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); })))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
       .when(!links, (el) => el.child(this.kbd(t, ",")))
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close));
@@ -5574,7 +5830,7 @@ export default class Threads extends View {
         .child(svg(ICON(icon)).size(13).flex_none())
         .child(word)));
     const row = (text, ctl) => h_flex().min_h(24).gap(8).items_center().flex_wrap().child(label(text)).child(ctl);
-    return { label, note, group, sw, stepper, choose, row };
+    return { label, note, group, sw, stepper, choose, row, toggle };
   }
 
   // Reset to defaults, at the end of each tab's rows: every control on the card, dim when
@@ -5708,44 +5964,181 @@ export default class Threads extends View {
     return `One letter, a to z. The quote key stays ${q}.`;
   }
 
-  // The Link rules page, read only: what a link rule is, then each rule in the file with its
-  // type's icon, its name, its description, its example with the linked part marked, and the
-  // address that opens, or why the mod will not run it. Rules are changed in the file.
+  // The Link rules page: what a link rule is, then each rule in the file with its type's
+  // icon, its name, its description, its example with the linked part marked and the address
+  // that opens, and its switch (or why the mod will not run it). A press on a row opens the
+  // rule in place; Change and Remove show on the row under the pointer. The rules change on
+  // the card and in the file alike.
   linkRulesRows(t, w) {
     const { note, group } = this.cardKit(t);
     const list = this.linkList ?? [];
+    const e = this.ruleEdit;
+    const edit = this.linksEditable();
     const other = (this.prefsNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
+    const rows = list.map((r, i) => (e?.at === i ? this.ruleEditor(t) : this.ruleRow(t, r, i, edit)));
+    if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.ruleEditor(t));
+    if (this.ruleUndo) rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
-      group(`Rules${list.length ? ` · ${list.length}` : ""}`, list.length
-        ? list.map((r) => this.ruleRow(t, r))
-        : [note("No rules yet.")]),
+      group(`Rules${list.length ? ` · ${list.length}` : ""}`, rows.length ? rows : [note("No rules yet.")]),
+      !list.length && !e && edit ? this.ruleExamples(t) : null,
       ...other.map((n) => note(n, t.blocked)),
       list.length >= 2 ? note("When two rules match the same text, the higher one wins.") : null,
-      group("Changing a rule", [note("Rules are kept under \"links\" in the settings file. A change there shows here within a second."), this.fileRow(t, w)]),
+      edit && !e && list.length < MAX_RULES
+        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus")) : null,
+      group("File", [
+        note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
+          : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
+        this.fileRow(t, w),
+      ]),
     ].filter(Boolean);
   }
 
-  ruleRow(t, r) {
+  ruleRow(t, r, i, edit = false) {
+    const { toggle } = this.cardKit(t);
     const why = r.why ?? r.rule?.slow ?? null;
     const bad = why != null;
     const ex = this.ruleExample(r);
+    const hover = edit && this.ruleHover === r.n;
+    const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i); cx.notify(); };
     return v_flex().id(`th-rule-${r.n}`).p(8).gap(3).rounded(6).border_1()
       .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
-      .when(!bad && !r.on, (el) => el.opacity(0.55))
+      .when(edit, (el) => el.cursor_pointer().on_click(open)
+        .on_hover((on, cx) => {
+          const next = on ? r.n : this.ruleHover === r.n ? null : this.ruleHover;
+          if (next !== this.ruleHover) { this.ruleHover = next; cx.notify(); }
+        }))
       .child(h_flex().gap(6).items_center()
-        .child(svg(ICON(LINK_ICON[r.type] ?? "regex")).size(13).flex_none().text_color(t.dim))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_semibold().text_color(t.foreground).child(r.name))
+        .child(svg(ICON(LINK_ICON[r.type] ?? "regex")).size(13).flex_none().text_color(t.dim).when(!bad && !r.on, (el) => el.opacity(0.55)))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_semibold().text_color(!bad && !r.on ? t.dim : t.foreground).child(r.name))
+        .when(hover, (el) => el
+          .child(this.miniButton(t, `th-rule-change-${r.n}`, "Change", open))
+          .child(this.miniButton(t, `th-rule-remove-${r.n}`, "Remove", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); })))
+        .when(!bad && !r.on, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child("Off")))
         .child(bad ? svg(ICON("alert")).size(13).flex_none().text_color(t.blocked)
-          : div().flex_none().text_size(11.5).text_color(t.muted).child(r.on ? "On" : "Off")))
-      .when(Boolean(r.description), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(r.description)))
-      .child(ex.pieces
-        ? h_flex().flex_wrap().text_size(12.5).text_color(t.foreground).children(ex.pieces.map((p) => (p.url
-          ? div().flex_none().underline().text_color(t.accent).child(p.t)
-          : div().flex_none().whitespace_nowrap().child(p.t))))
-        : div().text_size(12).text_color(t.dim).child(ex.line))
-      .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(ex.under)))
+          : edit ? div().id(`th-rule-on-${r.n}`).flex_none().cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx); cx.notify(); })
+            .child(toggle(r.on))
+            : div().flex_none().text_size(11.5).text_color(t.muted).child(r.on ? "On" : "Off")))
+      .child(v_flex().gap(3).when(!bad && !r.on, (el) => el.opacity(0.55))
+        .when(Boolean(r.description), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(r.description)))
+        .child(this.examplePieces(t, ex))
+        .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(ex.under))))
       .when(bad, (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(`Not working: ${why}`)));
+  }
+
+  // An example as a reply would show it, the part a rule links underlined in the accent.
+  examplePieces(t, ex) {
+    return ex.pieces
+      ? h_flex().flex_wrap().text_size(12.5).text_color(t.foreground).children(ex.pieces.map((p) => (p.url
+        ? div().flex_none().underline().text_color(t.accent).child(p.t)
+        : div().flex_none().whitespace_nowrap().child(p.t))))
+      : div().text_size(12).text_color(t.dim).child(ex.line);
+  }
+
+  miniButton(t, id, label, onClick) {
+    return div().id(id).flex_none().h(20).px(6).flex().items_center().rounded(4).cursor_pointer()
+      .border_1().border_color(t.border).bg(t.background).text_size(11.5).text_color(t.muted)
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(label);
+  }
+
+  // Where a removed rule was: a quiet line with Undo.
+  undoLine(t) {
+    return h_flex().id("th-rule-undo-line").min_h(28).px(8).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(`Removed ${this.ruleUndo.name}.`))
+      .child(this.miniButton(t, "th-rule-undo", "Undo", (_e, cx) => { this.undoRemove(cx); cx.notify(); }));
+  }
+
+  // No rules: the two types that fill a rule, in dashed boxes. Use opens a new rule with that
+  // type pressed.
+  ruleExamples(t) {
+    return v_flex().gap(6)
+      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
+      .children(["ticket", "pull-request"].map((k) => {
+        const tpl = LINK_TEMPLATES[k];
+        return h_flex().id(`th-rule-example-${k}`).p(8).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+          .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(t.dim))
+          .child(v_flex().flex_1().min_w(0).gap(1)
+            .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(tpl.word))
+            .child(div().text_size(11.5).text_color(t.muted).child(tpl.line)))
+          .child(this.miniButton(t, `th-rule-use-${k}`, "Use", (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); }));
+      }));
+  }
+
+  // The open rule: Type, then Name, Description, Finds, Opens and Example, the line that says
+  // what the rule does to its example, and Keep rule with the rest.
+  ruleEditor(t) {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const { note } = this.cardKit(t);
+    const isNew = e.at == null;
+    const label = (text) => div().text_size(11.5).font_medium().text_color(t.muted).child(text);
+    const hints = {
+      description: note("It shows under the name in the list."),
+      pattern: h_flex().flex_wrap().gap(4).text_size(11.5).text_color(t.dim)
+        .child(div().flex_none().child("A JavaScript regular expression. Capitals count."))
+        .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
+          .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
+          .child("Reference")),
+      url: note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
+    };
+    const field = ([k, name]) => {
+      const shown = e.shown[k] ?? null;
+      const focused = this.fieldFocused === `rule-${k}`;
+      return v_flex().gap(3)
+        .child(label(name))
+        .child(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
+          .border_color(shown ? t.blocked : focused ? t.accent : t.border).bg(t.background)
+          .child(Input.new(this.ruleInputs[k]).w_full().h_full().text_size(12.5).text_color(t.foreground)
+            .when(k === "pattern" || k === "url", (el) => el.font_family(this.mono()))))
+        .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))
+        .when(Boolean(hints[k]), (el) => el.child(hints[k]));
+    };
+    const typeRows = (isNew && !e.touched) || e.typeOpen;
+    const tpl = LINK_TEMPLATES[d.type] ?? LINK_TEMPLATES.custom;
+    const typeBlock = typeRows
+      ? v_flex().gap(4).child(label("Type"))
+        .children(LINK_TYPES.map((k) => {
+          const on = d.type === k;
+          const x = LINK_TEMPLATES[k];
+          return h_flex().id(`th-rule-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+            .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
+            .hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); })
+            .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(on ? t.foreground : t.dim))
+            .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(x.word))
+            .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.muted).child(x.line));
+        }))
+        .when(!isNew || e.touched, (el) => el.child(note("The label changes; the fields stay.")))
+      : h_flex().gap(6).items_center()
+        .child(label("Type"))
+        .child(svg(ICON(LINK_ICON[d.type] ?? "regex")).size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(tpl.word))
+        .child(this.miniButton(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+    const r = e.stale ? e.lastGood : e.result;
+    const result = r
+      ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
+        .child(this.examplePieces(t, r))
+        .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(r.under))
+          .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniButton(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); })))))
+        .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(`${r.beaten} is higher in the list and takes this text first. ${!isNew && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`, t.muted)))
+      : null;
+    const buttons = h_flex().gap(6).flex_wrap()
+      .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check"))
+      .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }))
+      .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up")))
+      .when(!isNew, (el) => el
+        .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy"))
+        .child(this.button(t, "th-rule-remove", "Remove", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); })));
+    return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
+      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(t.muted).child("New rule, not kept yet")))
+      .child(typeBlock)
+      .children(RULE_FIELDS.map(field))
+      .when(Boolean(result), (el) => el.child(result))
+      .child(buttons);
   }
 
   // What a rule does to its own example, kept until the rules or the repository change:
