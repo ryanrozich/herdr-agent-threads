@@ -1,6 +1,7 @@
 [
  {
   "n": 1,
+  "v": 9,
   "ts": 1793524200000,
   "origin": "human",
   "prompt": "Rename useCart to useBasket everywhere",
@@ -60,6 +61,7 @@
  },
  {
   "n": 2,
+  "v": 13,
   "ts": 1793524295000,
   "origin": "human",
   "prompt": "Update the README example too",

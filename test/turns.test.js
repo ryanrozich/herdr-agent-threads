@@ -680,3 +680,23 @@ test("subagent calls make a step group of their own, apart from the commands aro
   ]);
   expect(groups.map((g) => g.count)).toEqual([2, 3, 2, 1]);
 });
+
+test("a turn's version moves only when an event may change it", () => {
+  const s = newSession("s", "f");
+  const ts = (n) => `2026-11-01T09:00:0${n}.000Z`;
+  for (const e of [{ k: "p", o: "human", t: "one", ts: ts(1) }, { k: "t", t: "First." }, { k: "s", ts: ts(2) },
+    { k: "p", o: "human", t: "two", ts: ts(3) }]) apply(s, e);
+  const [t1, t2] = s.turns;
+  const v1 = t1.v;
+  const v2 = t2.v;
+  apply(s, { k: "t", t: "Second." });
+  expect(t1.v).toBe(v1);
+  expect(t2.v).toBeGreaterThan(v2);
+  // A title or a context line changes no turn.
+  const v3 = t2.v;
+  apply(s, { k: "title", t: "A title" });
+  expect(t2.v).toBe(v3);
+  apply(s, { k: "s", ts: ts(4) });
+  expect(t2.v).toBeGreaterThan(v3);
+  expect(t1.v).toBe(v1);
+});
