@@ -7272,7 +7272,7 @@ test("no list row scrolls on its own: code and commands wrap, Show all opens the
   const lines = [use("toolu_b1", "Bash", { command: longCmd }, 1), res("toolu_b1", huge, 3),
     use("toolu_b2", "Bash", { command: "bun run lint" }, 4), res("toolu_b2", "a\nb\nc", 5)];
   writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
-  const { newSession, apply } = await import("../mods/agent-threads/turns.js");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
   const s = newSession("00000000-0000-4000-8000-00000000000d", file);
   const code = Array.from({ length: 30 }, (_, i) => `export const step${i} = ${i};`).join("\n");
