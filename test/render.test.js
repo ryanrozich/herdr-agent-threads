@@ -7019,3 +7019,29 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   // The quote is in the bubble's muted ink; the person's own words in its ink.
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
+
+test("while a long session's first rows are still built, the pane says it is reading, not that nothing was typed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "300", "--agents"));
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  // The first build of the rows, in slices, as after reading a long session.
+  v.baseRows = null; v.rowsKey = null; v.rowJob = null;
+  const max = v.buildMax;
+  v.buildMax = () => 0;
+  const said = [];
+  const { empty, loading } = v;
+  v.empty = function (...a) { said.push(a[2]); return empty.apply(this, a); };
+  v.loading = function (...a) { said.push(a[1]); return loading.apply(this, a); };
+  v.render(cx);
+  expect(v.rowJob).toBeTruthy();
+  expect(said.some((x) => /^Reading session/.test(x))).toBe(true);
+  expect(said).not.toContain("Nothing you typed yet");
+  // Once built, the turns.
+  v.buildMax = max;
+  for (let i = 0; i < 60 && v.rowJob; i++) { v.renders++; v.render(cx); }
+  said.length = 0;
+  v.render(cx);
+  expect(v.rowJob).toBeNull();
+  expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
+  expect(said).toEqual([]);
+});

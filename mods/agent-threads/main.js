@@ -5176,6 +5176,10 @@ export default class Threads extends View {
       return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
     const rows = this.rows();
+    // The first rows of a session still being built, in slices over several frames (buildStep):
+    // no row yet, and no empty state either, which would say there is nothing while the turns
+    // are still on their way.
+    if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
       const n = this.counts().hiddenAll;
       return this.empty(t, "bot", "Nothing you typed yet",
