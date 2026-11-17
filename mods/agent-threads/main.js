@@ -63,6 +63,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
+import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
 // The turn a list row belongs to, or null (a day band, the spacer, the tail).
@@ -2815,6 +2816,8 @@ export default class Threads extends View {
         const cs = this.codeShape(seg.text, this.full.has(`c:${key}:${i}`));
         out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...cs });
         if (cs.more) out.push({ ...item, kind: "codeall", key: `ca:${key}:${i}`, i, all: cs.all, left: cs.rows - CODE_LINES });
+        // A Mermaid block: View diagram, which opens it drawn as text in the output viewer.
+        if (isDiagram(seg.lang)) out.push({ ...item, kind: "mview", key: `mv:${key}:${i}`, i, seg });
       }
     });
     // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
@@ -3778,6 +3781,13 @@ export default class Threads extends View {
       this.callAll.has(id) ? this.callAll.delete(id) : this.callAll.add(id);
       return cx.notify();
     }
+    // View diagram under a Mermaid block.
+    if (kind === "mv") {
+      const part = this.baseRows?.find((x) => x.key === key) ?? this.rowsMemo?.find((x) => x.key === key);
+      this.sel = rest.slice(0, 2).join(":");
+      if (part?.seg) this.openDiagram(part);
+      return cx.notify();
+    }
     // Show all or Show less under a code block.
     if (kind === "ca") {
       const k = `c:${id}`;
@@ -4269,16 +4279,31 @@ export default class Threads extends View {
     this.outputOpened = { key: r.key, lines: n };
     return true;
   }
+  // A Mermaid block drawn as text art (diagram.js) in the same viewer, unwrapped so the
+  // drawing keeps its shape. A kind the renderer cannot draw, or source it cannot read,
+  // opens the source with a plain note saying so.
+  openDiagram(r) {
+    const src = String(r.seg?.text ?? "").replace(/\n+$/, "");
+    const d = drawDiagram(src);
+    const text = d.art ?? src;
+    const n = text.split("\n").length;
+    openOverlay({ mod: MOD, kind: "dialog", frame: "none", width: 1, height: 1, props: { output: {
+      title: `#${r.turn?.n ?? ""} · ${d.art ? "Diagram" : "Mermaid source"}`, cmd: "", note: d.error ?? "", wrap: !d.art,
+      text, lines: n, total: n, lang: "text",
+    } } });
+    this.diagramOpened = { key: r.key, drawn: Boolean(d.art) };
+    return true;
+  }
   initOutput(p, cx) {
     const o = p.output ?? {};
     // The viewer takes the keyboard, so Esc closes it.
     this.h = cx.focus_handle();
     cx.timer.after(0, () => this.h.focus());
     this.outv = { overlay: p.overlay ?? null, title: String(o.title ?? ""), cmd: String(o.cmd ?? ""), text: String(o.text ?? ""),
-      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null };
+      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null, note: String(o.note ?? ""), wrap: o.wrap !== false };
     try {
       this.outv.st = EditorState.new({
-        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: true, folding: false, soft_wrap: true,
+        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: true, folding: false, soft_wrap: this.outv.wrap,
         font_family: settings().font_family, font_size: 12, syntax: this.syntaxColors(theme()),
       });
     } catch (e) {
@@ -4295,7 +4320,7 @@ export default class Threads extends View {
     // If that stop does not hold, the output still scrolls; there is no list under it.
     const body = o.st ? Editor.new(o.st).size_full()
       : v_flex().id("th-output-plain").size_full().px(10).py(8).overflow_y_scrollbar().text_size(12).font_family(mono).text_color(t.muted)
-        .children(o.text.split("\n").slice(0, 5000).map((l) => div().w_full().min_h(18).line_height("18px").child(l || " ")));
+        .children(o.text.split("\n").slice(0, 5000).map((l) => div().w_full().min_h(18).line_height("18px").when(!o.wrap, (el) => el.whitespace_nowrap()).child(l || " ")));
     return v_flex().id("th-output").size_full().bg(t.background)
       .track_focus(this.h)
       .on_key_down((e) => { if ((e?.key ?? "") === "escape") this.outputClose(); })
@@ -4307,6 +4332,7 @@ export default class Threads extends View {
         .child(this.galleryButton(t, "th-output-close", "x", "Close (Esc)", null, false, null, () => this.outputClose())))
       .when(o.total > o.lines, (el) => el.child(div().flex_none().px(16).py(6).text_size(12).text_color(t.dim)
         .child("Threads reads the first 24 KB of a tool's output from the transcript; the rest is not shown here.")))
+      .when(Boolean(o.note), (el) => el.child(div().flex_none().px(16).py(6).text_size(12).text_color(t.dim).child(o.note)))
       .child(div().id("th-output-body").flex_1().min_h(0).p(12)
         .on_scroll_wheel((_e, cx) => cx.stop_propagation())
         .child(div().size_full().rounded(6).border_1().border_color(t.border).overflow_hidden().child(body)));
@@ -6194,6 +6220,7 @@ export default class Threads extends View {
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
       case "codeall": return SHOW_ALL_H;
+      case "mview": return SHOW_ALL_H;
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
@@ -7279,6 +7306,7 @@ export default class Threads extends View {
               .child(st ? Editor.new(st).size_full().py(6) : this.plainCode(t, `th-code-${r.key}`, r.seg.text, mono))));
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
+      case "mview": return this.showAllRow(t, "View diagram", "panel-right");
       case "fold":
         // Quiet: no border or fill, so it reads as the end of the reply, not a button to find.
         return v_flex().mt(8)

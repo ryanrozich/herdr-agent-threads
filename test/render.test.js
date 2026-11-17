@@ -7680,3 +7680,62 @@ test("the probe's walk starts over at the top when the rows change, and asks aga
   v.probeList();
   expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
 });
+
+// Mermaid, first step (agreed 17 Nov): a "View diagram" line under a mermaid code block in an
+// open turn opens the diagram drawn as text art in the output viewer, unwrapped. A kind the
+// renderer cannot draw opens the source with a plain note.
+test("View diagram under a mermaid block opens it as text art; a kind it cannot draw shows the source with a note", async () => {
+  const ts = (s) => `2026-11-01T09:00:${String(s).padStart(2, "0")}.000Z`;
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession("00000000-0000-4000-8000-00000000000e", "/nonexistent/e.jsonl");
+  const flow = "flowchart LR\n  A[Cart]-->B{Total ok?}\n  B -->|yes| C[Pay]";
+  const pie = 'pie title Orders\n  "web" : 3\n  "app" : 2';
+  for (const e of [{ k: "p", o: "human", t: "Draw the checkout", ts: ts(0) },
+    { k: "t", t: `Here.\n\n\`\`\`mermaid\n${flow}\n\`\`\`\n\nAnd the split:\n\n\`\`\`Mermaid\n${pie}\n\`\`\`\n\n\`\`\`js\nconst a = 1;\n\`\`\`` },
+    { k: "d", ms: 4000, ts: ts(4) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  v.sel = a;
+  v.toggle(a, cx);
+  for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); }
+  const rows = v.rows();
+  // One View diagram per mermaid block (the fence's language in any case), none under the js.
+  const links = rows.filter((r) => r.kind === "mview");
+  expect(links.map((r) => r.key)).toEqual([`mv:${a}:1`, `mv:${a}:3`]);
+  const at = (k) => rows.findIndex((r) => r.key === k);
+  expect(at(`mv:${a}:1`)).toBe(at(`code:${a}:1`) + 1);
+  expect(v.height(links[0])).toBe(26); // as tall as Show all
+  rec = []; v.partContent(theme, links[0], false); const d = rec; rec = null;
+  expect(d.some(([n, x]) => n === "child" && x === "View diagram")).toBe(true);
+  expect(d.filter(([n]) => /^on_/.test(n))).toEqual([]);
+  // A press opens the drawing: the boxes and the arrow's label, no source, unwrapped.
+  overlays.length = 0;
+  v.click(links[0].key, cx);
+  expect(v.sel).toBe(a);
+  expect(overlays).toHaveLength(1);
+  const o = overlays[0].props.output;
+  expect(o).toMatchObject({ title: "#1 · Diagram", note: "", wrap: false, lang: "text" });
+  expect(o.text).toContain("│ Cart ├───►│ Total ok? ├─yes►│ Pay │");
+  expect(o.text).not.toContain("flowchart");
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov7", output: o } };
+  const g = new Threads();
+  const gcx = makeCx();
+  const before = editors.length;
+  g.init(state.props, gcx);
+  expect(editors.slice(before).at(-1).opts).toMatchObject({ readonly: true, soft_wrap: false, value: o.text });
+  // A pie chart: the source, wrapped, under a note that names what can be drawn.
+  overlays.length = 0;
+  v.click(links[1].key, cx);
+  const p = overlays[0].props.output;
+  expect(p).toMatchObject({ title: "#1 · Mermaid source", wrap: true, text: pie });
+  expect(p.note).toBe('Threads can draw flowchart, state, sequence, class, ER and XY chart diagrams, not "pie". The source is below.');
+  state = { terminals: [], panes: [], shared: {}, props: { overlay: "ov8", output: p } };
+  const h = new Threads();
+  const hcx = makeCx();
+  h.init(state.props, hcx);
+  rec = []; h.render(hcx); const hd = rec; rec = null;
+  expect(hd.some(([n, x]) => n === "child" && x === p.note)).toBe(true);
+});
