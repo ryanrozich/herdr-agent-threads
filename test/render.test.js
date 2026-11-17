@@ -166,6 +166,7 @@ function makeCx() {
     clip: null,
     write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
     read_from_clipboard() { return cx.clip ?? undefined; },
+    open_url(u) { log.push(["open_url", u]); },
   };
   return cx;
 }
@@ -8264,11 +8265,14 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   expect(idsIn(c)).not.toContain("th-set-tab-general"); // no tabs and no preview on the page
   expect(idsIn(c)).not.toContain("th-set-preview");
   for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Your rules · 5",
-    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412", "On",
+    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412",
     "PR", "Off", "This session has no repository, so this rule links nothing here.",
     "Broken", "Not working: pattern not valid", "Bare", "No example yet", "\\bBUG-(\\d+)\\b", "Miss", "Finds nothing in its example",
     "When two rules match the same text, the higher one wins."]) expect(s).toContain(x);
   expect(c).toContainEqual(["underline"]);
+  // A switch on each rule that runs; a warning mark in its place on one that does not.
+  expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-on-1", "th-rule-on-2", "th-rule-on-4"]));
+  expect(idsIn(c)).not.toContain("th-rule-on-3");
   const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   expect(icons).toEqual(expect.arrayContaining(["ticket.svg", "git-pull-request.svg", "regex.svg", "alert.svg"]));
   // With the session's repository, the PR rule's example shows its address (and it stays off).
@@ -8329,4 +8333,283 @@ test("a rule that turned slow on a reply shows Not working with the reason on th
   // A change to the file compiles it again, and it runs.
   v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/a/$1", example: "Z-1" }] }));
   expect(v.links[0].slow).toBe(undefined);
+});
+
+// ---- link rules changed on the card (chat-look round 10; settings-links) ----
+
+const RULES = [
+  { name: "Ticket", type: "ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1", example: "Fixed in ACME-412.", keepMe: 1 },
+  { name: "Hash", pattern: "#(\\d+)", url: "https://h.example/$1", example: "See #58." },
+];
+async function rulesPane(rules = RULES) {
+  const r = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  settingsWrites.length = 0;
+  r.v.applyPrefs(JSON.stringify({ textSize: 15, links: rules }));
+  recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
+  r.v.action("settings", r.cx);
+  r.v.setPage = "links";
+  r.cx.pending = []; // the folder watch never ends: wait only for what follows
+  return r;
+}
+const settleAll = async (cx) => { for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); } };
+const lastLinks = () => JSON.parse(settingsWrites.at(-1)).links;
+function typeIn(v, k, text, cx) { v.ruleInputs[k].set_value(text); v.ruleInputs[k].handlers.change({}, cx); }
+function done(v) { keepSettings = false; delete recordFiles[v.prefsPath()]; }
+
+test("a fresh install has the pull request rule, on; the first write records it, and a file without links has none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  cx.pending = [];
+  try {
+    v.applyPrefs(null);
+    expect(v.linkList.map((r) => [r.name, r.type, r.on, r.why])).toEqual([["Pull request", "pull-request", true, null]]);
+    expect(v.links.length).toBe(1);
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme" };
+    expect(v.linkOne("Merged in #58 today.").md).toContain("https://github.com/acme/exports/pull/58");
+    settingsWrites.length = 0;
+    v.action("textSize:+", cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ name: "Pull request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58.", type: "pull-request" }]);
+    expect(w.textSize).toBe(15);
+    v.applyPrefs(JSON.stringify({ textSize: 14 }));
+    expect(v.linkList).toEqual([]);
+  } finally { done(v); }
+});
+
+test("the switch on a row turns a rule off and on, written to the file; an off rule links nothing and is dimmed with Off", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ ...RULES[0], on: false });
+    expect(JSON.parse(settingsWrites.at(-1)).textSize).toBe(15);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain("Off");
+    expect(v.settingsOpen).toBe(true); // the press stays in the card and opens nothing
+    expect(v.ruleEdit).toBe(null);
+    onOf(c, "th-rule-on-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual(RULES[0]);
+    expect(v.links.map((r) => r.name)).toEqual(["Ticket", "Hash"]);
+  } finally { done(v); }
+});
+
+test("Change and Remove show on the row under the pointer; Remove takes the rule at once, and Undo puts it back where it was", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-remove-1");
+    onOf(cardOf(v), "th-rule-1", "on_hover")(true, cx);
+    let c = cardOf(v);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-change-1", "th-rule-remove-1"]));
+    expect(idsIn(c)).not.toContain("th-rule-remove-2");
+    onOf(c, "th-rule-1", "on_hover")(false, cx);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-change-1");
+    onOf(cardOf(v), "th-rule-1", "on_hover")(true, cx);
+    onOf(cardOf(v), "th-rule-remove-1", "on_click")({}, cx);
+    expect(v.linkList.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([RULES[1]]);
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("Removed Ticket.");
+    expect(idsIn(c)).toContain("th-rule-undo-line");
+    expect(v.ruleUndo.at).toBe(0); // drawn where the rule was
+    onOf(c, "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+    expect(strsOf(cardOf(v))).not.toContain("Removed Ticket.");
+    // Undo lasts until the page is left.
+    v.removeRule(1, cx);
+    expect(v.ruleUndo).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.ruleUndo).toBe(null);
+    await settleAll(cx);
+  } finally { done(v); }
+});
+
+test("a press on a row opens the rule in place with its fields; Keep rule writes it, keeping keys this version does not know; Esc and Discard drop the change", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(Object.fromEntries(Object.entries(v.ruleInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Ticket", description: "", pattern: RULES[0].pattern, url: RULES[0].url, example: RULES[0].example });
+    let c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of ["Type", "Ticket key", "Name", "Description", "Finds", "Opens", "Example", "A JavaScript regular expression. Capitals count.", "Reference", "Keep rule", "Discard", "Duplicate", "Remove", "ACME-412", "https://tracker.example/ACME-412"]) expect(s).toContain(x);
+    expect(s).not.toContain("Move up"); // the first rule
+    expect(idsIn(c)).toContain("th-rule-edit-1");
+    expect(idsIn(c)).not.toContain("th-rule-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    // Open goes to the address, Reference to the pattern sheet, with Herdr's URL opener.
+    log = [];
+    onOf(c, "th-rule-open", "on_click")({}, cx);
+    onOf(c, "th-rule-reference", "on_click")({}, cx);
+    expect(log.filter((x) => x[0] === "open_url").map((x) => x[1])).toEqual(["https://tracker.example/ACME-412", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet"]);
+    // A change, kept.
+    typeIn(v, "description", "Our tracker", cx);
+    typeIn(v, "example", "Shipped ACME-7.", cx);
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example/ACME-7");
+    v.ruleInputs.name.handlers.submit({}, cx); // Enter in a field keeps it
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ name: "Ticket", type: "ticket", description: "Our tracker", pattern: RULES[0].pattern, url: RULES[0].url, example: "Shipped ACME-7.", keepMe: 1 });
+    expect(strsOf(cardOf(v))).toContain("Our tracker");
+    // Esc from a field closes the rule, not the card, and writes nothing.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    typeIn(v, "name", "Changed", cx);
+    v.key(keyEv("escape"), cx);
+    expect([v.ruleEdit, v.settingsOpen, v.fieldFocused]).toEqual([null, true, null]);
+    // Esc with no field focused, and Discard, do the same.
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.action("escape", cx);
+    expect([v.ruleEdit, v.settingsOpen]).toEqual([null, true]);
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    c = cardOf(v);
+    onOf(c, "th-rule-discard", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    expect(v.linkList[1].name).toBe("Hash");
+  } finally { done(v); }
+});
+
+test("Add rule: three types, Custom first; a type fills an untouched new rule, and after the first change to Finds, Opens or Example it is only the label", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["New rule, not kept yet", "Custom", "Write it yourself.", "Ticket key", "Pull request", "Links a ticket key such as ACME-412 to its ticket."]));
+    expect(idsIn(c).indexOf("th-rule-new")).toBeGreaterThan(idsIn(c).indexOf("th-rule-2"));
+    expect(v.ruleEdit.draft.type).toBe("custom");
+    expect(strsOf(c)).not.toContain("Duplicate");
+    onOf(c, "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bACME-(\\d+)\\b");
+    expect(v.ruleInputs.name.value()).toBe("Ticket");
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example.com/ACME-412");
+    // The rule above takes the same text first, and the line says so.
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Keep this rule, then Move up to put it above.");
+    onOf(cardOf(v), "th-rule-type-custom", "on_click")({}, cx);
+    expect([v.ruleInputs.pattern.value(), v.ruleInputs.name.value()]).toEqual(["", ""]);
+    // Typed: the three rows fold to one line, and a type no longer fills.
+    typeIn(v, "pattern", "\\bBUG-(\\d+)\\b", cx);
+    c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    onOf(c, "th-rule-type-change", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("The label changes; the fields stay.");
+    onOf(cardOf(v), "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bBUG-(\\d+)\\b");
+    expect(v.ruleEdit.draft.type).toBe("ticket");
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-type-ticket");
+    typeIn(v, "url", "https://bugs.example/$1", cx);
+    typeIn(v, "name", "Bug", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[2]).toEqual({ name: "Bug", type: "ticket", pattern: "\\bBUG-(\\d+)\\b", url: "https://bugs.example/$1" });
+    // The description takes 80 characters at most.
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    typeIn(v, "description", "x".repeat(90), cx);
+    expect(v.ruleInputs.description.value().length).toBe(80);
+  } finally { done(v); }
+});
+
+test("a fault shows when typing stops or the field is left, never at a key; once shown it follows each key and goes the moment the rule runs", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    cx.timers = [];
+    typeIn(v, "pattern", "#(\\d+", cx);
+    let c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    // The result line keeps the last one that worked, dimmed.
+    expect(strsOf(c)).toContain("https://h.example/58");
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at, at + 3)).toContainEqual(["opacity", 0.45]);
+    // A second key restarts the pause: the first timer finds a newer key and does nothing.
+    typeIn(v, "pattern", "#(\\d+x", cx);
+    const [first] = cx.timers;
+    first.fn(cx);
+    expect(v.ruleEdit.shown.pattern).toBe(null);
+    cx.flush(REASON_MS);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    expect(cardOf(v)).toContainEqual(["border_color", theme.blocked]);
+    // Mended: gone at that key, and the result is back at full strength.
+    typeIn(v, "pattern", "#(\\d+)", cx);
+    c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    const at2 = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at2, at2 + 3)).not.toContainEqual(["opacity", 0.45]);
+    // Leaving the field shows it at once.
+    typeIn(v, "url", "ftp://h.example/$1", cx);
+    expect(v.ruleEdit.shown.url).toBe(null);
+    v.ruleInputs.url.handlers.blur({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: url must start with https:// or http:// and a fixed host; placeholders only in the path");
+    // Keep rule does not keep a rule that would not run: it stays open, nothing is written.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).not.toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    // An empty field is not a fault until Keep rule.
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    v.ruleInputs.pattern.handlers.blur({}, cx);
+    cx.flush(REASON_MS);
+    expect(v.ruleEdit.shown).toEqual({ pattern: null, url: null });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit.shown).toEqual({ pattern: "no pattern", url: "no url" });
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Not working: no pattern", "Not working: no url"]));
+  } finally { done(v); }
+});
+const REASON_MS = 1500;
+
+test("a kept rule that is not working opens with its reason; Move up and Duplicate", async () => {
+  const { v, cx } = await rulesPane([...RULES, { name: "Broken", pattern: "x(", url: "https://x.example/$1" }, { name: "Late", pattern: "ACME-(\\d+)", url: "https://late.example/$1", example: "ACME-9" }]);
+  try {
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-4", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Move up puts this rule above it.");
+    for (let i = 0; i < 3; i++) onOf(cardOf(v), "th-rule-up", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-up");
+    expect(strsOf(cardOf(v)).some((x) => x.includes("takes this text first"))).toBe(false);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Ticket", "Hash", "Broken"]);
+    onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleInputs.name.value()]).toEqual([null, 1, "Late copy"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-change"); // a copy is never refilled by a type
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Late copy", "Ticket", "Hash", "Broken"]);
+  } finally { done(v); }
+});
+
+test("no rules: the two types that fill a rule in dashed boxes, and Use opens one filled; a file that does not read as settings cannot be changed here", async () => {
+  const { v, cx } = await rulesPane([]);
+  try {
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Ticket key", "Pull request", "Links a number such as #58 to that pull request in this repository.", "Add rule"]));
+    expect(c).toContainEqual(["border_dashed"]);
+    onOf(c, "th-rule-use-pull-request", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.type).toBe("pull-request");
+    expect(v.ruleInputs.url.value()).toBe("https://github.com/{repo}/pull/$1");
+    expect(strsOf(cardOf(v))).toContain("This session has no repository, so this rule links nothing here.");
+    expect(strsOf(cardOf(v))).not.toContain("Examples, not rules until you keep one");
+    v.closeRule();
+    // A hand edit that does not parse: the rules show, with no switch, no Add rule and no editor.
+    v.applyPrefs(JSON.stringify({ links: RULES }));
+    v.applyPrefs("{ not json");
+    c = cardOf(v);
+    expect(idsIn(c)).not.toContain("th-rule-on-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    expect(strsOf(c)).toContain("The settings file does not read as settings now, so rules change only in the file until it is fixed.");
+    v.openRule(0);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
 });
