@@ -20,9 +20,11 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const m = e?.modifiers ?? {};
   if (m.platform || m.control || m.alt || m.function) return null;
   const k = e?.key ?? "";
-  // ? is Shift-/ on most layouts; Herdr may name it either way.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
+  // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   if (k === "G") return "latest";
+  if (k === "W") return filtering ? null : "widthStep";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
@@ -50,7 +52,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["c"], "Copy the reply"], [["1-9"], "Go to that image"], [["Esc", "q"], "Close"],
     ]],
     ["View", [
-      [["w"], "Fit to the reading width"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }

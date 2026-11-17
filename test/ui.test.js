@@ -44,6 +44,19 @@ test("keys: plain keys act, chords with cmd, ctrl, alt or fn never do", () => {
   expect(keyAction(key("escape"), true)).toBe("escape");
 });
 
+test("Shift w steps the reading width; plain w still fits the pane, and a filter being typed takes the letter", () => {
+  expect(keyAction(key("w", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W"))).toBe("widthStep");
+  expect(keyAction(key("w"))).toBe("fit");
+  expect(keyAction(key("w", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("W"), true)).toBe(null);
+  expect(keyAction(key("w", { shift: true, platform: true }))).toBe(null);
+  // Listed under View, beside w.
+  const view = keySheet().find(([g]) => g === "View")[1].map(([k, what]) => `${k.join(" ")}: ${what}`);
+  expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
+});
+
 test("alpha: every colour form", () => {
   expect(alpha("#ff8800", 0.5)).toBe("#ff880080");
   expect(alpha("#f80", 1)).toBe("#ff8800ff");
