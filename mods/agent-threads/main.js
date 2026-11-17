@@ -111,6 +111,10 @@ const SHAPE_FIRST = 40;
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
 // interrupted). The rest are measured over the next frames.
 const PROBE_MAX = 16;
+// Rows probeDue looks at in one frame. With every part near the top measured, its walk went
+// on to every row: 45 to 48 ms in one frame at 6,000 turns on the rig, after each rebuild.
+// 300 rows took 7 to 8 ms there; the next frame goes on from there (probeWalk).
+const PROBE_WALK = 300;
 // Herdr stops a draw that runs past its time (about 50 ms) and keeps the last frame that
 // worked, so a draw that never fits would leave the pane blank for good. A row whose draw was
 // stopped is drawn plainly for CUT_MS (its Markdown as plain text), and
@@ -6261,7 +6265,8 @@ export default class Threads extends View {
     if (was?.sig === sig && was.h === h) return;
     // Every closed row's reply block is measured: a cap under the turns a long session has
     // made the probe measure the same parts again and again.
-    if (this.meas.size > 20000) { this.meas.clear(); this.measEpoch = (this.measEpoch ?? 0) + 1; }
+    // PR 81 (kept rows' sizes) and PR 83 (the probe's walk) each start over when measures go.
+    if (this.meas.size > 20000) { this.meas.clear(); this.measEpoch = (this.measEpoch ?? 0) + 1; this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
     this.meas.set(key, { sig, h });
     this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key.startsWith("wyou:") ? key.slice(5) : key;
@@ -6292,6 +6297,11 @@ export default class Threads extends View {
     const rows = this.baseRows ?? [];
     const n = rows.length;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
+    // Within the clean radius of the top row nothing was due, and while the rows, their
+    // layout and the top stay, a new measure only settles parts: the walk starts there.
+    // Measures and tries cleared (probeEpoch) start it from the top again.
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}`;
+    const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
     const visit = (r) => {
       const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
         : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
@@ -6303,17 +6313,23 @@ export default class Threads extends View {
       if ((this.probeTries.get(k) ?? 0) >= 3) return;
       want.push([part, sig, k]);
     };
-    let more = false;
-    for (let d = 0; d < n; d++) {
-      if (top + d < n) visit(rows[top + d]);
-      if (d > 0 && top - d >= 0) visit(rows[top - d]);
-      if (want.length >= PROBE_MAX) { more = top + d + 1 < n || top - d - 1 >= 0; break; }
+    let d = d0;
+    let clean = d0;
+    let seen = 0;
+    for (; d < n && seen < PROBE_WALK; d++) {
+      if (top + d < n) { visit(rows[top + d]); seen++; }
+      if (d > 0 && top - d >= 0) { visit(rows[top - d]); seen++; }
+      if (!want.length) clean = d + 1;
+      if (want.length >= PROBE_MAX) break;
     }
+    this.probeWalk = { key: wk, clean };
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
-    this.probeLeft = more || want.length > out.length ? 1 : 0;
-    this.probeQuiet = want.length ? null : { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 };
-    if (this.probeTries.size > 4000) this.probeTries.clear();
+    // Nothing due anywhere: quiet. Otherwise parts wait, or rows are not looked at yet.
+    const done = top + clean >= n && top - clean < 0;
+    this.probeLeft = done ? 0 : 1;
+    this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
+    if (this.probeTries.size > 4000) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
     return out.map(([r, sig]) => [r, sig]);
   }
 

@@ -5185,7 +5185,12 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 });
 
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
-function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) draw(v, cx); }
+// Drops the queued timers and the marks that say a frame is queued: a timer dropped with its
+// mark still set would never be asked for again, and the rows would stop where they are.
+function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.buildNext = false; v.probeNext = false; }
+// Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
+// 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
+function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
   const { v, cx } = await longSession(450);
@@ -5258,10 +5263,11 @@ test("the probe takes the parts nearest the top of the pane first, walking out b
   expect(due.length).toBe(16);
   expect(v.probeLeft).toBeGreaterThan(0);
   expect(due.every(([r]) => Math.abs(v.baseIndex.get(r.key.replace(/^cmd:/, "")) - at) <= 16)).toBe(true);
-  // All measured: nothing due, and the next call does not walk the rows again.
+  // All measured: nothing due, within a few frames (the walk ends its pass, then one pass
+  // finds nothing), and then the next call does not walk the rows again.
   for (const r of v.probeRows) v.meas.set(r.key, { sig: v.partSig(r), h: 20 });
   v.measVer = (v.measVer ?? 0) + 1;
-  expect(v.probeDue().length).toBe(0);
+  for (let i = 0; i < 6 && v.probeLeft !== 0; i++) expect(v.probeDue().length).toBe(0);
   expect(v.probeLeft).toBe(0);
   const visit = v.partSig.bind(v);
   let sigs = 0;
@@ -5937,9 +5943,10 @@ test("a settings change in a long session reshapes rows over several frames, the
     v.topKey = before[before.length - 20].key;
     v.action("replyLines:2", cx);
     // The reshaping time a draw gets follows the last draw's cost on the real clock: start
-    // from a quick one, so the counts below do not depend on how busy the machine is.
+    // from a quick one, so the counts below do not depend on how busy the machine is. On a slow
+    // machine the draws above may leave a frame queued: dropTimers drops it with its mark.
     v.frameBase = 0;
-    cx.timers = [];
+    dropTimers(v, cx);
     // A scroll asked for now waits for the reshaping, and a return's wait for the probe
     // (until) starts after it.
     v.scrollTo = { key: before[5].key, how: "center", until: Date.now() - 1 };
@@ -5974,7 +5981,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     expect(v.scrollTo).toBe(null);
     // Agent messages on: rows never shaped before draw blank for a frame, then fill in.
     v.action("agents", cx);
-    cx.timers = [];
+    dropTimers(v, cx);
     draw(v, cx);
     for (let k = 0; k < 50 && v.rowJob; k++) draw(v, cx);
     expect(shown().some((r) => r.shape.blank)).toBe(true);
@@ -7590,4 +7597,86 @@ test("while a long session's first rows are still built, the pane says it is rea
   expect(v.rowJob).toBeNull();
   expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
   expect(said).toEqual([]);
+});
+
+test("the probe looks at no more than its share of rows a frame: a part far from the top is found over frames, then nothing is due; the nearest parts stay first", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  // Every part measured but the first turn's, far above the top at the end of the list.
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  expect(parts.length).toBeGreaterThan(500);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  v.measVer = (v.measVer ?? 0) + 1;
+  const sig = v.partSig.bind(v);
+  let sigs = 0;
+  v.partSig = (...a) => { sigs++; return sig(...a); };
+  let found = null;
+  let calls = 0;
+  for (; calls < 20 && !found; calls++) {
+    sigs = 0;
+    const due = v.probeDue();
+    // At most 300 rows, of which only turns with a reply are parts.
+    expect(sigs).toBeLessThanOrEqual(300);
+    if (!due.length) expect(v.probeLeft).toBe(1);
+    found = due.find(([r]) => r.key === parts[0].key) ?? null;
+  }
+  expect(found).toBeTruthy();
+  expect(calls).toBeGreaterThan(1);
+  // Measured: the walk goes on from the rows it knows are clean, finds nothing, and the
+  // probe is quiet.
+  v.meas.set(parts[0].key, { sig: v.partSig(parts[0]), h: 20 });
+  v.measVer++;
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBeLessThanOrEqual(300);
+  expect(v.probeLeft).toBe(0);
+  sigs = 0;
+  expect(v.probeDue().length).toBe(0);
+  expect(sigs).toBe(0);
+});
+
+test("the probe's walk goes on past measured rows while measures keep coming in", async () => {
+  const { v, cx } = await longSession(2000);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const parts = v.baseRows.map((r) => (r.kind === "turn" && r.shape?.md != null ? v.cmdFor(r) : null)).filter(Boolean);
+  v.meas = new Map(parts.slice(1).map((p) => [p.key, { sig: v.partSig(p), h: 20 }]));
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  v.topKey = v.baseRows.at(-1).key;
+  let found = false;
+  // A measure of some part comes in every frame, as while the newest parts are measured.
+  for (let i = 0; i < 40 && !found; i++) {
+    found = v.probeDue().some(([r]) => r.key === parts[0].key);
+    v.measVer = (v.measVer ?? 0) + 1;
+  }
+  expect(found).toBe(true);
+});
+
+test("the probe's walk starts over at the top when the rows change, and asks again for a part that has not reported", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  v.meas = new Map();
+  v.probeTries = new Map();
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  const turns = v.baseRows.filter((r) => r.kind === "turn");
+  v.topKey = turns[150].key;
+  const first = v.probeDue().map(([r]) => r.key);
+  expect(first.length).toBe(16);
+  // Not reported yet: the same parts again, nearest first (up to three tries each).
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
+  // The rows changed: from the top again.
+  v.probeList();
+  expect(v.probeDue().map(([r]) => r.key)).toEqual(first);
 });
