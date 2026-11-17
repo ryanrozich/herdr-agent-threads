@@ -1,6 +1,6 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
-  "files": { "includes": ["mods/**/*.js", "test/**/*.js"] },
+  "files": { "includes": ["mods/**/*.js", "test/**/*.js", "!mods/**/vendor/**"] },
   // Lint only: the code keeps its own layout.
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
