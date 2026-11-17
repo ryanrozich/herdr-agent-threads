@@ -7565,3 +7565,29 @@ test("opening or closing a turn, or a part of one, puts only its rows in place, 
   step("again", () => { v.againOpen = true; v.rowsKey = "again"; });
   expect(spliced).toBeGreaterThanOrEqual(6);
 });
+
+test("while a long session's first rows are still built, the pane says it is reading, not that nothing was typed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "300", "--agents"));
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  // The first build of the rows, in slices, as after reading a long session.
+  v.baseRows = null; v.rowsKey = null; v.rowJob = null;
+  const max = v.buildMax;
+  v.buildMax = () => 0;
+  const said = [];
+  const { empty, loading } = v;
+  v.empty = function (...a) { said.push(a[2]); return empty.apply(this, a); };
+  v.loading = function (...a) { said.push(a[1]); return loading.apply(this, a); };
+  v.render(cx);
+  expect(v.rowJob).toBeTruthy();
+  expect(said.some((x) => /^Reading session/.test(x))).toBe(true);
+  expect(said).not.toContain("Nothing you typed yet");
+  // Once built, the turns.
+  v.buildMax = max;
+  for (let i = 0; i < 60 && v.rowJob; i++) { v.renders++; v.render(cx); }
+  said.length = 0;
+  v.render(cx);
+  expect(v.rowJob).toBeNull();
+  expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
+  expect(said).toEqual([]);
+});
