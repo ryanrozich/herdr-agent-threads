@@ -61,7 +61,7 @@ import {
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railRoom, landPlan, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, nameValue, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -154,6 +154,11 @@ const PIN_MAP_KEY = "threads.pinnedByTerminal";
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
 const WIDTH_KEY = "threads.width";
+// The Pinned column's width as the owner last left it, with - and = (a drag on its divider
+// resizes Threads, ui.js columnResize) or any other way Herdr resizes it: { px }, Herdr's
+// px size (the measured width and the frame). "hold" until a time: the pane's own resize
+// (fitToReading) is under way and is not the owner's choice.
+const PIN_W_KEY = "threads.pinWidth";
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -664,17 +669,6 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
-    // The settings panel's name field: while it has the keyboard, keys type (this.naming).
-    this.nameInput = InputState.new({ placeholder: DEFAULTS.youName, value: DEFAULTS.youName });
-    this.naming = false;
-    this.nameInput.on("focus", (_e, cx) => { this.naming = true; cx.notify(); });
-    this.nameInput.on("blur", (_e, cx) => { this.endNaming(cx); });
-    this.nameInput.on("submit", (_e, cx) => { this.endNaming(cx); this.h.focus(); });
-    this.nameInput.on("change", (_e, cx) => {
-      const v = nameValue(this.nameInput.value());
-      if (v && v !== this.prefs.youName) this.changePrefs({ youName: v }, cx);
-      cx.notify();
-    });
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
@@ -950,18 +944,8 @@ export default class Threads extends View {
   setPrefs(values) {
     const was = this.prefs;
     this.prefs = values;
-    // The name field shows the name in use, except while the person is typing in it.
-    if (!this.naming && this.nameInput && this.nameInput.value() !== values.youName) this.nameInput.set_value(values.youName);
     // Hiding agent turns: a hidden selected turn hands the selection to the turn before it.
     if (was.agentTurns && !values.agentTurns) this.reselect = true;
-  }
-
-  // The name field gives the keyboard back and shows the name in use, trimmed. A cleared
-  // field changed nothing, so it shows the name it had.
-  endNaming(cx) {
-    this.naming = false;
-    if (this.nameInput.value() !== this.prefs.youName) this.nameInput.set_value(this.prefs.youName);
-    cx?.notify();
   }
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
@@ -2262,7 +2246,7 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    const px = pinColumn(this.pw());
+    const px = pinColumn(this.pw(), this.keptPinWidth());
     if (!me || !px) {
       if (auto) return false;
       this.setView("pinned");
@@ -2289,12 +2273,25 @@ export default class Threads extends View {
     } else if (Date.now() > a.until) this.splitAsk = null;
   }
 
-  // This pane's width, for its partner (resizeColumn).
+  // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that
+  // changes after the pane has settled (1.5 s from its first measure, past the split's own
+  // resize) is the owner's: kept for the next time the column opens (keptPinWidth).
   shareWidth() {
     const me = this.me();
     if (!me || this.paneW == null) return;
     const map = shared(WIDTH_KEY) ?? {};
     if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
+    if (!this.pinnedPane) return;
+    const now = Date.now();
+    this.firstSizeAt ??= now;
+    const kept = shared(PIN_W_KEY) ?? {};
+    if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
+    const px = Math.round(this.paneW) + PANE_FRAME;
+    if (kept.px !== px) setShared(PIN_W_KEY, { px });
+  }
+  keptPinWidth() {
+    const px = shared(PIN_W_KEY)?.px;
+    return Number.isFinite(px) && px > 0 ? px : null;
   }
 
   // - and =, in the column or in Threads while the column is open: the column 40 px
@@ -2313,6 +2310,7 @@ export default class Threads extends View {
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
+    setShared(PIN_W_KEY, { px: next.column });
     return true;
   }
 
@@ -3638,15 +3636,7 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
-    const name = keyAction(e, this.filtering || this.naming, this.quoteKey);
-    // In the name field Esc gives the keyboard back to the list; other keys type.
-    if (this.naming) {
-      if (name !== "escape") return;
-      this.endNaming(cx);
-      this.h.focus();
-      cx.stop_propagation();
-      return true;
-    }
+    const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -3759,7 +3749,7 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, youName: DEFAULTS.youName, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
+      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -3794,11 +3784,6 @@ export default class Threads extends View {
     }
     // "width:wide": the reading width (settings width), for every pane.
     if (name.startsWith("width:")) return this.chooseWidth(name.slice(6), cx);
-    // "youName:Sam": the name over the person's messages; an empty one is the default.
-    if (name.startsWith("youName:")) {
-      this.changePrefs({ youName: nameValue(name.slice(8)) ?? DEFAULTS.youName }, cx);
-      return true;
-    }
     // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
@@ -3933,7 +3918,7 @@ export default class Threads extends View {
     const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
     const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
     return {
-      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : this.prefs.youName,
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "You",
       when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
       running: !turn.done, asOf: fmtTime(Date.now()),
       cmd: commandParts(turn)?.name ?? null,
@@ -4376,7 +4361,7 @@ export default class Threads extends View {
       });
     }
     const t = theme();
-    const focusedPanel = this.h.is_focused() || this.input && this.filtering || this.naming;
+    const focusedPanel = this.h.is_focused() || this.input && this.filtering;
     if (this.debug) this.measure();
     const floating = this.floating();
     const banners = this.banners(t);
@@ -4503,7 +4488,10 @@ export default class Threads extends View {
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     run("layout.resize", { id: main.pane, px });
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
-    if (col) run("layout.resize", { id: col.pane, px: pinColumn(px) ?? PIN_COL[0] });
+    if (col) {
+      setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
+      run("layout.resize", { id: col.pane, px: pinColumn(px, this.keptPinWidth()) ?? PIN_COL[0] });
+    }
     this.capAsked = null;
     this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
     return true;
@@ -4943,11 +4931,6 @@ export default class Threads extends View {
         .child(stepper("promptLines", "Prompt lines"))
         .child(stepper("replyLines", "Reply lines")))
       .child(stepper("textSize", "Text size"))
-      .child(h_flex().gap(6).items_center()
-        .child(label("Your name"))
-        .child(h_flex().id("th-set-name").flex_none().w(this.narrow() ? 110 : 150).h(24).px(6).rounded(5).border_1()
-          .border_color(this.naming ? t.accent : t.border).bg(t.background).items_center()
-          .child(Input.new(this.nameInput).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))))
       .child(this.swatches(t, "bubbleColor", "Your messages"))
       .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
@@ -7281,7 +7264,10 @@ export default class Threads extends View {
         const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
         // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
         // peak can be wider than the lane leaves beside the inset.
-        const mark = div().absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
+        // Herdr slides a change of width over 90 ms by itself (round 7, the slide): the draw
+        // only sets the new width, and no timer runs in the mod.
+        const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
+          .transition("width", { duration: RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
         const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
