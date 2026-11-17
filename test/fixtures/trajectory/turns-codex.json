@@ -1,0 +1,116 @@
+[
+ {
+  "n": 1,
+  "v": 9,
+  "ts": 1793523600000,
+  "origin": "human",
+  "prompt": "Why is the order total a cent off when there are three or more items?",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?"
+  ],
+  "tools": 2,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "exec_command": 2
+  },
+  "steps": [
+   {
+    "k": "text",
+    "t": "Checking how the cart adds up tax.",
+    "cut": false
+   },
+   {
+    "k": "group",
+    "calls": [
+     "exec_command",
+     "exec_command"
+    ],
+    "count": 2
+   }
+  ],
+  "usage": {
+   "t48820": {
+    "i": 7200,
+    "o": 620,
+    "cr": 41000,
+    "cc": 0
+   }
+  },
+  "model": "gpt-5.5-codex",
+  "effort": "medium",
+  "durationMs": 41000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793523617000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null
+ },
+ {
+  "n": 2,
+  "v": 14,
+  "ts": 1793523687000,
+  "origin": "human",
+  "prompt": "Yes, and add a test with three items at $3.33",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass."
+  ],
+  "tools": 2,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "apply_patch": 1,
+   "exec_command": 1
+  },
+  "steps": [
+   {
+    "k": "group",
+    "calls": [
+     "apply_patch",
+     "exec_command"
+    ],
+    "count": 2
+   }
+  ],
+  "usage": {
+   "t53010": {
+    "i": 5100,
+    "o": 910,
+    "cr": 47000,
+    "cc": 0
+   }
+  },
+  "model": "gpt-5.5-codex",
+  "effort": "medium",
+  "durationMs": 63000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793523705000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null
+ }
+]

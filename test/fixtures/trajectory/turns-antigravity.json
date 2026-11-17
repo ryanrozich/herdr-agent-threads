@@ -1,0 +1,135 @@
+[
+ {
+  "n": 1,
+  "v": 12,
+  "ts": 1793526000000,
+  "origin": "human",
+  "prompt": "Why does the search box lose its text when I go back?",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "The search page keeps its text in component state, which resets when the page mounts again on back.\n\nKeeping it in the URL (`?q=`) fixes both back and reload:\n\n- `SearchBox` reads `q` from the URL on mount\n- typing updates `q` with `replace`, so it adds no history entry\n\nShall I make the change?"
+  ],
+  "tools": 2,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "grep_search": 1,
+   "view_file": 1
+  },
+  "steps": [
+   {
+    "k": "group",
+    "calls": [
+     "grep_search",
+     "view_file"
+    ],
+    "count": 2,
+    "ids": [
+     "s1.0",
+     "s3.0"
+    ]
+   }
+  ],
+  "usage": {
+   "step-1": {
+    "i": 11400,
+    "o": 70,
+    "cr": 0,
+    "cc": 0
+   },
+   "step-3": {
+    "i": 2300,
+    "o": 90,
+    "cr": 9300,
+    "cc": 0
+   },
+   "step-5": {
+    "i": 2400,
+    "o": 160,
+    "cr": 9600,
+    "cc": 0
+   }
+  },
+  "model": "Gemini 3.5 Flash",
+  "effort": "Medium",
+  "durationMs": 12000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793526012000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null
+ },
+ {
+  "n": 2,
+  "v": 17,
+  "ts": 1793526060000,
+  "origin": "human",
+  "prompt": "Yes, do it",
+  "sender": {
+   "kind": "you"
+  },
+  "agent": false,
+  "cmd": false,
+  "after": [
+   "Done. `SearchBox` now keeps the query in `?q=`, and going back restores it."
+  ],
+  "tools": 1,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {
+   "replace_file_content": 1
+  },
+  "steps": [
+   {
+    "k": "group",
+    "calls": [
+     "replace_file_content"
+    ],
+    "count": 1,
+    "ids": [
+     "s7.0"
+    ]
+   }
+  ],
+  "usage": {
+   "step-7": {
+    "i": 2600,
+    "o": 210,
+    "cr": 10100,
+    "cc": 0
+   },
+   "step-9": {
+    "i": 2800,
+    "o": 40,
+    "cr": 10600,
+    "cc": 0
+   }
+  },
+  "model": "Gemini 3.5 Flash",
+  "effort": "Medium",
+  "durationMs": 8000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793526068000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestParts": [],
+  "images": [],
+  "imgLine": null
+ }
+]
