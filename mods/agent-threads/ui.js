@@ -1681,16 +1681,18 @@ export function callText(name, input) {
   return s ? s.slice(0, 300) : String(name ?? "tool");
 }
 
-// The rail on the list's right edge, in place of the scrollbar: one tick per turn, 9 px apart
-// and closing up to 3 px; past that one tick stands for `per` turns. A new day leaves a 7 px
-// gap while every turn has its own tick. h is the rail's height, days the day starts after
-// the first.
+// The rail on the list's right edge (or left), in place of the scrollbar: one tick per turn,
+// 9 px apart, a new day 7 px further (railWindow).
 // The card beside a hovered tick: at most CARD_W wide, CARD_GAP px from the tick on the
 // rail's inner side; a first line with the day, the time and the number, the prompt on two
 // lines of about CARD_CHARS characters and the reply on three of about REPLY_CHARS.
 // The peak: the hovered tick grows to PEAK px (PEAK_SMALL in a gutter under 40 px), and the
 // ticks within SWELL px of it grow less, by the square of how near they are (railSwell).
-export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36 };
+// The window (round 7): 9 px a tick (MAX) at every length, one tick a turn, in a window at
+// most WIN_PCT of the list's height and WIN_MAX px (60 ticks); it keeps the turns on screen
+// SPARE ticks from its ends, and the FADE ticks before a cut end fade. A pin or the running
+// turn past an end shows as a DOT px dot in a 9 px row there.
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36, WIN_PCT: 0.6, WIN_MAX: 540, SPARE: 3, FADE: [0.25, 0.5, 0.75], DOT: 4 };
 // The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
 // tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
 // the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
@@ -1705,16 +1707,52 @@ export function railSwell(w, peak, d) {
   const k = 1 - d / RAIL.SWELL;
   return Math.max(w, Math.round((w + (peak - w) * k * k) * 2) / 2);
 }
-export function railLayout(count, days, h) {
-  const fit = (gaps) => {
-    const room = Math.max(RAIL.MIN, h - 2 * RAIL.PAD - gaps * RAIL.DAY);
-    const per = count * RAIL.MIN > room ? Math.ceil((count * RAIL.MIN) / room) : 1;
-    const ticks = Math.ceil(count / per);
-    const pitch = Math.max(RAIL.MIN, Math.min(RAIL.MAX, Math.floor(room / Math.max(1, ticks))));
-    return { per, ticks, pitch, mark: pitch >= 5 ? 2 : 1, dayGap: gaps > 0 };
+
+// The rail's window over n ticks: { top, count, cut } where the ticks top to top + count - 1
+// are drawn. day(i) is true when tick i starts a new day (a 7 px gap above it, except at the
+// window's top). room is the window's px: min(WIN_PCT of h, WIN_MAX), less a 9 px row at each
+// end for its dot when the ticks do not all fit. The window keeps on (the first and last tick
+// on screen, or null) SPARE ticks from its ends, moving only as far as that needs; at the end
+// (end true, while the list follows the newest turn) it rests at the last tick. It is not
+// kept centred, so it stays still while the list moves a little.
+export function railFit(day, from, room, last = Infinity) {
+  let y = 0;
+  let i = from;
+  for (; i <= last; i++) {
+    const add = (i > from && day(i) ? RAIL.DAY : 0) + RAIL.MAX;
+    if (y + add > room) break;
+    y += add;
+  }
+  return i - from;
+}
+export function railWindow(n, day, h, top = 0, on = null, end = false) {
+  const room0 = Math.max(RAIL.MAX, Math.min(RAIL.WIN_PCT * Math.max(0, h), RAIL.WIN_MAX));
+  if (n <= 0) return { top: 0, count: 0, cut: false };
+  if (railFit(day, 0, room0, n - 1) >= n) return { top: 0, count: n, cut: false };
+  const room = Math.max(RAIL.MAX, room0 - 2 * RAIL.MAX);
+  // The window's top for a window that ends at tick e.
+  const endingAt = (e) => {
+    let y = 0;
+    let i = e;
+    for (; i >= 0; i--) {
+      const add = RAIL.MAX + (i < e && day(i + 1) ? RAIL.DAY : 0);
+      if (y + add > room) break;
+      y += add;
+    }
+    return i + 1;
   };
-  const one = fit(days);
-  return one.per === 1 ? one : fit(0);
+  let t = Math.max(0, Math.min(top, n - 1));
+  if (end) t = endingAt(n - 1);
+  else if (on) {
+    const [a, b] = on;
+    if (a < t + RAIL.SPARE) t = Math.max(0, a - RAIL.SPARE);
+    const need = Math.min(n - 1, b + RAIL.SPARE);
+    if (t + railFit(day, t, room, n - 1) - 1 < need) t = Math.max(t, endingAt(need));
+    // A window taller than the turns on screen keeps their first one in view.
+    if (t > a) t = Math.max(0, a - RAIL.SPARE);
+  }
+  t = Math.min(t, endingAt(n - 1));
+  return { top: t, count: railFit(day, t, room, n - 1), cut: true };
 }
 
 export function stripLayout(w, text, right = true) {

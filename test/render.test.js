@@ -5806,8 +5806,14 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   expect(r.some((e) => e[0] === "id" && e[1] === "th-rail-card")).toBe(false);
   expect(r.some((e) => e[0] === "tooltip")).toBe(false);
   // Pointing at a tick opens its card; leaving it closes it.
-  const hovers = r.filter((e) => e[0] === "on_hover").map((e) => e[1]);
-  expect(hovers.length).toBe(ticks.length);
+  // The first hover report is the rail's own (it holds the window); then one per tick.
+  const all = r.filter((e) => e[0] === "on_hover").map((e) => e[1]);
+  expect(all.length).toBe(ticks.length + 1);
+  const hovers = all.slice(1);
+  all[0](true, cx);
+  expect(v.railOn).toBe(true);
+  all[0](false, cx);
+  expect(v.railOn).toBe(false);
   hovers[1](true, cx);
   expect(v.railHover).toBe(ks[1]);
   rec = []; v.railView(theme); r = rec; rec = null;
@@ -5867,10 +5873,10 @@ test("the rail card: a hovered tick shows the day, time and number, two lines of
   expect(r).toContainEqual(["left", 0]);
   v.prefs = { ...v.prefs, railSide: "right" };
   v.railHover = null;
+  // Every tick is one turn at any height: no tick stands for several.
   v.listH = 12;
   ({ ticks } = v.railTicks());
-  expect(ticks[0].turns.length).toBeGreaterThan(1);
-  expect(v.railCard(ticks[0]).rest).toBe(`#${ticks[0].turns[0].turn.n} to #${ticks[0].last.turn.n}`);
+  expect(ticks.every((k) => k.turns.length === 1)).toBe(true);
 });
 
 test("the rail replaces the scrollbar: a tick per turn, on screen brighter, selected longer, pinned in accent; a click goes to the turn; a search dims misses", async () => {
@@ -5880,7 +5886,7 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   const ks = keys();
   expect(v.railShown()).toBe(true);
   let { L, ticks } = v.railTicks();
-  expect(L.per).toBe(1);
+  expect(L.pitch).toBe(9);
   expect(ticks.map((k) => k.key)).toEqual(ks);
   // No scrollbar in the body any more, and the rail is drawn in it.
   rec = []; v.render(cx); const drawn = rec; rec = null;
@@ -6651,4 +6657,55 @@ test("draw time: a session of 2,000 turns draws well inside Herdr's time, and re
   listWindow = null;
   expect(still).toBeLessThan(10);
   expect(rebuild).toBeLessThan(25);
+});
+
+test("the rail's window: 9 px a tick in a long session, at most 540 px, following the list, faded ends, dots for a pin or the running turn past an end", async () => {
+  const { v, cx, keys } = await pinPane("--only", "150", "--gap", "600");
+  v.listH = 900;
+  draw(v, cx);
+  const ks = keys();
+  expect(ks.length).toBe(150);
+  // Pin an early turn, then follow the newest turn: the window rests at the end.
+  v.sel = ks[5];
+  v.action("pin", cx);
+  v.sel = ks.at(-1);
+  v.follow = true;
+  let w = v.railTicks();
+  expect(w.cut).toBe(true);
+  expect(w.ticks.length).toBeLessThanOrEqual(58);
+  expect(w.ticks.at(-1).key).toBe(ks.at(-1));
+  expect(w.ticks.every((k) => k.turns.length === 1)).toBe(true);
+  // The top end is cut, so its three ticks fade; the bottom is the real last turn.
+  expect(w.ticks.slice(0, 3).map((k) => k.fade)).toEqual([0.25, 0.5, 0.75]);
+  expect(w.ticks.at(-1).fade).toBe(1);
+  // The pin above the window shows as a dot there.
+  expect(w.dotTop).toEqual({ i: 5, live: false });
+  expect(w.dotBottom).toBe(null);
+  // Only the window's ticks are drawn, with a row at each end.
+  rec = []; v.railView(theme); const r = rec; rec = null;
+  expect(r.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-tick-") && !String(e[1]).startsWith("th-tick-card")).length).toBe(w.ticks.length);
+  expect(r).toContainEqual(["id", "th-rail-up"]);
+  expect(r).toContainEqual(["tooltip", `Pinned #${v.findTurn(ks[5]).n} above`]);
+  // A press on the dot brings the pin into the window, and the list stays.
+  const scroll = v.scrollTo;
+  v.railReveal(5, cx);
+  w = v.railTicks();
+  expect(w.ticks.some((k) => k.i === 5)).toBe(true);
+  expect(v.scrollTo).toBe(scroll);
+  // It stays there until the list moves; then the window follows the list again.
+  v.follow = false;
+  drawRange(v, 100, 106);
+  v.viewRange = [100, 106];
+  w = v.railTicks();
+  expect(w.ticks.some((k) => k.i === 5)).toBe(false);
+  const on = w.ticks.filter((k) => k.inView).map((k) => k.i);
+  expect(on.length).toBeGreaterThan(0);
+  expect(Math.min(...on) - w.top).toBeGreaterThanOrEqual(RAIL.SPARE);
+  // While the pointer is on the rail, the window holds where it is.
+  const top = w.top;
+  v.railOn = true;
+  v.viewRange = [0, 4];
+  expect(v.railTicks().top).toBe(top);
+  v.railOn = false;
+  expect(v.railTicks().top).toBe(0);
 });
