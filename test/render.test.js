@@ -1146,6 +1146,73 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   expect(v.selectHint()).toBe("q quotes the highlight · s returns");
 });
 
+test("q quotes what ⌘C copied from another turn on screen, from that turn, and names it; text from outside the pane is still refused", async () => {
+  const { v, cx } = await quotePane();
+  const [k1, k2] = v.turnKeys(v.rows());
+  expect(v.sel).toBe(k1);
+  const t2 = v.findTurn(k2);
+  // Words from the next turn's reply (a closed row shows its start), not in the open one.
+  const part = "no test changes";
+  expect(v.replyText(t2)).toContain(part);
+  expect(v.replyText(v.findTurn(k1))).not.toContain(part);
+  const quoteNow = async () => {
+    log = [];
+    v.quoteAt = 0;
+    v.key(keyEv("q"), cx);
+    cx.flush();
+    await settleCx(cx);
+  };
+  // A press and drag in the list, then ⌘C: the clipboard changed since the press.
+  const copy = (text) => { cx.clip = "older text"; v.notePress(cx); cx.clip = text; };
+  // Select view on the open turn, Herdr 0.1.16: its editor has nothing highlighted.
+  v.toggleSelect(k1, cx);
+  v.selEditor.st.selected_range = () => ({ start: 0, end: 0 });
+  drawRange(v, 0); // both turns on screen
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: true, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted the selection from #${t2.n} into t4`));
+  // The other turn's message too.
+  copy("Bump Playwright");
+  await quoteNow();
+  expect(cx.clip).toBe("> Bump Playwright\n\n");
+  expect(v.lastQuote).toMatchObject({ fromTurn: t2.n, pasted: true });
+  // Text from outside the pane: nothing is pasted, as before.
+  copy("rm -rf / from some other window");
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // A turn that is not on screen is not a source.
+  v.viewRange = [0, v.rowIndex(k2)];
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // Out of Select view: the open turn is still selected, the copy came from the closed one.
+  // ⌘ released says q quotes it and selects that turn; q quotes it, not the open reply.
+  v.endSelect();
+  drawRange(v, 0);
+  copy(part);
+  v.toast = null;
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(v.toast?.text).toBe("Copied 3 words · q quotes them");
+  expect(v.sel).toBe(k2);
+  v.sel = k1; // the ⌘ release can be missed: q finds the turn itself
+  await quoteNow();
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: false, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted the selection from #${t2.n} into t4`));
+  // Copied from the selected turn itself: the toast names no turn.
+  v.sel = k2;
+  copy(part);
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ fromTurn: null, pasted: true });
+  expect(v.toast.text).toMatch(/^Quoted the selection into t4/);
+});
+
 test("in Select view q quotes what ⌘C copied from the reply, and never the whole reply", async () => {
   const { v, cx } = await quotePane();
   const key = v.sel;
@@ -2217,7 +2284,9 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       for (const r of parts) {
         const i = lastList.keys.indexOf(r.key);
         const H = fed.get(r.key);
-        const design = r.kind === "latest" ? 6 + H : H;
+        // The flat preview's box is drawn 6 px under the heading; the Markdown form (Shorten
+        // long messages off) is measured with its margin in it.
+        const design = r.kind === "latest" && !r.md ? 6 + H : H;
         expect(v.height(rows[i])).toBe(design);
         expect(lastList.sizes[i]).toBe(Math.ceil(design));
         // No slot is below its measure.
@@ -2365,6 +2434,89 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
       v.full.clear();
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+// The owner, 18 Nov, on the fourth test build: LATEST UPDATE drew as one flat paragraph (a
+// table and lists joined with " · ", no bold, no breaks), and with Shorten long messages off
+// (the default) there was no Show all to reach the Markdown. Off, it draws as Markdown from the
+// start, like the reply above it, with no Show all or Show less; on, the clamped preview stays.
+test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and with no Show all or Show less; on, the clamped preview with Show all", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  const md = "The nightly run finished.\n\n| job | before | after |\n| --- | --- | --- |\n| build | 4m | 3m |\n| tests | 9m | 6m |\n\n**Still open:**\n\n- the flaky cart test\n- the cache key\n\nSee `ci/nightly.yml`.";
+  t.latest = md;
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  const strs = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  // Off (the default): the Markdown, whole.
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); let calls = rec; rec = null;
+  expect(calls.some((e) => e[0] === "TextView" && String(e[1]).startsWith(`th-lmd-${r.key}`))).toBe(true);
+  expect(strs(calls)).not.toContain("Show all");
+  expect(strs(calls)).not.toContain("Show less");
+  expect(strs(calls).some((x) => x.includes(" · "))).toBe(false);
+  expect(v.height(r)).toBe(6 + v.mdHeight(md));
+  // A click on it changes nothing: there is nothing to show or hide.
+  v.click(r.key, cx);
+  expect(v.full.has(`l:${key}`)).toBe(false);
+  // Past 12,000 characters the rest is not drawn, and a note says how much.
+  const long = `${md}\n\n${"More detail on the cart totals. ".repeat(500)}`;
+  t.latest = long;
+  s.version++;
+  r = lt();
+  expect(r.md.length).toBeLessThanOrEqual(12000);
+  expect(r.md.endsWith(" …")).toBe(true);
+  expect(r.left).toBe(long.trim().length - r.md.replace(/\s*…$/, "").length);
+  expect(r.left).toBeGreaterThan(3000);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain(`… ${r.left.toLocaleString()} more characters not shown`);
+  // On: the clamped one-block preview, as before, with Show all past 6 lines.
+  t.latest = md;
+  s.version++;
+  v.prefs = { ...v.prefs, truncate: true };
+  r = lt();
+  expect(r.md).toBe(null);
+  expect(r.text).not.toContain("|");
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain("Show less");
+});
+
+// The outside review of the fifth build: the Markdown update's measure key held only its length,
+// so a measure taken with Shorten long messages off (no Show less row) carried over to Show all
+// with it on (a Show less row, 22 px taller), and Show less sat over the next item.
+test("LATEST UPDATE: a measure taken whole is not reused after Shorten long messages and Show all, nor across the 12,000 character note", async () => {
+  const { v } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  t.latest = "The run finished.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- one\n- two";
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  v.meas = new Map([[r.key, { h: 120, sig: v.partSig(r) }]]);
+  expect(v.measured(r)).toBe(120);
+  v.prefs = { ...v.prefs, truncate: true };
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(t.latest);
+  expect(r.whole).toBe(false);
+  expect(v.measured(r)).toBe(null);
+  // A cut text and the same length uncut are different layouts too (the note's line).
+  v.full.clear();
+  v.prefs = { ...v.prefs, truncate: false };
+  r = lt();
+  const sigWhole = v.partSig(r);
+  expect(v.partSig({ ...r, left: 500 })).not.toBe(sigWhole);
 });
 
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
@@ -5264,6 +5416,29 @@ test("the image viewer: a fenced code block in the reply gets the language, a Co
   expect(text()).not.toContain("Copied");
   // Still one scroll part per block, so j and k count it.
   expect(g.galleryParts()).toBe(6);
+});
+
+// Issue 117: a long code line ran past the panel's right edge. The viewer's code wraps as
+// the open turn's does: the editor's soft_wrap is on and the box is as tall as the wrapped
+// rows at the panel's text width (452 px at 1460 wide: 58 characters a row).
+test("the image viewer: a long code line in the reply wraps inside the panel, and the box has room for its rows", () => {
+  editors.length = 0;
+  const code = "@media (min-width: 640px) {\n  .filters { display: flex; flex-wrap: nowrap; overflow-x: auto; }\n}";
+  const md = `The fix:\n\n\`\`\`css\n${code}\n\`\`\``;
+  const { calls, size } = viewer({ turn: { ...VIEW_TURN, md } });
+  size(1460, 1150);
+  expect(editors.at(-1).opts).toMatchObject({ value: code, readonly: true, soft_wrap: true });
+  // Three lines, the middle one two rows: four rows of 20 px and the 16 px inset.
+  const box = afterId(calls(), "th-gallery-code-copy-1");
+  expect(box.some(([n, x]) => n === "h" && x === 4 * 20 + 16)).toBe(true);
+  // A plain block (no editor) wraps too, and scrolls only down.
+  const plain = viewer({ turn: { ...VIEW_TURN, md } });
+  plain.g.gal.code[1].st = false;
+  plain.size(1460, 1150);
+  const drawn = afterId(plain.calls(), "th-gallery-code-1");
+  expect(drawn.some(([n]) => n === "whitespace_nowrap")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_scroll")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_y_scroll")).toBe(true);
 });
 
 test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {

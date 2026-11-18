@@ -293,6 +293,10 @@ const NO_CUT = 100000;
 const SYSTEM_FACE = ".SystemUIFont";
 const READ_INK = 0.86;
 const LATEST_LINES = 6;
+// The most of a LATEST UPDATE drawn as Markdown, and the height of the note under it that
+// says how much more there is.
+const LATEST_MD = 12000;
+const LATEST_NOTE = 20;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
@@ -3391,13 +3395,23 @@ export default class Threads extends View {
     // What the agent said in its last background update, when that is not the reply.
     const late = (turn.latest ?? "").trim();
     if (late && late !== text) {
+      // With Shorten long messages off (the default) the update is Markdown from the start,
+      // like the reply above it (the owner, 18 Nov: a flat preview was all there was, since
+      // nothing was cut and so no Show all came). On, a clamped one-block preview (C5), the
+      // Markdown after Show all. Past LATEST_MD characters the rest is not drawn, and a note
+      // under it says how much (left).
+      const whole = !this.prefs.truncate;
       const all = this.full.has(`l:${key}`);
       // One block that gpui wraps at the card's width (C5); the estimate counts lines only
       // until the probe has measured it.
-      const text = flattenMd(late.slice(0, 4000));
+      const text = whole ? "" : flattenMd(late.slice(0, 4000));
       const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
+      // cutMd ends a cut text in " …", so it cuts 4 short of the cap.
+      const cut = (whole || all) && late.length > LATEST_MD;
+      const md = whole || all ? (cut ? cutMd(late, LATEST_MD - 4) : late) : null;
+      const left = cut ? late.length - md.replace(/\s*…$/, "").length : 0;
       push({ ...item, kind: "lhead", key: `lh:${key}` });
-      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
+      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, whole, text, estLines: l.lines.length + (l.cut ? 1 : 0), md, left });
     }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
@@ -3797,13 +3811,10 @@ export default class Threads extends View {
   }
 
   // A code block with no editor (one that failed to start): its lines, wrapped, in the box.
-  // In the image viewer, outside the list (scroll), they do not wrap and scroll both ways.
+  // In the image viewer, outside the list (scroll), a taller block scrolls down inside.
   plainCode(t, id, text, mono, scroll = false) {
-    if (scroll) {
-      return v_flex().id(id).size_full().px(8).py(6).items_start().overflow_scroll().text_size(12).font_family(mono).text_color(t.muted)
-        .children(text.split("\n").map((l) => div().flex_none().h(CODE_LINE).line_height(`${CODE_LINE}px`).whitespace_nowrap().child(l || " ")));
-    }
     return v_flex().id(id).size_full().px(8).py(6).text_size(12).font_family(mono).text_color(t.muted)
+      .when(scroll, (el) => el.overflow_y_scroll())
       .children(text.split("\n").map((l) => div().w_full().min_h(CODE_LINE).line_height(`${CODE_LINE}px`).child(l || " ")));
   }
   // The quiet line under a code block or a tool's output whose rest is hidden: Show all and
@@ -3960,10 +3971,12 @@ export default class Threads extends View {
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
   // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
-  // copied, only when it is part of this reply (so text from anywhere else is never pasted);
-  // otherwise the whole reply as Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
-  // the highlight, so it never falls back to the whole reply: when the clipboard holds
-  // nothing from this reply, the quote says how instead.
+  // copied, only when it is part of this reply, or of a turn on screen (copiedPart), so text
+  // from anywhere else is never pasted; otherwise the whole reply as Markdown source.
+  // { text, source, from } or { refuse, source, why }: from is the turn the copied text came
+  // from, when it is another one. In Select view a press means the highlight, so it never
+  // falls back to the whole reply: when the clipboard holds nothing from the pane, the quote
+  // says how instead.
   quoteSource(key, cx) {
     const turn = key ? this.findTurn(key) : null;
     const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
@@ -3974,6 +3987,9 @@ export default class Threads extends View {
       if (lit?.trim()) return { text: lit, source: "selection", how: "editor" };
       const clip = readClip(cx);
       if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection", how: "clipboard" };
+      // ⌘C on the formatted text of another turn on screen, Select view still open here.
+      const part = this.copiedPart(cx);
+      if (part) return { text: part.text, source: "selection", how: "clipboard", from: part.key };
       const say = lit != null ? `Nothing highlighted: select text, then ${this.quoteKey}` : `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`;
       return { refuse: say, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
@@ -3983,13 +3999,13 @@ export default class Threads extends View {
   }
 
   // After ⌘C in Select view, once the editor's copy has run: when the clipboard holds text
-  // from this reply, a toast says q quotes it. Never the text itself in the record.
+  // from this reply or another turn on screen, a toast says q quotes it. Never the text itself in the record.
   sawCopy(key, cx) {
     cx.timer.after(60, (cx) => {
       if (this.selecting !== key) return;
       const turn = this.findTurn(key);
       const clip = readClip(cx);
-      const ok = Boolean(turn && clip.trim() && inReply(clip, this.replyText(turn)));
+      const ok = Boolean(turn && clip.trim() && (inReply(clip, this.replyText(turn)) || this.copiedPart(cx)));
       this.selectCopy = { at: Date.now(), ok, chars: clip.length };
       if (ok) {
         const words = clip.trim().split(/\s+/).length;
@@ -4030,18 +4046,30 @@ export default class Threads extends View {
     this.clipBefore = this.clipAtPress;
     this.clipAtPress = readClip(cx);
   }
-  // { key, text } when the clipboard holds text copied since the last press from the selected
-  // or an open turn's reply or message, or null.
+  // { key, text } when the clipboard holds text copied since the last press from the reply
+  // or message of the selected turn, an open turn or a turn on screen, or null. A drag's
+  // release often lands on another turn's item, which then is the selected one (click).
   copiedPart(cx) {
     if (this.clipAtPress == null || !this.replySelectable()) return null;
     const clip = readClip(cx);
     if (!clip.trim() || clip === this.clipAtPress) return null;
-    const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
+    const keys = [...new Set([this.sel, ...this.open, ...this.screenTurns()])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
       return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
+  }
+  // The turns with an item in the range the list drew last, top to bottom.
+  screenTurns() {
+    const rows = this.rowsMemo ?? [];
+    const [a, b] = this.viewRange ?? [0, 0];
+    const out = [];
+    for (let i = a; i < Math.min(b, rows.length); i++) {
+      const k = rowTurnKey(rows[i]);
+      if (k && !out.includes(k)) out.push(k);
+    }
+    return out;
   }
   // ⌘ released: the one moment after ⌘C that reaches the panel. Says once that q quotes it.
   cmdUp(e, cx) {
@@ -4065,8 +4093,12 @@ export default class Threads extends View {
   // A quote press (the quote key, the Quote button, or debugQuote in tests). Returns false
   // when it did nothing, so the key can reach Herdr. Key repeat is ignored by the caller,
   // and a second press within 1 s does nothing.
-  quote(cx, via, key = this.selecting ?? this.copiedPart(cx)?.key ?? this.sel) {
+  quote(cx, via, button = null) {
     if (this.settingsOpen || this.choosing) return false;
+    // The turn a press is for (a button's, the one in Select view, the selected one), and the
+    // turn quoted from: without a button, the turn ⌘C copied from when it is another one.
+    const target = button ?? this.selecting ?? this.sel;
+    const key = button ?? this.selecting ?? this.copiedPart(cx)?.key ?? this.sel;
     const at = Date.now();
     if (this.quoteAt && at - this.quoteAt < 1000) return true;
     this.quoteAt = at;
@@ -4076,10 +4108,14 @@ export default class Threads extends View {
     // what it copied.
     const k = this.quoteKey;
     const q = this.quoteSource(key, cx);
+    // Text copied from a turn other than the one the press is for: the toast names it ("from #12").
+    const fromKey = q.from ?? key;
+    const fromTurn = !q.refuse && fromKey && fromKey !== target ? this.findTurn(fromKey)?.n ?? null : null;
+    const from = fromTurn != null ? ` from #${fromTurn}` : "";
     // Kept for the debug report and, with no text in it, in shared("threads.lastQuote") on
     // every build, so a quote that went wrong can be told apart afterwards.
     const record = (x) => {
-      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, ...x };
+      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, fromTurn, ...x };
       try { setShared("threads.lastQuote", this.lastQuote); } catch { /* the report still has it */ }
     };
     const out = q.refuse ? null : quoteText(q.text);
@@ -4124,10 +4160,10 @@ export default class Threads extends View {
         const folds = out.text.length > 800 || (out.text.match(/\n/g) ?? []).length > 2;
         let text;
         if (!r.pasted) text = `Could not focus ${t4}. Quote copied.`;
-        else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
-        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
-        else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
-        else if (q.source === "selection") text = `Quoted the selection into ${t4}`;
+        else if (gate.busy) text = `Quoted${from} into ${t4} · ${this.agent().short} will queue it`;
+        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines${from} into ${t4}`;
+        else if (out.cut === "chars") text = `Quoted the start${from} into ${t4} · cut at 2,000 characters`;
+        else if (q.source === "selection") text = `Quoted the selection${from} into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
         // Claude Code folds a long paste, and a second paste opens it.
         if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";
@@ -4848,7 +4884,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -5150,7 +5186,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k, L) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -5184,11 +5220,13 @@ export default class Threads extends View {
   }
   // A fenced code block in the panel, as the open turn draws one: the language and Copy on a
   // head, then the highlighted code, up to CODE_LINES wrapped rows (a taller one scrolls
-  // inside, and says so).
-  galleryCode(t, c, k) {
+  // inside, and says so). Rows are wrapped at the panel's text width, less the box's border
+  // and the editor's inset, at 12 px mono (codePer in the list).
+  galleryCode(t, c, k, L) {
     const mono = this.mono();
     const copied = this.gal.codeCopied === k;
-    const rows = c.text.split("\n").length;
+    const textW = L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX);
+    const rows = Math.max(1, codeRows(c.text, (textW - 18) / (12 * MONO_EM)));
     const shown = Math.min(CODE_LINES, rows);
     return v_flex().w_full()
       .child(h_flex().h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
@@ -7272,7 +7310,7 @@ export default class Threads extends View {
       case "you": return this.youHeight(r);
       case "rhead": return ROW.GAP + ROW.LINE + (this.captionRows(r.turn) ? 6 + this.captionRows(r.turn) * 18 : 0);
       case "lhead": return 14 + TV_LINE;
-      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
+      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       case "seltext": return 6 + 22 + r.boxH;
@@ -7320,7 +7358,9 @@ export default class Threads extends View {
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
-      case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
+      // The Markdown form draws a Show less row only after Show all (not when whole) and a note
+      // past the cap (left), so both are part of its layout.
+      case "latest": return `${head}|${r.md ? `all${r.md.length}|${r.whole ? "w" : "s"}|${r.left ?? 0}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
       default: return head;
     }
@@ -8315,7 +8355,8 @@ export default class Threads extends View {
       case "latest": {
         if (r.md) return v_flex().mt(6)
           .child(this.readBlock(div()).child(this.mdView(tv(`th-lmd-${r.key}`), r.md, this.replySelectable())))
-          .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
+          .when(r.left > 0, (el) => el.child(div().h(LATEST_NOTE).flex().items_center().text_size(11.5).italic().text_color(t.dim).child(`… ${r.left.toLocaleString()} more characters not shown`)))
+          .when(!r.whole, (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less")));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
         const block = this.readBlock(div()).text_color(t.foreground).child(r.text);
