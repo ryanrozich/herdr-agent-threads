@@ -1607,6 +1607,16 @@ const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
 // 300 px, "Agent message" with no name.
+// Where a turn's message came from: "you" (the person's own prompt), "rule" (typed in the
+// terminal and marked as an agent message by a sender rule, core/turns.js ruleSender) or
+// "sent" (another agent really sent it: hc, a peer session, a schedule, the SDK). Both
+// agent kinds draw alike for now; every place that draws a sender reads this to tell them
+// apart.
+export function senderOrigin(sender) {
+  if (!sender || sender.kind === "you") return "you";
+  return sender.rule != null ? "rule" : "sent";
+}
+
 export function senderLabel(sender, width) {
   if (!sender || sender.kind === "you") return "User";
   const words = kindWords(sender);

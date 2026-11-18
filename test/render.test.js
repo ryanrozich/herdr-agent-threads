@@ -657,6 +657,59 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   expect(v.shape(v.current().turns[1]).blank).toBeFalsy();
 });
 
+test("every place that draws an agent message can tell a rule-marked typed prompt from one another agent sent", async () => {
+  const { senderOrigin } = await import("../mods/agent-threads/ui.js");
+  // Two messages from helper-a: one typed in the terminal and marked by the "From {name}:"
+  // rule, one helper-a really sent. Today both draw alike; the mark for the first is not
+  // chosen yet, so what is checked is that each place has the fact to draw it from.
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+    { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
+  ]);
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  const [you, typed, sent] = v.current().turns;
+  expect([you, typed, sent].map((t) => senderOrigin(t.sender))).toEqual(["you", "rule", "sent"]);
+  // The same words over both bubbles today.
+  expect(senderLabel(typed.sender, 400)).toBe(senderLabel(sent.sender, 400));
+  // Open header and closed rows: the debug list says which.
+  v.open = new Set(["0:2", "0:3"]);
+  draw(v, cx);
+  const detail = () => state.shared["threads.debug"].t4.detail;
+  expect(detail().some((d) => d.startsWith("head#2") && d.includes("agent:peer:helper-a") && d.endsWith("from:rule"))).toBe(true);
+  expect(detail().some((d) => d.startsWith("head#3") && d.includes("agent:peer:helper-a") && d.endsWith("from:sent"))).toBe(true);
+  // The viewer's copy of a turn keeps it.
+  expect([v.viewerTurn(you).origin, v.viewerTurn(typed).origin, v.viewerTurn(sent).origin]).toEqual(["you", "rule", "sent"]);
+  // The rail: its turns (every tick is made from one) and the card a tick opens. The rail
+  // shows from 700 px; the ticks drawn are only those in its window.
+  v.width = 700;
+  draw(v, cx);
+  const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
+  expect([senderOrigin(entry(2).turn.sender), senderOrigin(entry(3).turn.sender)]).toEqual(["rule", "sent"]);
+  const card = (n) => v.railCard({ turns: [entry(n)], live: false, pinned: false });
+  expect([card(2).origin, card(3).origin]).toEqual(["rule", "sent"]);
+  // Folded rows (agent messages hidden) and search rows hold the turn itself.
+  v.open = new Set();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(detail().some((d) => d.startsWith("afold#2") && d.includes(" rule2"))).toBe(true);
+  expect(detail().some((d) => d.startsWith("afold#3") && !d.includes(" rule"))).toBe(true);
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.setQuery("cart tests", cx);
+  draw(v, cx);
+  const found = v.rows().filter((r) => r.turn && r.kind === "turn");
+  expect(found.map((r) => senderOrigin(r.turn.sender))).toEqual(["rule", "sent"]);
+  v.setQuery("", cx);
+  // Pinned: a pinned turn is drawn from the turn, so it carries the same fact.
+  for (const k of ["0:2", "0:3"]) { v.sel = k; v.action("pin", cx); }
+  v.setView("pinned");
+  draw(v, cx);
+  expect(v.rows().filter((r) => r.turn).map((r) => senderOrigin(r.turn.sender))).toEqual(["rule", "sent"]);
+  v.setView("all");
+});
+
 test("a sender rule that is not valid shows a note in the panel and is ignored", async () => {
   const { v, cx } = await scripted(senderEvents());
   v.applyPrefs(JSON.stringify({ senders: [{ pattern: "^(?<sender>(a+)+)!" }, { pattern: "^From (\\w+):" }] }));
