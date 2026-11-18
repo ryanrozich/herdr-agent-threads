@@ -1860,10 +1860,10 @@ export default class Threads extends View {
     for (let i = job.sizes.length; i < out.length; i++) {
       job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
       job.index.set(out[i].key, i);
-      if (job.sums) {
-        // Each heading keeps the session's numbers before its turn, so a build that keeps the
-        // rows before it keeps their numbers too (keptSums).
-        if (out[i].kind === "trh") out[i].cum = sumsBefore(job.sums);
+      // Each heading brings its turn's numbers, and keeps the session's before its turn, so a
+      // build that keeps the rows before it keeps their numbers too (keptSums).
+      if (job.sums && out[i].kind === "trh") {
+        out[i].cum = sumsBefore(job.sums);
         addTotals(job.sums, out[i]);
       }
     }
@@ -1878,6 +1878,7 @@ export default class Threads extends View {
       return;
     }
     this.rowJob = null;
+    this.builtFrame = this.renders;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -3609,7 +3610,7 @@ export default class Threads extends View {
     return v_flex().id("th-traj").flex_1().min_h(0).w_full()
       .when(pad, (el) => el.pt(TOP_BAND))
       .when(top, (el) => el.child(this.trajBar(t)))
-      .when(this.timelineShown(), (el) => el.child(this.timelineView(t)))
+      .when(this.timelineShown(), (el) => el.child(this.timelineView(t, cx)))
       .child(main);
   }
 
@@ -3749,12 +3750,18 @@ export default class Threads extends View {
   // The layout (ledger.js timelineLayout), again only when the session's numbers, the width or
   // the scale change, and once a second while a turn runs (its bars run to now). It walks the
   // turns, not the rows. A build that changes nothing (the debug pane's timing rebuilds) keeps it.
-  tlLayout() {
+  tlLayout(cx = null) {
     const s = this.ledgerSums();
     const heads = s.heads ?? [];
     const last = heads.at(-1);
     const live = Boolean(last?.going);
     const k = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
+    // Not in the frame that finished a build (its slowest): the last layout stays for that
+    // frame, and the next one lays out.
+    if (this.tlMemo && this.tlMemo.k !== k && cx && this.renderOpen && this.builtFrame === this.renders) {
+      if (!this.tlNext) { this.tlNext = true; cx.timer.after(0, (cx) => { this.tlNext = false; cx.notify(); }); }
+      return this.tlMemo;
+    }
     if (this.tlMemo?.k !== k) {
       const t0 = now();
       this.tlMemo = { s, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), Date.now()) };
@@ -3832,8 +3839,8 @@ export default class Threads extends View {
   // there is room) and the ticks, with a red mark at each failed call. The selected turn has a
   // band behind it, and the selected step an outline. The filter bar's chips hide a lane;
   // Failed only and User only dim the other bars to 20%.
-  timelineView(t) {
-    const { L, heads } = this.tlLayout();
+  timelineView(t, cx) {
+    const { L, heads } = this.tlLayout(cx);
     const cw = L.cw;
     const ink = this.inks(t);
     const f = this.tf ?? ALL_ROWS;

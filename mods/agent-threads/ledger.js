@@ -284,6 +284,8 @@ export function ledgerTurn(s, turn, si, live = false) {
     partial: cells.some((c) => c.kind === "more"),
     // The turn's start (ms), and its length so far for a turn that has no end yet.
     t0, span, cnt, items,
+    // The keys of its failed calls and of the user's messages, for the session's lists.
+    failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
   };
   return { rows: [head, ...rows], fails, calls };
 }
@@ -316,24 +318,26 @@ export function ledgerTotals(rows) {
 export function newTotals() {
   return { turns: 0, steps: 0, calls: 0, failed: 0, fails: [], partial: [], users: [], heads: [], input: 0, model: 0, tools: 0, user: 0, agent: 0, tokens: 0, worked: 0 };
 }
-// One row into the session's numbers.
+// One row into the session's numbers: a heading brings its whole turn's (its counts and keys,
+// made with its rows), so a build adds one object a turn, and a step row adds nothing.
 export function addTotals(t, r) {
-  if (r.kind === "trh") {
-    t.turns++;
-    t.calls += r.calls;
-    t.tokens += r.tokens ?? 0;
-    t.worked += r.total ?? r.span ?? 0;
-    t.heads.push(r);
-    if (r.partial) t.partial.push(r.key);
-    return;
-  }
-  if (r.kind !== "tr") return;
-  t.steps++;
-  const lane = laneOf(r.lk);
-  if (lane) t[lane]++;
-  if (r.lk === "you") { t.user++; t.users.push(r.key); }
-  if (r.lk === "agent") t.agent++;
-  if (r.failed) { t.failed++; t.fails.push(r.key); }
+  if (r.kind !== "trh") return;
+  const c = r.cnt ?? {};
+  t.turns++;
+  t.calls += r.calls;
+  t.tokens += r.tokens ?? 0;
+  t.worked += r.total ?? r.span ?? 0;
+  t.heads.push(r);
+  if (r.partial) t.partial.push(r.key);
+  t.steps += c.steps ?? 0;
+  t.input += c.input ?? 0;
+  t.model += c.model ?? 0;
+  t.tools += c.tools ?? 0;
+  t.user += c.user ?? 0;
+  t.agent += c.agent ?? 0;
+  t.failed += c.failed ?? 0;
+  for (const k of r.failKeys ?? []) t.fails.push(k);
+  for (const k of r.userKeys ?? []) t.users.push(k);
 }
 
 // ---- the filter bar (round 6, section 3) ----
