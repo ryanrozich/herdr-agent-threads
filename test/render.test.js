@@ -8445,7 +8445,7 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 p
   for (const x of [["px", 16], ["py", 16], ["gap", 20]]) expect(own(c, "th-set-rows-general")).toContainEqual(x);
   // A switch: 32 by 18 with a 14 px knob; off, its track has a muted outline.
   const hints = own(c, "th-set-hints");
-  for (const x of [["min_h", 28], ["w", 32], ["h", 18], ["size", 14], ["border_1"]]) expect(hints).toContainEqual(x);
+  for (const x of [["min_h", 28], ["w", 32], ["h", 18], ["size", 14], ["border_1"], ["border_color", muted]]) expect(hints).toContainEqual(x);
   // The colors: one line beside the name at 440, 24 px dots 2 px apart, Plain with a muted edge.
   expect(own(c, "th-bubbleColor-row")).toContainEqual(["min_h", 28]);
   expect(own(c, "th-bubbleColor-blue")).toContainEqual(["size", 24]);
