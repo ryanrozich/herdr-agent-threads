@@ -4,6 +4,7 @@ import { test, expect } from "bun:test";
 import {
   promptParts, quoteRows, rowShape, clipYou, promptMd, escapeMd, quoteText, inReply, atLeast, canQuote, foreground,
   commandColor, contrast, actsLayout, keyAction, TAKEN_LETTERS, rowTextWidth, rowHeight,
+  HYPHEN_BREAK, hyphenBreaks, hyphenSpots, breakSpans,
 } from "../mods/agent-threads/ui.js";
 
 const runs = (t) => promptParts(t).map((r) => [r.quote ? "q" : "c", r.lines]);
@@ -328,3 +329,72 @@ test("actsLayout: copy and quote from the reply's left edge, select only where a
   expect(actsLayout({ select: true }).select).toEqual([12 + 2 * 26, 12 + 2 * 26 + 22]);
 });
 
+
+// Issue 112: Herdr wraps an open bubble itself and never breaks after a "-", so a long
+// hyphenated token broke inside a word. The drawn text gets HYPHEN_BREAK after the "-"s of a
+// token too long for the line; what is copied, quoted or searched is the message itself.
+const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+const PROMPT = `Why does src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js round down, and does ${TOKEN} see it?`;
+
+test("hyphenBreaks: a break after each inner '-' of a token longer than the line, nowhere else", () => {
+  const B = HYPHEN_BREAK;
+  expect(B).toHaveLength(1);
+  expect(/\s/.test(B)).toBe(false);
+  const out = hyphenBreaks(PROMPT, 40);
+  // The long token: a break after each of its ten hyphens; the path (98 characters, with
+  // its own hyphens) too, since it is one token longer than the line.
+  expect(out).toContain(TOKEN.replaceAll("-", `-${B}`));
+  expect(out).toContain(`order-${B}total`);
+  // Without the breaks it is the message itself.
+  expect(out.replaceAll(B, "")).toBe(PROMPT);
+  // Short tokens are left alone, at any per.
+  expect(hyphenBreaks("a well-known pre-merge check", 10)).toBe("a well-known pre-merge check");
+  expect(hyphenBreaks(PROMPT, 200)).toBe(PROMPT);
+  expect(hyphenBreaks(PROMPT, 0)).toBe(PROMPT);
+  // A trailing "-", and a run of "-", get no break; each line on its own.
+  expect(hyphenBreaks("aaaa-bbbb--cccc-", 8)).toBe(`aaaa-${B}bbbb--${B}cccc-`);
+  expect(hyphenBreaks(`short-one\n${TOKEN}`, 30).split("\n")[0]).toBe("short-one");
+  expect(hyphenSpots("no hyphens here at all", 4)).toBeNull();
+});
+
+test("breakSpans: search marks the same characters across a hyphen, the drawn pieces carry the breaks", () => {
+  const B = HYPHEN_BREAK;
+  const pieces = breakSpans(PROMPT, "merge-check", 40);
+  // Joined without the breaks: the line itself; the hit is the query's characters.
+  expect(pieces.map((p) => p.t).join("").replaceAll(B, "")).toBe(PROMPT);
+  const hits = pieces.filter((p) => p.hit);
+  expect(hits).toHaveLength(1);
+  expect(hits[0].t.replaceAll(B, "")).toBe("merge-check");
+  expect(hits[0].t).toBe(`merge-${B}check`);
+  const after = pieces[pieces.indexOf(hits[0]) + 1];
+  expect(after.t.startsWith(`-${B}for-${B}`)).toBe(true);
+  // A hit that ends on a "-" keeps the break after it.
+  const ends = breakSpans(TOKEN, "pre-", 20);
+  expect(ends[0]).toEqual({ t: `pre-${B}`, hit: true });
+  expect(ends[1].t.startsWith(`merge-${B}`)).toBe(true);
+});
+
+test("promptMd with per: breaks in text and link text only, never in code, a URL or a link's address", () => {
+  const B = HYPHEN_BREAK;
+  const link = { name: "Issue", re: /\bACME-(\d+)\b/g, url: "https://linear.app/acme/issue/ACME-$1", host: "linear.app" };
+  const url = "https://example.com/a-very-long-path-with-many-hyphens-in-it-for-the-test";
+  const code = `\`${TOKEN}\``;
+  const text = `${TOKEN} ${url} ${code} fix-for-ACME-123-and-the-rounding-in-the-nightly-receipt-run`;
+  const plain = promptMd(text, { links: [link] }).md;
+  const md = promptMd(text, { links: [link], per: 30 }).md;
+  expect(plain.includes(B)).toBe(false);
+  expect(md).toContain(TOKEN.replaceAll("-", `\\-${B}`));
+  expect(md).toContain(`<${url}>`);
+  expect(md).toContain(code);
+  // The rule still finds ACME-123 (it runs on the message), and its text is broken, not its address.
+  expect(md).toContain(`for\\-${B}[ACME\\-${B}123](https://linear.app/acme/issue/ACME-123)`);
+  // Without the breaks, it is the Markdown drawn before.
+  expect(md.replaceAll(B, "")).toBe(plain);
+  // Quote lines too.
+  expect(promptMd(`> ${TOKEN}\nok`, { per: 30 }).md).toContain(`> pre\\-${B}merge`);
+});
+
+test("quoteText drops HYPHEN_BREAK, so a copied piece of a drawn bubble pastes as typed", () => {
+  const B = HYPHEN_BREAK;
+  expect(quoteText(`see pre-${B}merge-${B}check`).text).toBe("> see pre-merge-check\n\n");
+});
