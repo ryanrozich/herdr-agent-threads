@@ -58,7 +58,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -171,9 +171,18 @@ const TOP_BAND = 32;
 // The settings card: at most this wide, and the heights of its fixed parts (the title, the
 // tab row and the foot), so its rows get the rest of the room.
 const CARD_W = 440;
-const CARD_HEAD = 36;
-const CARD_TABS = 32;
-const CARD_FOOT = 38;
+const CARD_HEAD = 40;
+const CARD_TABS = 36;
+const CARD_FOOT = 40;
+// Its gap to the pane's sides and bottom.
+const CARD_GAP = 12;
+// Its bands' side inset: 16 px, or 12 under a 320 px card.
+const cardPad = (w) => (w < 320 ? 12 : 16);
+// A color dot on the card, across (settings-spacing 2).
+const SWATCH = 24;
+// A text button's size: the usual, and the card's, which is the height of its rows' controls.
+const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
+const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 // Its tabs. The Trajectory tab joins them with the Trajectory (draft PR 94).
 const SETTING_TABS = [["general", "General"], ["chat", "Chat"]];
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
@@ -1066,6 +1075,7 @@ export default class Threads extends View {
     this.filtering = false;
     this.keysOpen = false;
     this.detailsOpen = false;
+    this.quietRail();
     this.setTab = "chat";
     this.setPage = "main";
     this.quoteDraft = null;
@@ -1077,6 +1087,20 @@ export default class Threads extends View {
   closeSettings() {
     this.settingsOpen = false;
     this.dropField();
+  }
+  // While the settings card or the keys sheet is open, it and its clear layer are all that
+  // react: nothing under them takes a hover, a press or the wheel (settings-spacing 7). The
+  // kit has no call that keeps a hover from reaching what lies under a layer, so each part
+  // under it asks: the rail, its ticks and their cards, the list's presses, pointer and
+  // wheel, and the rows' hover fills, reveals and info cards.
+  covered() { return Boolean(this.settingsOpen || this.keysOpen); }
+  // A card or sheet opening drops the rail's hover, so no tick card waits under it to come
+  // back when it closes.
+  quietRail() {
+    this.railHover = null;
+    this.railCardOn = false;
+    this.railLeave = null;
+    this.railQuiet = null;
   }
   setQuoteField(v) {
     this.quoteSetting = true;
@@ -4184,7 +4208,7 @@ export default class Threads extends View {
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": return this.setSettings(!this.settingsOpen);
-      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; } return true;
+      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
       case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
@@ -5425,18 +5449,24 @@ export default class Threads extends View {
 
   // ---- the settings card (, or the sliders icon) ----
   // A card over the list, under the icons at the top right, CARD_W wide at most (the pane
-  // less 10 px each side when narrower). The keys sheet's two pieces: a clear layer over the
+  // less 12 px each side when narrower). The keys sheet's two pieces: a clear layer over the
   // pane closes it on a press anywhere else in the pane, and the card stops the press. A press
   // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. The title, the
   // tabs and the preview stay put while the rows scroll under them; the session's line and
   // "? keys" sit at the foot. Two tabs, General and Chat, and it opens on Chat, the tab of the
   // pane it was opened from. The Trajectory tab comes with the Trajectory (draft PR 94).
+  // Spacing (settings-spacing): every band has the same side inset (cardPad), so the title,
+  // the tabs, the labels and the foot share one left edge and the controls one right edge.
+  // While it is open nothing under it reacts (covered()), and the wheel moves only the card:
+  // the clear layer keeps the wheel from the list. No scrim, so the colors and the text size
+  // are chosen against the real list; the border and a deep shadow mark the layer.
   settingsCard(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
     const top = this.floating() ? TOP_BAND : 46;
-    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - 8);
+    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - CARD_GAP);
     const w = this.setCardW();
+    const pad = cardPad(w);
     const fixed = CARD_HEAD + (links ? 0 : CARD_TABS + this.previewH(w)) + CARD_FOOT + 2;
     const bodyMax = Math.max(60, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
@@ -5445,38 +5475,42 @@ export default class Threads extends View {
     const rows = links ? this.linkRulesRows(t, w) : this.setTab === "general" ? this.generalRows(t, w) : this.chatRows(t, w);
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
-      .child(v_flex().id("th-set-card").absolute().top(top).right(10).w(w)
-        .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
+      // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+      .child(v_flex().id("th-set-card").absolute().top(top).right(CARD_GAP).w(w)
+        .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_2xl()
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
-        .child(this.cardHead(t, links, close))
-        .when(!links, (el) => el.child(this.cardTabs(t)).child(this.cardPreview(t, w)))
+        .child(this.cardHead(t, links, close, pad))
+        .when(!links, (el) => el.child(this.cardTabs(t, pad)).child(this.cardPreview(t, w)))
         .child(v_flex().id(`th-set-body-${key}`).flex_none().h(bodyH).overflow_y_scrollbar()
-          .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(12).pt(10).pb(12).gap(14)
+          .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
             .on_size_change((size, cx) => {
               const h = size.height / this.zoom();
               if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
             })
             .children(rows)))
-        .child(this.cardFoot(t)));
+        .child(this.cardFoot(t, pad)));
   }
-  setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 20)); }
+  setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 2 * CARD_GAP)); }
 
-  cardHead(t, links, close) {
-    return h_flex().flex_none().h(CARD_HEAD).px(12).gap(8).items_center().border_b(1).border_color(t.border)
-      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.setPage = "main"; cx.notify(); })))
-      .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
-      .when(!links, (el) => el.child(this.kbd(t, ",")))
-      .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close));
+  // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
+  // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
+  cardHead(t, links, close, pad) {
+    return h_flex().flex_none().h(CARD_HEAD).px(pad).gap(8).items_center().border_b(1).border_color(t.border)
+      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.setPage = "main"; cx.notify(); }).ml(-5)))
+      .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
+      .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
   }
 
-  cardTabs(t) {
-    return h_flex().flex_none().h(CARD_TABS).px(8).gap(2).border_b(1).border_color(t.border)
+  // Each tab has 10 px each side, so the first tab's word starts on the inset.
+  cardTabs(t, pad) {
+    return h_flex().flex_none().h(CARD_TABS).px(pad - 10).gap(2).border_b(1).border_color(t.border)
       .children(SETTING_TABS.map(([k, word]) => {
         const on = k === this.setTab;
-        return div().id(`th-set-tab-${k}`).flex_none().h_full().px(9).flex().items_center().cursor_pointer()
+        return div().id(`th-set-tab-${k}`).flex_none().h_full().px(10).flex().items_center().cursor_pointer()
           .border_b(2).border_color(on ? t.accent : CLEAR)
-          .text_size(12.5).font_medium().text_color(on ? t.foreground : t.muted)
+          .text_size(13).font_medium().text_color(on ? t.foreground : t.muted)
           .hover((s) => s.text_color(t.foreground))
           .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setTab = k; cx.notify(); })
           .child(word);
@@ -5486,18 +5520,21 @@ export default class Threads extends View {
   // The preview, pinned under the tabs: an agent's bubble and yours, drawn from the settings
   // the list uses. Text size, both colors, the time (an agent's only with Always show time;
   // yours stands for the selected turn), agent messages hidden (the agent's bubble fades and
-  // says so) and the rail's side (four ticks on that edge). One line each: a bubble too long
-  // for its half takes the short words, and is cut past that.
-  previewH() { return this.rt().line + 2 * ROW.BUBBLE_PY + 2 * 16 + 2 * 2 + 16; }
+  // says so) and the rail's side (four ticks on that side, inside the inset). The text is at
+  // the real size, never scaled, since text size is one of the things it shows: the sample is
+  // short instead ("From an agent", "From the user"), each bubble at most 45% of the band and
+  // cut past that, with 10 px above and below. Bubbles are padded and rounded as in the list.
+  previewH() { return this.rt().line + 2 * ROW.BUBBLE_PY + 2 * 16 + 2 * 2 + 2 * 10; }
   cardPreview(t, w) {
     const P = this.prefs;
     const rt = this.rt();
-    const half = (w - 32 - 12) / 2 - 2 * ROW.BUBBLE_PX;
-    const fits = (s) => s.length * rt.size * PROSE_EM <= half;
-    const words = (long, short) => (fits(long) ? long : short);
+    const pad = cardPad(w);
+    // The rail's side: the ticks on the inset, 8 px wide, then 12 px to the bubbles.
+    const railPad = pad + 8 + 12;
+    const most = Math.floor(w * 0.45);
     const bubble = (agent, text) => {
       const look = this.bubbleLook(t, agent);
-      return this.readFont(div()).flex_none().max_w_full().min_w(0).truncate().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY)
+      return this.readFont(div()).flex_none().max_w(most).min_w(0).truncate().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY)
         .bg(look.style.fill).text_color(look.theme.foreground).text_size(rt.size).line_height(`${rt.line}px`)
         .when(look.style.outline, (el) => el.border_1().border_color(t.border))
         .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
@@ -5506,19 +5543,20 @@ export default class Threads extends View {
     };
     const line = (text, color) => div().flex_none().h(16).max_w_full().truncate().text_size(11.5).text_color(color).child(text);
     const hidden = !P.agentTurns;
-    const label = hidden ? words("Agent · hidden in the list", "Agent · hidden") : "Agent";
+    const half = (w - pad - railPad - 12) / 2;
+    const label = hidden ? ("Agent · hidden in the list".length * 11.5 * PROSE_EM <= half ? "Agent · hidden in the list" : "Agent · hidden") : "Agent";
     const left = this.railLeft();
-    const ticks = v_flex().absolute().top(14).gap(9).when(left, (el) => el.left(5)).when(!left, (el) => el.right(5))
+    const ticks = v_flex().absolute().top(14).gap(9).when(left, (el) => el.left(pad)).when(!left, (el) => el.right(pad))
       .children([0, 1, 2, 3].map((i) => div().w(8).h(i === 2 ? 3 : 2).rounded(1).bg(i === 2 ? t.accent : alpha(t.muted, 0.5))));
-    return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? 20 : 12).pr(left ? 12 : 20).gap(12).items_center()
+    return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? railPad : pad).pr(left ? pad : railPad).py(10).gap(12).items_center()
       .border_b(1).border_color(t.border).bg(t.background)
       .child(v_flex().flex_1().min_w(0).gap(2).items_start().when(hidden, (el) => el.opacity(0.45))
         .child(line(label, this.agentColor(t)))
-        .child(bubble(true, words("A message from an agent", "From an agent")))
+        .child(bubble(true, "From an agent"))
         .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
       .child(v_flex().flex_1().min_w(0).gap(2).items_end()
         .child(line("", t.dim))
-        .child(bubble(false, words("A message from the user", "From the user")))
+        .child(bubble(false, "From the user"))
         .child(line(fmtTime(PREVIEW_AT), t.dim)))
       .child(ticks);
   }
@@ -5526,31 +5564,36 @@ export default class Threads extends View {
   // The card's foot, under the scroll: the agent, the turn count and the session's title (the
   // floating top has no header to hold them), and "? keys", the way to every key while the key
   // hints are off.
-  cardFoot(t) {
-    return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(12).gap(8).items_center().border_t(1).border_color(t.border)
+  cardFoot(t, pad) {
+    return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
       .child(this.floating() ? this.aboutRow(t) : div().flex_1())
       .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
-        .child(this.kbd(t, "?")).child(div().flex_none().text_size(11.5).text_color(t.dim).child("keys")));
+        .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
   }
 
-  // The pieces every row of the card is made of.
+  // The pieces every row of the card is made of. A row is 28 px high at least, 4 px from the
+  // next in its group; a group's label is 6 px over its first row, and groups are 20 px apart
+  // (the rows' gap). Text a person reads is muted at the faintest; dim is for decoration.
   cardKit(t) {
-    const label = (text) => div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(text);
-    const note = (text, color = t.dim) => div().text_size(11.5).line_height("16px").text_color(color).child(text);
-    const group = (title, kids) => v_flex().gap(8)
-      .child(div().text_size(11).font_semibold().text_color(t.muted).child(title))
+    const label = (text) => div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child(text);
+    const note = (text, color = t.muted) => div().text_size(12).line_height("16px").text_color(color).child(text);
+    const group = (title, kids) => v_flex().gap(4)
+      .child(div().mb(2).text_size(11).font_semibold().text_color(t.muted).child(title))
       .children(kids.filter(Boolean));
-    const toggle = (on) => div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center()
-      .when(on, (el) => el.justify_end()).bg(on ? t.ansi5 : t.border)
-      .child(div().size(12).rounded(6).bg(on ? t.background : t.muted));
+    // 32 by 18 with a 14 px knob. Off, the track has an outline, since the track alone barely
+    // shows on the card; the outline takes a px of the padding so the knob stays put.
+    const toggle = (on) => div().flex_none().w(32).h(18).rounded(9).flex().items_center()
+      .when(on, (el) => el.p(2).justify_end().bg(t.ansi5))
+      .when(!on, (el) => el.p(1).bg(t.border).border_1().border_color(alpha(t.muted, 0.5)))
+      .child(div().size(14).rounded(7).bg(on ? t.background : t.muted));
     // A switch row: the whole row flips it.
-    const sw = (id, text, on, act, value = null) => h_flex().id(id).min_h(24).gap(8).items_center().cursor_pointer()
+    const sw = (id, text, on, act, value = null) => h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer()
       .on_click((_e, cx) => { cx.stop_propagation(); this.action(act, cx); cx.notify(); })
       .child(label(text))
-      .when(Boolean(value), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(value)))
+      .when(Boolean(value), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(value)))
       .child(toggle(on));
-    const step = (id, icon, act, ok) => div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5)
+    const step = (id, icon, act, ok) => div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(6)
       .border_1().border_color(t.border).bg(t.background).cursor_pointer()
       .when(!ok, (el) => el.opacity(0.4))
       .hover((s) => s.bg(t.hover))
@@ -5559,32 +5602,34 @@ export default class Threads extends View {
     const stepper = (key, name) => {
       const [lo, hi] = RANGES[key];
       const v = this.prefs[key];
-      return h_flex().min_h(24).gap(6).items_center()
+      return h_flex().min_h(28).gap(6).items_center()
         .child(label(name))
         .child(step(`th-${key}-minus`, "minus", `${key}:-`, v > lo))
-        .child(div().flex_none().w(20).text_center().text_size(12.5).font_family(this.mono()).text_color(t.foreground).child(String(v)))
+        .child(div().flex_none().w(20).text_center().text_size(13).font_family(this.mono()).text_color(t.foreground).child(String(v)))
         .child(step(`th-${key}-plus`, "plus", `${key}:+`, v < hi));
     };
-    // A chooser: each choice its icon and its word, the chosen one filled.
+    // A chooser: each choice its icon and its word, the chosen one filled. 28 px high, as a row.
     const choose = (id, cur, opts, act) => h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
-      .children(opts.map(([v, word, icon]) => h_flex().id(`${id}-${v}`).flex_none().h(22).px(7).gap(5).items_center().rounded(4).cursor_pointer()
+      .children(opts.map(([v, word, icon]) => h_flex().id(`${id}-${v}`).flex_none().h(22).px(8).gap(5).items_center().rounded(4).cursor_pointer()
         .text_size(12).bg(v === cur ? t.hover : alpha(t.hover, 0)).text_color(v === cur ? t.foreground : t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${act}:${v}`, cx); cx.notify(); })
         .child(svg(ICON(icon)).size(13).flex_none())
         .child(word)));
-    const row = (text, ctl) => h_flex().min_h(24).gap(8).items_center().flex_wrap().child(label(text)).child(ctl);
+    const row = (text, ctl) => h_flex().min_h(28).gap(8).items_center().flex_wrap().child(label(text)).child(ctl);
     return { label, note, group, sw, stepper, choose, row };
   }
 
-  // Reset to defaults, at the end of each tab's rows: every control on the card, dim when
-  // every one is at its default. Link rules and the quote key are never touched.
-  resetRow(t, w) {
+  // Reset to defaults, at the end of each tab's rows: every control on the card, faded when
+  // every one is at its default. Link rules and the quote key are never touched, which the
+  // line under the button says.
+  resetRow(t) {
     const differ = this.prefsDiffer();
-    return h_flex().gap(10).items_center().flex_wrap()
-      .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); }, "refresh")
+    const { note } = this.cardKit(t);
+    return v_flex().gap(6).items_start()
+      .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); }, "refresh", CARD_BUTTON)
         .when(!differ, (el) => el.opacity(0.45)))
-      .child(div().text_size(11.5).text_color(t.dim).child(w < 360 ? "Rules and the quote key stay." : "Link rules and the quote key stay."));
+      .child(note("Link rules and the quote key stay."));
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
@@ -5603,25 +5648,25 @@ export default class Threads extends View {
         sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
       ]),
       group("Colors", [
-        this.colorRow(t, "bubbleColor", "User messages"),
-        this.colorRow(t, "agentBubbleColor", "Agent messages"),
+        this.colorRow(t, "bubbleColor", "User messages", w),
+        this.colorRow(t, "agentBubbleColor", "Agent messages", w),
       ]),
       group("Links and keys", [
-        h_flex().id("th-set-links").min_h(24).gap(8).items_center().cursor_pointer().rounded(5)
+        h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
           .hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
-          .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child("Link rules"))
-          .child(div().flex_none().text_size(11.5).text_color(t.dim).child(n ? String(n) : "None"))
-          .when(bad > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.blocked).child(`${bad} not working`)))
+          .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
+          .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+          .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
           .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)),
         v_flex().gap(4)
-          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(34).h(24).px(6).items_center().rounded(5)
+          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
             .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-            .child(Input.new(this.quoteInput).w_full().h_full().text_size(12.5).font_family(this.mono()).text_color(t.foreground))))
-          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.dim : t.blocked))),
+            .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked))),
       ]),
       group("File", [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null]),
-      this.resetRow(t, w),
+      this.resetRow(t),
     ];
   }
 
@@ -5634,7 +5679,7 @@ export default class Threads extends View {
       group("Messages", [
         sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
         sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
-        P.truncate ? v_flex().pl(14).gap(6).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
+        P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
         sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
       ]),
       group("Layout", [
@@ -5643,7 +5688,7 @@ export default class Threads extends View {
         note(this.widthNote()),
         sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth"),
       ]),
-      this.resetRow(t, w),
+      this.resetRow(t),
     ];
   }
 
@@ -5653,7 +5698,7 @@ export default class Threads extends View {
     const pw = this.pw();
     const room = Math.max(1, pw - 2 * gutter(pw));
     const want = this.prefs.width === "full" ? room : readType(this.prefs.textSize, this.chars()).measure;
-    const inner = w - 24;
+    const inner = w - 2 * cardPad(w);
     const col = Math.max(4, Math.round((Math.min(want, room) / Math.max(1, pw)) * inner));
     return div().id("th-set-ruler").relative().w(inner).h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
       .child(div().absolute().top(0).h(4).rounded(2).left(Math.round((inner - col) / 2)).w(col).bg(t.muted));
@@ -5668,34 +5713,47 @@ export default class Threads extends View {
 
   // A message color: its name, then a dot for each preset (ui.js BUBBLES) and, when the file
   // holds one, its own #rrggbb. The color's name is the dot's tooltip; the chosen one has a
-  // ring.
-  colorRow(t, key, name) {
+  // ring. Each dot is 24 px across (a 16 px color in a 2 px ring and 2 px of air), 2 px apart.
+  // On one line with the name when they fit beside its 96 px; else the name above and the dots
+  // 6 px under it, from the left edge. Plain, and a color drawn as an outline, get a muted
+  // edge, since their fill alone barely shows on the card.
+  colorRow(t, key, name, w) {
     const cur = this.prefs[key];
     const agent = key === "agentBubbleColor";
     const names = Object.keys(BUBBLES);
     const list = cur.startsWith("#") ? [...names, cur] : names;
     const word = (v) => (v.startsWith("#") ? v : `${v[0].toUpperCase()}${v.slice(1)}`);
-    return h_flex().gap(8).items_center().flex_wrap()
-      .child(div().flex_1().min_w(90).text_size(12.5).text_color(t.foreground).child(name))
-      .child(h_flex().flex_none().gap(4).flex_wrap().children(list.map((v) => {
-        const st = bubbleStyle(v, t, agent);
-        const on = v === cur;
-        return div().id(`th-${key}-${v}`).flex_none().size(22).rounded(11).p(2).cursor_pointer()
-          .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
-          .tooltip(`${word(v)}${v === DEFAULTS[key] ? " · default" : ""}`)
-          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
-          .child(div().size_full().rounded(9).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.border : st.fill));
-      })));
+    const dotsW = list.length * SWATCH + (list.length - 1) * 2;
+    const oneLine = 96 + 8 + dotsW <= w - 2 * cardPad(w);
+    const dots = h_flex().flex_none().gap(2).flex_wrap().children(list.map((v) => {
+      const st = bubbleStyle(v, t, agent);
+      const on = v === cur;
+      return div().id(`th-${key}-${v}`).flex_none().size(SWATCH).rounded(SWATCH / 2).p(2).cursor_pointer()
+        .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
+        .tooltip(`${word(v)}${v === DEFAULTS[key] ? " · default" : ""}`)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
+        .child(div().size_full().rounded(8).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.muted : st.fill));
+    }));
+    const title = div().text_size(13).text_color(t.foreground).child(name);
+    return oneLine
+      ? h_flex().id(`th-${key}-row`).min_h(28).gap(8).items_center().child(title.flex_1().min_w(96)).child(dots)
+      : v_flex().id(`th-${key}-row`).gap(6).child(title).child(dots);
   }
 
-  // The settings file: its path, Open (the system's open command, after writing the file
-  // when there is none yet) and Copy path, which says "Copied" in its own place.
+  // The settings file: its path, cut at a slash from its start so it begins with a whole
+  // folder (cutPath), with the whole path in its tooltip, and Copy path, which says "Copied"
+  // in its own place. Under a 320 px card the button says Copy.
   fileRow(t, w) {
     const copied = this.copied?.id === "settings-path";
+    const word = copied ? "Copied" : w < 320 ? "Copy" : "Copy path";
+    const path = tilde(this.prefsPath());
+    // The button: its padding and border, the icon and its gap, and the word.
+    const button = 2 * CARD_BUTTON.px + 2 + CARD_BUTTON.icon + CARD_BUTTON.gap + Math.ceil(word.length * 12 * 0.55);
+    const room = w - 2 * cardPad(w) - 6 - button;
     return h_flex().gap(6).items_center()
-      .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(this.mono()).text_color(t.dim)
-        .tooltip(tilde(this.prefsPath())).child(tilde(this.prefsPath())))
-      .child(this.button(t, "th-set-copy", copied ? "Copied" : w < 360 ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy"));
+      .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
+        .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
+      .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
   }
 
   // The quote key field's note: a letter that cannot be the quote key, and why it stays.
@@ -5838,11 +5896,11 @@ export default class Threads extends View {
       .when(buttons.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(buttons)));
   }
 
-  button(t, id, label, onClick, icon) {
-    return h_flex().id(id).h(26).px(9).gap(5).items_center().rounded(6).cursor_pointer().bg(t.raised).border_1().border_color(t.border)
+  button(t, id, label, onClick, icon, size = BUTTON) {
+    return h_flex().id(id).h(size.h).px(size.px).gap(size.gap).items_center().rounded(6).cursor_pointer().bg(t.raised).border_1().border_color(t.border)
       .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
       .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
-      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(13).text_color(t.muted)))
+      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(size.icon).text_color(t.muted)))
       .child(label);
   }
 
@@ -6058,6 +6116,7 @@ export default class Threads extends View {
     const strip = !this.floating() && this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e, cx) => {
+        if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
         this.notePointer(e.position, cx);
@@ -6065,6 +6124,7 @@ export default class Threads extends View {
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
       .on_mouse_down("left", (e, cx) => {
+        if (this.covered()) return;
         const x = e.local_position?.x;
         const w = e.bounds?.width;
         // In the column's own px: a centred column starts colLeft() in.
@@ -6082,7 +6142,7 @@ export default class Threads extends View {
         .when(Boolean(sticky), (el) => el.child(div().id("th-sticky-day").child(this.dayPill(t, sticky))))))
       .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
-        .on_scroll_wheel((e) => this.listWheel(e))
+        .on_scroll_wheel((e) => { if (!this.covered()) this.listWheel(e); })
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full()
           .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
@@ -6970,7 +7030,7 @@ export default class Threads extends View {
   // Hover reveal: an element whose text and icons are clear at rest and dim while the
   // pointer is on it. Children that set no colour of their own take it. gpui restyles only
   // the hovered element itself, so the strip a hover reveals must sit inside that element.
-  reveal(t, el) { return el.text_color(CLEAR).hover((s) => s.text_color(t.dim)); }
+  reveal(t, el) { return el.text_color(CLEAR).when(!this.covered(), (x) => x.hover((s) => s.text_color(t.dim))); }
 
   // The strip under a bubble (ui.js stripLayout): on the selected turn, copy the prompt, the
   // pin (in the accent colour when the turn is pinned) and "#7 · 9:12 AM", at the bubble's
@@ -7034,7 +7094,7 @@ export default class Threads extends View {
   // which would draw a second card.
   lineIcon(t, itemKey, key, probe) {
     const state = this.infoState(key);
-    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard))) return { state };
+    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard || this.covered()))) return { state };
     const turn = this.findTurn(key);
     if (!turn || this.detailsAnchor(key) !== itemKey) return { state };
     const up = this.detailsDir(itemKey, turn) === "up";
@@ -7266,7 +7326,7 @@ export default class Threads extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(size).text_color(c).child(text));
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
       .child(v_flex().flex_1().min_w(0).gap(P.GAP)
@@ -7304,7 +7364,7 @@ export default class Threads extends View {
       : turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
     return h_flex().w_full().h(outlineHeight(this.prefs.textSize)).relative().px(ROW.PAD_X).gap(8).items_center().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().w(r.numW).text_size(11.5).font_family(this.mono()).text_color(sel ? t.muted : t.dim).child(`#${turn.n}`))
       .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
       .when(Boolean(icon), (el) => el.child(icon))
@@ -7892,6 +7952,8 @@ export default class Threads extends View {
     const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
+      // Nothing under the sheet takes the wheel (covered()).
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
@@ -8136,7 +8198,9 @@ export default class Threads extends View {
     const left = this.railLeft();
     // The peak: each tick's width from its distance in px to the hovered tick, set in the draw
     // that opens the card. Distances count the day gaps.
-    const hi = this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
+    // Under the settings card or the keys sheet the rail takes no hover, press or wheel.
+    const quiet = this.covered();
+    const hi = quiet || this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
     let ys = null;
     if (hi >= 0) {
       ys = [];
@@ -8145,8 +8209,9 @@ export default class Threads extends View {
     }
     // The pointer on the rail holds its window (railTicks).
     const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center()
-      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
-      .on_scroll_wheel((e, cx) => this.railWheel(e, cx));
+      .when(!quiet, (el) => el
+        .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
+        .on_scroll_wheel((e, cx) => this.railWheel(e, cx)));
     // A cut end has a 9 px row past it, holding a dot for a pin or the running turn that lies
     // that way; a press brings it into the window.
     const endRow = (id, d, above) => {
@@ -8155,9 +8220,11 @@ export default class Threads extends View {
       const turn = this.railMemo.all[d.i].turns[0].turn;
       const dot = div().absolute().top((L.pitch - RAIL.DOT) / 2).size(RAIL.DOT).rounded(RAIL.DOT / 2).bg(d.live ? busy : t.accent)
         .when(d.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
+      const place = left ? dot.left(look.right + 3) : dot.right(look.right + 3);
+      if (quiet) return row.child(place);
       return row.cursor_pointer().tooltip(`${d.live ? "Working" : "Pinned"} #${turn.n} ${above ? "above" : "below"}`)
         .on_click((_e, cx) => { cx.stop_propagation(); this.railReveal(d.i, cx); })
-        .child(left ? dot.left(look.right + 3) : dot.right(look.right + 3));
+        .child(place);
     };
     return (left ? rail.left(0).items_start() : rail.right(0).items_end())
       .when(cut, (el) => el.child(endRow("th-rail-up", dotTop, true)))
@@ -8174,10 +8241,11 @@ export default class Threads extends View {
         const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
           .transition("width", { duration: RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
-          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.railCardClose(k.key); this.railJump(k.key, cx); })
+        const still = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
+          .when(k.dayStart, (el) => el.mt(RAIL.DAY))
           .child(left ? mark.left(look.right) : mark.right(look.right));
+        if (quiet) return still;
+        const tick = still.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); this.railCardClose(k.key); this.railJump(k.key, cx); });
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));

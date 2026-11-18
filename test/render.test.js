@@ -7968,10 +7968,11 @@ test("the settings card: over the list, opens on Chat with the keyboard, closes 
   expect(ids).toEqual(expect.arrayContaining(["th-set-card", "th-set-close", "th-set-tab-general", "th-set-tab-chat", "th-set-preview", "th-set-foot", "th-set-keys"]));
   expect(ids.filter((x) => x.startsWith("th-set-tab-"))).toEqual(["th-set-tab-general", "th-set-tab-chat"]);
   expect(ids).not.toContain("th-top");
-  // 440 px at most, and the pane less 10 px each side when narrower.
+  // 440 px at most, 12 px from the pane's right edge, and the pane less 12 px each side when narrower.
+  expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 3]).toEqual(["right", 12]);
   expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 4]).toEqual(["w", 440]);
   v.paneW = 360;
-  expect(v.setCardW()).toBe(340);
+  expect(v.setCardW()).toBe(336);
   v.paneW = 573;
   // A press on the card stays in it; a press anywhere else in the pane closes it, and selects nothing.
   const sel = v.sel;
@@ -8054,20 +8055,29 @@ test("the preview follows text size, both colors, the time, hidden agent message
   v.action("settings", cx);
   const pv = () => { rec = []; v.cardPreview(theme, 440); const c = rec; rec = null; return c; };
   let c = pv();
-  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "A message from an agent", "A message from the user", "9:12 AM"]));
+  // The short words always, at the real text size, each bubble at most 45% of the band.
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "From an agent", "From the user", "9:12 AM"]));
   expect(strsOf(c)).not.toContain("9:10 AM");
   expect(c).toContainEqual(["opacity", 0.45]);
   expect(c).toContainEqual(["bg", "#87643A"]); // amber
   expect(c).toContainEqual(["text_size", 14]);
-  expect(c).toContainEqual(["right", 5]);
+  expect(c.filter((e) => e[0] === "max_w")).toEqual([["max_w", 198], ["max_w", 198]]);
+  // 10 px above and below: the line height plus 68.
+  expect(v.previewH()).toBe(v.rt().line + 68);
+  expect(c).toContainEqual(["py", 10]);
+  // The ticks on the inset (16 px in), and 36 px on the rail's side to the bubbles.
+  expect(c).toContainEqual(["right", 16]);
+  expect(c).toContainEqual(["pl", 16]);
+  expect(c).toContainEqual(["pr", 36]);
   v.prefs = { ...v.prefs, agentTurns: true, alwaysShowTime: true, textSize: 16, railSide: "left", agentBubbleColor: "teal" };
   c = pv();
   expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent", "9:10 AM"]));
   expect(c).not.toContainEqual(["opacity", 0.45]);
   expect(c).toContainEqual(["bg", "#36706D"]);
   expect(c).toContainEqual(["text_size", 16]);
-  expect(c).toContainEqual(["left", 5]);
-  // A narrow card shortens the words to keep one line.
+  expect(c).toContainEqual(["left", 16]);
+  expect(c).toContainEqual(["pl", 36]);
+  // A narrow card shortens the label to keep one line.
   v.prefs = { ...v.prefs, agentTurns: false };
   expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From the user"]));
 });
@@ -8269,18 +8279,143 @@ test("the card's rows scroll inside it: as tall as they are, up to the room abov
   v.width = 545; v.paneW = 573; v.rootH = 400;
   v.action("settings", cx);
   const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-body-chat"); return c.slice(at).find((e) => e[0] === "h")[1]; };
-  const room = 400 - 32 - 8 - (36 + 32 + v.previewH() + 38 + 2);
+  const room = 400 - 32 - 12 - (40 + 36 + v.previewH() + 40 + 2);
   expect(bodyH()).toBe(room);
   // Measured shorter than the room: the card is as tall as its rows.
   const c = cardOf(v);
-  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 150, width: 400 }, cx);
-  expect(bodyH()).toBe(150);
+  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 120, width: 400 }, cx);
+  expect(bodyH()).toBe(120);
   onOf(c, "th-set-rows-chat", "on_size_change")({ height: 900, width: 400 }, cx);
   expect(bodyH()).toBe(room);
   // The key hints take their room.
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   expect(bodyH()).toBe(room - 38);
+});
+
+// The owner, 17 Nov: pointing at the settings card near the rail set the rail off under it.
+// While the card or the keys sheet is open nothing under it takes a hover, a press or the
+// wheel (settings-spacing 7). The kit has no call that blocks a hover under a layer, so the
+// rail, the list and the rows ask (covered()).
+test("nothing under the settings card or the keys sheet reacts: the rail and its cards, the list's press, pointer and wheel, the rows' hovers", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  const rail = () => { rec = []; v.railView(theme); const r = rec; rec = null; return r; };
+  const live = (r) => r.filter((e) => ["on_hover", "on_scroll_wheel", "on_click", "tooltip"].includes(e[0])).length;
+  const hovers = () => rail().filter((e) => e[0] === "on_hover").map((e) => e[1]).slice(1);
+  let hovered = 0;
+  const el = { text_color() { return this; }, when(c, f) { return c ? f(this) : this; }, hover() { hovered++; return this; } };
+  let stopped = 0;
+  const ev = { ...cx, stop_propagation() { stopped++; } };
+  expect(live(rail())).toBeGreaterThan(0);
+  v.reveal(theme, el);
+  expect(hovered).toBe(1);
+  for (const side of ["right", "left"]) {
+    for (const page of ["main", "links"]) {
+      v.prefs = { ...v.prefs, railSide: side };
+      // A tick's card is open when the card opens: it closes, and does not come back after.
+      hovers()[1](true, cx);
+      expect(v.railHover).toBe(ks[1]);
+      v.action("settings", cx);
+      v.setPage = page;
+      expect(v.settingsOpen).toBe(true);
+      expect(v.railHover).toBe(null);
+      const r = rail();
+      expect(live(r)).toBe(0);
+      expect(idsIn(r).some((x) => x.startsWith("th-tick-card-") || x === "th-rail-card")).toBe(false);
+      const c = frame(v, cx);
+      // The list: a press, the pointer and the wheel do nothing.
+      const press = v.pressAt;
+      const moved = v.mouseX;
+      onOf(c, "threads-body", "on_mouse_move")({ position: { x: 9, y: 9 }, local_position: { x: 9, y: 9 } }, cx);
+      onOf(c, "threads-body", "on_mouse_down")({ position: { x: 5, y: 5 }, local_position: { x: 5, y: 5 }, bounds: { width: 500 }, click_count: 2 }, cx);
+      expect(v.pressAt).toBe(press);
+      expect(v.mouseX).toBe(moved);
+      v.follow = true;
+      onOf(c, "threads-listbox", "on_scroll_wheel")({ delta: { y: 40 } }, cx);
+      expect(v.follow).toBe(true);
+      // The rows: no hover fill, no reveal, no info card.
+      hovered = 0;
+      v.reveal(theme, el);
+      expect(hovered).toBe(0);
+      expect(c.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-hover-"))).toEqual([]);
+      // The wheel over the card or its clear layer stops at the layer, after the card's own
+      // scroll (drawn over it) has run.
+      stopped = 0;
+      onOf(c, "th-set-catch", "on_scroll_wheel")({ delta: { y: 40 } }, ev);
+      expect(stopped).toBe(1);
+      v.closeSettings();
+      expect(live(rail())).toBeGreaterThan(0);
+    }
+  }
+  // The keys sheet too.
+  v.action("keys", cx);
+  expect(v.keysOpen).toBe(true);
+  expect(live(rail())).toBe(0);
+  const c = frame(v, cx);
+  stopped = 0;
+  onOf(c, "th-keys-scrim", "on_scroll_wheel")({ delta: { y: 40 } }, ev);
+  expect(stopped).toBe(1);
+  v.action("keys", cx);
+  expect(live(rail())).toBeGreaterThan(0);
+  hovered = 0;
+  v.reveal(theme, el);
+  expect(hovered).toBe(1);
+});
+
+// settings-spacing 1 to 5 and 8: one inset on every band, so the title, the tabs, the labels
+// and the foot share a left edge; a 4 px grid; the comma key's cap gone from the head (it is
+// in the sliders icon's tooltip and on the keys sheet); readable text no fainter than muted.
+test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 px tabs, 28 px rows, muted helper text, no comma key in the head", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "general";
+  const muted = theme.muted;
+  const of = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  // From an element's id to the next id.
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  const head = of(() => v.cardHead(theme, false, () => {}, 16));
+  for (const x of [["h", 40], ["px", 16], ["text_size", 14], ["mr", -5]]) expect(head).toContainEqual(x);
+  expect(strsOf(head)).toEqual(["Settings"]);
+  expect(of(() => v.cardHead(theme, true, () => {}, 16))).toContainEqual(["ml", -5]);
+  const tabs = of(() => v.cardTabs(theme, 16));
+  for (const x of [["h", 36], ["px", 6], ["px", 10], ["text_size", 13]]) expect(tabs).toContainEqual(x);
+  const foot = of(() => v.cardFoot(theme, 16));
+  for (const x of [["h", 40], ["px", 16], ["text_size", 12], ["text_color", muted]]) expect(foot).toContainEqual(x);
+  let c = cardOf(v);
+  for (const x of [["px", 16], ["py", 16], ["gap", 20]]) expect(own(c, "th-set-rows-general")).toContainEqual(x);
+  // A switch: 32 by 18 with a 14 px knob; off, its track has a muted outline.
+  const hints = own(c, "th-set-hints");
+  for (const x of [["min_h", 28], ["w", 32], ["h", 18], ["size", 14], ["border_1"]]) expect(hints).toContainEqual(x);
+  // The colors: one line beside the name at 440, 24 px dots 2 px apart, Plain with a muted edge.
+  expect(own(c, "th-bubbleColor-row")).toContainEqual(["min_h", 28]);
+  expect(own(c, "th-bubbleColor-blue")).toContainEqual(["size", 24]);
+  expect(own(c, "th-bubbleColor-plain")).toContainEqual(["border_color", muted]);
+  // Reset's line is under the button, muted, whole.
+  expect(strsOf(c)).toContain("Link rules and the quote key stay.");
+  // The file's path: muted 11.5 mono, cut at a slash, whole in its tooltip.
+  const path = own(c, "th-set-path");
+  for (const x of [["text_size", 11.5], ["text_color", muted]]) expect(path).toContainEqual(x);
+  const full = path.find((e) => e[0] === "tooltip")[1];
+  const shown = strsOf(path).at(-1);
+  expect(shown === full || (shown.startsWith("…/") && full.endsWith(shown.slice(1)))).toBe(true);
+  // A 336 px card: the dots under the name, 6 px below it.
+  v.paneW = 360;
+  c = cardOf(v);
+  expect(own(c, "th-bubbleColor-row")).toContainEqual(["gap", 6]);
+  expect(strsOf(c)).toContain("Copy path");
+  // Under 320: a 12 px inset, and Copy.
+  v.paneW = 330;
+  c = cardOf(v);
+  expect(own(c, "th-set-rows-general")).toContainEqual(["px", 12]);
+  expect(strsOf(c)).toContain("Copy");
+  const narrow = strsOf(own(c, "th-set-path")).at(-1);
+  expect(narrow.startsWith("…/")).toBe(true);
+  expect(narrow.length).toBeLessThan(full.length);
 });
 
 test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {

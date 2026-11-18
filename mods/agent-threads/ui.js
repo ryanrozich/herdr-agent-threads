@@ -1785,6 +1785,17 @@ export function outLang(out, input = "", kind = "") {
   }
   return null;
 }
+// A path cut from its start to at most `max` characters at a slash, so what shows begins with
+// a whole folder: "…/agent-threads/settings.json". The file's own name stays whole even when
+// it alone is longer (the element cuts its end then).
+export function cutPath(path, max) {
+  const p = String(path ?? "");
+  if (p.length <= max) return p;
+  const parts = p.split("/");
+  let tail = parts.pop();
+  while (parts.length > 1 && `…/${parts.at(-1)}/${tail}`.length <= max) tail = `${parts.pop()}/${tail}`;
+  return `…/${tail}`;
+}
 // A call's text on its row: what it ran or read (calls.sh picks the command, path, pattern,
 // query or URL), on one line; the tool's name until that is read.
 // Paths in a level 3 line, shorter to read and with no home folder in a screenshot: a path in
