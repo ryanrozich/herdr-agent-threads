@@ -3,8 +3,8 @@
 // reinstall, which replaces mods/agent-threads/, leaves it alone). A person can edit it by
 // hand; the pane watches it and applies a change at once.
 //
-//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "plain",
-//     "agentBubbleColor": "plum", "quoteKey": "q",
+//   { "textSize": 14, "promptLines": 4, "replyLines": 6, "agentTurns": false, "bubbleColor": "blue",
+//     "agentBubbleColor": "amber", "quoteKey": "q",
 //     "links": [{ "name": "Issue", "pattern": "\\bACME-(\\d+)\\b", "url": "https://linear.app/acme/issue/ACME-$1" }] }
 //
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
@@ -12,15 +12,18 @@
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
 // agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
 // false leaves them off it (the running turn keeps its tick).
-// bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
-// bubbles, a preset name (ui.js BUBBLES; "plain", the default for the person's, is the
-// theme's own look) or "#rrggbb".
+// bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
+// bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
+// "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
+// the theme's own look) or "#rrggbb".
 // truncate: shorten long messages (false, the default: every message and reply shows in full,
 // with no Show more anywhere). On, a collapsed row shows promptLines and replyLines of each
 // with Show more, and an open turn's message and running reply are cut with Show all.
 // alwaysShowTime: keep each message's time under its bubble (false, the default: the time
 // shows under the selected turn's bubble only).
 // railSide: the side of the list the turn rail sits on, "right" (the default) or "left".
+// keyHints: the row of key hints at the pane's foot (false, the default: "? keys" at the
+// settings card's foot and ? still show every key).
 // width: how long a reading line may be, "comfortable" (70 characters, the default), "wide"
 // (90) or "full" (no limit; a bubble still stops at 90). One value for every pane.
 // readingWidth: keep the Threads pane at the width's column (true, the default): a pane that
@@ -28,10 +31,16 @@
 // with it on resizes the pane to that column; choosing Full turns it off.
 // viewerReply: the image viewer shows the turn's prompt and reply beside the image (true, the
 // default); i in the viewer shows or hides it, and the viewer writes the choice here.
-// quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
-// links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
-// terminal's git remote). No link rules ship. senders: rules that mark a typed prompt as an
-// agent message and name its sender (parseSenders). No sender rules ship.
+// quoteKey: the key that quotes a reply into the terminal; the settings card writes it.
+// links: text patterns shown as links in open cards ($0 to $9 the match and its groups;
+// {repo} and {owner} from the terminal's git remote), each with four optional keys: on
+// (false skips the rule), type ("custom", "ticket" or "pull-request", the icon it shows;
+// anything else reads as custom), description (one line of the person's own, 80 characters
+// at most) and example (text the rule should turn into a link, shown on the Link rules
+// page). The card's Link rules page writes the whole list. A fresh install (no file) has one
+// rule, the pull request rule (DEFAULT_LINKS), switched on; the first write records it.
+// senders: rules that mark a typed prompt as an agent message and name its sender
+// (parseSenders), kept as written. No sender rules ship.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -40,15 +49,15 @@ import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "
 import { MOD, PREVIOUS } from "./name.js";
 import { RULE_TEXT } from "./core/turns.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
 // Builds before it wrote every value on any change, so a file without the mark that holds
 // exactly their defaults (2 and 3) reads as the new defaults; the next save adds the mark.
-// "look": 3 marks a file written since the quiet look, whose bubble default is plain. Builds
-// before it wrote the old default, slate, on any change, so a file without the mark that
-// holds slate reads as plain; any other colour in it was the person's choice and is kept.
+// "look": 3 marks a file written since the quiet look. Builds before it wrote the old
+// default, slate, on any change, so a file without the mark that holds slate reads as the
+// default (blue); any other colour in it was the user's choice and is kept.
 export const LOOK = 3;
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }
@@ -86,14 +95,16 @@ export function parseSettings(text) {
       alwaysShowTime: typeof raw.alwaysShowTime === "boolean" ? raw.alwaysShowTime : DEFAULTS.alwaysShowTime,
       truncate: typeof raw.truncate === "boolean" ? raw.truncate : DEFAULTS.truncate,
       railSide: raw.railSide === "left" || raw.railSide === "right" ? raw.railSide : DEFAULTS.railSide,
+      keyHints: typeof raw.keyHints === "boolean" ? raw.keyHints : DEFAULTS.keyHints,
     },
     error: null,
   };
 }
 
-// ---- keys the panel reads but never rewrites: quoteKey, links and senders ----
+// ---- keys kept apart from the values: quoteKey, links and senders ----
 // They stay out of the values above, so a save made from the panel (which writes
-// {...file, ...values}) keeps them exactly as they were written, even mid-edit.
+// {...file, ...values}) keeps them exactly as they were written, even mid-edit. The card's
+// quote key field writes quoteKey alone, as an extra (settingsText).
 
 // quoteKey: one lowercase letter a–z the panel does not already use. Anything else falls
 // back to q, with a note. { key, note }.
@@ -203,36 +214,116 @@ function patternRuns(re, pattern, max) {
   return null;
 }
 
-// links: [{ name, pattern, url }] → { rules, notes }. A rule is dropped, with a note, when
+// A rule's type: the icon the Link rules page shows for it, and nothing else.
+export const LINK_TYPES = Object.freeze(["custom", "ticket", "pull-request"]);
+export const DESCRIPTION_MAX = 80;
+const EXAMPLE_MAX = 200;
+
+// links: [{ name, pattern, url, on?, type?, description?, example? }] → { rules, notes, list }.
+// A rule is not working, with a note, when
 // it has no pattern or URL, the pattern is over 200 characters, does not compile, matches
 // the empty string, has a nested quantifier, an alternation under a quantifier or a
-// backreference, takes over 5 ms on a hostile probe (up to 33 characters), its URL template is not a fixed http(s) host, or it is past the 20th.
-// Each kept rule: { n, name, re (global), url, host, repo (uses {repo} or {owner}) }.
+// backreference, takes over 5 ms on a hostile probe (up to 33 characters) or over 3 ms on a run of one kind of
+// character (up to 2,048), its URL template is not a fixed http(s) host, or it is past the 20th.
+// Each kept rule: { n, name, re (global), url, host, repo (uses {repo} or {owner}) }. A rule
+// with on: false is kept out of rules (it links nothing and takes no text from the rules
+// below it) and has no note. list: one entry a rule in the file, for the Link rules page:
+// { n, name, type, description, example, on, pattern, url, why (null when it works), rule }.
 export function parseLinks(raw) {
   const rules = [];
   const notes = [];
-  if (raw == null) return { rules, notes };
-  if (!Array.isArray(raw)) return { rules, notes: ["links is not a list; no link rules"] };
+  const list = [];
+  if (raw == null) return { rules, notes, list };
+  if (!Array.isArray(raw)) return { rules, notes: ["links is not a list; no link rules"], list };
   raw.forEach((r, i) => {
     const n = i + 1;
-    const no = (why) => notes.push(`Link rule ${n}: ${why}`);
-    if (i >= MAX_RULES) return no(`past the ${MAX_RULES}th rule; ignored`);
-    if (!r || typeof r !== "object") return no("not an object");
-    const { pattern, url } = r;
-    if (typeof pattern !== "string" || !pattern) return no("no pattern");
-    if (typeof url !== "string" || !url) return no("no url");
-    const shape = patternShape(pattern, "g");
-    if (shape.why) return no(shape.why);
-    const { re } = shape;
-    const host = templateHost(url);
-    if (!host) return no("url must start with https:// or http:// and a fixed host; placeholders only in the path");
-    const slow = patternSlow(re, pattern);
-    if (slow) return no(slow);
-    const name = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : `Rule ${n}`;
-    rules.push({ n, name, re, url, host, repo: /\{(repo|owner)\}/.test(url) });
+    const o = r && typeof r === "object" && !Array.isArray(r) ? r : {};
+    const text = (v, max) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
+    const entry = {
+      n, name: text(o.name, 40) || `Rule ${n}`, type: LINK_TYPES.includes(o.type) ? o.type : "custom",
+      description: text(o.description, DESCRIPTION_MAX), example: typeof o.example === "string" ? o.example.slice(0, EXAMPLE_MAX) : "",
+      on: o.on !== false, pattern: typeof o.pattern === "string" ? o.pattern : "", url: typeof o.url === "string" ? o.url : "", why: null, rule: null,
+    };
+    list.push(entry);
+    const why = linkFault(r, i);
+    if (why) { entry.why = why; notes.push(`Link rule ${n}: ${why}`); return; }
+    entry.rule = { n, name: entry.name, re: new RegExp(entry.pattern, "g"), url: entry.url, host: templateHost(entry.url), repo: /\{(repo|owner)\}/.test(entry.url) };
+    if (entry.on) rules.push(entry.rule);
   });
-  return { rules, notes };
+  return { rules, notes, list };
 }
+
+// The three types, each with its line for the chooser and, for two, the rule it fills a new
+// one with. The ticket rule's address is a stand-in for the person's own tracker.
+export const LINK_TEMPLATES = Object.freeze({
+  custom: Object.freeze({ word: "Custom", line: "Write it yourself.", rule: null }),
+  ticket: Object.freeze({ word: "Ticket key", line: "Links a ticket key such as ACME-412 to its ticket.",
+    rule: Object.freeze({ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example.com/ACME-$1", example: "Fixed in ACME-412." }) }),
+  "pull-request": Object.freeze({ word: "Pull request", line: "Links a number such as #58 to that pull request in this repository.",
+    rule: Object.freeze({ name: "Pull request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." }) }),
+});
+// What a fresh install starts with: the pull request rule, on. It needs only the session's
+// repository (a terminal folder with an origin on GitHub).
+export function defaultLinks() {
+  return [{ ...LINK_TEMPLATES["pull-request"].rule, type: "pull-request" }];
+}
+// No file yet, or an empty one: what a fresh install starts from.
+const fresh = (text) => text == null || String(text).trim() === "";
+
+// Why a rule would not run, for the card's rule editor; null when it would.
+export function ruleFault(r) { return linkFault(r, 0); }
+
+// Why rule i cannot run, in the words the page and the notes use, or null when it can.
+function linkFault(r, i) {
+  if (i >= MAX_RULES) return `past the ${MAX_RULES}th rule; ignored`;
+  if (!r || typeof r !== "object") return "not an object";
+  const { pattern, url } = r;
+  if (typeof pattern !== "string" || !pattern) return "no pattern";
+  if (typeof url !== "string" || !url) return "no url";
+  if (pattern.length > 200) return "pattern over 200 characters";
+  if (/\\[1-9]|\\k</.test(pattern)) return "backreferences are not allowed";
+  const risky = riskyShape(pattern);
+  if (risky) return risky;
+  let re;
+  try { re = new RegExp(pattern, "g"); } catch { return "pattern not valid"; }
+  for (const probe of ["", "a", "a b", "#1", " "]) {
+    re.lastIndex = 0;
+    const m = re.exec(probe);
+    if (m && m[0] === "") return "pattern matches empty text";
+  }
+  if (!templateHost(url)) return "url must start with https:// or http:// and a fixed host; placeholders only in the path";
+  // Hostile probes of growing length, two characters at a time, stopping at the first one
+  // over 5 ms: a pattern whose time grows exponentially is caught at a length where one
+  // probe still costs only a few times the last (a long first probe would hang on it).
+  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
+  for (let len = 12; len <= 32; len += 2) {
+    for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
+      const t0 = now();
+      re.lastIndex = 0;
+      re.exec(probe);
+      if (now() - t0 > 5) return "too slow on a short test text; disabled";
+    }
+  }
+  // Long runs of one kind of character: quantifiers side by side that can take the same
+  // characters ("\s*\s*Q", "\w+\w+X") cost polynomial time on a near miss, which the short
+  // probes miss and nested-group shapes do not show. Lengths grow by half from 16 to 2,048,
+  // stopping at the first probe over 3 ms (each step costs at most a few times the last),
+  // and the whole check stops at 100 ms. A plain pattern runs these in about a millisecond.
+  const start = now();
+  for (const unit of [" ", "a", "1", "a1 _-.", "#", lit]) {
+    for (let len = 16; len <= LONG_PROBE; len = Math.ceil(len * 1.5)) {
+      const probe = `${unit.repeat(Math.ceil(len / unit.length)).slice(0, len)}!`;
+      const t0 = now();
+      re.lastIndex = 0;
+      re.exec(probe);
+      const t1 = now();
+      if (t1 - t0 > 3 || t1 - start > 100) return SLOW_LONG;
+    }
+  }
+  return null;
+}
+const LONG_PROBE = 2048;
+export const SLOW_LONG = "too slow on long text; disabled";
 
 // senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
 // matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
@@ -296,22 +387,25 @@ export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+  if (fresh(text)) raw = { links: defaultLinks() };
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
   const senders = parseSenders(raw.senders);
   return {
-    quoteKey: quote.key, links: links.rules, senders: senders.rules,
-    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes],
+    quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], senderNotes: senders.notes,
     linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
     senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
   };
 }
 
 // The file's text for a set of values. Keys this version does not know are kept, so a
-// newer version's settings survive a change made here.
-export function settingsText(values, previous) {
-  let keep = {};
+// newer version's settings survive a change made here. extra: keys written as they are
+// (the card's quote key, { quoteKey: "y" }).
+export function settingsText(values, previous, extra = null) {
+  let keep = fresh(previous) ? { links: defaultLinks() } : {};
   try { const p = JSON.parse(previous ?? ""); if (p && typeof p === "object" && !Array.isArray(p)) keep = p; } catch { /* replaced */ }
+  if (extra) keep = { ...keep, ...extra };
   const { values: v } = parseSettings(JSON.stringify({ ...keep, ...values, look: LOOK }));
   return `${JSON.stringify({ ...keep, ...v, look: LOOK }, null, 2)}\n`;
 }
@@ -328,9 +422,9 @@ export const NOT_SAVED = "settings.json is not valid JSON, so it was left as it 
 // so a save never overwrites a change made in an editor meanwhile; Herdr rejects a stale
 // snapshot and the caller reads again. Refuses (rejects with NOT_SAVED) while the file's
 // text does not parse.
-export function saveSettings(appHome, values, expected) {
+export function saveSettings(appHome, values, expected, extra = null) {
   if (!writable(expected)) return Promise.reject(new Error(NOT_SAVED));
-  return writeTextFile(settingsPath(appHome), settingsText(values, expected), expected ?? null);
+  return writeTextFile(settingsPath(appHome), settingsText(values, expected, extra), expected ?? null);
 }
 
 // Writes the pins file. expected: its text as just read (null when there was no file), so a
