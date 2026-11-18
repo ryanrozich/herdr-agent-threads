@@ -5600,6 +5600,31 @@ test("a long session's rows are built over several frames, the old rows shown ti
   expect(rowSig(v)).toEqual(whole);
 });
 
+test("a long session whose read ends while its first rows still build selects the newest turn when the build is done", async () => {
+  // The read's end selects the newest turn, but on a long session or a slow machine the first
+  // rows build is still going over several frames then, so there is no turn to select yet.
+  // Each reading of the clock moves it 2 ms here, so the build takes several slices anywhere.
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  performance.now = () => (fake += 2);
+  let p;
+  try { p = await pane(fixture("--extra", "300")); } finally { performance.now = realPerf; }
+  const { v, cx } = p;
+  expect(v.rowJob).not.toBe(null);
+  expect(v.sel).toBe(null);
+  expect(v.follow).toBe(true);
+  let toEnd = 0;
+  v.scroll = { scroll_to_bottom() { toEnd++; }, scroll_to_item() {} };
+  settleRows(v, cx);
+  cx.flush(16);
+  expect(v.rowJob).toBe(null);
+  const keys = v.turnKeys(v.rows());
+  expect(keys.length).toBeGreaterThan(300);
+  expect(v.sel).toBe(keys.at(-1));
+  expect(v.follow).toBe(true);
+  expect(toEnd).toBeGreaterThan(0);
+});
+
 test("a new turn in a long session rebuilds only from the last mark: the rows match a full build", async () => {
   const { apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx, s } = await longSession(450);
