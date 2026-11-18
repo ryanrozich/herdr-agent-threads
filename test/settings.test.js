@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" };
+const CHAT = { textSize: 14, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -103,15 +103,15 @@ test("bubble colours take a preset name or #rrggbb, and anything else the defaul
   const v = (j) => parseSettings(JSON.stringify(j)).values;
   expect(v({ bubbleColor: "Teal", agentBubbleColor: "plain" })).toMatchObject({ bubbleColor: "teal", agentBubbleColor: "plain" });
   expect(v({ bubbleColor: "#1a2b3c", agentBubbleColor: "#abc" })).toMatchObject({ bubbleColor: "#1A2B3C", agentBubbleColor: "#AABBCC" });
-  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("plain");
-  expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "plum" });
+  for (const bad of ["navy", "#12345", "rgb(1,2,3)", 7, null, "toString"]) expect(v({ bubbleColor: bad }).bubbleColor).toBe("blue");
+  expect(JSON.parse(settingsText({ bubbleColor: "green" }, null))).toMatchObject({ bubbleColor: "green", agentBubbleColor: "amber" });
   expect(v({ bubbleColor: "Blue", agentBubbleColor: "purple" })).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "purple" }); // the bright pair
 });
 
 test("the quiet look: slate in a file from before it was the old default and reads as plain; any other colour, or slate chosen since, is kept", () => {
   const v = (j) => parseSettings(JSON.stringify(j)).values;
-  expect(v({ bubbleColor: "slate" }).bubbleColor).toBe("plain");
-  expect(v({ bubbleColor: "slate", look: 2 }).bubbleColor).toBe("plain");
+  expect(v({ bubbleColor: "slate" }).bubbleColor).toBe("blue");
+  expect(v({ bubbleColor: "slate", look: 2 }).bubbleColor).toBe("blue");
   expect(v({ bubbleColor: "teal", look: 2 }).bubbleColor).toBe("teal");
   expect(v({ bubbleColor: "#1a2b3c" }).bubbleColor).toBe("#1A2B3C");
   expect(v({ bubbleColor: "slate", look: 3 }).bubbleColor).toBe("slate");
@@ -120,7 +120,40 @@ test("the quiet look: slate in a file from before it was the old default and rea
   expect(JSON.parse(t)).toMatchObject({ bubbleColor: "slate", look: 3 });
   expect(parseSettings(t).values.bubbleColor).toBe("slate");
   // The agent's bubble keeps its default.
-  expect(v({}).agentBubbleColor).toBe("plum");
+  expect(v({}).agentBubbleColor).toBe("amber");
+});
+
+test("agent messages are amber by default; a file that holds plum keeps it, and a save keeps it", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values;
+  expect(DEFAULTS.agentBubbleColor).toBe("amber");
+  expect(v({}).agentBubbleColor).toBe("amber");
+  expect(v({ agentBubbleColor: "plum" }).agentBubbleColor).toBe("plum");
+  expect(v({ agentBubbleColor: "plum", look: 3 }).agentBubbleColor).toBe("plum");
+  expect(JSON.parse(settingsText({ textSize: 15 }, '{"agentBubbleColor": "plum"}')).agentBubbleColor).toBe("plum");
+  // User messages are blue by default; a file that stored plain keeps it.
+  expect(DEFAULTS.bubbleColor).toBe("blue");
+  expect(parseSettings(JSON.stringify({ bubbleColor: "plain", look: 3 })).values.bubbleColor).toBe("plain");
+  expect(parseSettings(JSON.stringify({ textSize: 15 })).values.bubbleColor).toBe("blue");
+});
+
+test("keyHints is a boolean, false by default: no key row at the pane's foot", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values.keyHints;
+  expect(v({})).toBe(false);
+  expect(v({ keyHints: true })).toBe(true);
+  expect(v({ keyHints: "yes" })).toBe(false);
+});
+
+test("the card's quote key is written as an extra: the values and every other key stay as they were", async () => {
+  const before = '{"links": [{"pattern": "x-(\\\\d+)", "url": "https://x.example/$1"}], "quoteKey": "q", "textSize": 15}';
+  const t = JSON.parse(settingsText({ ...parseSettings(before).values }, before, { quoteKey: "y" }));
+  expect(t.quoteKey).toBe("y");
+  expect(t.textSize).toBe(15);
+  expect(t.links).toEqual(JSON.parse(before).links);
+  expect(parseExtras(JSON.stringify(t)).quoteKey).toBe("y");
+  writes.length = 0;
+  await saveSettings("/apphome", parseSettings(before).values, before, { quoteKey: "z" });
+  expect(JSON.parse(writes[0].text).quoteKey).toBe("z");
+  expect(writes[0].expected).toBe(before);
 });
 
 test("truncate is a boolean, false by default: long messages show in full", () => {
