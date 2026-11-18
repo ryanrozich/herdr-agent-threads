@@ -49,7 +49,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -57,10 +57,10 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
+  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -170,14 +170,27 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
 const TOP_BAND = 32;
-// The settings card: at most this wide, and the heights of its fixed parts (the title, the
-// tab row and the foot), so its rows get the rest of the room.
+// The settings card: at most this wide, and the heights of its fixed parts (the title and the
+// foot), so its rows get the rest of the room.
 const CARD_W = 440;
 const CARD_HEAD = 40;
-const CARD_TABS = 36;
 const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
+// How far above the pane's bottom the card ends at the least, so a strip of the list stays
+// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
+// where under that the card takes the height. 0 makes the card take the height everywhere.
+const CARD_STRIP = 160;
+const CARD_STRIP_MIN = 514;
+// The card's one page: its sections in order, each with its rows in order (settingsRows draws
+// each row from its key). Moving a row or renaming a section is a change to this list alone.
+const CARD_SECTIONS = [
+  ["Messages", ["textSize", "userColor", "truncate", "time"]],
+  ["Agent messages", ["agents", "agentRail", "agentColor"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Links and keys", ["linkRules", "quoteKey"]],
+  ["File", ["file"]],
+];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
@@ -185,16 +198,13 @@ const SWATCH = 24;
 // A text button's size: the usual, and the card's, which is the height of its rows' controls.
 const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
 const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
-// Its tabs. The Trajectory tab joins them with the Trajectory (draft PR 94).
-const SETTING_TABS = [["general", "General"], ["chat", "Chat"]];
+// The Width chooser's words.
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey and links are never reset.
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
-// The preview's times: 9:12 AM for yours, two minutes before for an agent's.
-const PREVIEW_AT = new Date(2000, 0, 1, 9, 12).getTime();
 // The rule editor's fields: key, label, placeholder, the most it takes.
 const RULE_FIELDS = [
   ["name", "Name", "Ticket", 40],
@@ -232,6 +242,10 @@ const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the 
 const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
+// The line of links under a coloured bubble (issue 116): its gap, line height and the width of
+// a character of its 12 px text, for the estimate the probe then measures.
+const YOU_LINK_GAP = 4;
+const YOU_LINK_LINE = 18;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
@@ -746,9 +760,10 @@ export default class Threads extends View {
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
     this.settingsOpen = false;
-    // The settings card's tab ("general" or "chat") and page ("main" or "links"), and its
-    // rows' height as last drawn ({ key, h }). Not saved: it opens on Chat.
-    this.setTab = "chat";
+    // The settings card's page ("main" or "links") and its rows' height as last drawn
+    // ({ key, h }). Not saved. Each opening counts (cardOpens), so its scroll area is a new
+    // one and it opens at the top.
+    this.cardOpens = 0;
     this.setPage = "main";
     this.cardBody = null;
     // The card's quote key field: what was typed (null: nothing since it opened), and which
@@ -766,7 +781,9 @@ export default class Threads extends View {
     this.quoteKey = "q"; // settings.json quoteKey
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
-    this.prefsNotes = []; // notes on quoteKey and link rules
+    this.senders = []; // compiled sender rules (settings.js parseSenders)
+    this.sendersVer = 0;
+    this.prefsNotes = []; // notes on quoteKey, link rules and sender rules
     this.lastQuote = null; // the last quote press, for the debug report (never its text)
     this.remote = { key: null, repo: null, owner: null, why: "not looked up" }; // F3.3
     this.pinStore = parsePins(null).store; // pins.json, read below and watched
@@ -863,7 +880,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { tab: this.setTab, page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
@@ -878,6 +895,7 @@ export default class Threads extends View {
       quoteKey: this.quoteKey, settingsNotes: this.prefsNotes, lastQuote: this.lastQuote,
       editorFocused: Boolean(this.editorFocused), panelFocused: this.panelFocused(), focusEvents: this.focusEvents ?? null,
       links: { count: this.linkCount ?? 0, valid: this.links.length, ver: this.linksVer, rules: this.links.map((r) => `${r.n} ${r.name}${r.repo ? " {repo}" : ""}`) },
+      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
     };
@@ -900,7 +918,7 @@ export default class Threads extends View {
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
-      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
+      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)}${r.turn.sender.rule != null ? ` rule${r.turn.sender.rule}` : ""} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
       case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
@@ -1009,22 +1027,22 @@ export default class Threads extends View {
       if (this.prefsSaving) return;
       if (text === this.prefsRaw && this.prefsLoaded) return;
       this.prefsLoaded = true;
-      this.applyPrefs(text);
+      this.applyPrefs(text, cx);
       cx.notify();
     });
   }
 
-  applyPrefs(text) {
+  applyPrefs(text, cx = null) {
     const { values, error } = parseSettings(text);
     this.prefsRaw = text;
     this.prefsError = error;
     this.setPrefs(values);
-    this.applyExtras(text);
+    this.applyExtras(text, cx);
   }
 
-  // quoteKey and the link rules, compiled once here (never while drawing). A file that does
-  // not parse keeps the ones last read.
-  applyExtras(text) {
+  // quoteKey, the link rules and the sender rules, compiled once here (never while drawing).
+  // A file that does not parse keeps the ones last read.
+  applyExtras(text, cx = null) {
     if (text != null && String(text).trim() !== "" && parseSettings(text).error) return;
     const x = parseExtras(text);
     const quoteWas = this.quoteKey;
@@ -1035,7 +1053,34 @@ export default class Threads extends View {
     this.prefsNotes = x.notes;
     this.setLinks(x.links, x.linkList, x.linkCount);
     if (this.ruleEdit || this.ruleUndo) this.followRules(this.fileLinks());
+    this.senderCount = x.senderCount;
+    this.senderNotes = x.senderNotes;
+    const ssig = JSON.stringify(x.senders.map((r) => [r.n, r.re.source, r.label]));
+    if (ssig !== (this.sendersSig ?? "[]")) { this.sendersSig = ssig; this.senders = x.senders; this.sendersVer++; this.remark(cx); }
   }
+
+  // New sender rules: every session read so far is marked again (turns.js remarkSenders),
+  // in slices of SLICE_MS with cx (a settings change), all at once without it (tests). A
+  // newer change stops an older pass. Turns read later are marked as they are read.
+  remark(cx) {
+    const gen = (this.remarkGen = (this.remarkGen ?? 0) + 1);
+    const rules = this.senders;
+    const pass = async (cx) => {
+      for (const s of this.sessions.slice()) {
+        let i = 0;
+        do {
+          i = remarkSenders(s, rules, i, cx ? now() + SLICE_MS : Infinity);
+          if (i >= s.turns.length) break;
+          await cx.sleep(0);
+          if (this.remarkGen !== gen) return;
+        } while (i < s.turns.length);
+      }
+      cx?.notify();
+    };
+    if (cx) cx.spawn(pass);
+    else pass(null);
+  }
+
   setLinks(rules, list, count) {
     this.linkCount = count;
     this.linkList = list;
@@ -1110,8 +1155,8 @@ export default class Threads extends View {
 
   // ---- the settings card's state ----
 
-  // Opens the card on the tab of the pane it is opened from (Chat) and gives the pane the
-  // keyboard, so one Esc closes it; or closes it.
+  // Opens the card at the top of its one page and gives the pane the keyboard, so one Esc
+  // closes it; or closes it.
   setSettings(open) {
     if (!open) { this.closeSettings(); return true; }
     this.settingsOpen = true;
@@ -1119,7 +1164,7 @@ export default class Threads extends View {
     this.keysOpen = false;
     this.detailsOpen = false;
     this.quietRail();
-    this.setTab = "chat";
+    this.cardOpens++;
     this.setPage = "main";
     this.leaveLinks();
     this.quoteDraft = null;
@@ -1174,7 +1219,7 @@ export default class Threads extends View {
       this.changePrefs({}, cx, { quoteKey: v });
     }
   }
-  // A field in the card that leaves the screen (another tab, another page, the card closed)
+  // A field in the card that leaves the screen (another page, the card closed)
   // hands the keyboard back to the pane, so the panel's keys work again.
   dropField() {
     if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
@@ -1213,17 +1258,20 @@ export default class Threads extends View {
   // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
   // The save writes it only over the list it was made from: when the file's "links" changed
   // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
-  // pane shows the file again and the card says why.
-  writeLinks(raw, cx) {
+  // pane shows the file again and the card says why. undo: the Undo line a Delete just set,
+  // cleared when that Delete is not written, so Undo cannot add the rule a second time.
+  writeLinks(raw, cx, undo = null) {
     const from = JSON.stringify(this.fileLinks());
     this.linksPending = raw;
     const l = parseLinks(raw);
-    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes, ...(this.senderNotes ?? [])];
     this.setLinks(l.rules, l.list, raw.length);
     this.followRules(raw);
     const fits = (text) => {
       const now = this.linksOf(text);
-      return now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+      const why = now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+      if (why && undo && this.ruleUndo === undo) this.ruleUndo = null;
+      return why;
     };
     const chain = this.changePrefs({}, cx, { links: raw }, fits);
     chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
@@ -1425,7 +1473,7 @@ export default class Threads extends View {
     // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
     this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
-    this.writeLinks(raw, cx);
+    this.writeLinks(raw, cx, this.ruleUndo);
   }
   undoRemove(cx) {
     const u = this.ruleUndo;
@@ -1789,6 +1837,7 @@ export default class Threads extends View {
         return;
     }
     const s = newSession(r.id, r.file);
+    s.senders = this.senders;
     if (cur) s.reason = "new";
     // Cursor records no turn times: the pane keeps the ones it watches (turns.js, clockStart).
     if (harnessOfFile(r.file) === "cursor") s.clock = {};
@@ -1929,7 +1978,7 @@ export default class Threads extends View {
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
   restart(s, fresh = false) {
-    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock });
+    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
 
@@ -2084,8 +2133,8 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
+      this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
@@ -2361,6 +2410,8 @@ export default class Threads extends View {
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
+    // agentRail off: agent messages get no tick (the running turn keeps its own).
+    const agentRail = this.prefs.agentRail !== false;
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -2405,7 +2456,7 @@ export default class Threads extends View {
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
-        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
+        if (!off && (agentRail || !turn.agent || ti === liveTi)) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
         if (off && !visit) continue;
         if (miss && !visit) { unmatched++; continue; }
         const d = turn.day;
@@ -2581,7 +2632,7 @@ export default class Threads extends View {
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
   closedLook() {
     // The pane's width and the rail set how far a wide table may grow (tableExtra).
-    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.repoSig()}`;
+    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.sendersVer}|${this.repoSig()}`;
   }
 
   closedRows(item, out) {
@@ -2619,7 +2670,9 @@ export default class Threads extends View {
   // chevron, quiet; a press shows the message, or folds it again.
   foldLine(t, r) {
     const { turn } = r;
+    const tip = this.ruleTip(turn);
     const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0).cursor_pointer()
+      .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
       .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
         .text_color(t.muted).child(senderLabel(turn.sender, this.width)))
@@ -3071,15 +3124,15 @@ export default class Threads extends View {
     const f = turn.shapeFast;
     this.shapeStale = false;
     if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
-      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
+      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
     if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
-    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0 };
+    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
+    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
@@ -4558,13 +4611,13 @@ export default class Threads extends View {
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       // The settings card's switch: no toast, the card shows the change.
       case "agentsQuiet": this.setAgents(!this.prefs.agentTurns, cx, true); return true;
+      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
-      case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
       case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
@@ -5805,12 +5858,11 @@ export default class Threads extends View {
   // A card over the list, under the icons at the top right, CARD_W wide at most (the pane
   // less 12 px each side when narrower). The keys sheet's two pieces: a clear layer over the
   // pane closes it on a press anywhere else in the pane, and the card stops the press. A press
-  // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. The title, the
-  // tabs and the preview stay put while the rows scroll under them; the session's line and
-  // "? keys" sit at the foot. Two tabs, General and Chat, and it opens on Chat, the tab of the
-  // pane it was opened from. The Trajectory tab comes with the Trajectory (draft PR 94).
+  // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. One page: the
+  // title stays put while the rows scroll under it, and the session's line and "? keys" sit
+  // at the foot. It opens at the top. No preview: a change shows in the list behind the card.
   // Spacing (settings-spacing): every band has the same side inset (cardPad), so the title,
-  // the tabs, the labels and the foot share one left edge and the controls one right edge.
+  // the labels and the foot share one left edge and the controls one right edge.
   // While it is open nothing under it reacts (covered()), and the wheel moves only the card:
   // the clear layer keeps the wheel from the list. No scrim, so the colors and the text size
   // are chosen against the real list; the border and a deep shadow mark the layer.
@@ -5818,15 +5870,17 @@ export default class Threads extends View {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
     const top = this.floating() ? TOP_BAND : 46;
-    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - CARD_GAP);
+    const h = this.rootH || 600;
+    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
+    const room = Math.max(180, h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
-    const fixed = CARD_HEAD + (links ? 0 : CARD_TABS + this.previewH(w)) + CARD_FOOT + 2;
+    const fixed = CARD_HEAD + CARD_FOOT + 2;
     const bodyMax = Math.max(60, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
-    const key = links ? "links" : this.setTab;
+    const key = links ? "links" : "main";
     const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
-    const rows = links ? this.linkRulesRows(t, w) : this.setTab === "general" ? this.generalRows(t, w) : this.chatRows(t, w);
+    const rows = links ? this.linkRulesRows(t, w) : this.settingsRows(t, w);
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
@@ -5836,8 +5890,7 @@ export default class Threads extends View {
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
         .child(this.cardHead(t, links, close, pad))
-        .when(!links, (el) => el.child(this.cardTabs(t, pad)).child(this.cardPreview(t, w)))
-        .child(v_flex().id(`th-set-body-${key}`).flex_none().h(bodyH).overflow_y_scrollbar()
+        .child(v_flex().id(`th-set-body-${key}-${this.cardOpens}`).flex_none().h(bodyH).overflow_y_scrollbar()
           .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
             .on_size_change((size, cx) => {
               const h = size.height / this.zoom();
@@ -5855,67 +5908,6 @@ export default class Threads extends View {
       .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
       .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
-  }
-
-  // Each tab has 10 px each side, so the first tab's word starts on the inset.
-  cardTabs(t, pad) {
-    return h_flex().flex_none().h(CARD_TABS).px(pad - 10).gap(2).border_b(1).border_color(t.border)
-      .children(SETTING_TABS.map(([k, word]) => {
-        const on = k === this.setTab;
-        return div().id(`th-set-tab-${k}`).flex_none().h_full().px(10).flex().items_center().cursor_pointer()
-          .border_b(2).border_color(on ? t.accent : CLEAR)
-          .text_size(13).font_medium().text_color(on ? t.foreground : t.muted)
-          .hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setTab = k; cx.notify(); })
-          .child(word);
-      }));
-  }
-
-  // The preview, pinned under the tabs: an agent's bubble and yours, drawn from the settings
-  // the list uses. Text size, both colors, the time (an agent's only with Always show time;
-  // yours stands for the selected turn), agent messages hidden (the agent's bubble fades and
-  // says so) and the rail's side (four ticks on that side, inside the inset). The text is at
-  // the real size, never scaled, since text size is one of the things it shows: the sample is
-  // short instead ("From an agent", "From the user"), each bubble at most 45% of the band and
-  // cut past that, with 10 px above and below. Bubbles are padded and rounded as in the list.
-  previewH() { return this.rt().line + 2 * ROW.BUBBLE_PY + 2 * 16 + 2 * 2 + 2 * 10; }
-  cardPreview(t, w) {
-    const P = this.prefs;
-    const rt = this.rt();
-    const pad = cardPad(w);
-    // The rail's side: the ticks on the inset, 8 px wide, then 12 px to the bubbles.
-    const railPad = pad + 8 + 12;
-    const most = Math.floor(w * 0.45);
-    const bubble = (agent, text) => {
-      const look = this.bubbleLook(t, agent);
-      return this.readFont(div()).flex_none().max_w(most).min_w(0).truncate().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY)
-        .bg(look.style.fill).text_color(look.theme.foreground).text_size(rt.size).line_height(`${rt.line}px`)
-        .when(look.style.outline, (el) => el.border_1().border_color(t.border))
-        .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
-        .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
-        .child(text);
-    };
-    const line = (text, color) => div().flex_none().h(16).max_w_full().truncate().text_size(11.5).text_color(color).child(text);
-    const hidden = !P.agentTurns;
-    const half = (w - pad - railPad - 12) / 2;
-    const label = hidden ? ("Agent · hidden in the list".length * 11.5 * PROSE_EM <= half ? "Agent · hidden in the list" : "Agent · hidden") : "Agent";
-    const left = this.railLeft();
-    const ticks = v_flex().absolute().top(14).gap(9).when(left, (el) => el.left(pad)).when(!left, (el) => el.right(pad))
-      .children([0, 1, 2, 3].map((i) => div().w(8).h(i === 2 ? 3 : 2).rounded(1).bg(i === 2 ? t.accent : alpha(t.muted, 0.5))));
-    return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? railPad : pad).pr(left ? pad : railPad).py(10).gap(12).items_center()
-      .border_b(1).border_color(t.border).bg(t.background)
-      // Hidden agent messages show only in the label over the bubble ("Agent · hidden in the
-      // list"). The bubble keeps full strength, so its words read as in the list (a faded bubble
-      // was 1.9:1 on a light theme).
-      .child(v_flex().flex_1().min_w(0).gap(2).items_start()
-        .child(line(label, this.agentColor(t)))
-        .child(bubble(true, "From an agent"))
-        .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
-      .child(v_flex().flex_1().min_w(0).gap(2).items_end()
-        .child(line("", t.dim))
-        .child(bubble(false, "From the user"))
-        .child(line(fmtTime(PREVIEW_AT), t.dim)))
-      .child(ticks);
   }
 
   // The card's foot, under the scroll: the agent, the turn count and the session's title (the
@@ -5978,7 +5970,7 @@ export default class Threads extends View {
     return { label, note, group, sw, stepper, choose, row, toggle };
   }
 
-  // Reset to defaults, at the end of each tab's rows: every control on the card, faded when
+  // Reset to defaults, once, at the end of the page: every control on the card, faded when
   // every one is at its default. Link rules and the quote key are never touched, which the
   // line under the button says.
   resetRow(t) {
@@ -5991,63 +5983,56 @@ export default class Threads extends View {
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
-  // General: what every view shares. Text, the rail's side and the key hints, the two message
-  // colors, link rules and the quote key, and the file.
-  generalRows(t, w) {
+  // The card is one page (settings-structure-review, order B): Messages, Agent messages,
+  // Layout, Links and keys and File, in that order (CARD_SECTIONS), then Reset once. No tabs, no preview: a change
+  // shows in the list behind the card as it is made.
+  settingsRows(t, w) {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
-    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
-    const n = this.linkCount ?? 0;
     const qn = this.quoteNote();
-    return [
-      group("Text", [stepper("textSize", "Text size")]),
-      group("Layout", [
-        row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide")),
-        sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
-      ]),
-      group("Colors", [
-        this.colorRow(t, "bubbleColor", "User messages", w),
-        this.colorRow(t, "agentBubbleColor", "Agent messages", w),
-      ]),
-      group("Links and keys", [
-        h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
-          .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
-          .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
-          .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
-          .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
-          .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)),
-        v_flex().gap(4)
-          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
-            .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-            .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
-          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked))),
-      ]),
-      group("File", [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null]),
-      this.resetRow(t),
-    ];
-  }
-
-  // Chat: what shapes a bubble or the reading column.
-  chatRows(t, w) {
-    const P = this.prefs;
-    const { group, sw, stepper, choose, row, note } = this.cardKit(t);
-    const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
-    return [
-      group("Messages", [
-        sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
+    const linkRules = () => {
+      const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+      const n = this.linkCount ?? 0;
+      return h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
+        .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
+        .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+        .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
+        .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
+    };
+    // Each row by its key in CARD_SECTIONS; a row may be more than one element.
+    const rows = {
+      textSize: () => [stepper("textSize", "Text size")],
+      userColor: () => [this.colorRow(t, "bubbleColor", "User message color", w)],
+      agentColor: () => [this.colorRow(t, "agentBubbleColor", "Agent message color", w)],
+      agents: () => {
+        const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
+        return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
+      },
+      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
+      truncate: () => [
         sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
-        sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
-      ]),
-      group("Layout", [
+      ],
+      time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
+      width: () => [
         row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
         this.widthRuler(t, w),
         note(this.widthNote()),
-        sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth"),
-      ]),
-      this.resetRow(t),
-    ];
+      ],
+      keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
+      railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
+      keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      linkRules: () => [linkRules()],
+      quoteKey: () => [v_flex().gap(4)
+        .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
+          .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
+          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+        .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
+      file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
+    };
+    return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
   }
 
   // Under Width: the pane as a thin line and the reading column as its dark part, at their
@@ -7108,7 +7093,13 @@ export default class Threads extends View {
     // until Show all (r.all) draws it whole at its measured height, with Show less.
     const long = raw >= YOU_MAX;
     const capped = long && !r.all;
-    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long };
+    // A coloured bubble draws the prompt as plain text, so the links its rules make go on a
+    // line of their own under the bubble (youLinks), each once (issue 116).
+    const lk = plain && this.links.length ? promptLinks(c.text, this.links, this.linkCtx()) : [];
+    const linkMd = lk.length ? lk.map((p) => `[${escapeMd(p.t)}](${p.url})`).join(" \u00b7 ") : null;
+    // Its rows at the width inside the bubble's padding (the line has the same padding).
+    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * linkLineRows(lk.map((p) => p.t), bw - 2 * ROW.BUBBLE_PX) : 0;
+    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long, linkMd, linkH };
     r.turn.youMemo = { sig, v };
     return v;
   }
@@ -7120,7 +7111,8 @@ export default class Threads extends View {
     const chip = r.turn.cmd ? this.rt().line + 4 : 0;
     const label = r.turn.agent ? 16 + 4 : 0;
     // 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
-    return 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
+    // Then the line of links under a coloured bubble, if its rules made any.
+    return 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8 + y.linkH;
   }
 
   // The caption under an open turn's line: what the reply does not show, [icon, text]. The
@@ -7242,7 +7234,7 @@ export default class Threads extends View {
   partSig(r, base = this.sigBase()) {
     const head = `${base}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}|${y.linkMd ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
@@ -7543,7 +7535,9 @@ export default class Threads extends View {
   // The sender over an agent's message: its icon and name in the agent colour, on the left.
   senderLine(t, turn) {
     const ac = this.agentColor(t);
+    const tip = this.ruleTip(turn);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0)
+      .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
       .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
         .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)));
@@ -8196,7 +8190,7 @@ export default class Threads extends View {
         // The message in its bubble, on the right (an agent's outlined, on the left, under its
         // sender), as wide as its widest line.
         const agent = turn.agent;
-        return h_flex().w_full().when(!agent, (el) => el.justify_end())
+        const bubbleRow = h_flex().w_full().when(!agent, (el) => el.justify_end())
           .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
@@ -8213,6 +8207,13 @@ export default class Threads extends View {
               .child(y.capped ? "Show all" : "Show less").child(svg(ICON(y.capped ? "chevron-down" : "chevron-up")).size(12))))
             .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
+        if (!y.linkMd) return bubbleRow;
+        // Under a coloured bubble, the links its rules made, as wide as the bubble and on its
+        // side, in the theme's text and link colours (issue 116).
+        return v_flex().w_full().child(bubbleRow)
+          .child(h_flex().w_full().pt(YOU_LINK_GAP).when(!agent, (el) => el.justify_end())
+            .child(div().flex_none().w(y.bw).px(ROW.BUBBLE_PX).text_size(12).line_height(`${YOU_LINK_LINE}px`)
+              .child(this.mdView(tv(`th-ylk-${r.key}`), y.linkMd, false))));
       }
       case "ustrip": return this.reveal(t, div().id(`ush:${tkey}`).pt(ROW.GAP)).child(this.youStrip(t, turn, tkey, this.sel === tkey, "all"));
       case "rhead":
@@ -8421,7 +8422,16 @@ export default class Threads extends View {
   // The settings panel's line on the keys the file sets by hand.
   settingsLine() {
     const bad = (this.linkCount ?? 0) - this.links.length;
-    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""} · Quote key · ${this.quoteKey}`;
+    const sn = this.senderCount ?? 0;
+    const sbad = sn - this.senders.length;
+    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
+  }
+
+  // Which sender rule made a typed prompt an agent message, for the tooltip on its sender:
+  // "Marked by sender rule 2 · Hourly report", or null for every other turn.
+  ruleTip(turn) {
+    const r = turn?.sender?.rule;
+    return r != null ? `Marked by sender rule ${r} · ${turn.sender.ruleLabel ?? ""}`.replace(/ · $/, "") : null;
   }
 
   // Key hints that apply now, on one row: [key, label]. The most-used keys (move, open,

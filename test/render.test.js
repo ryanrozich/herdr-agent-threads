@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -94,9 +94,10 @@ mock.module("gpui-base", () => ({
   TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
-// ("in"), so a test can time the synchronous stretches between awaits.
+// ("in"), with the time and the work counted so far, so a test can measure the synchronous
+// stretches between awaits.
 let marks = null;
-const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
+const stamp = (what) => { if (marks) marks.push([what, performance.now(), { ...work }]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
@@ -165,6 +166,22 @@ function herdrRest() { return {
 // main.js finds its scripts under appHome()/mods/agent-threads.
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
+// The read's work, counted for the S1 child: lines parsed and events applied (through a
+// counting stand-in for core/turns.js, in the child only), turns reshaped, and turns whose
+// rows were built.
+const work = { lines: 0, events: 0, reshapes: 0, built: 0 };
+// What each costs in ms in bun with the JIT off, the interpreter's speed, on a developer
+// machine: 0.7 to 1.4 µs a line, 1.25 to 1.4 µs an event, 0.21 to 0.27 ms a reshape, and
+// 4.7 to 4.8 µs a turn's rows without its reshape.
+const PRICE = { lines: 0.001, events: 0.0013, reshapes: 0.22, built: 0.005 };
+// The S1 child's clock: the work done so far, at those prices.
+const worked = () => work.lines * PRICE.lines + work.events * PRICE.events + work.reshapes * PRICE.reshapes + work.built * PRICE.built;
+if (process.env.THREADS_CHILD === "read-timing") {
+  const turnsPath = join(modDir, "core/turns.js");
+  const real = await import(turnsPath);
+  const { parseLine, apply } = real;
+  mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
+}
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
@@ -736,6 +753,139 @@ test("an agent turn whose reply is shared with the person's prompt stays hidden:
   draw(v, cx);
   expect(v.turnKeys(v.rows())).toEqual(["0:1"]);
   expect(v.counts()).toMatchObject({ foldedAll: 0, hiddenAll: 1 });
+});
+
+// Sender rules (settings.json senders): typed prompts that are really agents' messages.
+// Made-up names and text.
+const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
+const FROM = "From release-checker: two links in the changelog are dead";
+const SENDERS = { senders: [{ name: "Hourly report", prefix: "{name} hourly" }, { prefix: "From {name}:" }] };
+const senderEvents = () => [
+  { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+  // The hourly report, with a reply of its own: folded once a rule marks it.
+  { k: "p", o: "human", t: HOURLY, ts: at(2) }, { k: "t", t: "Noted, nothing to do." }, { k: "d", ms: 800, ts: at(3) },
+  // The From message, with no reply: hidden once a rule marks it.
+  { k: "p", o: "human", t: FROM, ts: at(4) }, { k: "d", ms: 200, ts: at(5) },
+];
+const tooltips = (v, cx) => { rec = []; v.render(cx); const out = rec.filter(([n]) => n === "tooltip").map(([, x]) => x); rec = null; return out; };
+
+test("with no sender rules nothing changes: typed prompts stay the person's", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.applyPrefs("{}");
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(v.rows().some((r) => r.kind === "afold")).toBe(false);
+  expect(v.current().turns.every((t) => !t.agent)).toBe(true);
+  expect(v.counts()).toMatchObject({ agentAll: 0, foldedAll: 0, hiddenAll: 0 });
+  expect(v.settingsLine()).toBe("Link rules · 0 · Quote key · q");
+  expect(v.sendersVer).toBe(0);
+});
+
+test("a typed prompt a sender rule matches folds, hides and counts as an agent message, and the rule is named", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  const ver = v.current().version;
+  // Rules arrive after the rows were built: the turns are marked again and the rows follow.
+  v.applyPrefs(JSON.stringify(SENDERS));
+  expect(v.current().version).toBe(ver + 1);
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2"]);
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.kind === "turn" && r.key === "0:2");
+  expect(rows[i - 1]).toMatchObject({ kind: "afold", key: "af:0:2", fold: "folded" });
+  const detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · agent message rule1"))).toBe(true);
+  expect(v.counts()).toMatchObject({ agentAll: 2, foldedAll: 1, hiddenAll: 1 });
+  expect(v.headerButtons().find((b) => b[0] === "th-agents")[2]).toBe("Show agent messages (1 folded, 1 hidden) (a)");
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 · Quote key · q");
+  // Which rule: the folded line's tooltip names it.
+  expect(v.ruleTip(v.current().turns[1])).toBe("Marked by sender rule 1 · Hourly report");
+  expect(tooltips(v, cx)).toContain("Marked by sender rule 1 · Hourly report");
+  // Shown whole (a), the sender line over the message carries the same tooltip.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.includes("agent:peer:release-checker"))).toBe(true);
+  expect(tooltips(v, cx)).toContain("Marked by sender rule 2 · From {name}:");
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // In Pinned: a pinned rule-marked turn carries its sender like any agent message.
+  v.sel = "0:2";
+  v.action("pin", cx);
+  v.setView("pinned");
+  rec = [];
+  v.render(cx);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(v.rows().find((r) => r.key === "0:2")?.turn.agent).toBe(true);
+  expect(kids).toContain("build-bot · agent message");
+  v.setView("all");
+  // The rules removed: every turn is the person's again, with no stale row kept.
+  v.applyPrefs("{}");
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(v.rows().some((r) => r.kind === "afold")).toBe(false);
+  expect(v.counts()).toMatchObject({ agentAll: 0, foldedAll: 0, hiddenAll: 0 });
+  expect(v.shape(v.current().turns[1]).blank).toBeFalsy();
+});
+
+test("a sender rule that is not valid shows a note in the panel and is ignored", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.applyPrefs(JSON.stringify({ senders: [{ pattern: "^(?<sender>(a+)+)!" }, { pattern: "^From (\\w+):" }] }));
+  expect(v.prefsNotes).toEqual(["Sender rule 1: nested quantifier, as in (a+)+", "Sender rule 2: pattern has no (?<sender>...) group"]);
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not valid) · Quote key · q");
+  expect(v.current().turns.every((t) => !t.agent)).toBe(true);
+  // The card shows them where it shows notes the Link rules page cannot place on a rule.
+  v.settingsOpen = true;
+  v.setPage = "links";
+  rec = [];
+  v.render(cx);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(kids).toContain("Sender rule 1: nested quantifier, as in (a+)+");
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+});
+
+test("agentRail: on by default, agent messages have rail ticks; off, only the person's turns and the running one do", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    // A teammate's message with a reply of its own: folded, so it is in the list.
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good. The release note needs one more line." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+    // A teammate's message still running: the running turn.
+    { k: "p", o: "peer", t: peer("Checking the docs build"), ts: at(6) },
+  ]);
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  expect(v.prefs.agentRail).toBe(true);
+  draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "afold" && r.turnKey === "0:2")).toBe(true);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // The panel's switch, next to Agent messages.
+  v.settingsOpen = true;
+  rec = [];
+  v.render(cx);
+  const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
+  expect(kids).toContain("Agent messages on the rail");
+  v.settingsOpen = false;
+  // Off: the folded agent message leaves the rail and stays in the list; the running one keeps its tick.
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(false);
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  expect(v.turnKeys(v.rows())).toContain("0:2");
+  // With agent messages shown whole, they stay off the rail too.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  // Back on from the file.
+  v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: true }));
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
 });
 
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
@@ -1359,9 +1509,8 @@ test("long messages show in full by default: no Show more anywhere, and Shorten 
   expect(sh.pMore).toBe(false);
   expect(sh.md.length).toBeGreaterThanOrEqual(v.replyText(long).length - 10);
   expect(strings(() => v.rowItem(theme, row(), false))).not.toContain("Show more");
-  // The card's Chat tab: the switch, with no hint that repeats it, and no line steppers while it is off.
+  // The card: the switch, with no hint that repeats it, and no line steppers while it is off.
   v.action("settings", cx);
-  expect(v.setTab).toBe("chat");
   let panel = strings(() => v.render(cx));
   expect(panel).toContain("Shorten long messages");
   expect(panel).not.toContain("Every message and reply shows in full.");
@@ -1454,6 +1603,77 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   expect(src).toMatch(/\*… 50,003 more characters not shown\*$/);
   t3b.prompt = keep;
   v.full.clear();
+});
+
+test("link rules in a coloured bubble: the open turn lists the prompt's links under the bubble (issue 116)", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--links"));
+  v.width = 380;
+  v.applyPrefs(JSON.stringify({ links: [
+    { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" },
+    { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
+  ] }));
+  expect(v.prefs.bubbleColor).toBe("blue");
+  v.remote = { key: "t4|null", repo: "acme/widgets", owner: "acme", why: "test" };
+  v.open = new Set(["0:1"]);
+  mdSources.length = 0;
+  draw(v, cx);
+  const you = v.rows().find((r) => r.kind === "you");
+  const y = v.youMd(you);
+  // The bubble is plain text in its own ink, so the links go on a line of their own under it,
+  // drawn as Markdown, each once.
+  expect(y.plain).toBe(true);
+  expect(y.linkMd).toContain("[ACME\\-123](https://linear.app/acme/issue/ACME-123)");
+  expect(y.linkMd).toContain("(https://github.com/acme/widgets/pull/");
+  expect(new Set(y.linkMd.match(/\]\(([^)]+)\)/g)).size).toBe(y.linkMd.match(/\]\(([^)]+)\)/g).length);
+  expect(mdSources.some(([id, md]) => id.startsWith("th-ylk-") && md === y.linkMd)).toBe(true);
+  const withLinks = v.youHeight(you);
+  // The same turn with a plain bubble carries its links inside the bubble and has no link line.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
+  const plain = v.youMd(you);
+  expect(plain.plain).toBe(false);
+  expect(plain.linkMd).toBe(null);
+  v.prefs = { ...v.prefs, bubbleColor: "blue" };
+  expect(v.youHeight(you)).toBe(withLinks);
+  // With no rule that matches, a coloured bubble has no link line and its height is the same
+  // as before this line existed.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "None", pattern: "\\bZZZ-(\\d+)\\b", url: "https://z.example/$1" }] }));
+  draw(v, cx);
+  const bare = v.youMd(v.rows().find((r) => r.kind === "you"));
+  expect(bare.linkMd).toBe(null);
+  expect(withLinks - v.youHeight(v.rows().find((r) => r.kind === "you"))).toBeGreaterThan(0);
+});
+
+test("the link line is in the prompt part's measure key: a measure taken without the line is not used once it draws (PR 120 follow-up)", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--links"));
+  v.width = 380;
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
+  v.open = new Set(["0:1"]);
+  draw(v, cx);
+  const you = v.rows().find((r) => r.kind === "you");
+  // Another session lands on the same part key (the session's place and the turn number): a
+  // prompt of the same length, first with no match, measured at 60 px with no line.
+  const asTurn = (prompt) => ({ ...you, turn: { ...you.turn, prompt, youMemo: undefined } });
+  const before = asTurn("Fix the rounding bug in ACMX-123 today");
+  const after = asTurn("Fix the rounding bug in ACME-123 today");
+  expect(before.turn.prompt.length).toBe(after.turn.prompt.length);
+  expect(v.youMd(before).linkMd).toBe(null);
+  v.probed(before.key, v.partSig(before), { width: 300, height: 60 * v.zoom() }, cx);
+  expect(v.measured(before)).toBe(60);
+  // The same key and length, now with a link line: the old 60 px would put the line over the
+  // time strip, so the measure is not used and the slot falls back to the estimate, which
+  // counts the line, until the probe measures again.
+  expect(v.youMd(after).linkMd).toContain("ACME\\-123");
+  expect(v.measured(after)).toBe(null);
+  expect(v.youHeight(after)).toBeGreaterThan(v.youHeight(before));
+  // The worst case for the line: a prompt of short lines, one ticket key each, makes a narrow
+  // bubble and eight links. The line is as wide as the bubble, inside its padding, and its
+  // estimate is the whole-link wrap (ui.js linkLineRows, checked against a word wrap in
+  // links.test.js), here one link a row.
+  const keys = Array.from({ length: 8 }, (_, i) => `ACME-${101 + i}`);
+  const y = v.youMd(asTurn(keys.join("\n")));
+  expect(y.bw).toBeLessThan(140);
+  expect(y.linkH).toBe(4 + 18 * linkLineRows(keys, y.bw - 2 * 10));
+  expect(y.linkH).toBeGreaterThanOrEqual(4 + 18 * 8);
 });
 
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
@@ -1565,9 +1785,20 @@ async function until(f, what, n = 400) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-// Runs in a child bun with BUN_JSC_useJIT=0 (the interpreter's speed); the parent test below
-// starts it and checks what it wrote.
+// Runs in a child bun; the parent test below starts it and checks what it wrote.
+// The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
+// SHAPE_MS) moves only by the work counted, at the interpreter's prices (PRICE). On the wall
+// clock the read's last stretch came to 26 to 31 ms against a 30 ms bound, and 40 to 70 ms on
+// a busy machine: time spent waiting for a CPU counted as the read's. On this clock each run
+// does the same work in the same stretches on any machine, however busy, and more work in a
+// stretch still costs more.
 test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fixture and time each synchronous stretch", async () => {
+  for (const [name, n] of [["reshape", "reshapes"], ["turnRows", "built"]]) {
+    const f = Threads.prototype[name];
+    Threads.prototype[name] = function (...a) { work[n]++; return f.apply(this, a); };
+  }
+  const realPerf = performance.now.bind(performance);
+  performance.now = worked;
   const pcts = [];
   let v;
   const r = await paneWith(busy(), (cx, view) => {
@@ -1586,11 +1817,26 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   marks = null;
   // The longest stretch from a resume ("in") to the next hand-off ("out"), or to the end of
   // the read for the last one.
+  // most: the most work of each kind in one stretch.
   let longest = 0;
-  for (let i = 1; i < m.length; i++) if (m[i][0] === "out" && m[i - 1][0] === "in") longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+  const most = { lines: 0, events: 0, reshapes: 0, built: 0 };
+  for (let i = 1; i < m.length; i++) {
+    if (m[i][0] !== "out" || m[i - 1][0] !== "in") continue;
+    longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+    for (const k in most) most[k] = Math.max(most[k], m[i][2][k] - m[i - 1][2][k]);
+  }
+  const read = { ...work };
   // B1: the agent toggle rebuilds the rows, and an open card draws with its probe.
   const view = r.v;
-  const time = (f) => { const a = performance.now(); f(); return performance.now() - a; };
+  // The time a step takes (for the log) and the work it did.
+  const time = (f) => {
+    const w = { ...work };
+    const a = performance.now();
+    f();
+    const out = { ms: performance.now() - a };
+    for (const k in work) out[k] = work[k] - w[k];
+    return out;
+  };
   view.rows();
   const toggleOn = time(() => { view.setPrefs({ ...view.prefs, agentTurns: true }); view.rows(); });
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
@@ -1608,16 +1854,17 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   listWindow = null;
   view.toggle(keys.at(-3), r.cx);
   const allFrame = time(() => view.render(r.cx));
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
+  performance.now = realPerf;
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
-test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", async () => {
+test("S1: the read's longest synchronous stretch is at most 30 ms of work at the interpreter's speed, and the percentage rises chunk by chunk", async () => {
   const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
   // Not execFileSync: while the child runs, this process stays free to take a signal, so a
   // stopped run ends the child too (test/preload.js) instead of leaving it reading.
   await new Promise((resolve, reject) => {
     const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-      env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
+      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
     });
     const timer = setTimeout(() => child.kill(), 120000);
     child.on("error", reject);
@@ -1626,25 +1873,25 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);
   expect(r.turns).toBe(1305);
-  // The bounds below are for a developer machine. GitHub's shared runners measured about 1.3x
-  // slower (32 ms, 207 ms), so CI allows twice each: the regressions they guard against (a
-  // whole read parsed in one go, rows rebuilt per frame) cost several times more.
-  const slow = process.env.CI ? 2 : 1;
-  // 30 ms, not 25: 1,170 of this fixture's 1,305 turns are agent messages with a reply, which
-  // show folded while agent messages are hidden, and the last stretch shapes the turns in view
-  // from them (20 to 23 ms before they showed, 26 to 28 ms after).
-  expect(r.longest).toBeLessThanOrEqual(30 * slow);
+  // The bounds are in ms of work at the interpreter's prices (PRICE, the child's clock), so
+  // they are the same in CI, on any machine and under load. The longest stretch is the last:
+  // it builds the rows (BUILD_MS) and shapes the turns in view (SHAPE_MS), 18.6 ms here.
+  expect(r.longest).toBeLessThanOrEqual(30);
+  // The read yields after each chunk at least: no stretch parses or applies half the session.
+  // A whole read parsed in one go puts every line in one.
+  expect(r.most.lines).toBeLessThan(r.read.lines / 2);
+  expect(r.most.events).toBeLessThan(r.read.events / 2);
   expect(r.pcts.length).toBeGreaterThanOrEqual(4);
   for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
   expect(r.pcts.at(-1)).toBe(100);
-  // Showing agent messages shapes about 1,170 rows for the first time: 112 to 133 ms in this
-  // harness, the same as on a build checked in a drawn window, so the bound is loose. Hiding them and
-  // drawing an open card with its probe stay small.
-  expect(r.toggleOn).toBeLessThan(200 * slow);
-  expect(r.toggleOff).toBeLessThan(25 * slow);
-  expect(r.openFrame).toBeLessThan(50 * slow);
-  const f = (x) => x.toFixed(1);
-  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms; with every row drawn ${f(r.allFrame)} ms`);
+  // Showing agent messages shapes about 1,170 rows for the first time, within the draw's
+  // shaping time, so the bound is loose. Hiding them and drawing an open card with its probe
+  // stay small.
+  expect(r.toggleOn.ms).toBeLessThan(200);
+  expect(r.toggleOff.ms).toBeLessThan(25);
+  expect(r.openFrame.ms).toBeLessThan(50);
+  const f = (x) => `${x.ms.toFixed(1)} ms (${x.reshapes} reshaped, ${x.built} built)`;
+  console.log(`S1 work, at the interpreter's prices: longest stretch ${r.longest.toFixed(1)} ms over ${r.awaits} awaits, at most ${r.most.lines} lines and ${r.most.events} events in one; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)}, off ${f(r.toggleOff)}; open-card frame ${f(r.openFrame)}, next ${f(r.nextFrame)}; with every row drawn ${f(r.allFrame)}`);
 }, 130000);
 
 test("S1: before the first chunk the header says Reading… with no percentage, and the bar is indeterminate", async () => {
@@ -4274,11 +4521,8 @@ test("names: none over your message, none over a reply (one agent), who replied 
   // There is no name setting: the settings panel has no name field, and the image viewer
   // heads the user's turn "User".
   v.setSettings(true);
-  for (const tab of ["general", "chat"]) {
-    v.setTab = tab;
-    rec = []; v.settingsCard(theme); const panel = rec; rec = null;
-    expect(panel).not.toContainEqual(["child", "Your name"]);
-  }
+  rec = []; v.settingsCard(theme); const panel = rec; rec = null;
+  expect(panel).not.toContainEqual(["child", "Your name"]);
   expect(v.viewerTurn(row.turn).who).toBe("User");
 });
 
@@ -7696,7 +7940,6 @@ test("landExact: the nearest earlier item at least want above, lifted by the res
 test("Rail side lists Left on the left and Right on the right", async () => {
   const { v, cx } = await pinPane("--extra", "2");
   v.action("settings", cx);
-  v.setTab = "general";
   rec = [];
   v.settingsCard(theme);
   const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
@@ -8245,20 +8488,21 @@ const strsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] ==
 const idsIn = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
 const cardOf = (v) => { rec = []; v.settingsCard(theme); const c = rec; rec = null; return c; };
 
-test("the settings card: over the list, opens on Chat with the keyboard, closes on a press outside, the x, Esc or the comma", async () => {
+test("the settings card: over the list, opens at the top with the keyboard, closes on a press outside, the x, Esc or the comma", async () => {
   const { v, cx } = await pane(fixture("--extra", "4"));
   v.width = 545; v.paneW = 573; v.rootH = 700;
   const before = focusCalls;
   v.key(keyEv(","), cx);
   expect(v.settingsOpen).toBe(true);
-  expect(v.setTab).toBe("chat");
   expect(focusCalls).toBeGreaterThan(before); // the pane has the keyboard, so one Esc closes it
   let c = frame(v, cx);
   const ids = idsIn(c);
   // A clear layer over the pane, then the card, both after the list: the list does not move.
   expect(ids.indexOf("th-set-catch")).toBeGreaterThan(ids.indexOf("threads-listbox"));
-  expect(ids).toEqual(expect.arrayContaining(["th-set-card", "th-set-close", "th-set-tab-general", "th-set-tab-chat", "th-set-preview", "th-set-foot", "th-set-keys"]));
-  expect(ids.filter((x) => x.startsWith("th-set-tab-"))).toEqual(["th-set-tab-general", "th-set-tab-chat"]);
+  expect(ids).toEqual(expect.arrayContaining(["th-set-card", "th-set-close", "th-set-foot", "th-set-keys"]));
+  // One page: no tab band and no preview band.
+  expect(ids.filter((x) => x.startsWith("th-set-tab-") || x === "th-set-preview")).toEqual([]);
+  const bodyId = (c) => idsIn(c).find((x) => x.startsWith("th-set-body-"));
   expect(ids).not.toContain("th-top");
   // 440 px at most, 12 px from the pane's right edge, and the pane less 12 px each side when narrower.
   expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 3]).toEqual(["right", 12]);
@@ -8298,85 +8542,91 @@ test("the settings card: over the list, opens on Chat with the keyboard, closes 
   c = frame(v, cx);
   onOf(c, "th-set-card", "on_mouse_down_out")({}, cx);
   expect(v.settingsOpen).toBe(false);
-  // The comma again, and the tabs.
+  // The comma again.
   v.key(keyEv(","), cx);
   v.key(keyEv(","), cx);
   expect(v.settingsOpen).toBe(false);
+  // It opens at the top each time: its scroll area is a new one (Herdr keeps a scroll
+  // position by element id), and the first rows are Text and colors and Text size.
   v.action("settings", cx);
-  c = frame(v, cx);
-  onOf(c, "th-set-tab-general", "on_click")({}, cx);
-  expect(v.setTab).toBe("general");
-  // It opens on Chat each time.
-  v.closeSettings(); v.action("settings", cx);
-  expect(v.setTab).toBe("chat");
+  const first = bodyId(frame(v, cx));
+  expect(bodyId(frame(v, cx))).toBe(first);
+  v.closeSettings(); v.key(keyEv(","), cx);
+  expect(bodyId(frame(v, cx))).not.toBe(first);
+  expect(idsIn(cardOf(v)).find((x) => x.startsWith("th-textSize-"))).toBe("th-textSize-minus");
   draw(v, cx);
 });
 
-test("General holds text, rail side, key hints, the two message colors, link rules, the quote key and the file; Chat holds messages and the width", async () => {
+test("one page: Messages, Agent messages, Layout, Links and keys and File, in that order, then Reset once", async () => {
   const { v, cx } = await pane(fixture("--extra", "4", "--agents"));
   v.width = 545; v.paneW = 573; v.rootH = 700;
   v.action("settings", cx);
-  v.setTab = "general";
   const g = cardOf(v);
   const gs = strsOf(g);
-  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "User messages", "Agent messages", "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
-  for (const s of ["Show agent messages", "Width", "Shorten long messages", "Always show time", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(s);
-  // Headings in the keys sheet's style, US spelling; the rows lost their icons.
+  // The page as the owner approved it: each section with its rows, in order. Moving a row or
+  // renaming a section is one line here (and one in CARD_SECTIONS). A section's heading is
+  // recorded after its rows, so a row belongs to the first heading that follows it.
+  const PAGE = [
+    ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
+    ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color"]],
+    ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
+    ["Links and keys", ["Link rules", "Quote key"]],
+    ["File", ["Copy path"]],
+  ];
+  const heads = PAGE.map(([name]) => gs.indexOf(name));
+  expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
+  expect(heads).toEqual([...heads].sort((a, b) => a - b));
+  let last = -1;
+  PAGE.forEach(([name, labels], n) => {
+    for (const label of labels) {
+      const at = gs.indexOf(label);
+      expect([name, label, at > last && at < heads[n]]).toEqual([name, label, true]);
+      last = at;
+    }
+    last = heads[n];
+  });
+  // Then Reset, once, with its line, at the end.
+  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
+  expect(gs.indexOf("Link rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
+  for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
+  for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
+  expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
+  expect(gs.filter((x) => x === "Layout")).toHaveLength(1);
+  // Headings in the keys sheet's style, US spelling; the rows have no icons.
   expect(gs).not.toContain("Colours");
   const icons = g.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   for (const gone of ["bot.svg", "clock.svg", "scissors.svg", "fold-horizontal.svg", "move-horizontal.svg"]) expect(icons).not.toContain(gone);
   // A color's name is its dot's tooltip: amber is the agent default now.
   expect(g.some((e) => e[0] === "tooltip" && e[1] === "Amber · default")).toBe(true);
   expect(g.some((e) => e[0] === "tooltip" && e[1] === "Blue · default")).toBe(true);
-  v.setTab = "chat";
-  const ch = strsOf(cardOf(v));
-  for (const s of ["Messages", "Layout", "Show agent messages", "Shorten long messages", "Always show time", "Width", "Comfortable", "Wide", "Full", "Keep the pane at this width", "Reset to defaults"]) expect(ch).toContain(s);
-  for (const s of ["User messages", "Agent messages", "Text size", "Quote key", "Copy path", "Rail side"]) expect(ch).not.toContain(s);
   // The hidden count sits beside its switch; the two hints that repeated a switch are gone.
-  expect(ch.some((x) => /\d+ (hidden|folded)/.test(x))).toBe(true);
-  expect(ch).not.toContain("A message's time shows when its turn is selected.");
+  expect(gs.some((x) => /\d+ (hidden|folded)/.test(x))).toBe(true);
+  expect(gs).not.toContain("A message's time shows when its turn is selected.");
   // The line counts sit under their switch only while it is on.
-  expect(ch).not.toContain("Prompt lines");
+  expect(gs).not.toContain("Prompt lines");
   v.action("truncate", cx);
-  expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Prompt lines", "Reply lines"]));
+  const on = strsOf(cardOf(v));
+  expect(on.indexOf("Prompt lines")).toBeGreaterThan(on.indexOf("Shorten long messages"));
+  expect(on.indexOf("Reply lines")).toBeLessThan(on.indexOf("Always show time"));
 });
 
-test("the preview follows text size, both colors, the time, hidden agent messages and the rail's side", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
-  v.width = 545; v.paneW = 573;
+test("no tab band and no preview band at any width or height, and nothing on the card answers to a tab", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--agents"));
   v.action("settings", cx);
-  const pv = () => { rec = []; v.cardPreview(theme, 440); const c = rec; rec = null; return c; };
-  let c = pv();
-  // The short words always, at the real text size, each bubble at most 45% of the band.
-  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "From an agent", "From the user", "9:12 AM"]));
-  expect(strsOf(c)).not.toContain("9:10 AM");
-  // Hidden shows in the label only: nothing in the preview is faded, so the agent's words
-  // keep their ink on the amber fill (white, 5.37:1), on light and dark themes alike.
-  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
-  expect(c).toContainEqual(["bg", "#87643A"]); // amber
-  const at = c.findIndex((e) => e[0] === "bg" && e[1] === "#87643A");
-  const ink = c.slice(at).find((e) => e[0] === "text_color")[1];
-  expect(contrast(ink, "#87643A")).toBeGreaterThanOrEqual(4.5);
-  expect(c).toContainEqual(["text_size", 14]);
-  expect(c.filter((e) => e[0] === "max_w")).toEqual([["max_w", 198], ["max_w", 198]]);
-  // 10 px above and below: the line height plus 68.
-  expect(v.previewH()).toBe(v.rt().line + 68);
-  expect(c).toContainEqual(["py", 10]);
-  // The ticks on the inset (16 px in), and 36 px on the rail's side to the bubbles.
-  expect(c).toContainEqual(["right", 16]);
-  expect(c).toContainEqual(["pl", 16]);
-  expect(c).toContainEqual(["pr", 36]);
-  v.prefs = { ...v.prefs, agentTurns: true, alwaysShowTime: true, textSize: 16, railSide: "left", agentBubbleColor: "teal" };
-  c = pv();
-  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent", "9:10 AM"]));
-  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
-  expect(c).toContainEqual(["bg", "#36706D"]);
-  expect(c).toContainEqual(["text_size", 16]);
-  expect(c).toContainEqual(["left", 16]);
-  expect(c).toContainEqual(["pl", 36]);
-  // A narrow card shortens the label to keep one line.
-  v.prefs = { ...v.prefs, agentTurns: false };
-  expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From the user"]));
+  for (const pw of [300, 360, 460, 573, 600, 800, 1200]) {
+    for (const h of [260, 420, 900]) {
+      v.paneW = pw; v.width = Math.max(240, pw - 28); v.rootH = h;
+      const c = cardOf(v);
+      expect(idsIn(c).filter((x) => x.startsWith("th-set-tab-") || x === "th-set-preview")).toEqual([]);
+      expect(strsOf(c)).not.toContain("From the user");
+    }
+  }
+  expect(v.action("settingsTab:general", cx)).toBe(false);
+  expect(v.action("settingsTab:chat", cx)).toBe(false);
+  expect("setTab" in v).toBe(false);
+  expect(typeof v.cardPreview).toBe("undefined");
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.settingsCard).not.toHaveProperty("tab");
 });
 
 test("a switch on the card shows no toast; the a key still says what it did", async () => {
@@ -8411,10 +8661,22 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
 });
 const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
 
+test("Reset also covers Agent messages on the rail: switched off alone, Reset is lit and turns it back on", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.action("settings", cx);
+  expect(v.prefsDiffer()).toBe(false);
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(false);
+  expect(v.prefsDiffer()).toBe(true);
+  v.action("resetSettings", cx);
+  expect(v.prefs.agentRail).toBe(true);
+  expect(v.prefsDiffer()).toBe(false);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
 test("the file: its path with Copy path, which says Copied in its own place with no toast; no Open, which the mod has no way to do", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.action("settings", cx);
-  v.setTab = "general";
   const c = cardOf(v);
   expect(idsIn(c)).not.toContain("th-set-open");
   expect(strsOf(c)).not.toContain("Open");
@@ -8429,10 +8691,10 @@ test("the file: its path with Copy path, which says Copied in its own place with
   expect(v.action("openSettingsFile", cx)).toBe(false);
 });
 
-test("a field that leaves the screen gives the keyboard back: a tab, the Link rules row, Back, or a command, after typing in the quote key field", async () => {
+test("a field that leaves the screen gives the keyboard back: the Link rules row, Back, or a command, after typing in the quote key field", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.action("settings", cx);
-  const into = () => { v.setTab = "general"; v.setPage = "main"; v.quoteInput.handlers.focus({}, cx); expect(v.fieldFocused).toBe("quote"); };
+  const into = () => { v.setPage = "main"; v.quoteInput.handlers.focus({}, cx); expect(v.fieldFocused).toBe("quote"); };
   const back = (how) => {
     const f0 = focusCalls;
     how();
@@ -8445,16 +8707,11 @@ test("a field that leaves the screen gives the keyboard back: a tab, the Link ru
     return sel;
   };
   into();
-  back(() => onOf(cardOf(v), "th-set-tab-chat", "on_click")({}, cx));
-  expect(v.setTab).toBe("chat");
-  into();
   back(() => onOf(cardOf(v), "th-set-links", "on_click")({}, cx));
   expect(v.setPage).toBe("links");
   into();
   v.setPage = "links";
   back(() => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-back"); c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx); });
-  into();
-  back(() => v.action("settingsTab:chat", cx));
   into();
   back(() => v.action("settingsPage:links", cx));
 });
@@ -8462,7 +8719,6 @@ test("a field that leaves the screen gives the keyboard back: a tab, the Link ru
 test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.action("settings", cx);
-  v.setTab = "general";
   const q = v.quoteInput;
   expect(q.value()).toBe("q");
   settingsWrites.length = 0;
@@ -8561,7 +8817,6 @@ test("key hints at the bottom are off by default; the switch brings the row back
   expect([v.keysOpen, v.settingsOpen]).toEqual([true, false]);
   v.action("escape", cx);
   v.action("settings", cx);
-  v.setTab = "general";
   c = frame(v, cx);
   onOf(c, "th-set-hints", "on_click")({}, cx);
   expect(v.prefs.keyHints).toBe(true);
@@ -8571,18 +8826,34 @@ test("key hints at the bottom are off by default; the switch brings the row back
   await new Promise((r) => setTimeout(r, 20));
 });
 
+test("the card leaves a 160 px strip of the list under it, except in a pane under 514 px tall", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  // 800 px tall: the card ends 160 px above the bottom (top band 32, head 40, foot 40, 2 px border).
+  v.rootH = 800;
+  expect(bodyH()).toBe(800 - 32 - 160 - (40 + 40 + 2));
+  v.rootH = 514;
+  expect(bodyH()).toBe(514 - 32 - 160 - (40 + 40 + 2));
+  // Under 514 px the card takes the height, 12 px above the bottom.
+  v.rootH = 513;
+  expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
+});
+
 test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.width = 545; v.paneW = 573; v.rootH = 400;
   v.action("settings", cx);
-  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-body-chat"); return c.slice(at).find((e) => e[0] === "h")[1]; };
-  const room = 400 - 32 - 12 - (40 + 36 + v.previewH() + 40 + 2);
+  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
+  const room = 400 - 32 - 12 - (40 + 40 + 2);
   expect(bodyH()).toBe(room);
   // Measured shorter than the room: the card is as tall as its rows.
   const c = cardOf(v);
-  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 120, width: 400 }, cx);
+  onOf(c, "th-set-rows-main", "on_size_change")({ height: 120, width: 400 }, cx);
   expect(bodyH()).toBe(120);
-  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 900, width: 400 }, cx);
+  onOf(c, "th-set-rows-main", "on_size_change")({ height: 900, width: 400 }, cx);
   expect(bodyH()).toBe(room);
   // The key hints take their room.
   v.prefs = { ...v.prefs, keyHints: true };
@@ -8666,11 +8937,10 @@ test("nothing under the settings card or the keys sheet reacts: the rail and its
 // settings-spacing 1 to 5 and 8: one inset on every band, so the title, the tabs, the labels
 // and the foot share a left edge; a 4 px grid; the comma key's cap gone from the head (it is
 // in the sliders icon's tooltip and on the keys sheet); readable text no fainter than muted.
-test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 px tabs, 28 px rows, muted helper text, no comma key in the head", async () => {
+test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no tab band, 28 px rows, muted helper text, no comma key in the head", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.width = 545; v.paneW = 573; v.rootH = 700;
   v.action("settings", cx);
-  v.setTab = "general";
   const muted = theme.muted;
   const of = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
   // From an element's id to the next id.
@@ -8679,12 +8949,11 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 p
   for (const x of [["h", 40], ["px", 16], ["text_size", 14], ["mr", -5]]) expect(head).toContainEqual(x);
   expect(strsOf(head)).toEqual(["Settings"]);
   expect(of(() => v.cardHead(theme, true, () => {}, 16))).toContainEqual(["ml", -5]);
-  const tabs = of(() => v.cardTabs(theme, 16));
-  for (const x of [["h", 36], ["px", 6], ["px", 10], ["text_size", 13]]) expect(tabs).toContainEqual(x);
+  expect(typeof v.cardTabs).toBe("undefined");
   const foot = of(() => v.cardFoot(theme, 16));
   for (const x of [["h", 40], ["px", 16], ["text_size", 12], ["text_color", muted]]) expect(foot).toContainEqual(x);
   let c = cardOf(v);
-  for (const x of [["px", 16], ["py", 16], ["gap", 20]]) expect(own(c, "th-set-rows-general")).toContainEqual(x);
+  for (const x of [["px", 16], ["py", 16], ["gap", 20]]) expect(own(c, "th-set-rows-main")).toContainEqual(x);
   // A switch: 32 by 18 with a 14 px knob; off, its track has a muted outline.
   const hints = own(c, "th-set-hints");
   for (const x of [["min_h", 28], ["w", 32], ["h", 18], ["size", 14], ["border_1"], ["border_color", muted]]) expect(hints).toContainEqual(x);
@@ -8708,7 +8977,7 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 p
   // Under 320: a 12 px inset, and Copy.
   v.paneW = 330;
   c = cardOf(v);
-  expect(own(c, "th-set-rows-general")).toContainEqual(["px", 12]);
+  expect(own(c, "th-set-rows-main")).toContainEqual(["px", 12]);
   expect(strsOf(c)).toContain("Copy");
   const narrow = strsOf(own(c, "th-set-path")).at(-1);
   expect(narrow.startsWith("…/")).toBe(true);
@@ -8719,13 +8988,12 @@ test("the width line under Width ends on the controls' right edge: it fills its 
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.width = 545; v.paneW = 573; v.rootH = 700;
   v.action("settings", cx);
-  v.setTab = "chat";
   const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
   for (const [paneW, pad] of [[573, 16], [330, 12]]) {
     v.paneW = paneW;
     const w = v.setCardW();
     const c = cardOf(v);
-    expect(own(c, `th-set-rows-chat`)).toContainEqual(["px", pad]);
+    expect(own(c, "th-set-rows-main")).toContainEqual(["px", pad]);
     const ruler = own(c, "th-set-ruler");
     // The line takes its row's width, as the chooser's row and the switch rows do, so no fixed
     // width can run past them (it was 2 px over: the card's border).
@@ -8750,7 +9018,6 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
     { name: "Miss", pattern: "\\bZED-(\\d+)\\b", url: "https://z.example/$1", example: "nothing here" },
   ] }));
   v.action("settings", cx);
-  v.setTab = "general";
   const g = strsOf(cardOf(v));
   expect(g).toEqual(expect.arrayContaining(["Link rules", "5", "1 not working"]));
   // The row opens the page.
@@ -8821,7 +9088,6 @@ test("a rule that turned slow on a reply shows Not working with the reason on th
   v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/$1", example: "Z-1" }] }));
   v.links[0].slow = "too slow on a reply; skipped until the rule changes";
   v.action("settings", cx);
-  v.setTab = "general";
   expect(strsOf(cardOf(v))).toContain("1 not working");
   v.setPage = "links";
   const c = cardOf(v);
@@ -9146,6 +9412,33 @@ test("no rules: the two types that fill a rule in dashed boxes, and Use opens on
   } finally { done(v); }
 });
 
+// The merge of the settings card with sender rules: a link rule change worked out the notes
+// again from the link rules alone, and the sender rules' notes went from the card.
+test("a link rule kept, switched or deleted on the card leaves the sender rules' notes on the Link rules page", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    const bad = "Sender rule 1: pattern has no (?<sender>...) group";
+    const file = JSON.stringify({ textSize: 15, links: RULES, senders: [{ pattern: "^From (\\w+):" }] });
+    recordFiles[v.prefsPath()] = file;
+    v.applyPrefs(file);
+    expect(strsOf(cardOf(v))).toContain(bad);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.prefsNotes).toContain(bad);
+    expect(strsOf(cardOf(v))).toContain(bad);
+    await settleAll(cx);
+    expect(lastLinks()[0].example).toBe("Fixed in ACME-7.");
+    expect(JSON.parse(settingsWrites.at(-1)).senders).toEqual([{ pattern: "^From (\\w+):" }]);
+    for (const press of [() => v.toggleRule(1, cx), () => v.removeRule(1, cx)]) {
+      press();
+      expect(strsOf(cardOf(v))).toContain(bad);
+      await settleAll(cx);
+      expect(strsOf(cardOf(v))).toContain(bad);
+    }
+  } finally { done(v); }
+});
+
 const ABCD = ["A", "B", "C", "D"].map((n) => ({ name: n, pattern: `\\b${n}-(\\d+)\\b`, url: `https://${n.toLowerCase()}.example/$1` }));
 
 test("an open rule follows its rule when the list changes under it: Keep never writes over another rule", async () => {
@@ -9314,6 +9607,38 @@ test("a rule change whose save finds the file's rules changed writes nothing ove
   } finally { done(v); }
 });
 
+// Second review of PR 97, N1: a Delete whose save is refused leaves no Undo behind, so Undo
+// cannot write the rule a second time ("X, Ticket, Ticket, Hash").
+test("a Delete that is not saved because the file's rules changed offers no Undo", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Delete is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleUndo).toBe(null);
+    const s = strsOf(cardOf(v));
+    expect(s).toContain(MOVED);
+    expect(s.some((x) => String(x).startsWith("Deleted "))).toBe(false);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-undo");
+    // A Delete that is saved still offers Undo, and Undo puts the rule back once.
+    settingsStale = false;
+    onOf(cardOf(v), "th-rule-delete-btn-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, RULES[1]]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-undo");
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, ...RULES]);
+  } finally { done(v); }
+});
+
 // Review of PR 97, L2: the open rule's example follows the session's repository.
 test("the open rule's example is worked out again when the session's repository changes", async () => {
   const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
@@ -9346,7 +9671,6 @@ test("the settings card stays open and as it was when the pane's session changes
     await looked(v);
     expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
     v.action("settings", cx);
-    v.setTab = "general";
     v.setPage = "links";
     onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
     typeIn(v, "name", "Pull", cx);
@@ -9357,7 +9681,7 @@ test("the settings card stays open and as it was when the pane's session changes
     await looked(v);
     expect(v.current().file).toEndWith(`${SESSION_B}.jsonl`);
     expect(shownPrompts(v)).toContain("Prompt in session B");
-    expect([v.settingsOpen, v.setTab, v.setPage]).toEqual([true, "general", "links"]);
+    expect([v.settingsOpen, v.setPage]).toEqual([true, "links"]);
     expect(v.ruleEdit.draft.name).toBe("Pull");
     const c = frame(v, cx);
     expect(idsIn(c)).toEqual(expect.arrayContaining(["th-set-card", "th-rule-keep"]));

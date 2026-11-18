@@ -10,6 +10,8 @@
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
+// agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
+// false leaves them off it (the running turn keeps its tick).
 // bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
 // "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
@@ -37,14 +39,17 @@
 // at most) and example (text the rule should turn into a link, shown on the Link rules
 // page). The card's Link rules page writes the whole list. A fresh install (no file) has one
 // rule, the pull request rule (DEFAULT_LINKS), switched on; the first write records it.
+// senders: rules that mark a typed prompt as an agent message and name its sender
+// (parseSenders), kept as written. No sender rules ship.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
 import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
+import { RULE_TEXT } from "./core/turns.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -81,6 +86,7 @@ export function parseSettings(text) {
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
+      agentRail: typeof raw.agentRail === "boolean" ? raw.agentRail : DEFAULTS.agentRail,
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,
@@ -95,7 +101,7 @@ export function parseSettings(text) {
   };
 }
 
-// ---- keys kept apart from the values: quoteKey and links ----
+// ---- keys kept apart from the values: quoteKey, links and senders ----
 // They stay out of the values above, so a save made from the panel (which writes
 // {...file, ...values}) keeps them exactly as they were written, even mid-edit. The card's
 // quote key field writes quoteKey alone, as an extra (settingsText).
@@ -120,7 +126,8 @@ function riskyShape(p) {
   for (let i = 0; i < p.length; i++) {
     const c = p[i];
     if (c === "\\") { i++; if (stack.length && /[dDwWsS]/.test(p[i] ?? "") && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
-    if (c === "[") { let j = i + 1; if (p[j] === "^") j++; if (p[j] === "]") j++; while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; } i = j; if (stack.length && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
+    // In JavaScript "[]" and "[^]" are whole classes: a "]" right after "[" or "[^" ends it.
+    if (c === "[") { let j = i + 1; if (p[j] === "^") j++; while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; } i = j; if (stack.length && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
     if (c === "(") { stack.push({ q: false, alt: false }); continue; }
     if (c === "|") { if (stack.length) stack[stack.length - 1].alt = true; continue; }
     if (c === ")") {
@@ -145,6 +152,167 @@ export function templateHost(url) {
   if (/\{(?!(repo|owner)\})/.test(m[2])) return null;
   return m[1].toLowerCase();
 }
+
+// A rule's pattern compiled with flags, or why it is refused: over 200 characters, a
+// backreference, a nested quantifier or an alternation under a quantifier (riskyShape), not
+// valid, or matching empty text. { re } or { why }.
+function patternShape(pattern, flags) {
+  if (pattern.length > 200) return { why: "pattern over 200 characters" };
+  if (/\\[1-9]|\\k</.test(pattern)) return { why: "backreferences are not allowed" };
+  const risky = riskyShape(pattern);
+  if (risky) return { why: risky };
+  let re;
+  try { re = new RegExp(pattern, flags); } catch { return { why: "pattern not valid" }; }
+  for (const probe of ["", "a", "a b", "#1", " "]) {
+    re.lastIndex = 0;
+    const m = re.exec(probe);
+    if (m && m[0] === "") return { why: "pattern matches empty text" };
+  }
+  return { re };
+}
+
+// The most work a sender pattern can take on one prompt, worked out from the pattern alone
+// and never timed, so neither a slow machine nor a pause can change it. A regular
+// expression with no backreference and no nested repeat (both refused before this) tries
+// each way of splitting the text between its repeats at most once from each start: the
+// count of those ways, bounded by the RULE_TEXT characters a rule ever sees, bounds its
+// steps. { open, steps }: open is the number of open-ended repeats (*, + and {n,}); steps
+// counts every place the matcher can stand at every part of the pattern, as if every
+// character matched, so it is an upper bound. A lookahead or lookbehind is tried once each
+// time it is reached and never backed into. Stops counting past stop, or 1e12.
+export function senderCost(pattern, room = RULE_TEXT, stop = Infinity) {
+  let i = 0;
+  let open = 0;
+  const p = pattern;
+  // The pattern as a tree: { alt: [seq] }, a seq is a list of items, an item is
+  // { kind: "char" | "start" | "zero" | "look" | "group", alt?, min, max }.
+  const parseAlt = () => {
+    const alt = [parseSeq()];
+    while (p[i] === "|") { i++; alt.push(parseSeq()); }
+    return alt;
+  };
+  const parseSeq = () => {
+    const seq = [];
+    while (i < p.length && p[i] !== "|" && p[i] !== ")") {
+      const item = parseAtom();
+      const q = /^(?:([*+?])|\{(\d+)(?:(,)(\d*))?\})\??/.exec(p.slice(i));
+      if (q) {
+        i += q[0].length;
+        if (q[1]) { item.min = q[1] === "+" ? 1 : 0; item.max = q[1] === "?" ? 1 : Infinity; } else { item.min = Number(q[2]); item.max = q[3] ? (q[4] ? Number(q[4]) : Infinity) : item.min; }
+        if (item.max === Infinity) open++;
+      }
+      seq.push(item);
+    }
+    return seq;
+  };
+  const parseAtom = () => {
+    const c = p[i];
+    if (c === "(") {
+      const m = /^\(\?(?:[:=!]|<[=!]|<[A-Za-z_$][\w$]*>)/.exec(p.slice(i));
+      const look = m && /^\(\?(?:[=!]|<[=!])$/.test(m[0]);
+      i += m ? m[0].length : 1;
+      const alt = parseAlt();
+      i++; // ")"
+      return { kind: look ? "look" : "group", alt, min: 1, max: 1 };
+    }
+    if (c === "[") {
+      // "[]" (nothing) and "[^]" (any character) are whole classes in JavaScript.
+      let j = i + 1;
+      if (p[j] === "^") j++;
+      while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; }
+      i = j + 1;
+      return { kind: "char", min: 1, max: 1 };
+    }
+    if (c === "\\") {
+      const e = p[i + 1] ?? "";
+      i += 2;
+      if (e === "b" || e === "B") return { kind: "zero", min: 1, max: 1 };
+      if (e === "u" && /^[0-9A-Fa-f]{4}/.test(p.slice(i))) i += 4;
+      else if (e === "x" && /^[0-9A-Fa-f]{2}/.test(p.slice(i))) i += 2;
+      else if (e === "c" && /^[A-Za-z]/.test(p[i] ?? "")) i++;
+      return { kind: "char", min: 1, max: 1 };
+    }
+    i++;
+    if (c === "^") return { kind: "start", min: 1, max: 1 };
+    if (c === "$") return { kind: "zero", min: 1, max: 1 };
+    return { kind: "char", min: 1, max: 1 };
+  };
+  const tree = parseAlt();
+  const CAP = 1e12;
+  const size = room + 1;
+  const STOP = {};
+  let spent = 0;
+  const add = (n) => { spent = Math.min(CAP, spent + n); if (spent > stop) throw STOP; };
+  const sum = (d) => { let s = 0; for (let x = 0; x < size; x++) s += d[x]; return Math.min(CAP, s); };
+  const unit = () => { const d = new Float64Array(size); d[0] = 1; return d; };
+  // The steps a group or lookaround takes once, from one place, kept apart from spent.
+  const alone = (alt) => { const before = spent; const d = runAlt(alt, unit(), false); const c = spent - before; spent = before; return { d, c }; };
+  // d[x]: the number of paths that stand x characters into the head. abs: x counts from the
+  // head's start, so ^ keeps only 0 (inside a repeat it counts from where the repeat began).
+  const runAlt = (alt, d, abs) => {
+    if (alt.length === 1) return runSeq(alt[0], d, abs);
+    const out = new Float64Array(size);
+    for (const seq of alt) { const r = runSeq(seq, d, abs); for (let x = 0; x < size; x++) out[x] = Math.min(CAP, out[x] + r[x]); }
+    return out;
+  };
+  const runSeq = (seq, d, abs) => {
+    for (const item of seq) d = item.min === 1 && item.max === 1 ? once(item, d, abs) : repeat(item, d, abs);
+    return d;
+  };
+  const once = (item, d, abs) => {
+    const n = sum(d);
+    add(n);
+    if (item.kind === "char") { const out = new Float64Array(size); out.set(d.subarray(0, room), 1); return out; }
+    if (item.kind === "start") { if (!abs) return d; const out = new Float64Array(size); out[0] = d[0]; return out; }
+    if (item.kind === "look") { if (n) add(n * alone(item.alt).c); return d; }
+    if (item.kind === "zero") return d;
+    return runAlt(item.alt, d, abs);
+  };
+  const repeat = (item, d, abs) => {
+    if (item.kind === "char") {
+      // min times, then up to max - min more: each path ends anywhere in that window.
+      for (let k = 0; k < Math.min(item.min, size); k++) d = once(item, d, abs);
+      if (item.min >= size) return new Float64Array(size);
+      const span = Math.min(item.max - item.min, room);
+      const out = new Float64Array(size);
+      let win = 0;
+      for (let x = 0; x < size; x++) { win += d[x]; if (x > span) win -= d[x - span - 1]; out[x] = Math.min(CAP, win); }
+      add(sum(out));
+      return out;
+    }
+    if (item.kind !== "group") { add(sum(d) * Math.min(item.min, size)); return d; }
+    // A group of fixed shape (no repeat inside a repeated group gets this far): one time of
+    // it from one place (rel), min times, then each further time while the head lasts. A
+    // further time that takes no text ends the repeat, as in JavaScript.
+    const rel = alone(item.alt);
+    const at = [];
+    for (let k = 0; k < size; k++) if (rel.d[k]) at.push(k, rel.d[k]);
+    const step = (from, skip0) => {
+      add(sum(from) * (1 + rel.c));
+      const out = new Float64Array(size);
+      for (let x = 0; x < size; x++) {
+        if (!from[x]) continue;
+        for (let j = 0; j < at.length; j += 2) if ((at[j] || !skip0) && x + at[j] < size) out[x + at[j]] = Math.min(CAP, out[x + at[j]] + from[x] * at[j + 1]);
+      }
+      return out;
+    };
+    for (let k = 0; k < Math.min(item.min, size + 1); k++) d = step(d, false);
+    if (item.min > size + 1 && sum(d) > 0) add(CAP);
+    const out = d.slice();
+    for (let k = item.min; k < item.max && sum(d) > 0; k++) {
+      d = step(d, true);
+      for (let x = 0; x < size; x++) out[x] = Math.min(CAP, out[x] + d[x]);
+    }
+    return out;
+  };
+  try { runAlt(tree, new Float64Array(size).fill(1), true); } catch (e) { if (e !== STOP) throw e; }
+  return { open, steps: spent };
+}
+// The most open-ended repeats a sender pattern may have, and the most steps (senderCost).
+export const SENDER_OPEN = 3;
+export const SENDER_STEPS = 1e6;
+// The most steps all sender rules together may take on one prompt: rules past it are dropped.
+export const SENDER_TOTAL = 2e6;
 
 // A rule's type: the icon the Link rules page shows for it, and nothing else.
 export const LINK_TYPES = Object.freeze(["custom", "ticket", "pull-request"]);
@@ -257,8 +425,87 @@ function linkFault(r, i) {
 const LONG_PROBE = 2048;
 export const SLOW_LONG = "too slow on long text; disabled";
 
-// quoteKey and links from the file's text, with their notes. Text that does not parse
-// gives the defaults (parseSettings reports that).
+// senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
+// matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
+// prompt's start with one {name} in it, the sender: "[{name}] ". A pattern is a JavaScript
+// regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
+// A rule is dropped, with a note, when it has both or neither, a prefix is over 100
+// characters, has no {name} (it would mark every prompt that starts with it, "From:" or
+// "ab", with no sender), holds {name} twice or has under 2 characters besides it, a pattern
+// is not valid, has no sender group, fails a check link patterns have (patternShape), has
+// more than SENDER_OPEN open-ended repeats, or could take more than SENDER_STEPS steps on a
+// prompt, or would take the rules so far past SENDER_TOTAL steps between them (senderCost;
+// a prefix rule counts too), so one prompt costs a bounded time whatever the rules
+// prompt (senderCost), or it is past the 20th. Each kept rule: { n, label (its name, else
+// its prefix or pattern), re, named (true: the match names the sender) }. No clock is read,
+// so the same file always gives the same rules. No rule ships.
+export function parseSenders(raw, cost = senderCost) {
+  const rules = [];
+  const notes = [];
+  if (raw == null) return { rules, notes };
+  if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
+  let spent = 0;
+  // The step count, or why it could not be had: an error in the counter refuses this one
+  // rule and leaves the others alone.
+  const counted = (source) => {
+    try {
+      const c = cost(source, RULE_TEXT, SENDER_STEPS);
+      if (!Number.isFinite(c?.open) || !(c?.steps >= 0)) throw new Error("no count");
+      return c;
+    } catch {
+      return { why: "could not be checked; ignored" };
+    }
+  };
+  const keep = (rule, steps) => {
+    if (spent + steps > SENDER_TOTAL) return notes.push(`Sender rule ${rule.n}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
+    spent += steps;
+    rules.push(rule);
+  };
+  raw.forEach((r, i) => {
+    const n = i + 1;
+    const no = (why) => notes.push(`Sender rule ${n}: ${why}`);
+    if (i >= MAX_RULES) return no(`past the ${MAX_RULES}th rule; ignored`);
+    if (!r || typeof r !== "object") return no("not an object");
+    const { prefix, pattern } = r;
+    const hasPrefix = typeof prefix === "string" && prefix !== "";
+    const hasPattern = typeof pattern === "string" && pattern !== "";
+    if (hasPrefix === hasPattern) return no(hasPrefix ? "has both a prefix and a pattern; use one" : "no prefix or pattern");
+    const label = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : (hasPrefix ? prefix : pattern).slice(0, 60);
+    if (hasPrefix) {
+      if (prefix.length > 100) return no("prefix over 100 characters");
+      const parts = prefix.split("{name}");
+      if (parts.length > 2) return no("{name} more than once");
+      if (parts.length < 2) return no("prefix has no {name}; it would mark every prompt that starts with it");
+      if (parts.join("").trim().length < 2) return no("prefix needs 2 characters or more besides {name}");
+      const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // The name runs to the text after it, or to a space or the end when it ends the prefix.
+      const name = parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
+      const source = `^${esc(parts[0])}${name}${esc(parts[1])}`;
+      const c = counted(source);
+      if (c.why) return no(c.why);
+      keep({ n, label, re: new RegExp(source), named: true }, c.steps);
+      return;
+    }
+    const shape = patternShape(pattern, "");
+    if (shape.why) return no(shape.why);
+    if (!senderGroup(pattern)) return no("pattern has no (?<sender>...) group");
+    const c = counted(pattern);
+    if (c.why) return no(c.why);
+    if (c.open > SENDER_OPEN) return no(`${c.open} open-ended repeats (*, + or {n,}); ${SENDER_OPEN} at most`);
+    if (c.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
+    keep({ n, label, re: shape.re, named: true }, c.steps);
+  });
+  return { rules, notes };
+}
+
+// Whether a valid pattern has a group named sender: an empty match of it or of nothing
+// lists every named group, matched or not, so "\\(?<sender>" or "[(?<sender>]" does not count.
+function senderGroup(pattern) {
+  try { return "sender" in (new RegExp(`(?:${pattern})|`).exec("")?.groups ?? {}); } catch { return false; }
+}
+
+// quoteKey, links and senders from the file's text, with their notes. Text that does not
+// parse gives the defaults (parseSettings reports that).
 export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
@@ -266,7 +513,13 @@ export function parseExtras(text) {
   if (fresh(text)) raw = { links: defaultLinks() };
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
-  return { quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, notes: [...(quote.note ? [quote.note] : []), ...links.notes], linkCount: Array.isArray(raw.links) ? raw.links.length : 0 };
+  const senders = parseSenders(raw.senders);
+  return {
+    quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], senderNotes: senders.notes,
+    linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
+    senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
+  };
 }
 
 // The file's text for a set of values. Keys this version does not know are kept, so a

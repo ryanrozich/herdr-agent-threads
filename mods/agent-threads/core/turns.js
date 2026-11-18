@@ -31,7 +31,8 @@
 // Every row has a sender: the person ("you"), an hc report or request (a human-origin
 // prompt wrapped in <hc from="...">), a peer session (<agent-message from="...">), a
 // schedule or the SDK. turn.agent is true for every sender but the person, and the shown
-// prompt is the message without its wrapper tags.
+// prompt is the message without its wrapper tags. A typed prompt a sender rule matches is
+// an agent message too (ruleSender).
 
 const OWN_ROW = new Set(["human", "peer", "scheduled", "sdk"]);
 
@@ -153,11 +154,74 @@ export function senderOf(origin, text, originName = null) {
   return { sender: { kind: o }, body: t };
 }
 
+// Sender rules (settings.js parseSenders, kept on the session as s.senders): a prompt typed
+// in the terminal (sender "you", not a command) that a rule matches is an agent message,
+// { kind: "peer", name, rule: its number, ruleLabel }. A rule sees the prompt's first line
+// from its first non-space, up to RULE_TEXT characters: a sender's mark sits at the start
+// ("<seat> hourly 2026-11-18T01:47:20Z", "From <seat>:", with a seat name of up to 60
+// characters), and a short text keeps the most work a rule can take small (settings.js
+// senderCost bounds it from the pattern, at load). Never a reply, and never a turn that
+// already carries an agent marker. No clock is read: a rule that loads always runs.
+export const RULE_TEXT = 100;
+export function ruleSender(rules, prompt) {
+  if (!rules?.length || typeof prompt !== "string") return null;
+  let a = 0;
+  while (a < prompt.length && a < RULE_TEXT && /\s/.test(prompt[a])) a++;
+  let head = prompt.slice(a, a + RULE_TEXT);
+  const nl = head.indexOf("\n");
+  if (nl >= 0) head = head.slice(0, nl);
+  for (const r of rules) {
+    r.re.lastIndex = 0;
+    const m = r.re.exec(head);
+    if (!m) continue;
+    const name = r.named ? (m.groups?.sender ?? "").trim().slice(0, 60) : "";
+    if (r.named && !name) continue;
+    return { kind: "peer", ...(name ? { name } : {}), rule: r.n, ruleLabel: r.label };
+  }
+  return null;
+}
+
+// A turn the rules may mark: typed in the terminal, or marked by a rule before.
+const typedTurn = (t) => !t.cmd && (t.sender?.kind === "you" || t.sender?.rule != null);
+
+// Marks one turn by the rules; true when its sender changed.
+export function markTurn(turn, rules) {
+  if (!typedTurn(turn)) return false;
+  const next = ruleSender(rules, turn.prompt) ?? { kind: "you" };
+  const was = turn.sender;
+  if (was.kind === next.kind && was.name === next.name && was.rule === next.rule && was.ruleLabel === next.ruleLabel) return false;
+  turn.sender = next;
+  turn.agent = next.kind !== "you";
+  return true;
+}
+
+// New sender rules for a session already read: its typed turns are marked again from
+// turns[from], until the clock (performance.now) passes until, checked after each turn (a
+// turn costs at most the rules' step budget, settings.js SENDER_TOTAL).
+// Each turn whose sender changed takes the session's next version (turn.v), so a view's
+// rows for it are built again. Returns where it stopped (turns.length when done).
+export function remarkSenders(s, rules, from = 0, until = Infinity) {
+  s.senders = rules;
+  const v = s.version + 1;
+  let changed = false;
+  let i = from;
+  while (i < s.turns.length) {
+    if (markTurn(s.turns[i], rules)) { s.turns[i].v = v; changed = true; }
+    i++;
+    if (until !== Infinity && (globalThis.performance?.now?.() ?? Date.now()) > until) break;
+  }
+  if (changed) s.version = v;
+  return i;
+}
+
 function newTurn(s, e) {
   // A command line keeps its origin: one a peer, a schedule or the SDK sent is theirs, not
   // the person's, so it hides with the other agent turns.
   const o = e.o ?? "human";
-  const { sender, body } = e.cmd ? { sender: { kind: o === "human" ? "you" : o }, body: e.t ?? "" } : senderOf(e.o, e.t, typeof e.n === "string" ? e.n : null);
+  const said = e.cmd ? { sender: { kind: o === "human" ? "you" : o }, body: e.t ?? "" } : senderOf(e.o, e.t, typeof e.n === "string" ? e.n : null);
+  const body = said.body;
+  // A typed prompt a sender rule matches is an agent message (ruleSender).
+  const sender = (!e.cmd && said.sender.kind === "you" && ruleSender(s.senders, body)) || said.sender;
   return {
     n: s.turns.length + 1,
     // The session's version when the turn last changed (apply).

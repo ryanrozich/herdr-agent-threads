@@ -13,7 +13,7 @@ mock.module("herdr", () => ({
     "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
 const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG } = await import("../mods/agent-threads/settings.js");
-const { linkify, linkPieces, fillUrl, parseRemote, promptMd, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
+const { linkify, linkPieces, fillUrl, parseRemote, promptMd, promptLinks, linkLineRows, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
 
 const ISSUE = { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" };
 const PR = { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" };
@@ -270,4 +270,66 @@ test("a rule slow on a reply is skipped from then on, and says why, so one rule 
   const n = calls;
   expect(linkify("ACME-5 again", [slow, fast]).links).toBe(1);
   expect(calls).toBe(n);
+});
+
+test("promptLinks: each link a rule makes in a prompt, once, outside code, at most 8", () => {
+  const acme = rules({ pattern: "\\bACME-(\\d+)\\b", url: "https://t.example/ACME-$1" });
+  const got = promptLinks("Fix ACME-1 and ACME-2, then ACME-1 again.\n`ACME-3` in code\n```\nACME-4 in a fence\n```\nACME-5", acme);
+  expect(got).toEqual([
+    { t: "ACME-1", url: "https://t.example/ACME-1" },
+    { t: "ACME-2", url: "https://t.example/ACME-2" },
+    { t: "ACME-5", url: "https://t.example/ACME-5" },
+  ]);
+  expect(promptLinks("no keys here", acme)).toEqual([]);
+  expect(promptLinks(Array.from({ length: 20 }, (_, i) => `ACME-${i}`).join(" "), acme)).toHaveLength(8);
+});
+
+// A word wrap of the link line as Herdr draws it at 12 px: the links and the dots between them
+// are words with a space either side, a line breaks only at a space, and a word wider than the
+// line breaks between letters. Widths per glyph, measured high (capitals and digits run 7.3 to
+// 8 px at this size).
+const GLYPH = (c) => (/[A-Z]/.test(c) ? 8 : /[0-9]/.test(c) ? 7.3 : /[a-z]/.test(c) ? 6.6 : c === "-" ? 4.6 : c === "#" ? 7.6 : c === "·" ? 3.4 : c === " " ? 3.4 : 8);
+const wordW = (w) => [...w].reduce((n, c) => n + GLYPH(c), 0);
+function wrapRows(links, inner) {
+  const words = links.flatMap((t, i) => (i ? ["·", t] : [t]));
+  let rows = 1;
+  let x = 0;
+  for (const w of words) {
+    const ww = wordW(w);
+    const need = x ? x + GLYPH(" ") + ww : ww;
+    if (need <= inner) { x = need; continue; }
+    if (x) rows++;
+    if (ww <= inner) { x = ww; continue; }
+    x = 0;
+    for (const c of w) { if (x + GLYPH(c) > inner) { rows++; x = 0; } x += GLYPH(c); }
+  }
+  return rows;
+}
+const keyLike = (n, len, k) => {
+  const shape = k % 3;
+  if (shape === 0) return `${"ACMEWIDGETSQX".slice(0, Math.max(2, len - 5))}-${String(1000 + n).padStart(4, "0")}`.slice(0, len);
+  if (shape === 1) return `#${String(10 ** (len - 2) + n)}`.slice(0, len);
+  return `fix-${"loginflowcartcheckout".slice(0, len - 4)}`.slice(0, len);
+};
+
+test("linkLineRows: the link line's estimate is never short of a real word wrap (PR 126)", () => {
+  let worst = 0;
+  for (let bubble = 120; bubble <= 420; bubble += 5) {
+    const inner = bubble - 20;
+    for (let count = 1; count <= 8; count++) {
+      for (let len = 8; len <= 18; len++) {
+        for (let k = 0; k < 3; k++) {
+          const links = Array.from({ length: count }, (_, n) => keyLike(n, len, k + n));
+          const real = wrapRows(links, inner);
+          const est = linkLineRows(links, inner);
+          expect({ bubble, links, est: est >= real }).toEqual({ bubble, links, est: true });
+          worst = Math.max(worst, est - real - count);
+        }
+      }
+    }
+  }
+  // Tall, not wildly so: at most one spare row a link anywhere on the grid (a link a few px
+  // under the line at its real widths takes two rows at 8 px a character), which the probe
+  // replaces with the measure.
+  expect(worst).toBeLessThanOrEqual(0);
 });
