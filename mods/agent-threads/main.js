@@ -293,6 +293,10 @@ const NO_CUT = 100000;
 const SYSTEM_FACE = ".SystemUIFont";
 const READ_INK = 0.86;
 const LATEST_LINES = 6;
+// The most of a LATEST UPDATE drawn as Markdown, and the height of the note under it that
+// says how much more there is.
+const LATEST_MD = 12000;
+const LATEST_NOTE = 20;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
@@ -3391,13 +3395,23 @@ export default class Threads extends View {
     // What the agent said in its last background update, when that is not the reply.
     const late = (turn.latest ?? "").trim();
     if (late && late !== text) {
+      // With Shorten long messages off (the default) the update is Markdown from the start,
+      // like the reply above it (the owner, 18 Nov: a flat preview was all there was, since
+      // nothing was cut and so no Show all came). On, a clamped one-block preview (C5), the
+      // Markdown after Show all. Past LATEST_MD characters the rest is not drawn, and a note
+      // under it says how much (left).
+      const whole = !this.prefs.truncate;
       const all = this.full.has(`l:${key}`);
       // One block that gpui wraps at the card's width (C5); the estimate counts lines only
       // until the probe has measured it.
-      const text = flattenMd(late.slice(0, 4000));
+      const text = whole ? "" : flattenMd(late.slice(0, 4000));
       const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
+      // cutMd ends a cut text in " …", so it cuts 4 short of the cap.
+      const cut = (whole || all) && late.length > LATEST_MD;
+      const md = whole || all ? (cut ? cutMd(late, LATEST_MD - 4) : late) : null;
+      const left = cut ? late.length - md.replace(/\s*…$/, "").length : 0;
       push({ ...item, kind: "lhead", key: `lh:${key}` });
-      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
+      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, whole, text, estLines: l.lines.length + (l.cut ? 1 : 0), md, left });
     }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
@@ -7272,7 +7286,7 @@ export default class Threads extends View {
       case "you": return this.youHeight(r);
       case "rhead": return ROW.GAP + ROW.LINE + (this.captionRows(r.turn) ? 6 + this.captionRows(r.turn) * 18 : 0);
       case "lhead": return 14 + TV_LINE;
-      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
+      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       case "seltext": return 6 + 22 + r.boxH;
@@ -7320,7 +7334,9 @@ export default class Threads extends View {
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
-      case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
+      // The Markdown form draws a Show less row only after Show all (not when whole) and a note
+      // past the cap (left), so both are part of its layout.
+      case "latest": return `${head}|${r.md ? `all${r.md.length}|${r.whole ? "w" : "s"}|${r.left ?? 0}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
       default: return head;
     }
@@ -8315,7 +8331,8 @@ export default class Threads extends View {
       case "latest": {
         if (r.md) return v_flex().mt(6)
           .child(this.readBlock(div()).child(this.mdView(tv(`th-lmd-${r.key}`), r.md, this.replySelectable())))
-          .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
+          .when(r.left > 0, (el) => el.child(div().h(LATEST_NOTE).flex().items_center().text_size(11.5).italic().text_color(t.dim).child(`… ${r.left.toLocaleString()} more characters not shown`)))
+          .when(!r.whole, (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less")));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
         const block = this.readBlock(div()).text_color(t.foreground).child(r.text);
