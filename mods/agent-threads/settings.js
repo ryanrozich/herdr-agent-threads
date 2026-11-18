@@ -10,6 +10,8 @@
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
+// agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
+// false leaves them off it (the running turn keeps its tick).
 // bubbleColor and agentBubbleColor: the fill of the person's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "plain", the default for the person's, is the
 // theme's own look) or "#rrggbb".
@@ -37,7 +39,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -74,6 +76,7 @@ export function parseSettings(text) {
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
+      agentRail: typeof raw.agentRail === "boolean" ? raw.agentRail : DEFAULTS.agentRail,
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,

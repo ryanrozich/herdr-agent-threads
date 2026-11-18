@@ -661,6 +661,47 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
+test("agentRail: on by default, agent messages have rail ticks; off, only the person's turns and the running one do", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    // A teammate's message with a reply of its own: folded, so it is in the list.
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good. The release note needs one more line." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+    // A teammate's message still running: the running turn.
+    { k: "p", o: "peer", t: peer("Checking the docs build"), ts: at(6) },
+  ]);
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  expect(v.prefs.agentRail).toBe(true);
+  draw(v, cx);
+  expect(v.rows().some((r) => r.kind === "afold" && r.turnKey === "0:2")).toBe(true);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // The panel's switch, next to Agent messages.
+  v.settingsOpen = true;
+  rec = [];
+  v.render(cx);
+  const ids = rec.filter(([n]) => n === "id").map(([, x]) => x);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
+  expect(kids).toContain("Agent messages on the rail");
+  v.settingsOpen = false;
+  // Off: the folded agent message leaves the rail and stays in the list; the running one keeps its tick.
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(false);
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  expect(v.turnKeys(v.rows())).toContain("0:2");
+  // With agent messages shown whole, they stay off the rail too.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  // Back on from the file.
+  v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: true }));
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+});
+
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "First question", ts: at(0) },

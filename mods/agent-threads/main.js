@@ -1675,7 +1675,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
       this.linksVer, this.sendersVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -1951,6 +1951,8 @@ export default class Threads extends View {
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
+    // agentRail off: agent messages get no tick (the running turn keeps its own).
+    const agentRail = this.prefs.agentRail !== false;
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -1995,7 +1997,7 @@ export default class Threads extends View {
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
-        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
+        if (!off && (agentRail || !turn.agent || ti === liveTi)) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
         if (off && !visit) continue;
         if (miss && !visit) { unmatched++; continue; }
         const d = turn.day;
@@ -4111,6 +4113,7 @@ export default class Threads extends View {
       case "shallower": return this.shallower(cx);
       case "filter": this.filtering = true; this.settingsOpen = false; this.input.focus(); return true;
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
+      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
@@ -5365,6 +5368,11 @@ export default class Threads extends View {
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
         .child(label(!P.agentTurns && this.agentCountText(this.counts()) ? `Agent messages · ${this.agentCountText(this.counts()).replace(", ", " · ")}` : "Agent messages"))
         .child(sw))
+      .child(h_flex().id("th-set-agent-rail").gap(6).items_center().cursor_pointer()
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action("agentRail", cx); cx.notify(); })
+        .child(svg(ICON("list")).size(13).flex_none().text_color(t.muted))
+        .child(label("Agent messages on the rail"))
+        .child(toggle(P.agentRail !== false)))
       .child(v_flex().gap(2)
         .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
           .on_click((_e, cx) => { cx.stop_propagation(); this.action("alwaysTime", cx); cx.notify(); })
