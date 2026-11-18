@@ -65,10 +65,12 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse, evenRows } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// The Trajectory's numbers before a turn (ledger.js addTotals), kept on its heading.
+const sumsBefore = (t) => ({ turns: t.turns, steps: t.steps, calls: t.calls, failed: t.failed, partialN: t.partial.length, input: t.input, model: t.model, tools: t.tools, user: t.user, agent: t.agent, tokens: t.tokens, worked: t.worked });
 // The rows that stand for a turn, keyed by the turn's own key: the chat's, the outline's and
 // the Trajectory's heading.
 const TURN_ROWS = new Set(["turn", "head", "working", "wrow", "line", "trh"]);
@@ -170,6 +172,9 @@ const SEL_KEY = "threads.turnSel";
 // pane itself), and given this px width, room for its start column and bars (ledger.js).
 const TRAJ_SPLIT_MIN = 480;
 const TRAJ_COL = 560;
+// The Trajectory by its pane's width: the kind's word tag (and, later, the detail to the
+// right of the ledger) from TRAJ_SIDE.
+const TRAJ_SIDE = 900;
 // syncSel: how long a loaded pane waits for a turn the other pane selected and it has not read
 // or built yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
@@ -864,7 +869,7 @@ export default class Threads extends View {
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
       // The Trajectory: "trh#4 4 calls · 1 failed · 12.2k tok · 52s" and
       // "tr#4 failed 0:14 Bash | bun test login | failed 2s".
-      case "trh": return `trh${n} ${Object.values(headParts(r, this.pw())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.gray.length}/${r.line.red.length}` : ""}`;
+      case "trh": return `trh${n} ${Object.values(headParts(r, this.pw())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.tools.length}/${r.line.sub.length}/${r.line.model.length}/${r.line.red.length}` : ""}`;
       case "tr": return `tr${n} ${r.lk} ${r.start != null ? startText(r.start) : r.startQ ? "?" : "-"} ${r.tool ?? ""} | ${r.text} | ${r.status ?? ""} ${r.dur != null ? durText(r.dur) : r.durQ ? "?" : "-"}`;
       case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
@@ -1825,8 +1830,12 @@ export default class Threads extends View {
     for (let i = job.sizes.length; i < out.length; i++) {
       job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
       job.index.set(out[i].key, i);
-      if (job.sums && out[i].failed) job.sums.fails.push(out[i].key);
-      if (job.sums && out[i].partial) job.sums.partial.push(out[i].key);
+      if (job.sums) {
+        // Each heading keeps the session's numbers before its turn, so a build that keeps the
+        // rows before it keeps their numbers too (keptSums).
+        if (out[i].kind === "trh") out[i].cum = sumsBefore(job.sums);
+        addTotals(job.sums, out[i]);
+      }
     }
     for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
     const res = this.buildInfo.resume;
@@ -3402,16 +3411,24 @@ export default class Threads extends View {
   }
   // What a build keeps of the last one's sums: those of the rows before from.row.
   keptSums(from) {
-    if (!from) return { fails: [], partial: [] };
-    const b = this.baseSums?.rows === this.baseRows ? this.baseSums : ledgerTotals(this.baseRows.slice(0, from.row));
-    const before = (k) => (this.baseIndex.get(k) ?? Infinity) < from.row;
-    return { fails: b.fails.filter(before), partial: b.partial.filter(before) };
+    if (!from) return newTotals();
+    const rows = this.baseRows;
+    if (this.baseSums?.rows !== rows) return ledgerTotals(rows.slice(0, from.row));
+    const b = this.baseSums;
+    let i = from.row;
+    while (i < rows.length && rows[i].kind !== "trh") i++;
+    const c = i < rows.length ? rows[i].cum : null;
+    if (!c) return ledgerTotals(rows.slice(0, from.row));
+    return { ...c, fails: b.fails.slice(0, c.failed), partial: b.partial.slice(0, c.partialN), users: b.users.slice(0, c.user), heads: b.heads.slice(0, c.turns) };
   }
 
+  // m and Shift m: the user's message before the selection, or after it. At the first or
+  // last one it stops, as f does.
+  stepUser(d, cx) { return this.stepIn(this.ledgerSums().users, d, cx); }
   // f and Shift f: the next or previous failed call from the selection. At the last one it
   // stops; nothing pops up.
-  stepFail(d, cx) {
-    const fails = this.ledgerSums().fails;
+  stepFail(d, cx) { return this.stepIn(this.ledgerSums().fails, d, cx); }
+  stepIn(fails, d, cx) {
     if (!fails.length) return false;
     const at = this.baseIndex?.get(this.ledgerSel()) ?? (d > 0 ? -1 : Infinity);
     let to = null;
@@ -3431,6 +3448,8 @@ export default class Threads extends View {
       case "latest": this.jumpLatest(true); this.tsel = null; return true;
       case "nextFail": return this.stepFail(1, cx);
       case "prevFail": return this.stepFail(-1, cx);
+      case "prevUser": return this.stepUser(-1, cx);
+      case "nextUser": return this.stepUser(1, cx);
       // Opening a row, the outline, a turn's work, Select view and the Turn card belong to
       // the chat (opening a row here is a later round).
       case "open": case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
@@ -3523,6 +3542,10 @@ export default class Threads extends View {
       .children(few.map(([a, z]) => div().absolute().top(Math.max(0, (h - w) / 2)).h(w).left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.5, (z - a) * 100).toFixed(2)}%`).rounded(w / 2).bg(color)));
   }
 
+  // Whether the timeline shows at the top of the pane (not yet: the line under each heading
+  // stands in for it).
+  timelineShown() { return false; }
+
   // A turn's heading: its number and clock time (with the day when it is not today) at the
   // left; calls, failures, tokens and the total at the right. Along its lower edge, 3 px,
   // the turn's clock: each call a stretch of it, a failed one in red.
@@ -3547,10 +3570,36 @@ export default class Threads extends View {
       .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(`#${r.n}`))
       .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(r.going ? t.working : t.dim).child(when))
       .child(right)
-      .when(Boolean(line), (el) => el.child(div().id(`th-tl-${r.key}`).absolute().bottom(0).left(pl).right(pr).h(3)
-        .child(div().absolute().top(0).left(0).size_full().bg(alpha(t.foreground, 0.06)))
-        .when(line.gray.length > 0, (x) => x.child(this.pathLayer(line.gray, t.dim, 3, `th-tlg-${r.key}`)))
-        .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, t.blocked, 3, `th-tlr-${r.key}`)))));
+      .when(Boolean(line) && !this.timelineShown(), (el) => {
+        const ink = this.inks(t);
+        return el.child(div().id(`th-tl-${r.key}`).absolute().bottom(0).left(pl).right(pr).h(3)
+          .child(div().absolute().top(0).left(0).size_full().bg(alpha(t.foreground, 0.06)))
+          .when(line.model.length > 0, (x) => x.child(this.pathLayer(line.model, ink.model, 3, `th-tlm-${r.key}`)))
+          .when(line.tools.length > 0, (x) => x.child(this.pathLayer(line.tools, ink.tools, 3, `th-tlt-${r.key}`)))
+          .when(line.sub.length > 0, (x) => x.child(this.pathLayer(line.sub, alpha(ink.sub, SUB_ALPHA), 3, `th-tls-${r.key}`)))
+          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`))));
+      });
+  }
+
+  // The Trajectory's inks for this theme (ledger.js trajInks): the user's colour from one
+  // place (USER_COLOR, which a setting can feed later), each kind's colour, and whether the
+  // theme is dark (its background darker than its text).
+  inks(t) {
+    const k = `${t.foreground}|${t.background}|${t.dim}|${t.blocked}|${this.userColor()}`;
+    if (this.inkMemo?.k !== k) {
+      const dark = (contrast(t.background, "#000000") ?? 21) < (contrast(t.foreground, "#000000") ?? 1);
+      this.inkMemo = { k, v: { ...trajInks(t, dark, this.userColor()), dark } };
+    }
+    return this.inkMemo.v;
+  }
+  userColor() { return USER_COLOR; }
+  // A kind's ink and the tint behind its icon square or tag: plain (the user's in the text
+  // colour) has a neutral tint.
+  kindInk(t, k) {
+    const ink = this.inks(t);
+    const c = ink[k.ink] ?? t.dim;
+    const neutral = k.ink === "user" && ink.plain;
+    return { c, tint: neutral ? alpha(t.foreground, 0.1) : alpha(c, k.ink === "sub" ? 0.1 : 0.16), a: k.ink === "sub" ? SUB_ALPHA : 1 };
   }
 
   // The ledger's side padding, [left, right]: on the rail's side, clear of its lane, since
@@ -3562,6 +3611,17 @@ export default class Threads extends View {
       this.padMemo = { k, v: this.railLeft() ? [Math.max(ROW.PAD_X, lane), ROW.PAD_X] : [ROW.PAD_X, Math.max(ROW.PAD_X, lane)] };
     }
     return this.padMemo.v;
+  }
+
+  // A step's kind: a square tinted with its ink holding its mark, or from 900 px a tag with
+  // its word ("User", "Model", "Tool"), tinted the same.
+  ledgerKind(t, k) {
+    const { c, tint, a } = this.kindInk(t, k);
+    if (this.pw() >= TRAJ_SIDE) {
+      return div().flex_none().w(58).h(16).px(5).rounded(3).bg(tint).text_size(10.5).text_color(c).opacity(a < 1 ? 0.8 : 1)
+        .flex().items_center().truncate().child(k.tag ?? "");
+    }
+    return div().flex_none().size(18).rounded(4).bg(tint).flex().items_center().justify_center().child(this.ledgerMark(k, c));
   }
 
   // A step's mark: an icon, or a drawn dot, ring or square, in the kind's colour.
@@ -3584,7 +3644,6 @@ export default class Threads extends View {
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
     const cols = ledgerCols(this.pw());
     const ink = t[k.tone] ?? t.foreground;
-    const markInk = k.accent ? t[k.accent] : r.lk === "you" ? t.foreground : t.muted;
     const startCell = r.start != null ? startText(r.start) : r.startQ ? "?" : "";
     const durCell = r.dur != null ? durText(r.dur) : r.durQ ? "?" : "";
     const status = r.status ?? (r.sub ? [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") : null);
@@ -3595,7 +3654,7 @@ export default class Threads extends View {
       .when(!sel && r.failed, (el) => el.bg(alpha(t.blocked, 0.09)))
       .when(!sel && !r.failed, (el) => el.hover((s) => s.bg(t.hover)))
       .when(cols.start, (el) => el.child(div().flex_none().w(38).text_size(11).font_family(this.mono()).text_color(t.dim).child(startCell)))
-      .child(this.ledgerMark(k, markInk))
+      .child(this.ledgerKind(t, k))
       .child(h_flex().flex_1().min_w(0).gap(6).items_center()
         .when(Boolean(r.tool), (el) => el.child(div().flex_none().max_w(140).truncate().text_size(12).font_family(this.mono()).text_color(t.foreground).child(r.tool)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(ink)
@@ -4534,7 +4593,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (name === "nextFail" || name === "prevFail") return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name)) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));

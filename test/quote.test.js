@@ -268,13 +268,15 @@ test("the quote key: q by default, configurable, never a key already taken", () 
   expect(keyAction(k("q", { platform: true }))).toBe(null);
   expect(keyAction(k("q", { shift: true }))).toBe(null);
   expect(keyAction(k("j"), false, "j")).toBe("next"); // a taken key keeps its action
-  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "f", "g", "i", "j", "k", "o", "s", "t", "v", "w", "y"]);
+  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "c", "f", "g", "i", "j", "k", "m", "o", "s", "t", "v", "w", "y"]);
   // Round 3 (C2): i explains the stat chips, so it cannot be the quote key.
   expect(keyAction(k("i"))).toBe("legend");
   expect(keyAction(k("i"), false, "i")).toBe("legend");
   // The Trajectory: y switches the view, f and Shift f (or F) step through failures.
   expect([keyAction(k("y")), keyAction(k("f")), keyAction(k("f", { shift: true })), keyAction(k("F"))]).toEqual(["view", "nextFail", "prevFail", "prevFail"]);
   expect([keyAction(k("y"), true), keyAction(k("f"), true), keyAction(k("F"), true)]).toEqual([null, null, null]);
+  // m and Shift m (or M): the user's message before and after.
+  expect([keyAction(k("m")), keyAction(k("m", { shift: true })), keyAction(k("M")), keyAction(k("m"), true)]).toEqual(["prevUser", "nextUser", "nextUser", null]);
 });
 
 test("commandColor: muted where it reads at 4.5:1 on the row's background, else foreground", () => {

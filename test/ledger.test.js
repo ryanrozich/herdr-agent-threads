@@ -3,7 +3,7 @@
 // times" for a turn with none, failures, the bar's scale and the turn's line. The turns are
 // made up here in the reader's shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
-import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR } from "../mods/agent-threads/ledger.js";
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
 // A turn in the reader's shape: steps are [text] or [calls], each call [name, input, at, rt, failed].
@@ -159,10 +159,13 @@ test("ledger bars: one scale for the session, each step of ten the same length, 
 test("ledger line: the turn's clock with each call a stretch of it, failed ones apart, touching stretches joined", () => {
   const t = turn(4, [[["Read", "a", 6000, 12000], ["Grep", "b", 12000, 18000], ["Bash", "c", 30000, 36000, true]]]);
   const { line } = ledgerTurn(S, t, 0).rows[0];
-  expect(line.gray).toEqual([[0.1, 0.3]]);
+  expect(line.tools).toEqual([[0.1, 0.3]]);
   expect(line.red).toEqual([[0.5, 0.6]]);
+  // The reply is the model's stretch of the line (from its first word to the turn's end).
+  expect(line.model.length).toBe(1);
+  expect(line.sub).toEqual([]);
   // A call of a few ms still shows.
-  const quick = ledgerTurn(S, turn(9, [[["Read", "a", 6000, 6001]]]), 0).rows[0].line.gray[0];
+  const quick = ledgerTurn(S, turn(9, [[["Read", "a", 6000, 6001]]]), 0).rows[0].line.tools[0];
   expect(quick[1] - quick[0]).toBeGreaterThan(0.005);
   // Drawn as elements, at most n stretches, the closest joined first.
   expect(coarse([[0, 0.1], [0.11, 0.2], [0.5, 0.6], [0.9, 1]], 3)).toEqual([[0, 0.2], [0.5, 0.6], [0.9, 1]]);
@@ -172,4 +175,31 @@ test("ledger columns: the bar from 500 px, the start from 420 px; the duration a
   expect(ledgerCols(573)).toEqual({ bar: true, start: true, words: true });
   expect(ledgerCols(420)).toEqual({ bar: false, start: true, words: true });
   expect(ledgerCols(340)).toEqual({ bar: false, start: false, words: false });
+});
+
+test("ledger inks: the user blue, agents amber, the model violet, tools teal, as tints; plain is the text colour", () => {
+  expect(USER_COLOR).toBe("blue");
+  expect(TRAJ_INKS.user).toEqual({ light: "#2563EB", dark: "#7BA2FF" });
+  const th = { foreground: "#e8e8ec", dim: "#878c96", blocked: "#f0746a" };
+  const dark = trajInks(th, true);
+  expect([dark.user, dark.agent, dark.model, dark.tools]).toEqual(["#7BA2FF", "#CC9A5E", "#C49BEE", "#5DBCAA"]);
+  expect([dark.context, dark.failed, dark.plain]).toEqual([th.dim, th.blocked, false]);
+  expect(trajInks(th, false).user).toBe("#2563EB");
+  const plain = trajInks(th, true, "plain");
+  expect([plain.user, plain.plain]).toEqual([th.foreground, true]);
+  // Every kind has an ink, a tag and a lane (Interrupted has none); the user's tag says User.
+  for (const k of Object.values(LEDGER_KINDS)) expect(typeof k.ink === "string" && typeof k.tag === "string").toBe(true);
+  expect([LEDGER_KINDS.you.tag, LEDGER_KINDS.you.label, LEDGER_KINDS.you.ink]).toEqual(["User", "User message", "user"]);
+  expect(["you", "agent", "context", "text", "reply", "tool", "failed", "subagent", "stop"].map(laneOf))
+    .toEqual(["input", "input", "input", "model", "model", "tools", "tools", "tools", null]);
+});
+
+test("ledger totals: the whole session's lanes, the user's and agents' messages, tokens and time worked", () => {
+  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const b = ledgerTurn(S, turn(2, [[["Read", "y", 1000, 2000]]], { who: "reviewer" }), 0).rows;
+  const t = ledgerTotals([...a, ...b]);
+  expect(t).toMatchObject({ turns: 2, input: 2, model: 3, tools: 2, user: 1, agent: 1, failed: 1, worked: 120000 });
+  expect(t.users).toEqual([a.find((r) => r.lk === "you").key]);
+  expect(t.heads.map((h) => h.key)).toEqual(["0:1", "0:2"]);
+  expect(t.tokens).toBe(a[0].tokens + b[0].tokens);
 });

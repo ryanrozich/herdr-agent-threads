@@ -9,7 +9,7 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
-  y: "view", f: "nextFail",
+  y: "view", f: "nextFail", m: "prevUser",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -25,10 +25,12 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (m.shift) {
     if (k === "g" || k === "G") return "latest";
     if (k === "f" || k === "F") return filtering ? null : "prevFail";
+    if (k === "m" || k === "M") return filtering ? null : "nextUser";
     return k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   }
   if (k === "G") return "latest";
   if (k === "F") return filtering ? null : "prevFail";
+  if (k === "M") return filtering ? null : "nextUser";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
@@ -45,7 +47,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ...(outline ? [["Trajectory", [
       [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
-      [["f", "Shift f"], "Next or previous failed call"],
+      [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "The user's message before, or after"],
     ]]] : []),
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],

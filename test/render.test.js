@@ -5685,7 +5685,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 33 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 34 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -7928,6 +7928,41 @@ test("the top row has Chat and Trajectory as words, or two icons under 420 px; a
   expect(v.action("view", cx)).toBe(false);
 });
 
+// Round 7: the user's messages are blue (the stub theme is dark: #7BA2FF), each kind a tint;
+// "User" on the tag from 900 px; m and Shift m step through the user's messages.
+test("Trajectory words and colours: the user's rows blue-tinted, User on the tag from 900 px, m goes to the user's message before", async () => {
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
+  v.paneW = 573;
+  settleRows(v, cx);
+  const ink = v.inks(theme);
+  expect([ink.dark, ink.user, ink.model, ink.tools, ink.agent]).toEqual([true, "#7BA2FF", "#C49BEE", "#5DBCAA", "#CC9A5E"]);
+  const drawn = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  let calls = drawn();
+  // A user row: its square tinted blue, its mark blue; no word tag under 900 px.
+  expect(calls.some(([n, x]) => n === "bg" && String(x).toLowerCase().startsWith("#7ba2ff") && String(x).length === 9)).toBe(true);
+  expect(calls.some(([n, x]) => n === "text_color" && x === "#7BA2FF")).toBe(true);
+  expect(calls.some(([n, x]) => n === "child" && x === "User")).toBe(false);
+  v.paneW = 960;
+  calls = drawn();
+  expect(calls.some(([n, x]) => n === "child" && x === "User")).toBe(true);
+  expect(calls.some(([n, x]) => n === "child" && x === "Model")).toBe(true);
+  // m: the user's message before the selection, then the one before that; it stops at the first.
+  const users = ledgerOnly(v).filter((r) => r.lk === "you").map((r) => r.key);
+  expect(users.length).toBeGreaterThan(2);
+  expect(v.ledgerSums().users).toEqual(users);
+  v.action("latest", cx);
+  v.ledgerPick(ledgerOnly(v).filter((r) => r.kind === "tr").at(-1).key, false, cx);
+  v.key(keyEv("m"), cx);
+  expect(v.tsel).toBe(users.at(-1));
+  v.key(keyEv("m"), cx);
+  expect(v.tsel).toBe(users.at(-2));
+  v.key(keyEv("M"), cx);
+  expect(v.tsel).toBe(users.at(-1));
+  // In the chat m does nothing.
+  const chat = await pane(twoFails());
+  expect(chat.v.action("prevUser", chat.cx)).toBe(false);
+});
+
 test("Trajectory failures: a failed call and a failed subagent run; the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
   const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
@@ -8000,7 +8035,7 @@ test("Trajectory bars and times: a bar on one scale, the start from 420 px and t
   settleRows(v, cx);
   const detail = () => state.shared["threads.debug"].t4.detail;
   expect(detail().some((d) => /^tr#\d+ context \? /.test(d))).toBe(true);
-  expect(detail().some((d) => d.startsWith("trh#") && / line \d+\/1$/.test(d))).toBe(true);
+  expect(detail().some((d) => d.startsWith("trh#") && / line \d+\/\d+\/\d+\/1$/.test(d))).toBe(true);
   rec = [];
   draw(v, cx);
   let calls = rec;

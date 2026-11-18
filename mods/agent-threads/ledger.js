@@ -7,7 +7,8 @@
 // Nothing here reads a file: a row is made from what the reader already holds.
 //
 // A row keeps its kind (lk), and what each kind looks like is in one table (LEDGER_KINDS),
-// so a colour per kind is one change there.
+// so a colour per kind is one change there. Each kind has an ink (TRAJ_INKS, trajInks) and a
+// lane of the timeline (Input, Model or Tools).
 
 import { trajectory } from "./core/trajectory.js";
 import { reply, stats, fmtClock, fmtTokens, fmtDuration } from "./core/turns.js";
@@ -16,21 +17,50 @@ import { outlineText, flattenMd, callTime } from "./ui.js";
 export const LEDGER_ROW = 24;
 
 // Each kind of row: its mark (an icon file, or a drawn "dot", "ring", "square"), the theme
-// colour of its words and whether the words are in the code face. tone names a theme key.
+// colour of its words (tone, a theme key) and whether the words are in the code face; its ink
+// (the bar, the icon square's tint and the tag, trajInks), the word on its tag in a pane
+// 900 px or wider, and its lane of the timeline (null: none).
 export const LEDGER_KINDS = Object.freeze({
-  you: { mark: "chevron-right", tone: "foreground", label: "Prompt" },
-  agent: { mark: "bot", tone: "muted", label: "Agent message" },
-  text: { mark: "list", tone: "muted", label: "Text" },
-  reply: { mark: "list", tone: "foreground", label: "Reply" },
-  tool: { mark: "dot", tone: "foreground", code: true, label: "Tool call" },
-  failed: { mark: "x", tone: "foreground", code: true, label: "Failed call", accent: "blocked" },
-  running: { mark: "ring", tone: "foreground", code: true, label: "Running" },
-  noresult: { mark: "ring", tone: "foreground", code: true, label: "No result", faint: true },
-  subagent: { mark: "bot", tone: "foreground", label: "Subagent" },
-  more: { mark: null, tone: "dim", label: "More calls" },
-  context: { mark: "reply", tone: "muted", label: "Background update" },
-  stop: { mark: "square", tone: "muted", label: "Interrupted" },
+  you: { mark: "user", tone: "foreground", ink: "user", tag: "User", lane: "input", label: "User message" },
+  agent: { mark: "bot", tone: "muted", ink: "agent", tag: "Agent", lane: "input", label: "Agent message" },
+  context: { mark: "reply", tone: "muted", ink: "context", tag: "Context", lane: "input", label: "Background update" },
+  text: { mark: "list", tone: "muted", ink: "model", tag: "Model", lane: "model", label: "Text" },
+  reply: { mark: "list", tone: "foreground", ink: "model", tag: "Reply", lane: "model", label: "Reply" },
+  tool: { mark: "dot", tone: "foreground", code: true, ink: "tools", tag: "Tool", lane: "tools", label: "Tool call" },
+  failed: { mark: "x", tone: "foreground", code: true, ink: "failed", tag: "Failed", lane: "tools", label: "Failed call", accent: "blocked" },
+  running: { mark: "ring", tone: "foreground", code: true, ink: "tools", tag: "Tool", lane: "tools", label: "Running" },
+  noresult: { mark: "ring", tone: "foreground", code: true, ink: "tools", tag: "Tool", lane: "tools", label: "No result", faint: true },
+  subagent: { mark: "bot", tone: "foreground", ink: "sub", tag: "Subagent", lane: "tools", label: "Subagent" },
+  more: { mark: null, tone: "dim", ink: "context", tag: "More", lane: "tools", label: "More calls" },
+  stop: { mark: "square", tone: "muted", ink: "context", tag: "Stop", lane: null, label: "Interrupted" },
 });
+
+// The inks, each a tint like every other kind's: the user's messages blue, agent messages
+// amber, the model violet, tool calls teal (a subagent's call the lighter teal: tools drawn at
+// SUB_ALPHA), a failed call the theme's red, context and the system prompt the theme's dim.
+// One shade per bar, and no gradient anywhere.
+export const TRAJ_INKS = Object.freeze({
+  user: Object.freeze({ light: "#2563EB", dark: "#7BA2FF" }),
+  agent: Object.freeze({ light: "#87643A", dark: "#CC9A5E" }),
+  model: Object.freeze({ light: "#7A48C0", dark: "#C49BEE" }),
+  tools: Object.freeze({ light: "#1C7A6D", dark: "#5DBCAA" }),
+});
+export const SUB_ALPHA = 0.45;
+// The user's colour: "blue" (the default) or "plain" (the text colour, with a neutral-tint
+// square). The one place a setting can feed later.
+export const USER_COLOR = "blue";
+// Each ink as a colour for a theme t ({ foreground, dim, blocked }); dark: the theme is dark.
+// sub is the tools colour, drawn at SUB_ALPHA.
+export function trajInks(t, dark, user = USER_COLOR) {
+  const pick = (k) => TRAJ_INKS[k][dark ? "dark" : "light"];
+  return {
+    user: user === "plain" ? t.foreground : pick("user"), plain: user === "plain",
+    agent: pick("agent"), model: pick("model"), tools: pick("tools"), sub: pick("tools"),
+    context: t.dim, failed: t.blocked,
+  };
+}
+// A row's lane of the timeline: "input", "model", "tools", or null.
+export const laneOf = (lk) => LEDGER_KINDS[lk]?.lane ?? null;
 
 // The status word after a row's words, for the kinds that have one.
 const STATUS = { failed: "failed", running: "running", noresult: "no result" };
@@ -145,8 +175,12 @@ export function ledgerTurn(s, turn, si, live = false) {
   let calls = 0;
   let fails = 0;
   let lastEnd = t0;
-  const gray = [];
+  // The line under the heading: calls (a subagent's apart, failed ones red) and the reply.
+  const tools = [];
+  const sub = [];
+  const model = [];
   const red = [];
+  const openAt = [];
   cells.forEach((c, i) => {
     const r = { kind: "tr", key: `tr:${key}:${i}`, turn, si, lk: "text", text: "", tool: null, status: null, start: null, dur: null, startQ: false, durQ: false, failed: false };
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
@@ -163,7 +197,7 @@ export function ledgerTurn(s, turn, si, live = false) {
       if (c.start != null && t0 != null) r.start = c.start - t0;
       else r.startQ = true;
       if (isReply) {
-        if (c.start != null && c.end != null) r.dur = c.end - c.start;
+        if (c.start != null && c.end != null) { r.dur = c.end - c.start; model.push([c.start, c.end]); }
         else r.durQ = true;
       }
     } else if (c.kind === "tool") {
@@ -189,7 +223,10 @@ export function ledgerTurn(s, turn, si, live = false) {
       const ms = c.subagent?.ms ?? (c.start != null && c.end != null ? c.end - c.start : null);
       if (Number.isFinite(ms)) r.dur = ms;
       else if (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed") r.durQ = true;
-      if (c.start != null && c.end != null) (failed ? red : gray).push([c.start, c.end]);
+      if (c.start != null && c.end != null) (failed ? red : c.subagent ? sub : tools).push([c.start, c.end]);
+      // A call with no result: a flat bar to the turn's end (to now while it runs), drawn
+      // plain until its mark is settled.
+      else if (c.start != null && (r.lk === "running" || r.lk === "noresult")) openAt.push(c.start);
     } else if (c.kind === "more") {
       calls += c.count;
       r.lk = "more";
@@ -208,7 +245,33 @@ export function ledgerTurn(s, turn, si, live = false) {
   if (tr.interrupted) rows.push({ kind: "tr", key: `tr:${key}:stop`, turn, si, lk: "stop", text: "Interrupted", tool: null, status: null, start: timed && tr.end != null ? tr.end - t0 : null, dur: null, startQ: false, durQ: false, failed: false });
   const t1 = tr.end ?? lastEnd;
   const span = t0 != null && t1 != null ? t1 - t0 : null;
-  const line = timed && span > 0 ? { gray: stretches(gray, t0, span), red: stretches(red, t0, span) } : null;
+  for (const a of openAt) tools.push([a, Math.max(a, t1)]);
+  const line = timed && span > 0
+    ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span) }
+    : null;
+  // The turn's own counts, and its steps on the timeline: each row's lane, ink, start and end
+  // (ms from the turn's start; b null for an instant, open for a call with no result yet) and,
+  // in the Tools lane, its track (1: it started while another call ran, drawn half height).
+  const cnt = { steps: 0, input: 0, model: 0, tools: 0, failed: 0, user: 0, agent: 0 };
+  const items = [];
+  let end0 = -Infinity;
+  rows.forEach((r, i) => {
+    const k = LEDGER_KINDS[r.lk];
+    cnt.steps++;
+    if (k?.lane) cnt[k.lane]++;
+    if (r.failed) cnt.failed++;
+    if (r.lk === "you") cnt.user++;
+    if (r.lk === "agent") cnt.agent++;
+    const a = r.start;
+    const openBar = r.lk === "running" || r.lk === "noresult";
+    const b = a != null && r.dur != null ? a + r.dur : null;
+    let track = 0;
+    if (k?.lane === "tools" && a != null) {
+      track = a < end0 ? 1 : 0;
+      if (track === 0) end0 = openBar ? Infinity : b ?? a;
+    }
+    items.push({ key: r.key, i, lane: k?.lane ?? null, ink: k?.ink ?? "context", a, b, open: openBar && a != null, track, failed: r.failed, lk: r.lk });
+  });
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
@@ -216,6 +279,8 @@ export function ledgerTurn(s, turn, si, live = false) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
+    // The turn's start (ms), and its length so far for a turn that has no end yet.
+    t0, span, cnt, items,
   };
   return { rows: [head, ...rows], fails, calls };
 }
@@ -239,12 +304,31 @@ export function headParts(h, width = 600) {
 // The session's numbers, worked out in one place for whatever draws them: turns, steps
 // (rows that are not headings), calls and failures. rows are the ledger's rows.
 export function ledgerTotals(rows) {
-  const t = { turns: 0, steps: 0, calls: 0, failed: 0, fails: [], partial: [] };
-  for (const r of rows) {
-    if (r.kind === "trh") { t.turns++; t.calls += r.calls; if (r.partial) t.partial.push(r.key); continue; }
-    if (r.kind !== "tr") continue;
-    t.steps++;
-    if (r.failed) { t.failed++; t.fails.push(r.key); }
-  }
+  const t = newTotals();
+  for (const r of rows) addTotals(t, r);
   return t;
+}
+// The session's numbers before any row: also the rows in each lane, the user's and agents'
+// messages, tokens and the time worked (from the headings), and the user's rows in order.
+export function newTotals() {
+  return { turns: 0, steps: 0, calls: 0, failed: 0, fails: [], partial: [], users: [], heads: [], input: 0, model: 0, tools: 0, user: 0, agent: 0, tokens: 0, worked: 0 };
+}
+// One row into the session's numbers.
+export function addTotals(t, r) {
+  if (r.kind === "trh") {
+    t.turns++;
+    t.calls += r.calls;
+    t.tokens += r.tokens ?? 0;
+    t.worked += r.total ?? r.span ?? 0;
+    t.heads.push(r);
+    if (r.partial) t.partial.push(r.key);
+    return;
+  }
+  if (r.kind !== "tr") return;
+  t.steps++;
+  const lane = laneOf(r.lk);
+  if (lane) t[lane]++;
+  if (r.lk === "you") { t.user++; t.users.push(r.key); }
+  if (r.lk === "agent") t.agent++;
+  if (r.failed) { t.failed++; t.fails.push(r.key); }
 }
