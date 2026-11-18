@@ -112,9 +112,26 @@ let pinWrites = 0;
 // keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
 let keepSettings = false;
+// A script that has not ended in 4 s is killed with everything it started, and the call fails
+// with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
+// process, which says nothing of which call it was (once in CI). The script runs in a process
+// group of its own under this perl, which kills the group: a timeout on the call alone stops
+// only sh, and the extractor's sh waits for its pipeline before it heeds a TERM.
+const EXEC_LIMIT_S = 4;
+const EXEC_GUARD = `my $s = shift; my $late = 0;
+my $pid = fork() // die "fork: $!";
+if (!$pid) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127 }
+$SIG{ALRM} = sub { $late = 1; kill "KILL", -$pid; kill "KILL", $pid };
+alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
+exit 124 if $late;
+exit($st & 127 ? 128 + ($st & 127) : $st >> 8);`;
 function execReal(cmd, args) {
-    try { return { code: 0, stdout: execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
-    catch (e) { return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
+    const opts = { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "pipe"], timeout: (EXEC_LIMIT_S + 2) * 1000 };
+    try { return { code: 0, stdout: execFileSync("perl", ["-e", EXEC_GUARD, String(EXEC_LIMIT_S), cmd, ...args], opts), stderr: "" }; }
+    catch (e) {
+      if (e.status === 124 || e.code === "ETIMEDOUT") console.error(`exec: ${cmd} ${args.join(" ")} ran past ${EXEC_LIMIT_S} s and was killed`);
+      return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
+    }
 }
 function herdrRest() { return {
   home: () => "/home/test", appHome: () => app,
@@ -1382,10 +1399,17 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
-test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", () => {
+test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", async () => {
   const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
-  execFileSync("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-    env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore", timeout: 120000,
+  // Not execFileSync: while the child runs, this process stays free to take a signal, so a
+  // stopped run ends the child too (test/preload.js) instead of leaving it reading.
+  await new Promise((resolve, reject) => {
+    const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
+      env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
+    });
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.on("error", reject);
+    child.on("exit", (code, sig) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`the timing child ended with ${code ?? sig}`)); });
   });
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);
@@ -6038,6 +6062,11 @@ test("a settings change in a long session reshapes rows over several frames, the
   draw(v, cx);
   // Without the debug report, whose timing pass rebuilds the rows once more each draw.
   v.debug = false;
+  // Every row built and shaped before the change below, on any machine: on the real clock a
+  // slow one left rows unshaped here, and the counts below came out otherwise.
+  v.shapeBudget = Infinity;
+  settleRows(v, cx);
+  v.shapeBudget = null;
   const shown = () => v.rows().filter((r) => r.kind === "turn" && !r.live);
   expect(shown().length).toBeGreaterThan(100);
   // Reshaped for Reply lines 2: the turn's shape key has the new count, and the row draws it.
@@ -6047,6 +6076,14 @@ test("a settings change in a long session reshapes rows over several frames, the
   // Each reading of the clock moves it 0.25 ms, so a reshape costs about 0.5 ms and a frame
   // reshapes about 24 rows.
   performance.now = () => (fake += 0.25);
+  // The scroll's waits (2 s at most while rows settle, 400 ms for the probe) are on Date.now:
+  // stopped, so the frames below take no time however slow the machine is.
+  const realDate = Date.now;
+  const today = realDate();
+  Date.now = () => today;
+  // The list draws the rows of one screen at its end, as Herdr does: drawing all 1,305 rows in
+  // each of the 40 frames below took 3 s on one CPU, and the same frames run either way.
+  listWindow = (n) => ({ start: Math.max(0, n - 24), end: n });
   try {
     // The pane shows the turns from 20 rows above the end.
     const before = shown();
@@ -6098,7 +6135,7 @@ test("a settings change in a long session reshapes rows over several frames, the
     for (let k = 0; k < 400 && v.shapeLeft > 0; k++) { cx.flush(0); draw(v, cx); }
     expect(v.shapeLeft).toBe(0);
     expect(shown().some((r) => r.shape.blank || r.shape !== r.turn.shapeMemo)).toBe(false);
-  } finally { performance.now = realPerf; }
+  } finally { performance.now = realPerf; Date.now = realDate; listWindow = null; }
   // The heights match a reshape done in one go, with no budget.
   const keep = shown().map((r) => r.shape.height);
   for (const t of v.current().turns) { t.shapeKey = null; t.shapeMemo = null; }
