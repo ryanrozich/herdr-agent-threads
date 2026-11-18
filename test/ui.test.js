@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
@@ -42,6 +42,19 @@ test("keys: plain keys act, chords with cmd, ctrl, alt or fn never do", () => {
   expect(keyAction(key("c"), true)).toBe(null);
   expect(keyAction(key("down"), true)).toBe("next");
   expect(keyAction(key("escape"), true)).toBe("escape");
+});
+
+test("Shift w steps the reading width; plain w still fits the pane, and a filter being typed takes the letter", () => {
+  expect(keyAction(key("w", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W"))).toBe("widthStep");
+  expect(keyAction(key("w"))).toBe("fit");
+  expect(keyAction(key("w", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("W"), true)).toBe(null);
+  expect(keyAction(key("w", { shift: true, platform: true }))).toBe(null);
+  // Listed under View, beside w.
+  const view = keySheet().find(([g]) => g === "View")[1].map(([k, what]) => `${k.join(" ")}: ${what}`);
+  expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
 });
 
 test("alpha: every colour form", () => {
@@ -1030,4 +1043,14 @@ test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole li
   expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
   for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
   expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
+});
+
+test("cutPath: a path cut from its start at a slash, so it begins with a whole folder", () => {
+  const p = "~/.config/herdr-app/data/agent-threads/settings.json";
+  expect(cutPath(p, 80)).toBe(p);
+  expect(cutPath(p, p.length)).toBe(p);
+  expect(cutPath(p, 40)).toBe("…/data/agent-threads/settings.json");
+  expect(cutPath(p, 30)).toBe("…/agent-threads/settings.json");
+  // The file's name stays whole when it alone is longer.
+  expect(cutPath(p, 8)).toBe("…/settings.json");
 });

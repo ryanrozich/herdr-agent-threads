@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -109,8 +109,13 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
-// What the pane wrote to settings.json (the viewer keeps its panel choice there).
+// What the pane wrote to settings.json (the viewer keeps its panel choice there). With
+// keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
+let keepSettings = false;
+// With settingsStale set, a settings write whose expected text is not what the file holds is
+// rejected, as Herdr rejects a stale snapshot.
+let settingsStale = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -138,7 +143,11 @@ function herdrRest() { return {
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
-    if (p.endsWith("settings.json")) settingsWrites.push(text);
+    if (p.endsWith("settings.json")) {
+      if (settingsStale && (recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
+      settingsWrites.push(text);
+      if (keepSettings) recordFiles[p] = text;
+    }
     if (!p.endsWith("pins.json")) return null;
     if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
     recordFiles[p] = text;
@@ -198,6 +207,7 @@ function makeCx() {
     clip: null,
     write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
     read_from_clipboard() { return cx.clip ?? undefined; },
+    open_url(u) { log.push(["open_url", u]); },
   };
   return cx;
 }
@@ -387,6 +397,7 @@ test("a press in the Select view keeps the editor's selection: the panel does no
 // F3: the selected running turn's working card is sized with the line heights it draws.
 test("the working card's estimate uses the YOU part it draws and the 20 px note lines", async () => {
   const { v } = await pane(fixture("--only", "0", "--agents", "--open"));
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the message: the plain look
   let seen = 0;
   for (const width of [240, 380, 640]) {
     v.width = width;
@@ -863,7 +874,7 @@ test("in Select view q quotes what ⌘C copied from the reply, and never the who
   expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
   expect(cx.clip).toBe(`> ${part}\n\n`);
   expect(v.lastQuote).toMatchObject({ source: "selection", selectView: true, pasted: true });
-  expect(v.toast.text).toMatch(/^Quoted your selection into t4/);
+  expect(v.toast.text).toMatch(/^Quoted the selection into t4/);
   // Highlighted but not copied: the clipboard holds outside text. q pastes nothing, neither
   // that text nor the whole reply, and says how.
   for (const [clip, why] of [["rm -rf / from some other window", "notInReply"], ["", "empty"]]) {
@@ -1052,6 +1063,7 @@ test("the Quote button's own press does not hide what ⌘C copied, and Copy repl
 // selects; only a click that does not move opens the turn.
 test("a closed turn's message and reply start select by drag, a click that does not move opens it, and q quotes what ⌘C copied from either", async () => {
   const { v, cx } = await quotePane();
+  v.prefs = { ...v.prefs, bubbleColor: "plain" }; // Markdown in the message: the plain look
   const keys = v.turnKeys(v.rows());
   const k = keys.find((x) => !v.open.has(x));
   expect(k).toBeTruthy();
@@ -1160,11 +1172,12 @@ test("long messages show in full by default: no Show more anywhere, and Shorten 
   expect(sh.pMore).toBe(false);
   expect(sh.md.length).toBeGreaterThanOrEqual(v.replyText(long).length - 10);
   expect(strings(() => v.rowItem(theme, row(), false))).not.toContain("Show more");
-  // The panel: the switch, and no line steppers while it is off.
-  v.settingsOpen = true;
+  // The card's Chat tab: the switch, with no hint that repeats it, and no line steppers while it is off.
+  v.action("settings", cx);
+  expect(v.setTab).toBe("chat");
   let panel = strings(() => v.render(cx));
   expect(panel).toContain("Shorten long messages");
-  expect(panel).toContain("Every message and reply shows in full.");
+  expect(panel).not.toContain("Every message and reply shows in full.");
   expect(panel).not.toContain("Reply lines");
   // On: the row is cut to its line limits with Show more, and the steppers show.
   v.action("truncate", cx);
@@ -1217,7 +1230,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full.clear();
   const you = mdSources.find(([id]) => id === "th-you-you:0:3");
   expect(you[1]).toBe("> The retry path still logs a warning when the queue is empty\\.\\\n> It also retries forever\\.\n\nCap the retries at five\\, and log once\\.");
-  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 YOU md q1 code0 links0 h\d+/);
+  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 USER md q1 code0 links0 h\d+/);
   // The 40-line quote is clipped to 2 lines with Show all.
   v.open = new Set(["0:9"]);
   draw(v, cx);
@@ -1228,7 +1241,7 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.open = new Set(["0:3"]);
   draw(v, cx);
   expect(mdSources.some(([id]) => id === "th-you-you:0:3")).toBe(false);
-  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 YOU hl q1/);
+  expect(snap().detail.find((d) => d.startsWith("you#3"))).toMatch(/^you#3 USER hl q1/);
   v.query = "";
   // R5: Show all shows a long pasted prompt to its end, and past 200,000 characters says
   // how much it leaves out.
@@ -2212,7 +2225,7 @@ test("D1: LATEST UPDATE draws in muted, or foreground where muted is faint; the 
   };
   let calls = frame(v, cx);
   for (const label of ["LATEST UPDATE"]) expect(colourOf(calls, label)).toBe(theme.muted);
-  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU"))).toBe(false);
+  expect(calls.some(([n, x]) => n === "child" && (x === "FINAL REPLY" || x === "YOU" || x === "USER"))).toBe(false);
   // A theme whose muted reads under 4.5:1 on the card: foreground.
   const faint = { ...theme, muted: "#5a5a5a" };
   const real = theme.muted;
@@ -2409,7 +2422,7 @@ test("pasted images: tiles over the message at any width, decoded on first draw,
   // and the bubble's colours, and the panel shown (settings.json viewerReply).
   const vt = overlays[0].props.gallery.turn;
   expect(overlays[0].props.gallery.panel).toBe(true);
-  expect(vt).toMatchObject({ n: two.n, agent: false, who: "You", running: false, md: v.replyText(two), copy: v.replyText(two), stats: v.statsFull(two), caption: v.captionParts(two), size: 14 });
+  expect(vt).toMatchObject({ n: two.n, agent: false, who: "User", running: false, md: v.replyText(two), copy: v.replyText(two), stats: v.statsFull(two), caption: v.captionParts(two), size: 14 });
   expect(vt.prompt).toContain("[Image #2] [Image #3]");
   expect(vt.fill).toBe(v.bubbleLook(theme, false).style.fill);
   v.prefs = { ...v.prefs, viewerReply: false };
@@ -3916,14 +3929,16 @@ test("the list measuring its first item does not move a pin's place", async () =
   expect(v.pinnedAll().find((p) => p.key === key).pin.anchor).toEqual(["you", null]);
 });
 
-test("the person's bubble is plain and an agent's plum by default, and the panel's swatches change them", async () => {
+test("the user's bubble is blue and an agent's amber by default, and the panel's swatches change them", async () => {
   const { v, cx } = await pane(fixture("--extra", "6"));
   const you = () => v.bubbleLook(theme, false);
   const agent = () => v.bubbleLook(theme, true);
+  expect(you().style).toMatchObject({ fill: "#2563EB", ink: "#FFFFFF", outline: false });
   // Plain: the theme's text colour at 8%, in the theme's own colours.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
   expect(you().style).toMatchObject({ fill: "#e6e6e614", ink: theme.foreground, outline: false });
   expect(you().theme).toBe(theme);
-  expect(agent().style).toMatchObject({ fill: "#715C91", ink: "#FFFFFF", outline: false });
+  expect(agent().style).toMatchObject({ fill: "#87643A", ink: "#FFFFFF", outline: false });
   // On a coloured fill the text, muted and accent colours are the bubble's ink, so a quote,
   // a command and Show more read on it.
   v.action("bubbleColor:slate", cx);
@@ -3950,7 +3965,7 @@ test("the person's bubble is plain and an agent's plum by default, and the panel
   expect(agent().style).toMatchObject({ fill: theme.background, outline: true });
   draw(v, cx);
   v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ bubbleColor: "plain", agentBubbleColor: "plum", alwaysShowTime: false });
+  expect(v.prefs).toMatchObject({ bubbleColor: "blue", agentBubbleColor: "amber", alwaysShowTime: false });
   await new Promise((r) => setTimeout(r, 20));
   draw(v, cx);
 });
@@ -4002,7 +4017,7 @@ test("the quiet turn: no meta line over the bubble; the strip under it shows #n 
   const time = fmtTimeForTest(turn.ts);
   v.sel = null;
   let drawn = strings(() => v.rowItem(theme, row, false));
-  expect(drawn).not.toContain("You");
+  expect(drawn).not.toContain("User");
   // (The Turn card in the line's hover card is titled "Turn #n"; it shows only under the pointer.)
   expect(drawn.some((x) => x.includes(`#${turn.n}`) && x !== `Turn #${turn.n}`)).toBe(false);
   // The time is drawn for a hover on the message to reveal: the message and its strip are one
@@ -4067,7 +4082,7 @@ test("names: none over your message, none over a reply (one agent), who replied 
   expect(v.current().agentName).toBe("shop-agent");
   // No name over your message (the bubble on the right says it is yours), and none over
   // the reply in a session with one agent.
-  expect(drawn(row)).not.toContain("You");
+  expect(drawn(row)).not.toContain("User");
   expect(drawn(row)).not.toContain("shop-agent");
   expect(v.lineText(row.turn)).not.toContain("·");
   // A session where more than one agent replied (OpenCode records each turn's agent): who
@@ -4097,11 +4112,14 @@ test("names: none over your message, none over a reply (one agent), who replied 
   v.current().agentName = null;
   expect(v.agentName(row.turn)).toBe("Agent");
   // There is no name setting: the settings panel has no name field, and the image viewer
-  // heads your turn "You".
-  v.settingsOpen = true;
-  rec = []; v.settingsPanel(theme); const panel = rec; rec = null;
-  expect(panel).not.toContainEqual(["child", "Your name"]);
-  expect(v.viewerTurn(row.turn).who).toBe("You");
+  // heads the user's turn "User".
+  v.setSettings(true);
+  for (const tab of ["general", "chat"]) {
+    v.setTab = tab;
+    rec = []; v.settingsCard(theme); const panel = rec; rec = null;
+    expect(panel).not.toContainEqual(["child", "Your name"]);
+  }
+  expect(v.viewerTurn(row.turn).who).toBe("User");
 });
 
 
@@ -4290,7 +4308,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   // A bubble stops at Wide's line even in Full.
   expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
   // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
-  // back to 573; Full leaves it alone and turns the switch off.
+  // back to 573; Full leaves it alone and the switch as it was.
   v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
   v.paneW = 573;
   log = [];
@@ -4304,7 +4322,7 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   v.paneW = 573;
   log = [];
   v.action("width:full", cx);
-  expect(v.prefs).toMatchObject({ width: "full", readingWidth: false });
+  expect(v.prefs).toMatchObject({ width: "full", readingWidth: true });
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   // Full has no reading width: no fit button, and the pane is never asked back.
   v.paneW = 1200;
@@ -4312,19 +4330,29 @@ test("width: Comfortable, Wide and Full set the column and the reading line; cho
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
   // With the switch off, Wide changes the column only.
+  v.prefs = { ...v.prefs, readingWidth: false };
   log = [];
   v.action("width:wide", cx);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect(v.action("width:huge", cx)).toBe(false);
-  // The settings panel: a Width row with the three choices, the chosen one first in colour;
-  // in a pane narrower than Comfortable's column, a line says all three look the same.
+  // The card's Chat tab: a Width row with the three choices, each with its icon, then the
+  // pane and its reading column as a line, with the characters a line; in a pane narrower
+  // than the column, the line says it looks like Full here.
   v.paneW = 420;
-  rec = []; v.settingsPanel(theme); const sp = rec; rec = null;
+  v.action("settings", cx);
+  rec = []; v.settingsCard(theme); const sp = rec; rec = null;
   const ids = sp.filter((e) => e[0] === "id").map((e) => e[1]);
-  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full"]));
+  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full", "th-set-ruler"]));
+  const icons = sp.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(icons).toEqual(expect.arrayContaining(["width-comfortable.svg", "width-wide.svg", "width-full.svg"]));
   const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
   expect(texts).toContain("Keep the pane at this width");
-  expect(texts).toContain("This pane is narrower than Comfortable (573 px), so all three look the same here.");
+  expect(texts).toContain("Up to 90 characters a line. This pane has room for less, so it looks like Full here.");
+  v.paneW = 900;
+  expect(v.widthNote()).toBe("Up to 90 characters a line.");
+  v.prefs = { ...v.prefs, width: "full" };
+  expect(v.widthNote()).toBe("Text runs the whole pane.");
+  v.closeSettings();
 });
 
 test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
@@ -4594,7 +4622,7 @@ function afterId(calls, id) {
   return calls.slice(i + 1, j < 0 ? undefined : j);
 }
 const VIEW_TURN = {
-  n: 4, agent: false, who: "You", when: "9:25 AM · 58s", running: false, asOf: "9:30 AM", cmd: null,
+  n: 4, agent: false, who: "User", when: "9:25 AM · 58s", running: false, asOf: "9:30 AM", cmd: null,
   prompt: "[Image #41] [Image #42] The chips wrap on tablet.\nSee [Image #43] for the phone.", promptCut: 0,
   caption: [["wrench", "3 tool calls (not shown)"]],
   md: "The chips had a fixed width.\n\n- tablet scrolls\n- desktop stays\n\nCosts $5 to $9 a month.", copy: "The chips had a fixed width. (source)", left: 0,
@@ -4646,7 +4674,7 @@ test("the image viewer shows the turn's prompt and reply beside the image, 500 p
   expect(afterId(c, "th-gallery-panel")).toContainEqual(["border_l", 1]);
   const t = text();
   // The head, the caption, the stats and Copy reply; the Reply button is on the top line.
-  expect(t).toContain("#4 | · | You | 9:25 AM · 58s");
+  expect(t).toContain("#4 | · | User | 9:25 AM · 58s");
   expect(t).toContain("3 tool calls (not shown)");
   expect(t).toContain("58s · 7.9k tokens · opus 5.5 · 3 tool calls");
   expect(t).toContain("Copy reply");
@@ -5463,6 +5491,7 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   expect(labelAt).toBeGreaterThan(arrowAt);
   v.toast = { text: "x", at: 1 };
   rec = []; v.toastView(theme); const tb = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
+  v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
   expect(tb2).toBe(38 + 6 + 28 + 10);
@@ -5722,7 +5751,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(v.keysOpen).toBe(true);
   v.key(keyEv("?", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
   expect(v.keysOpen).toBe(false);
-  // The footer's "? keys" and the sheet's close button.
+  // The footer's "? keys" (with the key hints on) and the sheet's close button.
+  v.prefs = { ...v.prefs, keyHints: true };
   const f = frame(v, cx);
   handlerAfterId(f, "th-keys-hint", "on_click")({}, cx);
   expect(v.keysOpen).toBe(true);
@@ -5747,7 +5777,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 30 * 25 + 4 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 31 * 25 + 4 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -6978,13 +7008,14 @@ test("the floating top: no header row, the state top left at every width, icons 
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
   v.h.is_focused = () => false;
-  // Settings open: in the flow under the band, ending with the agent, the counts and the title.
+  // Settings open: a card over the list, not in its flow (the list does not move), with the
+  // agent, the counts and the title at its foot.
   v.settingsOpen = true;
   calls = drawn();
   ids = idsOf(calls);
-  expect(ids.indexOf("th-top")).toBeGreaterThan(-1);
-  expect(ids.indexOf("th-top")).toBeLessThan(ids.indexOf("threads-listbox"));
-  expect(ids).toContain("th-about");
+  expect(ids).not.toContain("th-top");
+  expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  expect(ids.indexOf("th-about")).toBeGreaterThan(ids.indexOf("th-set-card"));
   expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
   v.settingsOpen = false;
   // A search field opens under the band too.
@@ -7478,12 +7509,16 @@ test("landExact: the nearest earlier item at least want above, lifted by the res
 });
 
 test("Rail side lists Left on the left and Right on the right", async () => {
-  const { v } = await pinPane("--extra", "2");
+  const { v, cx } = await pinPane("--extra", "2");
+  v.action("settings", cx);
+  v.setTab = "general";
   rec = [];
-  v.railSideRow(theme, (x) => x);
+  v.settingsCard(theme);
   const ids = rec.filter((e) => e[0] === "id" && /^th-rail-(left|right)$/.test(e[1])).map((e) => e[1]);
+  const icons = rec.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   rec = null;
   expect(ids).toEqual(["th-rail-left", "th-rail-right"]);
+  expect(icons).toEqual(expect.arrayContaining(["panel-left.svg", "panel-right.svg"]));
 });
 
 // The owner's experiment, 17 Nov: "If you clicked it, the line would briefly extend, then
@@ -7858,7 +7893,7 @@ test("while a long session's first rows are still built, the pane says it is rea
   v.render(cx);
   expect(v.rowJob).toBeTruthy();
   expect(said.some((x) => /^Reading session/.test(x))).toBe(true);
-  expect(said).not.toContain("Nothing you typed yet");
+  expect(said).not.toContain("No user messages yet");
   // Once built, the turns.
   v.buildMax = max;
   for (let i = 0; i < 60 && v.rowJob; i++) { v.renders++; v.render(cx); }
@@ -8010,4 +8045,1232 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   h.init(state.props, hcx);
   rec = []; h.render(hcx); const hd = rec; rec = null;
   expect(hd.some(([n, x]) => n === "child" && x === p.note)).toBe(true);
+});
+
+// ---- the settings card (chat-look rounds 8 to 10, trajectory-5 section 9) ----
+
+// The handler named `name` set on the element with this id, before the next element's id.
+function onOf(calls, id, name) {
+  const at = calls.findIndex((e) => e[0] === "id" && e[1] === id);
+  if (at < 0) return null;
+  for (let j = at + 1; j < calls.length && calls[j][0] !== "id"; j++) if (calls[j][0] === name) return calls[j].at(-1);
+  return null;
+}
+const strsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+const idsIn = (calls) => calls.filter((e) => e[0] === "id").map((e) => e[1]);
+const cardOf = (v) => { rec = []; v.settingsCard(theme); const c = rec; rec = null; return c; };
+
+test("the settings card: over the list, opens on Chat with the keyboard, closes on a press outside, the x, Esc or the comma", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  const before = focusCalls;
+  v.key(keyEv(","), cx);
+  expect(v.settingsOpen).toBe(true);
+  expect(v.setTab).toBe("chat");
+  expect(focusCalls).toBeGreaterThan(before); // the pane has the keyboard, so one Esc closes it
+  let c = frame(v, cx);
+  const ids = idsIn(c);
+  // A clear layer over the pane, then the card, both after the list: the list does not move.
+  expect(ids.indexOf("th-set-catch")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  expect(ids).toEqual(expect.arrayContaining(["th-set-card", "th-set-close", "th-set-tab-general", "th-set-tab-chat", "th-set-preview", "th-set-foot", "th-set-keys"]));
+  expect(ids.filter((x) => x.startsWith("th-set-tab-"))).toEqual(["th-set-tab-general", "th-set-tab-chat"]);
+  expect(ids).not.toContain("th-top");
+  // 440 px at most, 12 px from the pane's right edge, and the pane less 12 px each side when narrower.
+  expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 3]).toEqual(["right", 12]);
+  expect(c[c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card") + 4]).toEqual(["w", 440]);
+  v.paneW = 360;
+  expect(v.setCardW()).toBe(336);
+  v.paneW = 573;
+  // A press on the card stays in it; a press anywhere else in the pane closes it, and selects nothing.
+  const sel = v.sel;
+  let stopped = 0;
+  const ev = { ...cx, stop_propagation() { stopped++; } };
+  onOf(c, "th-set-card", "on_click")({}, ev);
+  expect(v.settingsOpen).toBe(true);
+  onOf(c, "th-set-catch", "on_click")({}, ev);
+  expect(v.settingsOpen).toBe(false);
+  expect(v.sel).toBe(sel);
+  expect(stopped).toBe(2);
+  // The x.
+  v.action("settings", cx);
+  c = frame(v, cx);
+  const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-close");
+  c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.settingsOpen).toBe(false);
+  // Esc, from the list or from the quote key field, which hands the keyboard back.
+  v.action("settings", cx);
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  v.action("settings", cx);
+  v.quoteInput.handlers.focus({}, cx);
+  expect(v.fieldFocused).toBe("quote");
+  const f0 = focusCalls;
+  v.key(keyEv("escape"), cx);
+  expect([v.settingsOpen, v.fieldFocused]).toEqual([false, null]);
+  expect(focusCalls).toBe(f0 + 1);
+  // A press in another pane: Herdr's press-outside handler on the card.
+  v.action("settings", cx);
+  c = frame(v, cx);
+  onOf(c, "th-set-card", "on_mouse_down_out")({}, cx);
+  expect(v.settingsOpen).toBe(false);
+  // The comma again, and the tabs.
+  v.key(keyEv(","), cx);
+  v.key(keyEv(","), cx);
+  expect(v.settingsOpen).toBe(false);
+  v.action("settings", cx);
+  c = frame(v, cx);
+  onOf(c, "th-set-tab-general", "on_click")({}, cx);
+  expect(v.setTab).toBe("general");
+  // It opens on Chat each time.
+  v.closeSettings(); v.action("settings", cx);
+  expect(v.setTab).toBe("chat");
+  draw(v, cx);
+});
+
+test("General holds text, rail side, key hints, the two message colors, link rules, the quote key and the file; Chat holds messages and the width", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4", "--agents"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "general";
+  const g = cardOf(v);
+  const gs = strsOf(g);
+  for (const s of ["Text", "Layout", "Colors", "Links and keys", "File", "Text size", "Rail side", "Left", "Right", "Key hints at the bottom", "User messages", "Agent messages", "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]) expect(gs).toContain(s);
+  for (const s of ["Show agent messages", "Width", "Shorten long messages", "Always show time", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(s);
+  // Headings in the keys sheet's style, US spelling; the rows lost their icons.
+  expect(gs).not.toContain("Colours");
+  const icons = g.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  for (const gone of ["bot.svg", "clock.svg", "scissors.svg", "fold-horizontal.svg", "move-horizontal.svg"]) expect(icons).not.toContain(gone);
+  // A color's name is its dot's tooltip: amber is the agent default now.
+  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Amber · default")).toBe(true);
+  expect(g.some((e) => e[0] === "tooltip" && e[1] === "Blue · default")).toBe(true);
+  v.setTab = "chat";
+  const ch = strsOf(cardOf(v));
+  for (const s of ["Messages", "Layout", "Show agent messages", "Shorten long messages", "Always show time", "Width", "Comfortable", "Wide", "Full", "Keep the pane at this width", "Reset to defaults"]) expect(ch).toContain(s);
+  for (const s of ["User messages", "Agent messages", "Text size", "Quote key", "Copy path", "Rail side"]) expect(ch).not.toContain(s);
+  // The hidden count sits beside its switch; the two hints that repeated a switch are gone.
+  expect(ch.some((x) => /\d+ (hidden|folded)/.test(x))).toBe(true);
+  expect(ch).not.toContain("A message's time shows when its turn is selected.");
+  // The line counts sit under their switch only while it is on.
+  expect(ch).not.toContain("Prompt lines");
+  v.action("truncate", cx);
+  expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Prompt lines", "Reply lines"]));
+});
+
+test("the preview follows text size, both colors, the time, hidden agent messages and the rail's side", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  const pv = () => { rec = []; v.cardPreview(theme, 440); const c = rec; rec = null; return c; };
+  let c = pv();
+  // The short words always, at the real text size, each bubble at most 45% of the band.
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "From an agent", "From the user", "9:12 AM"]));
+  expect(strsOf(c)).not.toContain("9:10 AM");
+  // Hidden shows in the label only: nothing in the preview is faded, so the agent's words
+  // keep their ink on the amber fill (white, 5.37:1), on light and dark themes alike.
+  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
+  expect(c).toContainEqual(["bg", "#87643A"]); // amber
+  const at = c.findIndex((e) => e[0] === "bg" && e[1] === "#87643A");
+  const ink = c.slice(at).find((e) => e[0] === "text_color")[1];
+  expect(contrast(ink, "#87643A")).toBeGreaterThanOrEqual(4.5);
+  expect(c).toContainEqual(["text_size", 14]);
+  expect(c.filter((e) => e[0] === "max_w")).toEqual([["max_w", 198], ["max_w", 198]]);
+  // 10 px above and below: the line height plus 68.
+  expect(v.previewH()).toBe(v.rt().line + 68);
+  expect(c).toContainEqual(["py", 10]);
+  // The ticks on the inset (16 px in), and 36 px on the rail's side to the bubbles.
+  expect(c).toContainEqual(["right", 16]);
+  expect(c).toContainEqual(["pl", 16]);
+  expect(c).toContainEqual(["pr", 36]);
+  v.prefs = { ...v.prefs, agentTurns: true, alwaysShowTime: true, textSize: 16, railSide: "left", agentBubbleColor: "teal" };
+  c = pv();
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent", "9:10 AM"]));
+  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
+  expect(c).toContainEqual(["bg", "#36706D"]);
+  expect(c).toContainEqual(["text_size", 16]);
+  expect(c).toContainEqual(["left", 16]);
+  expect(c).toContainEqual(["pl", 36]);
+  // A narrow card shortens the label to keep one line.
+  v.prefs = { ...v.prefs, agentTurns: false };
+  expect(strsOf((() => { rec = []; v.cardPreview(theme, 300); const x = rec; rec = null; return x; })())).toEqual(expect.arrayContaining(["Agent · hidden", "From an agent", "From the user"]));
+});
+
+test("a switch on the card shows no toast; the a key still says what it did", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--agents"));
+  v.action("settings", cx);
+  const c = frame(v, cx);
+  onOf(c, "th-set-agents", "on_click")({}, cx);
+  expect(v.prefs.agentTurns).toBe(true);
+  expect(v.toast).toBe(null);
+  v.closeSettings();
+  v.key(keyEv("a"), cx);
+  expect(v.prefs.agentTurns).toBe(false);
+  expect(v.toast.text).toBe("Agent messages hidden");
+});
+
+test("Reset covers every control on the card, is dim at the defaults, and leaves the quote key and link rules", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ quoteKey: "y", links: [{ pattern: "X-(\\d+)", url: "https://x.example/$1" }] }));
+  v.action("settings", cx);
+  const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
+  expect(v.prefsDiffer()).toBe(false);
+  expect(reset()).toContainEqual(["opacity", 0.45]);
+  for (const a of ["agents", "keyHints", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
+  v.prefs = { ...v.prefs, width: "wide" };
+  expect(v.prefsDiffer()).toBe(true);
+  expect(reset()).not.toContainEqual(["opacity", 0.45]);
+  v.action("resetSettings", cx);
+  for (const k of ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  expect(v.quoteKey).toBe("y");
+  expect(v.links.length).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+});
+const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
+
+test("the file: its path with Copy path, which says Copied in its own place with no toast; no Open, which the mod has no way to do", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.action("settings", cx);
+  v.setTab = "general";
+  const c = cardOf(v);
+  expect(idsIn(c)).not.toContain("th-set-open");
+  expect(strsOf(c)).not.toContain("Open");
+  log = [];
+  onOf(c, "th-set-copy", "on_click")({}, cx);
+  expect(cx.clip).toBe(v.prefsPath());
+  expect(v.toast).toBe(null);
+  expect(strsOf(cardOf(v))).toContain("Copied");
+  cx.flush(2000);
+  expect(strsOf(cardOf(v))).toContain("Copy path");
+  expect(log.filter((x) => x[0] === "open")).toEqual([]);
+  expect(v.action("openSettingsFile", cx)).toBe(false);
+});
+
+test("a field that leaves the screen gives the keyboard back: a tab, the Link rules row, Back, or a command, after typing in the quote key field", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.action("settings", cx);
+  const into = () => { v.setTab = "general"; v.setPage = "main"; v.quoteInput.handlers.focus({}, cx); expect(v.fieldFocused).toBe("quote"); };
+  const back = (how) => {
+    const f0 = focusCalls;
+    how();
+    expect(v.fieldFocused).toBe(null);
+    expect(focusCalls).toBe(f0 + 1);
+    // The panel's keys work again.
+    const sel = v.sel;
+    v.key(keyEv("k"), cx);
+    expect(v.settingsOpen).toBe(true);
+    return sel;
+  };
+  into();
+  back(() => onOf(cardOf(v), "th-set-tab-chat", "on_click")({}, cx));
+  expect(v.setTab).toBe("chat");
+  into();
+  back(() => onOf(cardOf(v), "th-set-links", "on_click")({}, cx));
+  expect(v.setPage).toBe("links");
+  into();
+  v.setPage = "links";
+  back(() => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-back"); c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx); });
+  into();
+  back(() => v.action("settingsTab:chat", cx));
+  into();
+  back(() => v.action("settingsPage:links", cx));
+});
+
+test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.action("settings", cx);
+  v.setTab = "general";
+  const q = v.quoteInput;
+  expect(q.value()).toBe("q");
+  settingsWrites.length = 0;
+  keepSettings = true;
+  // Typed after the old letter: the field keeps the new one alone.
+  q.set_value("qy"); q.handlers.change({}, cx);
+  expect(q.value()).toBe("y");
+  expect(v.quoteKey).toBe("y");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).quoteKey).toBe("y");
+  expect(v.quoteNote()).toBe(null);
+  // A letter Threads uses.
+  q.set_value("yj"); q.handlers.change({}, cx);
+  expect(q.value()).toBe("j");
+  expect(v.quoteKey).toBe("y");
+  expect(v.quoteNote()).toBe("j is a Threads key already. The quote key stays y.");
+  expect(strsOf(cardOf(v))).toContain("j is a Threads key already. The quote key stays y.");
+  q.set_value(""); q.handlers.change({}, cx);
+  expect(v.quoteNote()).toBe("Type one letter. The quote key stays y.");
+  q.set_value("7"); q.handlers.change({}, cx);
+  expect(v.quoteNote()).toBe("One letter, a to z. The quote key stays y.");
+  // While the field has the keyboard, j and the comma are its own.
+  q.handlers.focus({}, cx);
+  const sel = v.sel;
+  v.key(keyEv("j"), cx);
+  v.key(keyEv(","), cx);
+  expect(v.sel).toBe(sel);
+  expect(v.settingsOpen).toBe(true);
+  q.handlers.blur({}, cx);
+  expect(v.fieldFocused).toBe(null);
+  // Opened again, the field shows the key.
+  v.closeSettings(); v.action("settings", cx);
+  expect(q.value()).toBe("y");
+  expect(v.quoteNote()).toBe(null);
+  // A key the file sets reaches the field.
+  v.applyPrefs(JSON.stringify({ quoteKey: "z" }));
+  expect(q.value()).toBe("z");
+  // A file value Threads cannot use: the mod's note, under the field.
+  v.applyPrefs(JSON.stringify({ quoteKey: "i" }));
+  expect(v.quoteNote()).toMatch(/^quoteKey "i" is not a free letter/);
+  keepSettings = false;
+  delete recordFiles[v.prefsPath()];
+});
+
+test("Shift w steps the width with the toast that names all three; inside the card a width change shows none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 900;
+  expect(v.prefs.width).toBe("comfortable");
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("wide");
+  expect(v.toast.icon).toBe("width-wide");
+  expect(v.toast.widths).toEqual({ cur: "wide", tight: false });
+  rec = []; v.toastView(theme); let c = rec; rec = null;
+  expect(strsOf(c)).toEqual(["Comfortable", "Wide", "Full"]);
+  expect(c).toContainEqual(["font_semibold"]);
+  // A second press changes the words in place, and the first toast's timer leaves it.
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("full");
+  const at = v.toast.at;
+  v.key(shiftW, cx);
+  expect(v.prefs.width).toBe("comfortable");
+  expect(v.toast.at).not.toBe(at);
+  // Too narrow for the list to change, with the pane not kept at the width: it says so, down to 420 px.
+  v.paneW = 440;
+  v.prefs = { ...v.prefs, readingWidth: false };
+  v.key(shiftW, cx);
+  expect(v.toast.widths.tight).toBe(true);
+  rec = []; v.toastView(theme); c = rec; rec = null;
+  expect(strsOf(c)).toContain("too narrow here to show");
+  v.paneW = 400;
+  rec = []; v.toastView(theme); c = rec; rec = null;
+  expect(strsOf(c)).not.toContain("too narrow here to show");
+  // With the card open the toast is drawn after it, so it sits over the card.
+  v.toast = null;
+  v.action("settings", cx);
+  v.key(shiftW, cx);
+  const f = idsIn(frame(v, cx));
+  expect(f.indexOf("th-toast-widths")).toBeGreaterThan(f.indexOf("th-set-card"));
+  // A width chosen in the card says nothing.
+  v.toast = null;
+  c = frame(v, cx);
+  onOf(c, "th-width-full", "on_click")({}, cx);
+  expect(v.prefs.width).toBe("full");
+  expect(v.toast).toBe(null);
+});
+
+test("key hints at the bottom are off by default; the switch brings the row back, and ? keys sits at the card's foot", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  expect(v.prefs.keyHints).toBe(false);
+  expect(idsIn(frame(v, cx))).not.toContain("th-footer");
+  expect(v.footSpace()).toBe(0);
+  v.action("settings", cx);
+  let c = frame(v, cx);
+  onOf(c, "th-set-keys", "on_click")({}, cx);
+  expect([v.keysOpen, v.settingsOpen]).toEqual([true, false]);
+  v.action("escape", cx);
+  v.action("settings", cx);
+  v.setTab = "general";
+  c = frame(v, cx);
+  onOf(c, "th-set-hints", "on_click")({}, cx);
+  expect(v.prefs.keyHints).toBe(true);
+  v.footerH = 38;
+  expect(idsIn(frame(v, cx))).toContain("th-footer");
+  expect(v.footSpace()).toBe(38);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573; v.rootH = 400;
+  v.action("settings", cx);
+  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-body-chat"); return c.slice(at).find((e) => e[0] === "h")[1]; };
+  const room = 400 - 32 - 12 - (40 + 36 + v.previewH() + 40 + 2);
+  expect(bodyH()).toBe(room);
+  // Measured shorter than the room: the card is as tall as its rows.
+  const c = cardOf(v);
+  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 120, width: 400 }, cx);
+  expect(bodyH()).toBe(120);
+  onOf(c, "th-set-rows-chat", "on_size_change")({ height: 900, width: 400 }, cx);
+  expect(bodyH()).toBe(room);
+  // The key hints take their room.
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  expect(bodyH()).toBe(room - 38);
+});
+
+// The owner, 17 Nov: pointing at the settings card near the rail set the rail off under it.
+// While the card or the keys sheet is open nothing under it takes a hover, a press or the
+// wheel (settings-spacing 7). The kit has no call that blocks a hover under a layer, so the
+// rail, the list and the rows ask (covered()).
+test("nothing under the settings card or the keys sheet reacts: the rail and its cards, the list's press, pointer and wheel, the rows' hovers", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  v.paneW = Math.max(573, v.width + 80);
+  v.listH = 600;
+  draw(v, cx);
+  const ks = keys();
+  const rail = () => { rec = []; v.railView(theme); const r = rec; rec = null; return r; };
+  const live = (r) => r.filter((e) => ["on_hover", "on_scroll_wheel", "on_click", "tooltip"].includes(e[0])).length;
+  const hovers = () => rail().filter((e) => e[0] === "on_hover").map((e) => e[1]).slice(1);
+  let hovered = 0;
+  const el = { text_color() { return this; }, when(c, f) { return c ? f(this) : this; }, hover() { hovered++; return this; } };
+  let stopped = 0;
+  const ev = { ...cx, stop_propagation() { stopped++; } };
+  expect(live(rail())).toBeGreaterThan(0);
+  v.reveal(theme, el);
+  expect(hovered).toBe(1);
+  for (const side of ["right", "left"]) {
+    for (const page of ["main", "links"]) {
+      v.prefs = { ...v.prefs, railSide: side };
+      // A tick's card is open when the card opens: it closes, and does not come back after.
+      hovers()[1](true, cx);
+      expect(v.railHover).toBe(ks[1]);
+      v.action("settings", cx);
+      v.setPage = page;
+      expect(v.settingsOpen).toBe(true);
+      expect(v.railHover).toBe(null);
+      const r = rail();
+      expect(live(r)).toBe(0);
+      expect(idsIn(r).some((x) => x.startsWith("th-tick-card-") || x === "th-rail-card")).toBe(false);
+      const c = frame(v, cx);
+      // The list: a press, the pointer and the wheel do nothing.
+      const press = v.pressAt;
+      const moved = v.mouseX;
+      onOf(c, "threads-body", "on_mouse_move")({ position: { x: 9, y: 9 }, local_position: { x: 9, y: 9 } }, cx);
+      onOf(c, "threads-body", "on_mouse_down")({ position: { x: 5, y: 5 }, local_position: { x: 5, y: 5 }, bounds: { width: 500 }, click_count: 2 }, cx);
+      expect(v.pressAt).toBe(press);
+      expect(v.mouseX).toBe(moved);
+      v.follow = true;
+      onOf(c, "threads-listbox", "on_scroll_wheel")({ delta: { y: 40 } }, cx);
+      expect(v.follow).toBe(true);
+      // The rows: no hover fill, no reveal, no info card.
+      hovered = 0;
+      v.reveal(theme, el);
+      expect(hovered).toBe(0);
+      expect(c.filter((e) => e[0] === "id" && String(e[1]).startsWith("th-hover-"))).toEqual([]);
+      // The wheel over the card or its clear layer stops at the layer, after the card's own
+      // scroll (drawn over it) has run.
+      stopped = 0;
+      onOf(c, "th-set-catch", "on_scroll_wheel")({ delta: { y: 40 } }, ev);
+      expect(stopped).toBe(1);
+      v.closeSettings();
+      expect(live(rail())).toBeGreaterThan(0);
+    }
+  }
+  // The keys sheet too.
+  v.action("keys", cx);
+  expect(v.keysOpen).toBe(true);
+  expect(live(rail())).toBe(0);
+  const c = frame(v, cx);
+  stopped = 0;
+  onOf(c, "th-keys-scrim", "on_scroll_wheel")({ delta: { y: 40 } }, ev);
+  expect(stopped).toBe(1);
+  v.action("keys", cx);
+  expect(live(rail())).toBeGreaterThan(0);
+  hovered = 0;
+  v.reveal(theme, el);
+  expect(hovered).toBe(1);
+});
+
+// settings-spacing 1 to 5 and 8: one inset on every band, so the title, the tabs, the labels
+// and the foot share a left edge; a 4 px grid; the comma key's cap gone from the head (it is
+// in the sliders icon's tooltip and on the keys sheet); readable text no fainter than muted.
+test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 px tabs, 28 px rows, muted helper text, no comma key in the head", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "general";
+  const muted = theme.muted;
+  const of = (fn) => { rec = []; fn(); const c = rec; rec = null; return c; };
+  // From an element's id to the next id.
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  const head = of(() => v.cardHead(theme, false, () => {}, 16));
+  for (const x of [["h", 40], ["px", 16], ["text_size", 14], ["mr", -5]]) expect(head).toContainEqual(x);
+  expect(strsOf(head)).toEqual(["Settings"]);
+  expect(of(() => v.cardHead(theme, true, () => {}, 16))).toContainEqual(["ml", -5]);
+  const tabs = of(() => v.cardTabs(theme, 16));
+  for (const x of [["h", 36], ["px", 6], ["px", 10], ["text_size", 13]]) expect(tabs).toContainEqual(x);
+  const foot = of(() => v.cardFoot(theme, 16));
+  for (const x of [["h", 40], ["px", 16], ["text_size", 12], ["text_color", muted]]) expect(foot).toContainEqual(x);
+  let c = cardOf(v);
+  for (const x of [["px", 16], ["py", 16], ["gap", 20]]) expect(own(c, "th-set-rows-general")).toContainEqual(x);
+  // A switch: 32 by 18 with a 14 px knob; off, its track has a muted outline.
+  const hints = own(c, "th-set-hints");
+  for (const x of [["min_h", 28], ["w", 32], ["h", 18], ["size", 14], ["border_1"], ["border_color", muted]]) expect(hints).toContainEqual(x);
+  // The colors: one line beside the name at 440, 24 px dots 2 px apart, Plain with a muted edge.
+  expect(own(c, "th-bubbleColor-row")).toContainEqual(["min_h", 28]);
+  expect(own(c, "th-bubbleColor-blue")).toContainEqual(["size", 24]);
+  expect(own(c, "th-bubbleColor-plain")).toContainEqual(["border_color", muted]);
+  // Reset's line is under the button, muted, whole.
+  expect(strsOf(c)).toContain("Link rules and the quote key stay.");
+  // The file's path: muted 11.5 mono, cut at a slash, whole in its tooltip.
+  const path = own(c, "th-set-path");
+  for (const x of [["text_size", 11.5], ["text_color", muted]]) expect(path).toContainEqual(x);
+  const full = path.find((e) => e[0] === "tooltip")[1];
+  const shown = strsOf(path).at(-1);
+  expect(shown === full || (shown.startsWith("…/") && full.endsWith(shown.slice(1)))).toBe(true);
+  // A 336 px card: the dots under the name, 6 px below it.
+  v.paneW = 360;
+  c = cardOf(v);
+  expect(own(c, "th-bubbleColor-row")).toContainEqual(["gap", 6]);
+  expect(strsOf(c)).toContain("Copy path");
+  // Under 320: a 12 px inset, and Copy.
+  v.paneW = 330;
+  c = cardOf(v);
+  expect(own(c, "th-set-rows-general")).toContainEqual(["px", 12]);
+  expect(strsOf(c)).toContain("Copy");
+  const narrow = strsOf(own(c, "th-set-path")).at(-1);
+  expect(narrow.startsWith("…/")).toBe(true);
+  expect(narrow.length).toBeLessThan(full.length);
+});
+
+test("the width line under Width ends on the controls' right edge: it fills its row, the column centered in the row's width", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "chat";
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  for (const [paneW, pad] of [[573, 16], [330, 12]]) {
+    v.paneW = paneW;
+    const w = v.setCardW();
+    const c = cardOf(v);
+    expect(own(c, `th-set-rows-chat`)).toContainEqual(["px", pad]);
+    const ruler = own(c, "th-set-ruler");
+    // The line takes its row's width, as the chooser's row and the switch rows do, so no fixed
+    // width can run past them (it was 2 px over: the card's border).
+    expect(ruler).toContainEqual(["w_full"]);
+    expect(ruler[0]).toEqual(["id", "th-set-ruler"]);
+    const ws = ruler.filter((e) => e[0] === "w").map((e) => e[1]);
+    expect(ws.length).toBe(1); // the column's only
+    const row = w - 2 - 2 * pad;
+    const left = ruler.find((e) => e[0] === "left")[1];
+    expect(Math.abs(left * 2 + ws[0] - row)).toBeLessThanOrEqual(1);
+    expect(left + ws[0]).toBeLessThanOrEqual(row);
+  }
+});
+
+test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ links: [
+    { name: "Ticket", type: "ticket", description: "Our tracker", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1", example: "Fixed in ACME-412." },
+    { name: "PR", type: "pull-request", pattern: "#(\\d{1,5})\\b", url: "https://git.example/{repo}/pull/$1", example: "See #58.", on: false },
+    { name: "Broken", pattern: "x(", url: "https://x.example/$1" },
+    { name: "Bare", pattern: "\\bBUG-(\\d+)\\b", url: "https://bugs.example/$1" },
+    { name: "Miss", pattern: "\\bZED-(\\d+)\\b", url: "https://z.example/$1", example: "nothing here" },
+  ] }));
+  v.action("settings", cx);
+  v.setTab = "general";
+  const g = strsOf(cardOf(v));
+  expect(g).toEqual(expect.arrayContaining(["Link rules", "5", "1 not working"]));
+  // The row opens the page.
+  onOf(cardOf(v), "th-set-links", "on_click")({}, cx);
+  expect(v.setPage).toBe("links");
+  const c = cardOf(v);
+  const s = strsOf(c);
+  expect(idsIn(c)).toContain("th-set-back");
+  expect(idsIn(c)).not.toContain("th-set-tab-general"); // no tabs and no preview on the page
+  expect(idsIn(c)).not.toContain("th-set-preview");
+  for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Rules · 5",
+    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412",
+    "PR", "Off", "This session has no repository, so this rule links nothing here.",
+    "Broken", "Not working: pattern not valid", "Bare", "No example yet", "\\bBUG-(\\d+)\\b", "Miss", "Finds nothing in its example",
+    "When two rules match the same text, the higher one wins."]) expect(s).toContain(x);
+  expect(c).toContainEqual(["underline"]);
+  // A switch on each rule that runs; a warning mark in its place on one that does not.
+  expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-on-1", "th-rule-on-2", "th-rule-on-4"]));
+  expect(idsIn(c)).not.toContain("th-rule-on-3");
+  const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+  expect(icons).toEqual(expect.arrayContaining(["ticket.svg", "git-pull-request.svg", "regex.svg", "alert.svg"]));
+  // With the session's repository, the PR rule's example shows its address (and it stays off).
+  v.remote = { ...v.remote, repo: "acme/exports", owner: "acme" };
+  expect(strsOf(cardOf(v))).toContain("https://git.example/acme/exports/pull/58");
+  expect(v.links.map((r) => r.name)).toEqual(["Ticket", "Bare", "Miss"]);
+  // Esc closes the card from the page; Back returns to the tabs.
+  onOf(cardOf(v), "th-set-back", "on_click")?.({}, cx);
+  const back = cardOf(v);
+  const at = back.findIndex((e) => e[0] === "id" && e[1] === "th-set-back");
+  if (at >= 0) back.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.setPage).toBe("main");
+  v.setPage = "links";
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  // No rules: the page says so.
+  v.applyPrefs("{}");
+  v.action("settings", cx);
+  v.setPage = "links";
+  expect(strsOf(cardOf(v))).toContain("No rules yet.");
+});
+
+test("Shift w through Full keeps Keep the pane at this width as it was, and Reset resizes the pane the way a width change does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  for (const want of ["wide", "full", "comfortable"]) { v.key(shiftW, cx); expect(v.prefs.width).toBe(want); expect(v.prefs.readingWidth).toBe(true); }
+  // Off by hand stays off through a cycle too.
+  v.prefs = { ...v.prefs, readingWidth: false };
+  for (let i = 0; i < 3; i++) v.key(shiftW, cx);
+  expect(v.prefs.readingWidth).toBe(false);
+  // Reset: back to Comfortable with the switch on, and the pane to its column.
+  v.prefs = { ...v.prefs, width: "wide", readingWidth: true };
+  v.paneW = 704;
+  log = [];
+  v.action("resetSettings", cx);
+  expect(v.prefs).toMatchObject({ width: "comfortable", readingWidth: true });
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
+  // At the defaults already, at that width: nothing to resize.
+  v.paneW = 573;
+  log = [];
+  v.action("resetSettings", cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
+test("a rule that turned slow on a reply shows Not working with the reason on the page and in the count", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/$1", example: "Z-1" }] }));
+  v.links[0].slow = "too slow on a reply; skipped until the rule changes";
+  v.action("settings", cx);
+  v.setTab = "general";
+  expect(strsOf(cardOf(v))).toContain("1 not working");
+  v.setPage = "links";
+  const c = cardOf(v);
+  expect(strsOf(c)).toContain("Not working: too slow on a reply; skipped until the rule changes");
+  expect(strsOf(c)).not.toContain("Finds nothing in its example");
+  // A change to the file compiles it again, and it runs.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/a/$1", example: "Z-1" }] }));
+  expect(v.links[0].slow).toBe(undefined);
+});
+
+// ---- link rules changed on the card (chat-look round 10; settings-links) ----
+
+const RULES = [
+  { name: "Ticket", type: "ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1", example: "Fixed in ACME-412.", keepMe: 1 },
+  { name: "Hash", pattern: "#(\\d+)", url: "https://h.example/$1", example: "See #58." },
+];
+async function rulesPane(rules = RULES) {
+  const r = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  settingsWrites.length = 0;
+  r.v.applyPrefs(JSON.stringify({ textSize: 15, links: rules }));
+  recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
+  r.v.action("settings", r.cx);
+  r.v.setPage = "links";
+  r.cx.pending = []; // the folder watch never ends: wait only for what follows
+  return r;
+}
+const settleAll = async (cx) => { for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); } };
+const lastLinks = () => JSON.parse(settingsWrites.at(-1)).links;
+function typeIn(v, k, text, cx) { v.ruleInputs[k].set_value(text); v.ruleInputs[k].handlers.change({}, cx); }
+function done(v) { keepSettings = false; settingsStale = false; delete recordFiles[v.prefsPath()]; }
+
+test("a fresh install has the pull request rule, on; the first write records it, and a file without links has none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  cx.pending = [];
+  try {
+    v.applyPrefs(null);
+    expect(v.linkList.map((r) => [r.name, r.type, r.on, r.why])).toEqual([["Pull request", "pull-request", true, null]]);
+    expect(v.links.length).toBe(1);
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme" };
+    expect(v.linkOne("Merged in #58 today.").md).toContain("https://github.com/acme/exports/pull/58");
+    settingsWrites.length = 0;
+    v.action("textSize:+", cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ name: "Pull request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58.", type: "pull-request" }]);
+    expect(w.textSize).toBe(15);
+    v.applyPrefs(JSON.stringify({ textSize: 14 }));
+    expect(v.linkList).toEqual([]);
+  } finally { done(v); }
+});
+
+test("the switch on a row turns a rule off and on, written to the file; an off rule links nothing and is dimmed with Off", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ ...RULES[0], on: false });
+    expect(JSON.parse(settingsWrites.at(-1)).textSize).toBe(15);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain("Off");
+    expect(v.settingsOpen).toBe(true); // the press stays in the card and opens nothing
+    expect(v.ruleEdit).toBe(null);
+    onOf(c, "th-rule-on-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual(RULES[0]);
+    expect(v.links.map((r) => r.name)).toEqual(["Ticket", "Hash"]);
+  } finally { done(v); }
+});
+
+test("Edit and Delete: icon buttons on every row before its switch, with a tooltip and a spoken label; Delete takes the rule at once, and Undo puts it back where it was", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    let c = cardOf(v);
+    // On every row, not only under the pointer, and the row has no hover handler for them.
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-edit-btn-2", "th-rule-delete-btn-2"]));
+    expect(onOf(c, "th-rule-1", "on_hover")).toBe(null);
+    expect(strsOf(c)).not.toContain("Change");
+    expect(strsOf(c)).not.toContain("Remove");
+    // Name, Edit, Delete, then the switch: the switch stays last, in a 36 by 24 hit area.
+    const ids = idsIn(c);
+    expect(ids.indexOf("th-rule-edit-btn-1")).toBeLessThan(ids.indexOf("th-rule-delete-btn-1"));
+    expect(ids.indexOf("th-rule-delete-btn-1")).toBeLessThan(ids.indexOf("th-rule-on-1"));
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    for (const [id, tip, icon] of [["th-rule-edit-btn-1", "Edit rule", "pencil"], ["th-rule-delete-btn-1", "Delete rule", "trash"]]) {
+      const b = own(id);
+      for (const x of [["size", 24], ["rounded", 5], ["text_color", theme.muted], ["tooltip", tip], ["accessibility_label", tip], ["role", "button"]]) expect(b).toContainEqual(x);
+      expect(b.some((e) => e[0] === "svg" && String(e[1]).endsWith(`/${icon}.svg`))).toBe(true);
+      // Lucide outlines at the mod's 1.5 stroke.
+      expect(readFileSync(new URL(`../mods/agent-threads/${icon}.svg`, import.meta.url), "utf8")).toContain('stroke-width="1.5"');
+    }
+    for (const x of [["w", 36], ["h", 24]]) expect(own("th-rule-on-1")).toContainEqual(x);
+    // Edit opens the rule, as a press on the row does.
+    onOf(c, "th-rule-edit-btn-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    expect(v.linkList.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([RULES[1]]);
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("Deleted Ticket.");
+    expect(idsIn(c)).toContain("th-rule-undo-line");
+    expect(v.ruleUndo.at).toBe(0); // drawn where the rule was
+    onOf(c, "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+    expect(strsOf(cardOf(v))).not.toContain("Deleted Ticket.");
+    // Undo lasts until the page is left.
+    v.removeRule(1, cx);
+    expect(v.ruleUndo).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.ruleUndo).toBe(null);
+    await settleAll(cx);
+  } finally { done(v); }
+});
+
+// settings-spacing 6: a rule's card 12 px in, its lines 4 px apart, a 14 px type icon 8 px
+// from a 13 px name, readable text muted, cards 8 px apart; nothing pressed under 24 px.
+test("Link rules spacing: 12 px cards, muted lines, a 32 px Undo line with a 24 px Undo, 24 px small buttons", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    let c = cardOf(v);
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    const row = own("th-rule-1");
+    for (const x of [["p", 12], ["gap", 4], ["gap", 8], ["size", 14], ["text_size", 13], ["font_semibold"]]) expect(row).toContainEqual(x);
+    v.removeRule(0, cx);
+    c = cardOf(v);
+    for (const x of [["min_h", 32], ["text_color", theme.muted]]) expect(own("th-rule-undo-line")).toContainEqual(x);
+    expect(own("th-rule-undo")).toContainEqual(["h", 24]);
+    expect(strsOf(c)).toContain("Undo");
+    await settleAll(cx);
+    rec = []; v.miniButton(theme, "x", "Use", () => {}); const m = rec; rec = null;
+    expect(m).toContainEqual(["h", 24]);
+  } finally { done(v); }
+});
+
+test("a press on a row opens the rule in place with its fields; Keep rule writes it, keeping keys this version does not know; Esc and Discard drop the change", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(Object.fromEntries(Object.entries(v.ruleInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Ticket", description: "", pattern: RULES[0].pattern, url: RULES[0].url, example: RULES[0].example });
+    let c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of ["Type", "Ticket key", "Name", "Description", "Finds", "Opens", "Example", "A JavaScript regular expression. Capitals count.", "Reference", "Keep rule", "Discard", "Duplicate", "Delete", "ACME-412", "https://tracker.example/ACME-412"]) expect(s).toContain(x);
+    expect(s).not.toContain("Move up"); // the first rule
+    expect(idsIn(c)).toContain("th-rule-edit-1");
+    expect(idsIn(c)).not.toContain("th-rule-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    // Open goes to the address, Reference to the pattern sheet, with Herdr's URL opener.
+    log = [];
+    onOf(c, "th-rule-open", "on_click")({}, cx);
+    onOf(c, "th-rule-reference", "on_click")({}, cx);
+    expect(log.filter((x) => x[0] === "open_url").map((x) => x[1])).toEqual(["https://tracker.example/ACME-412", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet"]);
+    // A change, kept.
+    typeIn(v, "description", "Our tracker", cx);
+    typeIn(v, "example", "Shipped ACME-7.", cx);
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example/ACME-7");
+    v.ruleInputs.name.handlers.submit({}, cx); // Enter in a field keeps it
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ name: "Ticket", type: "ticket", description: "Our tracker", pattern: RULES[0].pattern, url: RULES[0].url, example: "Shipped ACME-7.", keepMe: 1 });
+    expect(strsOf(cardOf(v))).toContain("Our tracker");
+    // Esc from a field closes the rule, not the card, and writes nothing.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    typeIn(v, "name", "Changed", cx);
+    v.key(keyEv("escape"), cx);
+    expect([v.ruleEdit, v.settingsOpen, v.fieldFocused]).toEqual([null, true, null]);
+    // Esc with no field focused, and Discard, do the same.
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.action("escape", cx);
+    expect([v.ruleEdit, v.settingsOpen]).toEqual([null, true]);
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    c = cardOf(v);
+    onOf(c, "th-rule-discard", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    expect(v.linkList[1].name).toBe("Hash");
+  } finally { done(v); }
+});
+
+test("Add rule: three types, Custom first; a type fills an untouched new rule, and after the first change to Finds, Opens or Example it is only the label", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["New rule, not kept yet", "Custom", "Write it yourself.", "Ticket key", "Pull request", "Links a ticket key such as ACME-412 to its ticket."]));
+    expect(idsIn(c).indexOf("th-rule-new")).toBeGreaterThan(idsIn(c).indexOf("th-rule-2"));
+    expect(v.ruleEdit.draft.type).toBe("custom");
+    expect(strsOf(c)).not.toContain("Duplicate");
+    onOf(c, "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bACME-(\\d+)\\b");
+    expect(v.ruleInputs.name.value()).toBe("Ticket");
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example.com/ACME-412");
+    // The rule above takes the same text first, and the line says so.
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Keep this rule, then Move up to put it above.");
+    onOf(cardOf(v), "th-rule-type-custom", "on_click")({}, cx);
+    expect([v.ruleInputs.pattern.value(), v.ruleInputs.name.value()]).toEqual(["", ""]);
+    // Typed: the three rows fold to one line, and a type no longer fills.
+    typeIn(v, "pattern", "\\bBUG-(\\d+)\\b", cx);
+    c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    onOf(c, "th-rule-type-change", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("The label changes; the fields stay.");
+    onOf(cardOf(v), "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bBUG-(\\d+)\\b");
+    expect(v.ruleEdit.draft.type).toBe("ticket");
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-type-ticket");
+    typeIn(v, "url", "https://bugs.example/$1", cx);
+    typeIn(v, "name", "Bug", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[2]).toEqual({ name: "Bug", type: "ticket", pattern: "\\bBUG-(\\d+)\\b", url: "https://bugs.example/$1" });
+    // The description takes 80 characters at most.
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    typeIn(v, "description", "x".repeat(90), cx);
+    expect(v.ruleInputs.description.value().length).toBe(80);
+  } finally { done(v); }
+});
+
+test("a fault shows when typing stops or the field is left, never at a key; once shown it follows each key and goes the moment the rule runs", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    cx.timers = [];
+    typeIn(v, "pattern", "#(\\d+", cx);
+    let c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    // The result line keeps the last one that worked, dimmed.
+    expect(strsOf(c)).toContain("https://h.example/58");
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at, at + 3)).toContainEqual(["opacity", 0.45]);
+    // A second key restarts the pause: the first timer finds a newer key and does nothing.
+    typeIn(v, "pattern", "#(\\d+x", cx);
+    const [first] = cx.timers;
+    first.fn(cx);
+    expect(v.ruleEdit.shown.pattern).toBe(null);
+    cx.flush(REASON_MS);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    expect(cardOf(v)).toContainEqual(["border_color", theme.blocked]);
+    // Mended: gone at that key, and the result is back at full strength.
+    typeIn(v, "pattern", "#(\\d+)", cx);
+    c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    const at2 = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at2, at2 + 3)).not.toContainEqual(["opacity", 0.45]);
+    // Leaving the field shows it at once.
+    typeIn(v, "url", "ftp://h.example/$1", cx);
+    expect(v.ruleEdit.shown.url).toBe(null);
+    v.ruleInputs.url.handlers.blur({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: url must start with https:// or http:// and a fixed host; placeholders only in the path");
+    // Keep rule does not keep a rule that would not run: it stays open, nothing is written.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).not.toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    // An empty field is not a fault until Keep rule.
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    v.ruleInputs.pattern.handlers.blur({}, cx);
+    cx.flush(REASON_MS);
+    expect(v.ruleEdit.shown).toEqual({ pattern: null, url: null });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit.shown).toEqual({ pattern: "no pattern", url: "no url" });
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Not working: no pattern", "Not working: no url"]));
+  } finally { done(v); }
+});
+const REASON_MS = 1500;
+
+test("a kept rule that is not working opens with its reason; Move up and Duplicate", async () => {
+  const { v, cx } = await rulesPane([...RULES, { name: "Broken", pattern: "x(", url: "https://x.example/$1" }, { name: "Late", pattern: "ACME-(\\d+)", url: "https://late.example/$1", example: "ACME-9" }]);
+  try {
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-4", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Move up puts this rule above it.");
+    for (let i = 0; i < 3; i++) onOf(cardOf(v), "th-rule-up", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-up");
+    expect(strsOf(cardOf(v)).some((x) => x.includes("takes this text first"))).toBe(false);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Ticket", "Hash", "Broken"]);
+    onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleInputs.name.value()]).toEqual([null, 1, "Late copy"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-change"); // a copy is never refilled by a type
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Late copy", "Ticket", "Hash", "Broken"]);
+  } finally { done(v); }
+});
+
+test("no rules: the two types that fill a rule in dashed boxes, and Use opens one filled; a file that does not read as settings cannot be changed here", async () => {
+  const { v, cx } = await rulesPane([]);
+  try {
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Ticket key", "Pull request", "Links a number such as #58 to that pull request in this repository.", "Add rule"]));
+    expect(c).toContainEqual(["border_dashed"]);
+    onOf(c, "th-rule-use-pull-request", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.type).toBe("pull-request");
+    expect(v.ruleInputs.url.value()).toBe("https://github.com/{repo}/pull/$1");
+    expect(strsOf(cardOf(v))).toContain("This session has no repository, so this rule links nothing here.");
+    expect(strsOf(cardOf(v))).not.toContain("Examples, not rules until you keep one");
+    v.closeRule();
+    // A hand edit that does not parse: the rules show, with no switch, no Add rule and no editor.
+    v.applyPrefs(JSON.stringify({ links: RULES }));
+    v.applyPrefs("{ not json");
+    c = cardOf(v);
+    expect(idsIn(c)).not.toContain("th-rule-on-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    expect(strsOf(c)).toContain("The settings file does not read as settings now, so rules change only in the file until it is fixed.");
+    v.openRule(0);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+const ABCD = ["A", "B", "C", "D"].map((n) => ({ name: n, pattern: `\\b${n}-(\\d+)\\b`, url: `https://${n.toLowerCase()}.example/$1` }));
+
+test("an open rule follows its rule when the list changes under it: Keep never writes over another rule", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    // Open C, remove A from its row, keep C: C changes, D stays.
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.removeRule(0, cx);
+    expect(v.ruleEdit.at).toBe(1);
+    typeIn(v, "example", "C-7", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.example ?? null])).toEqual([["B", null], ["C", "C-7"], ["D", null]]);
+    // A hand edit that adds a rule above: the open rule follows it.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...ABCD] }));
+    expect(v.ruleEdit.at).toBe(3);
+    typeIn(v, "name", "C2", cx);
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "B", "C2", "D"]);
+    // A hand edit that changes the open rule: it becomes a new rule where it was, typed text kept.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    typeIn(v, "example", "C-9", cx);
+    v.applyPrefs(JSON.stringify({ links: [ABCD[0], ABCD[1], { ...ABCD[2], url: "https://c.example/x/$1" }, ABCD[3]] }));
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleEdit.lost]).toEqual([null, 2, true]);
+    expect(strsOf(cardOf(v))).toContain("This rule changed in the file or was removed. Keep rule adds it as a new rule.");
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.url])).toEqual([["A", ABCD[0].url], ["B", ABCD[1].url], ["C", ABCD[2].url], ["C", "https://c.example/x/$1"], ["D", ABCD[3].url]]);
+  } finally { done(v); }
+});
+
+test("Undo puts a removed rule back beside the same neighbor, whatever was added meanwhile", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    v.removeRule(2, cx); // C, after B
+    await settleAll(cx);
+    // A rule kept above it, here and by hand.
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    v.duplicateRule();
+    v.keepRule(cx);
+    await settleAll(cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "D"]);
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "C", "D"]);
+    // The first rule removed goes back before the rule that followed it.
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0].name).toBe("A");
+    v.applyPrefs(JSON.stringify({ links: [{ name: "Y", pattern: "\\bY-(\\d+)\\b", url: "https://y.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name).slice(0, 3)).toEqual(["Y", "X", "A"]);
+  } finally { done(v); }
+});
+
+const NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+
+// Review of PR 97, M2: a hand edit that makes "links" a string is never written over.
+test("Undo, Delete and the switch write nothing while \"links\" in the file is not a list, and the card says why", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(strsOf(cardOf(v))).toContain("Deleted Ticket.");
+    // In an editor "links" becomes the string "oops", and the pane reads it.
+    const oops = `${JSON.stringify({ textSize: 15, links: "oops" }, null, 2)}\n`;
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain(NOT_LIST);
+    expect(strsOf(c)).toContain("\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed.");
+    expect(v.ruleUndo).not.toBe(null); // Undo waits for the file to be fixed
+    // Delete and the switch are not drawn now; called anyway, they write nothing and say why.
+    expect(idsIn(c)).not.toContain("th-rule-delete-btn-2");
+    expect(idsIn(c)).not.toContain("th-rule-on-2");
+    for (const press of [() => v.removeRule(0, cx), () => v.toggleRule(0, cx)]) {
+      v.prefsError = null;
+      press();
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(v.prefsError).toBe(NOT_LIST);
+    }
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    // The file fixed: Undo puts the rule back.
+    const fixed = JSON.stringify({ textSize: 15, links: [RULES[1]] });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    expect(strsOf(cardOf(v))).not.toContain(NOT_LIST);
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+  } finally { done(v); }
+});
+
+test("a press that races the hand edit to a non-list \"links\" (the pane has not read it yet) writes nothing and says why", async () => {
+  for (const which of ["delete", "switch", "undo"]) {
+    const { v, cx } = await rulesPane();
+    try {
+      settingsStale = true;
+      if (which === "undo") { v.removeRule(0, cx); await settleAll(cx); }
+      const before = v.prefsRaw;
+      const oops = JSON.stringify({ textSize: 15, links: "oops" });
+      recordFiles[v.prefsPath()] = oops; // on disk, not read yet
+      settingsWrites.length = 0;
+      const c = cardOf(v);
+      expect(v.prefsRaw).toBe(before);
+      if (which === "delete") onOf(c, "th-rule-delete-btn-1", "on_click")({}, cx);
+      if (which === "switch") onOf(c, "th-rule-on-1", "on_click")({}, cx);
+      if (which === "undo") onOf(c, "th-rule-undo", "on_click")({}, cx);
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(recordFiles[v.prefsPath()]).toBe(oops);
+      // The pane shows the file as it is, and the card says why.
+      expect(v.prefsRaw).toBe(oops);
+      expect(v.linkList).toEqual([]);
+      expect(strsOf(cardOf(v))).toContain(NOT_LIST);
+    } finally { done(v); }
+  }
+});
+
+// Review of PR 97, L1: the card's change to the rules never replaces a newer list in the file.
+test("a rule change whose save finds the file's rules changed writes nothing over them; a change to other keys still merges", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    // An editor adds a rule in the same moment as the switch is pressed.
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited;
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]); // shown at once
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => [r.name, r.on])).toEqual([["X", true], ["Ticket", true], ["Hash", true]]);
+    expect(strsOf(cardOf(v))).toContain(MOVED);
+    // From the list it now shows, the same press is written.
+    onOf(cardOf(v), "th-rule-on-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, { ...RULES[0], on: false }, RULES[1]]);
+    expect(strsOf(cardOf(v))).not.toContain(MOVED);
+    // An editor changes only the text size: the rules match, so the change is written on top.
+    const sized = JSON.stringify({ ...JSON.parse(recordFiles[v.prefsPath()]), textSize: 17 });
+    recordFiles[v.prefsPath()] = sized;
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ ...RULES[0], on: false }, RULES[1]]);
+    expect(w.textSize).toBe(17);
+    expect(v.prefsError).toBe(null);
+  } finally { done(v); }
+});
+
+// Second review of PR 97, N1: a Delete whose save is refused leaves no Undo behind, so Undo
+// cannot write the rule a second time ("X, Ticket, Ticket, Hash").
+test("a Delete that is not saved because the file's rules changed offers no Undo", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Delete is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleUndo).toBe(null);
+    const s = strsOf(cardOf(v));
+    expect(s).toContain(MOVED);
+    expect(s.some((x) => String(x).startsWith("Deleted "))).toBe(false);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-undo");
+    // A Delete that is saved still offers Undo, and Undo puts the rule back once.
+    settingsStale = false;
+    onOf(cardOf(v), "th-rule-delete-btn-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, RULES[1]]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-undo");
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, ...RULES]);
+  } finally { done(v); }
+});
+
+// Review of PR 97, L2: the open rule's example follows the session's repository.
+test("the open rule's example is worked out again when the session's repository changes", async () => {
+  const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
+  const { v, cx } = await rulesPane([PR]);
+  try {
+    v.remote = { key: "t4|null", repo: "acme/exports", owner: "acme", host: "github.com", why: "test" };
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    // Another session, in another repository: no key is typed in the rule.
+    v.remote = { ...v.remote, repo: "acme/billing" };
+    frame(v, cx);
+    let s = strsOf(cardOf(v));
+    expect(s).toContain("https://github.com/acme/billing/pull/58");
+    expect(s).not.toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, repo: null, owner: null, why: "no git remote origin" };
+    frame(v, cx);
+    s = strsOf(cardOf(v));
+    expect(s).toContain("This session has no repository, so this rule links nothing here.");
+    expect(v.ruleEdit.draft.example).toBe("Merged in #58.");
+  } finally { done(v); }
+});
+
+test("the settings card stays open and as it was when the pane's session changes", async () => {
+  const f = sharedFolder();
+  f.record(5101, SESSION_A);
+  f.record(5102, SESSION_B);
+  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  const { v, cx } = sharedState(f, "t3c");
+  try {
+    await looked(v);
+    expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+    v.action("settings", cx);
+    v.setTab = "general";
+    v.setPage = "links";
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "name", "Pull", cx);
+    const before = idsIn(cardOf(v));
+    // The terminal's agent moves to session B (a /clear or a resume).
+    f.record(5101, SESSION_B);
+    v.resolve(cx);
+    await looked(v);
+    expect(v.current().file).toEndWith(`${SESSION_B}.jsonl`);
+    expect(shownPrompts(v)).toContain("Prompt in session B");
+    expect([v.settingsOpen, v.setTab, v.setPage]).toEqual([true, "general", "links"]);
+    expect(v.ruleEdit.draft.name).toBe("Pull");
+    const c = frame(v, cx);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-set-card", "th-rule-keep"]));
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Still closes as before.
+    v.key(keyEv("escape"), cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    hcBy = {};
+    recordFiles = {};
+  }
+});
+
+// Herdr tells a mod pane it lost focus only through its pane's focused flag (read in react);
+// there is no blur event for the pane in the API or the stubs.
+test("the settings card stays open and as it was when the pane loses focus, and the keys work when it comes back", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    state.panes[1].focused = true;
+    v.react(cx);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const before = idsIn(cardOf(v));
+    // Focus goes to the terminal's pane.
+    state.panes[1].focused = false;
+    state.panes[0].focused = true;
+    v.react(cx);
+    const c = frame(v, cx);
+    expect([v.settingsOpen, v.setPage, v.ruleEdit?.at]).toEqual([true, "links", 0]);
+    expect(v.ruleEdit.draft.example).toBe("Fixed in ACME-7.");
+    expect(idsIn(c)).toContain("th-set-card");
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Back: the pane takes the keyboard, and Esc closes the rule, then the card.
+    state.panes[0].focused = false;
+    state.panes[1].focused = true;
+    v.react(cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(v.settingsOpen).toBe(true);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    delete state.panes[0].focused;
+    delete state.panes[1].focused;
+    done(v);
+  }
+});
+
+test("a rule whose address is on github.com links only when the session's origin is on GitHub; elsewhere it says why", async () => {
+  const { v, cx } = await rulesPane([
+    { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." },
+    { name: "MR", pattern: "!(\\d+)\\b", url: "https://gitlab.com/{repo}/-/merge_requests/$1", example: "See !12." },
+  ]);
+  try {
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme", host: "gitlab.com" };
+    expect(v.linkOne("Merged in #58 and !12.").md).not.toContain("github.com");
+    expect(v.linkOne("Merged in #58 and !12.").md).toContain("https://gitlab.com/acme/exports/-/merge_requests/12");
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    v.closeRule();
+    v.remote = { ...v.remote, host: "github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, host: "ssh.github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+  } finally { done(v); }
 });
