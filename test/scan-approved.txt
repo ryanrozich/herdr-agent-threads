@@ -5,24 +5,27 @@
 # pins, the outline, its footer hint, the header with no pin button and no agent name over a
 # reply, approved with the merge of PR 24; viewer and keys retaken 2026-11-12 with the image
 # viewer's reading panel, approved with the owner's go on the viewer design).
-# All 17 were retaken 2026-11-18 for 1.0 (from rc-1, Herdr 0.1.16) and still need the owner's
-# approval. All show the staged acme-web session (test/make-hero.js, test/make-agents.js), and
-# each passed the PNG check before it was pinned. The check skips a pinned file only while its
-# sha256 matches, so a changed image is scanned again.
+# All 17 were retaken 2026-11-18 for 1.0 (from rc-1, Herdr 0.1.16; six of them again with turn 7
+# open for PR 120) and approved with the merge of PR 134 the same day. All 17 are pinned below.
+# Until 2026-11-18 work.png had no line and those six kept their rc-1 hashes, so the check scanned
+# those seven on every run, and they passed. All show the staged acme-web session
+# (test/make-hero.js, test/make-agents.js), and each passed the PNG check before it was pinned.
+# The check skips a pinned file only while its sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
-66c1a51fa896efa1b6628997216a42dfedbcb46282342ce60041b0ecc946eebf docs/screenshots/open-turn.png
-bd8097e716219449fd3b845898827be8039e3a23b11aa98f188877135b5cb4f3 docs/screenshots/viewer.png
-035595f7825880e3943733879360b6fd2c81175f6619cfca7c7ebcccd837b8d5 preview.png
+f8174ae205b19334dfc780197474e503edfadbaf7fd1ee04abe3ef0adc21bef1 docs/screenshots/open-turn.png
+abbef5f825de267c669a26fd16974490388ae14c2a48037308c99a5636b98936 docs/screenshots/viewer.png
+52f2b003b26d99660c7c8a5ad552b55d427c758d00c150feead459070c5ce298 preview.png
 2632b09db9b8d590fd3899216e17637c6ca426fe49ffb86762656b975d02e9f8 docs/screenshots/agent-messages.png
 4a2ee326e0c6a21f9a431e6f5a1bd2c5fa67675503d83a9a8b6d8d44d1769829 docs/screenshots/agents.png
 e30c55c0591a802ebbbb41dd5b8840f9fc2ba40679a3db034e12cdf21c899ad6 docs/screenshots/days.png
 df4eccb04f6efb0af0e6e6ce45efedd5a24ced4e53d85cfc7c0bc06ad3a26540 docs/screenshots/images.png
 ecb3aaaf0e64390292401ede837aa94e6f250bea010c614f2a39d333fae10ef7 docs/screenshots/keys.png
-384dfe7ed83ef1e25ecaa87b65588b054bcab74e8e7905acf443a6bea321f165 docs/screenshots/light.png
+645edc279c2fddd0defba94cdbbbb0d71fd1d26b9cd868abedbb9995289742a1 docs/screenshots/light.png
 539035578e40163bd5d72dba81d17b41385bd2f2c586eac9e3bfa7f5c883a4ab docs/screenshots/outline.png
-6fa3884fb64975f915b7c0bff61aab8885b8928aa3ddae33d0212ec60a2639ab docs/screenshots/panel.png
+8637ad0cb001c00f645d6d176b6a7108a022477859abed19585ba8349f07bcf2 docs/screenshots/panel.png
 532b4b36e67b2d5a88fc711a6116a08c074088f407bbdc5ff5a5c992db2eefa4 docs/screenshots/pinned.png
 48f7ccd614cf0d744d015ea7e30d7e7357e951f0a57548f99b0e2d0620b7815d docs/screenshots/quote.png
 f6a67134d4fbdb437da97ef28ccbfc59d35028e4c01fd1c46b7e6d1e82f9a3b4 docs/screenshots/search.png
 e1862173d9fccb12b5a48de056a861034966d87d49c6cdcb02fdbc437d48e681 docs/screenshots/updating.png
-f1d294c9a5ff0692dd2f62112483370e4305e5bdfff8489845ca9e6ac7ef90bf docs/screenshots/width.png
+9387d73710d1094a251566f8dd8541261e00e111fbe2fcde7ed4acc2b65a81be docs/screenshots/width.png
+8b5dfb1dbaa8819ae3f4480fbeaf6ae4befb09b2d96007729a5d46a5b32e062e docs/screenshots/work.png
