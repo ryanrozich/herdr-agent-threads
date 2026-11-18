@@ -98,7 +98,7 @@ Images you pasted show as tiles over your message. Click a tile to open the imag
 
 Press `a` to show messages other agents sent the session, such as a subagent's report. They are hidden by default. When the agent wrote a reply to one of them on its own, that reply still shows, under one folded line that names the sender ("helper-a · agent message"). Click the line to see the message, and again to fold it.
 
-<a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
+<a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as an amber bubble on the left" width="400"></a>
 
 ### Read wide tables
 
