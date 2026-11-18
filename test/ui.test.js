@@ -187,7 +187,10 @@ test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () =
     expect(path.length).toBeGreaterThanOrEqual(300);
     const p = rowLines(path, 2, per(w));
     expect(p.lines.length).toBe(2);
-    expect(p.lines[0].length).toBe(Math.floor(per(w)));
+    // It breaks after a slash, at most a segment short of the full line.
+    expect(p.lines[0].endsWith("/")).toBe(true);
+    expect(p.lines[0].length).toBeGreaterThan(Math.floor(per(w)) - "segment/".length);
+    expect(p.lines[0].length).toBeLessThanOrEqual(Math.floor(per(w)));
     expect(p.lines[1].endsWith("…")).toBe(true);
     const cjk = rowLines("检查一下这个函数为什么在生产环境里会失败然后修复它并添加测试用例再更新文档说明", 2, per(w));
     expect(cjk.lines.length).toBe(2);
@@ -201,6 +204,46 @@ test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () =
   expect(fits).toEqual({ lines: ["aaaa bbbb", "cccc dddd"], cut: false });
   expect(rowLines("line one\nline two", 2, 40)).toEqual({ lines: ["line one line two"], cut: false });
   expect(rowLines("", 2, 30)).toEqual({ lines: [], cut: false });
+});
+
+// A token longer than the line (a path, a long hyphenated name) breaks right after its last
+// "/" or "-" that fits, so no word is cut in two; with neither it still breaks at any
+// character. Joined back, the lines are the text: nothing lost or added.
+test("rowLines: a long token breaks after a slash or a hyphen, else by character, and loses nothing", () => {
+  const path = "src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js";
+  const hy = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const bare = "x".repeat(37) + "y".repeat(37);
+  const join = (r) => r.lines.join("");
+  for (const per of [12, 20, 31, 44, 60]) {
+    const p = rowLines(path, 20, per);
+    expect(p.cut).toBe(false);
+    expect(join(p)).toBe(path);
+    for (const l of p.lines) expect(l.length).toBeLessThanOrEqual(per);
+    // Every line but the last ends at a slash or a hyphen.
+    for (const l of p.lines.slice(0, -1)) expect(l).toMatch(/[/-]$/);
+    const h = rowLines(hy, 20, per);
+    expect(join(h)).toBe(hy);
+    for (const l of h.lines.slice(0, -1)) expect(l).toMatch(/-$/);
+    // Neither: full lines, broken at any character.
+    const b = rowLines(bare, 20, per);
+    expect(join(b)).toBe(bare);
+    for (const l of b.lines.slice(0, -1)) expect(l.length).toBe(per);
+  }
+  // At 31 characters: the slash break, where a character break cut "median-of-three.js".
+  expect(rowLines(path, 6, 31).lines).toEqual(["src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/", "helpers/median-of-three.js"]);
+  expect(rowLines(hy, 6, 20).lines).toEqual(["pre-merge-check-for-", "the-nightly-", "rounding-and-", "receipt-totals-run"]);
+  // A break that would leave the line less than half full is a character break instead.
+  expect(rowLines(`ab/${"c".repeat(30)}`, 4, 16).lines).toEqual(["ab/ccccccccccccc", "cccccccccccccccc", "c"]);
+  // "." and "_" are not breaks: an extension or a snake_case name stays whole only if it fits.
+  expect(rowLines("aaaa_bbbb_cccc_dddd.eeee", 3, 10).lines).toEqual(["aaaa_bbbb_", "cccc_dddd.", "eeee"]);
+  // Words around the token wrap as before, and the joined text is the original with each
+  // wrap's space put back.
+  const text = `Check ${path} before the run`;
+  const t = rowLines(text, 8, 31);
+  expect(t.lines).toEqual(["Check", "src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/", "helpers/median-of-three.js", "before the run"]);
+  expect(t.lines.reduce((s, l, i) => s + (i && !t.lines[i - 1].match(/[/-]$/) ? " " : "") + l, "")).toBe(text);
+  // Cut to two lines, the second still ends at a break, with the ellipsis after it.
+  expect(rowLines(path, 2, 31).lines).toEqual(["src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/…"]);
 });
 
 test("flattenMd: bullets, fences, links, emphasis, headings", () => {
