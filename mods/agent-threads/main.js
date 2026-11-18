@@ -178,17 +178,17 @@ const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
 // How far above the pane's bottom the card ends at the least, so a strip of the list stays
-// in view under it. 0 at 1.0: the card takes the height (the owner's call). The strip the
-// designer proposed is CARD_STRIP = 160, kept only in a pane at least CARD_STRIP_MIN tall.
-const CARD_STRIP = 0;
+// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
+// where under that the card takes the height. 0 makes the card take the height everywhere.
+const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
 // The card's one page: its sections in order, each with its rows in order (settingsRows draws
 // each row from its key). Moving a row or renaming a section is a change to this list alone.
 const CARD_SECTIONS = [
-  ["Text and colors", ["textSize", "userColor", "agentColor"]],
-  ["Messages", ["agents", "agentRail", "truncate", "time"]],
+  ["Messages", ["textSize", "userColor", "truncate", "time"]],
+  ["Agent messages", ["agents", "agentRail", "agentColor", "senderRules"]],
   ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
-  ["Rules and keys", ["linkRules", "senderRules", "quoteKey"]],
+  ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
@@ -6132,8 +6132,8 @@ export default class Threads extends View {
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
-  // The card is one page (settings-structure-review): Text and colors, Messages, Layout,
-  // Rules and keys and File, in that order, then Reset once. No tabs, no preview: a change
+  // The card is one page (settings-structure-review, order B): Messages, Agent messages,
+  // Layout, Links and keys and File, in that order (CARD_SECTIONS), then Reset once. No tabs, no preview: a change
   // shows in the list behind the card as it is made.
   settingsRows(t, w) {
     const P = this.prefs;
@@ -6142,8 +6142,8 @@ export default class Threads extends View {
     // Each row by its key in CARD_SECTIONS; a row may be more than one element.
     const rows = {
       textSize: () => [stepper("textSize", "Text size")],
-      userColor: () => [this.colorRow(t, "bubbleColor", "User messages", w)],
-      agentColor: () => [this.colorRow(t, "agentBubbleColor", "Agent messages", w)],
+      userColor: () => [this.colorRow(t, "bubbleColor", "User message color", w)],
+      agentColor: () => [this.colorRow(t, "agentBubbleColor", "Agent message color", w)],
       agents: () => {
         const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
         return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
