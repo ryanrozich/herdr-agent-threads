@@ -1243,8 +1243,9 @@ export default class Threads extends View {
   // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
   // The save writes it only over the list it was made from: when the file's "links" changed
   // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
-  // pane shows the file again and the card says why.
-  writeLinks(raw, cx) {
+  // pane shows the file again and the card says why. undo: the Undo line a Delete just set,
+  // cleared when that Delete is not written, so Undo cannot add the rule a second time.
+  writeLinks(raw, cx, undo = null) {
     const from = JSON.stringify(this.fileLinks());
     this.linksPending = raw;
     const l = parseLinks(raw);
@@ -1253,7 +1254,9 @@ export default class Threads extends View {
     this.followRules(raw);
     const fits = (text) => {
       const now = this.linksOf(text);
-      return now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+      const why = now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+      if (why && undo && this.ruleUndo === undo) this.ruleUndo = null;
+      return why;
     };
     const chain = this.changePrefs({}, cx, { links: raw }, fits);
     chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
@@ -1455,7 +1458,7 @@ export default class Threads extends View {
     // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
     this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
-    this.writeLinks(raw, cx);
+    this.writeLinks(raw, cx, this.ruleUndo);
   }
   undoRemove(cx) {
     const u = this.ruleUndo;

@@ -9275,6 +9275,38 @@ test("a rule change whose save finds the file's rules changed writes nothing ove
   } finally { done(v); }
 });
 
+// Second review of PR 97, N1: a Delete whose save is refused leaves no Undo behind, so Undo
+// cannot write the rule a second time ("X, Ticket, Ticket, Hash").
+test("a Delete that is not saved because the file's rules changed offers no Undo", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Delete is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleUndo).toBe(null);
+    const s = strsOf(cardOf(v));
+    expect(s).toContain(MOVED);
+    expect(s.some((x) => String(x).startsWith("Deleted "))).toBe(false);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-undo");
+    // A Delete that is saved still offers Undo, and Undo puts the rule back once.
+    settingsStale = false;
+    onOf(cardOf(v), "th-rule-delete-btn-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, RULES[1]]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-undo");
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, ...RULES]);
+  } finally { done(v); }
+});
+
 // Review of PR 97, L2: the open rule's example follows the session's repository.
 test("the open rule's example is worked out again when the session's repository changes", async () => {
   const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
