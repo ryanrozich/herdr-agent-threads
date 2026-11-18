@@ -65,8 +65,14 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { VERSION, versionLine } from "./version.js";
-import { BUILD } from "./build.js";
+import { VERSION, versionLine, parseBuild } from "./version.js";
+// build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
+// is missing or does not parse still loads; the version line then says the commit is not
+// known. It settles long before anyone opens the settings card.
+let built = null;
+import("./build.js")
+  .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
+  .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -797,7 +803,7 @@ export default class Threads extends View {
     this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
-    this.build = BUILD; // build.js, what install.sh found (version.js)
+    this.build = undefined; // a stand-in for build.js in tests; undefined reads build.js (built)
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
     this.senders = []; // compiled sender rules (settings.js parseSenders)
@@ -6239,7 +6245,7 @@ export default class Threads extends View {
   // found. A plain line, not a control; a copy without a build says the commit is not known,
   // and its tooltip says why.
   versionRow(t) {
-    const line = versionLine(VERSION, this.build);
+    const line = versionLine(VERSION, this.build === undefined ? built : this.build);
     return div().id("th-set-version").text_size(11.5).text_color(t.muted).when(Boolean(line.tip), (el) => el.tooltip(line.tip)).child(line.text);
   }
 

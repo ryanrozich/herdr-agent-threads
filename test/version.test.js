@@ -66,12 +66,12 @@ const install = (from, tag) => {
     const env = { ID: "-c user.name=t -c user.email=t", HERDR_APP_HOME: join(base, "home"), PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
     if (from === "git") {
       sh(repo, "git init -q && git add -A && git $ID commit -q -m one", env);
-      if (tag) sh(repo, `git $ID tag -a ${tag} -m x`, env);
+      if (tag) sh(repo, 'git $ID tag -a "$TAG" -m x', { ...env, TAG: tag });
       sh(repo, "echo x > extra.txt && git add extra.txt && git $ID commit -q -m two", env);
     }
     if (from === "inside") {
       sh(outer, "git init -q && git add -A && git $ID commit -q -m one", env);
-      sh(outer, `git $ID tag -a ${tag} -m x`, env);
+      sh(outer, 'git $ID tag -a "$TAG" -m x', { ...env, TAG: tag });
     }
     sh(repo, "sh install.sh", env);
     return {
@@ -84,16 +84,33 @@ const install = (from, tag) => {
   }
 };
 
+test("install.sh writes nothing from a tag name that parseBuild would not read: quotes, dollars and the like stay out of build.js", () => {
+  const unknown = "export const BUILD = null;\n";
+  // Tag names git allows that a careless printf would paste into JavaScript. (git refuses
+  // a backslash or a newline in a tag name.)
+  for (const tag of ['v1.0.0"x', "v1.0.0'x", "v1.0.0$x", "v1.0.0`x`", "v1.0.0;x", "v1.0.0x"]) {
+    const r = install("git", tag);
+    expect([tag, r.built]).toEqual([tag, unknown]);
+  }
+});
+
+test("main.js loads build.js only through a dynamic import that catches, so a missing or broken build.js leaves the pane working", () => {
+  const main = readFileSync(join(mod, "main.js"), "utf8");
+  expect(main).not.toMatch(/^import .* from "\.\/build\.js";$/m);
+  expect(main).toMatch(/import\("\.\/build\.js"\)\s*\.then\(\(m\) => \{ built = parseBuild\(m\?\.BUILD\) \? m\.BUILD : null; \}\)\s*\.catch\(\(\) => \{ built = null; \}\);/);
+});
+
 test("install.sh writes git describe into the installed build.js, and leaves the repo's own as it is", () => {
   const committed = readFileSync(join(mod, "build.js"), "utf8");
   const tagged = install("git", "v1.0.0");
-  expect(tagged.built).toContain(`export const BUILD = "v1.0.0-1-g${tagged.head}";`);
+  expect(tagged.built).toBe(`export const BUILD = "v1.0.0-1-g${tagged.head}";\n`);
   expect(tagged.kept).toBe(committed);
-  // No release tag in the clone: nothing to describe against, so the copy keeps null.
-  expect(install("git", null).built).toBe(committed);
+  // No release tag in the clone: nothing to describe against, so the copy says null.
+  const unknown = "export const BUILD = null;\n";
+  expect(install("git", null).built).toBe(unknown);
   // Not a git clone at all (a downloaded folder): the same.
-  expect(install("none", null).built).toBe(committed);
+  expect(install("none", null).built).toBe(unknown);
   // A copy inside some other git repo that has a release tag of its own: that repo's tags
   // say nothing about this copy, so it keeps null too.
-  expect(install("inside", "v9.9.9").built).toBe(committed);
+  expect(install("inside", "v9.9.9").built).toBe(unknown);
 });
