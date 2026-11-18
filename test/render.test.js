@@ -601,6 +601,9 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
     { k: "p", o: "human", t: prompt, ts: at(0) }, { k: "t", t: "Done." }, { k: "d", ms: 1000, ts: at(1) },
     { k: "p", o: "human", t: `Open ${path} next`, ts: at(2) }, { k: "t", t: "Opened." }, { k: "d", ms: 1000, ts: at(3) },
   ]);
+  // The selectable HTML is drawn only for text in the theme's ink: the plain bubble, not the
+  // blue default (settings card).
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
   v.width = 380;
   settleRows(v, cx);
   const shape = (k) => v.rows().find((r) => r.key === k).shape;
@@ -618,6 +621,7 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
   const { v: w, cx: wx } = await scripted([
     { k: "p", o: "human", cmd: true, t: `/review-pr ${path} now`, ts: at(0) }, { k: "t", t: "Reviewed." }, { k: "d", ms: 1000, ts: at(1) },
   ]);
+  w.prefs = { ...w.prefs, bubbleColor: "plain" };
   w.width = 380;
   settleRows(w, wx);
   const cs = w.rows().find((r) => r.key === "0:1").shape;
