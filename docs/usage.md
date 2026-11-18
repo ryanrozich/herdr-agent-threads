@@ -134,7 +134,7 @@ The card's Quote key field writes `quoteKey`. The Link rules page lists each rul
 
 ### Link rules in detail
 
-Each rule turns text that matches a pattern into a link in an open card: in the reply and in your prompt. Collapsed rows stay plain text. A fresh install has one rule, switched on: `#58` in a reply links to pull request 58 of the session's repository on GitHub (it needs a terminal folder with an `origin` remote). It links only when `origin` is on GitHub; for a repository hosted elsewhere the Link rules page says so, and you can change its Opens there. Add your own there or in the file, for example:
+Each rule turns text that matches a pattern into a link in an open card: in the reply and in your prompt. A coloured bubble keeps its text plain and lists the links its rules made on a line under it, each once; a plain bubble has them in place. Collapsed rows stay plain text. A fresh install has one rule, switched on: `#58` in a reply links to pull request 58 of the session's repository on GitHub (it needs a terminal folder with an `origin` remote). It links only when `origin` is on GitHub; for a repository hosted elsewhere the Link rules page says so, and you can change its Opens there. Add your own there or in the file, for example:
 
 ```json
 {
