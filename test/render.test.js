@@ -8563,18 +8563,32 @@ test("one page: Text and colors, Messages, Layout, Rules and keys and File, in t
   v.action("settings", cx);
   const g = cardOf(v);
   const gs = strsOf(g);
-  // The sections in order, and the rows in order (a section's heading is drawn after its
-  // rows are made, so the two are checked apart).
-  const inOrder = (list) => {
-    const at = list.map((x) => gs.indexOf(x));
-    expect(list.filter((_x, n) => at[n] < 0)).toEqual([]);
-    expect(at).toEqual([...at].sort((a, b) => a - b));
-  };
-  inOrder(["Text and colors", "Messages", "Layout", "Rules and keys", "File"]);
+  // The page as the owner approved it: each section with its rows, in order. Moving a row or
+  // renaming a section is one line here (and one in CARD_SECTIONS). A section's heading is
+  // recorded after its rows, so a row belongs to the first heading that follows it.
+  const PAGE = [
+    ["Text and colors", ["Text size", "User messages", "Agent messages"]],
+    ["Messages", ["Show agent messages", "Agent messages on the rail", "Shorten long messages", "Always show time"]],
+    ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
+    ["Rules and keys", ["Link rules", "Quote key"]],
+    ["File", ["Copy path"]],
+  ];
+  const heads = PAGE.map(([name]) => gs.indexOf(name));
+  expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
+  expect(heads).toEqual([...heads].sort((a, b) => a - b));
+  let last = -1;
+  PAGE.forEach(([name, labels], n) => {
+    for (const label of labels) {
+      const at = gs.indexOf(label);
+      expect([name, label, at > last && at < heads[n]]).toEqual([name, label, true]);
+      last = at;
+    }
+    last = heads[n];
+  });
+  // Then Reset, once, with its line, at the end.
+  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
+  expect(gs.indexOf("Link rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
-  inOrder(["Text size", "User messages", "Agent messages", "Show agent messages", "Agent messages on the rail", "Shorten long messages", "Always show time",
-    "Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom",
-    "Link rules", "Quote key", "Copy path", "Reset to defaults", "Link rules and the quote key stay."]);
   for (const x of ["General", "Chat", "Text", "Colors", "Links and keys", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
   expect(gs.filter((x) => x === "Layout")).toHaveLength(1);

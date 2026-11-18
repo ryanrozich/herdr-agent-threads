@@ -177,6 +177,20 @@ const CARD_HEAD = 40;
 const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
+// How far above the pane's bottom the card ends at the least, so a strip of the list stays
+// in view under it. 0 at 1.0: the card takes the height (the owner's call). The strip the
+// designer proposed is CARD_STRIP = 160, kept only in a pane at least CARD_STRIP_MIN tall.
+const CARD_STRIP = 0;
+const CARD_STRIP_MIN = 514;
+// The card's one page: its sections in order, each with its rows in order (settingsRows draws
+// each row from its key). Moving a row or renaming a section is a change to this list alone.
+const CARD_SECTIONS = [
+  ["Text and colors", ["textSize", "userColor", "agentColor"]],
+  ["Messages", ["agents", "agentRail", "truncate", "time"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Rules and keys", ["linkRules", "quoteKey"]],
+  ["File", ["file"]],
+];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
@@ -5856,7 +5870,9 @@ export default class Threads extends View {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
     const top = this.floating() ? TOP_BAND : 46;
-    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - CARD_GAP);
+    const h = this.rootH || 600;
+    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
+    const room = Math.max(180, h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
     const fixed = CARD_HEAD + CARD_FOOT + 2;
@@ -5973,48 +5989,50 @@ export default class Threads extends View {
   settingsRows(t, w) {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
-    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
-    const n = this.linkCount ?? 0;
     const qn = this.quoteNote();
-    const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
-    return [
-      group("Text and colors", [
-        stepper("textSize", "Text size"),
-        this.colorRow(t, "bubbleColor", "User messages", w),
-        this.colorRow(t, "agentBubbleColor", "Agent messages", w),
-      ]),
-      group("Messages", [
-        sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
-        sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail"),
+    const linkRules = () => {
+      const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+      const n = this.linkCount ?? 0;
+      return h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
+        .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
+        .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+        .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
+        .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
+    };
+    // Each row by its key in CARD_SECTIONS; a row may be more than one element.
+    const rows = {
+      textSize: () => [stepper("textSize", "Text size")],
+      userColor: () => [this.colorRow(t, "bubbleColor", "User messages", w)],
+      agentColor: () => [this.colorRow(t, "agentBubbleColor", "Agent messages", w)],
+      agents: () => {
+        const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
+        return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
+      },
+      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
+      truncate: () => [
         sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
-        sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
-      ]),
-      group("Layout", [
+      ],
+      time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
+      width: () => [
         row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
         this.widthRuler(t, w),
         note(this.widthNote()),
-        sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth"),
-        row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide")),
-        sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
-      ]),
-      group("Rules and keys", [
-        h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
-          .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
-          .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
-          .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
-          .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
-          .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)),
-        v_flex().gap(4)
-          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
-            .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-            .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
-          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked))),
-      ]),
-      group("File", [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null]),
-      this.resetRow(t),
-    ];
+      ],
+      keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
+      railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
+      keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      linkRules: () => [linkRules()],
+      quoteKey: () => [v_flex().gap(4)
+        .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
+          .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
+          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+        .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
+      file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
+    };
+    return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
   }
 
   // Under Width: the pane as a thin line and the reading column as its dark part, at their
