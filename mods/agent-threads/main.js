@@ -6031,11 +6031,13 @@ export default class Threads extends View {
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
   // General: what every view shares. Text, the rail's side and the key hints, the two message
-  // colors, link rules and the quote key, and the file.
+  // colors, link rules and the quote key, and the file. The Link rules row's count of rules
+  // that do not work takes in the sender rules the file holds and the mod refused, since
+  // their notes are on the page it opens and nowhere else on the card.
   generalRows(t, w) {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
-    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length + Math.max(0, (this.senderCount ?? 0) - this.senders.length);
     const n = this.linkCount ?? 0;
     const qn = this.quoteNote();
     return [

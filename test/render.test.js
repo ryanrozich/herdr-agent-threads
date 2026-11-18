@@ -9009,6 +9009,29 @@ test("a rule that turned slow on a reply shows Not working with the reason on th
   expect(v.links[0].slow).toBe(undefined);
 });
 
+// Issue 113: a refused sender rule has its note on the Link rules page only, so the General
+// tab's Link rules row, the one place the card counts rules that do not work, counts it too.
+test("a refused sender rule counts as not working on the Link rules row, which opens the page with its note", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const link = { name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1" };
+  const seat = { name: "Seat message", pattern: "^From (?<sender>[a-z]+-[a-z]+:" };
+  const bracket = { name: "Bracket", prefix: "[{name}] " };
+  v.applyPrefs(JSON.stringify({ links: [link], senders: [seat, bracket] }));
+  v.action("settings", cx);
+  v.setTab = "general";
+  expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Link rules", "1", "1 not working"]));
+  onOf(cardOf(v), "th-set-links", "on_click")({}, cx);
+  expect(v.setPage).toBe("links");
+  expect(strsOf(cardOf(v))).toContain("Sender rule 1: pattern not valid");
+  // A link rule that does not work counts beside it.
+  v.setPage = "main";
+  v.applyPrefs(JSON.stringify({ links: [link, { name: "Broken", pattern: "x(", url: "https://x.example/$1" }], senders: [seat, bracket] }));
+  expect(strsOf(cardOf(v))).toContain("2 not working");
+  // Mended, the row has no count of rules that do not work.
+  v.applyPrefs(JSON.stringify({ links: [link], senders: [{ ...seat, pattern: "^From (?<sender>[a-z]+-[a-z]+):" }, bracket] }));
+  expect(strsOf(cardOf(v)).some((x) => /not working/.test(x))).toBe(false);
+});
+
 // ---- link rules changed on the card (chat-look round 10; settings-links) ----
 
 const RULES = [
