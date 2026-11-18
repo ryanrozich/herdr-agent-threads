@@ -35,7 +35,8 @@
 // (false skips the rule), type ("custom", "ticket" or "pull-request", the icon it shows;
 // anything else reads as custom), description (one line of the person's own, 80 characters
 // at most) and example (text the rule should turn into a link, shown on the Link rules
-// page). No link rules ship.
+// page). The card's Link rules page writes the whole list. A fresh install (no file) has one
+// rule, the pull request rule (DEFAULT_LINKS), switched on; the first write records it.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -184,6 +185,26 @@ export function parseLinks(raw) {
   return { rules, notes, list };
 }
 
+// The three types, each with its line for the chooser and, for two, the rule it fills a new
+// one with. The ticket rule's address is a stand-in for the person's own tracker.
+export const LINK_TEMPLATES = Object.freeze({
+  custom: Object.freeze({ word: "Custom", line: "Write it yourself.", rule: null }),
+  ticket: Object.freeze({ word: "Ticket key", line: "Links a ticket key such as ACME-412 to its ticket.",
+    rule: Object.freeze({ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example.com/ACME-$1", example: "Fixed in ACME-412." }) }),
+  "pull-request": Object.freeze({ word: "Pull request", line: "Links a number such as #58 to that pull request in this repository.",
+    rule: Object.freeze({ name: "Pull request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." }) }),
+});
+// What a fresh install starts with: the pull request rule, on. It needs only the session's
+// repository (a terminal folder with an origin on GitHub).
+export function defaultLinks() {
+  return [{ ...LINK_TEMPLATES["pull-request"].rule, type: "pull-request" }];
+}
+// No file yet, or an empty one: what a fresh install starts from.
+const fresh = (text) => text == null || String(text).trim() === "";
+
+// Why a rule would not run, for the card's rule editor; null when it would.
+export function ruleFault(r) { return linkFault(r, 0); }
+
 // Why rule i cannot run, in the words the page and the notes use, or null when it can.
 function linkFault(r, i) {
   if (i >= MAX_RULES) return `past the ${MAX_RULES}th rule; ignored`;
@@ -242,6 +263,7 @@ export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+  if (fresh(text)) raw = { links: defaultLinks() };
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
   return { quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, notes: [...(quote.note ? [quote.note] : []), ...links.notes], linkCount: Array.isArray(raw.links) ? raw.links.length : 0 };
@@ -251,7 +273,7 @@ export function parseExtras(text) {
 // newer version's settings survive a change made here. extra: keys written as they are
 // (the card's quote key, { quoteKey: "y" }).
 export function settingsText(values, previous, extra = null) {
-  let keep = {};
+  let keep = fresh(previous) ? { links: defaultLinks() } : {};
   try { const p = JSON.parse(previous ?? ""); if (p && typeof p === "object" && !Array.isArray(p)) keep = p; } catch { /* replaced */ }
   if (extra) keep = { ...keep, ...extra };
   const { values: v } = parseSettings(JSON.stringify({ ...keep, ...values, look: LOOK }));

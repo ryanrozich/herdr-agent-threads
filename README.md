@@ -106,7 +106,7 @@ A table in a reply can run wider than the reading line when the pane has room be
 
 ### Make it yours
 
-Press `,` for settings, a card over the list with two tabs: General (text size, the rail's side, the key hints, the two message colors, link rules, the quote key and the file) and Chat (agent messages, Shorten long messages and its lines, the time, and the reading width: Comfortable, Wide or Full, which `Shift w` also steps). Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links in the settings file. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with two tabs: General (text size, the rail's side, the key hints, the two message colors, link rules, the quote key and the file) and Chat (agent messages, Shorten long messages and its lines, the time, and the reading width: Comfortable, Wide or Full, which `Shift w` also steps). Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
