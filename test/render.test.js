@@ -18,9 +18,14 @@ const app = mkdtempSync(join(tmpdir(), "threads-render-"));
 let calls = 0;
 // With rec set, every element method call is recorded as [name, ...args].
 let rec = null;
+// Methods the stub's elements lack, as an older Herdr's do: `name in el` answers false and
+// a call throws, as Herdr's "not a function".
+const lacking = new Set();
 const el = new Proxy(() => {}, {
+  has(_t, name) { return !lacking.has(String(name)); },
   get(_t, name) {
     if (name === "then") return undefined;
+    if (lacking.has(String(name))) return undefined;
     if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
     if (name === "hover") return (fn) => { fn(el); return el; };
     return (...args) => { calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
@@ -796,19 +801,19 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   const i = rows.findIndex((r) => r.kind === "turn" && r.key === "0:2");
   expect(rows[i - 1]).toMatchObject({ kind: "afold", key: "af:0:2", fold: "folded" });
   const detail = state.shared["threads.debug"].t4.detail;
-  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · agent message rule1"))).toBe(true);
+  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · matched by rule rule1"))).toBe(true);
   expect(v.counts()).toMatchObject({ agentAll: 2, foldedAll: 1, hiddenAll: 1 });
   expect(v.headerButtons().find((b) => b[0] === "th-agents")[2]).toBe("Show agent messages (1 folded, 1 hidden) (a)");
   expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 · Quote key · q");
   // Which rule: the folded line's tooltip names it.
-  expect(v.ruleTip(v.current().turns[1])).toBe("Marked by sender rule 1 · Hourly report");
-  expect(tooltips(v, cx)).toContain("Marked by sender rule 1 · Hourly report");
+  expect(v.ruleTip(v.current().turns[1])).toBe("Typed into the terminal. Sender rule 1 · Hourly report named its sender.");
+  expect(tooltips(v, cx)).toContain("Typed into the terminal. Sender rule 1 · Hourly report named its sender.");
   // Shown whole (a), the sender line over the message carries the same tooltip.
   v.prefs = { ...v.prefs, agentTurns: true };
   draw(v, cx);
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
   expect(state.shared["threads.debug"].t4.detail.some((d) => d.includes("agent:peer:release-checker"))).toBe(true);
-  expect(tooltips(v, cx)).toContain("Marked by sender rule 2 · From {name}:");
+  expect(tooltips(v, cx)).toContain("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
   v.prefs = { ...v.prefs, agentTurns: false };
   // In Pinned: a pinned rule-marked turn carries its sender like any agent message.
   v.sel = "0:2";
@@ -819,7 +824,7 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
   rec = null;
   expect(v.rows().find((r) => r.key === "0:2")?.turn.agent).toBe(true);
-  expect(kids).toContain("build-bot · agent message");
+  expect(kids).toEqual(expect.arrayContaining(["build-bot", "matched by rule"]));
   v.setView("all");
   // The rules removed: every turn is the person's again, with no stale row kept.
   v.applyPrefs("{}");
@@ -833,8 +838,8 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
 test("every place that draws an agent message can tell a rule-marked typed prompt from one another agent sent", async () => {
   const { senderOrigin } = await import("../mods/agent-threads/ui.js");
   // Two messages from helper-a: one typed in the terminal and marked by the "From {name}:"
-  // rule, one helper-a really sent. Today both draw alike; the mark for the first is not
-  // chosen yet, so what is checked is that each place has the fact to draw it from.
+  // rule, one helper-a really sent. What is checked here is that each place has the fact to
+  // draw the mark from; the mark itself is checked in the tests that follow.
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
     { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
@@ -845,8 +850,7 @@ test("every place that draws an agent message can tell a rule-marked typed promp
   draw(v, cx);
   const [you, typed, sent] = v.current().turns;
   expect([you, typed, sent].map((t) => senderOrigin(t.sender))).toEqual(["you", "rule", "sent"]);
-  // The same words over both bubbles today.
-  expect(senderLabel(typed.sender, 400)).toBe(senderLabel(sent.sender, 400));
+  expect(senderLabel(typed.sender, 400)).not.toBe(senderLabel(sent.sender, 400));
   // Open header and closed rows: the debug list says which.
   v.open = new Set(["0:2", "0:3"]);
   draw(v, cx);
@@ -883,11 +887,151 @@ test("every place that draws an agent message can tell a rule-marked typed promp
   v.setView("all");
 });
 
+// The mark on a message a sender rule matched (the designer's option 2, which the owner
+// chose): "matched by rule" for the words, the tag icon for the bot, and a 1 px dashed edge on
+// the bubble. A message another agent really sent keeps its words, its bot icon and no edge.
+const twoKinds = () => scripted([
+  { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+  { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+  { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
+]);
+const recOf = (fn) => { rec = []; try { fn(); return rec; } finally { rec = null; } };
+// The colour each dashed edge was drawn in: the border_color after each border_dashed.
+const dashes = (c) => c.flatMap((e, i) => (e[0] === "border_dashed" ? [c.slice(i + 1).find((x) => x[0] === "border_color")?.[1] ?? null] : []));
+const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => e[1].split("/").pop());
+
+test("a message a sender rule matched reads \"matched by rule\" with the tag icon, its tooltip says a rule named its sender; a sent one is as before", async () => {
+  const { senderIcon, kindWords } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  const [you, typed, sent] = v.current().turns;
+  expect(kindWords(typed.sender)).toBe("matched by rule");
+  expect([senderLabel(typed.sender, 400), senderLabel(sent.sender, 400)]).toEqual(["helper-a · matched by rule", "helper-a · agent message"]);
+  // Under 300 px the label is the name alone, as today.
+  expect([senderLabel(typed.sender, 240), senderLabel(sent.sender, 240)]).toEqual(["helper-a", "helper-a"]);
+  expect([senderIcon(typed.sender), senderIcon(sent.sender)]).toEqual(["tag", "bot"]);
+  expect([v.youLabel(you), v.youLabel(typed), v.youLabel(sent)]).toEqual(["USER", "FROM HELPER-A · MATCHED BY RULE", "FROM HELPER-A"]);
+  expect(v.ruleTip(typed)).toBe("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
+  expect(v.ruleTip(sent)).toBe(null);
+  // Closed rows: the name, then the words on their own, so a short label cuts the name and
+  // never "matched by rule"; the tag icon over the matched one, the bot over the sent one.
+  let c = recOf(() => v.render(cx));
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["helper-a", "matched by rule", "agent message"]));
+  expect(svgs(c)).toEqual(expect.arrayContaining(["tag.svg", "bot.svg"]));
+  expect(c.filter((e) => e[0] === "tooltip").map((e) => e[1])).toContain("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
+  // The words never shrink; the name does.
+  const words = c.findIndex((e) => e[0] === "child" && e[1] === "matched by rule");
+  expect(c.slice(Math.max(0, words - 4), words).some((e) => e[0] === "flex_none")).toBe(true);
+  // Open: the line inside the bubble.
+  v.open = new Set(["0:2", "0:3"]);
+  c = recOf(() => v.render(cx));
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["FROM HELPER-A", "MATCHED BY RULE"]));
+  // The debug report, the viewer and Copy follow the label.
+  const detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.some((d) => d.includes("[helper-a · matched by rule]"))).toBe(true);
+  expect(detail.some((d) => d.includes("[helper-a · agent message]"))).toBe(true);
+  expect([v.viewerTurn(typed).who, v.viewerTurn(sent).who]).toEqual(["helper-a · matched by rule", "helper-a · agent message"]);
+  // Folded (agent messages hidden, each has a reply): the same words and icon on the one line.
+  v.open = new Set();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.startsWith("afold#2 folded helper-a · matched by rule rule2"))).toBe(true);
+  c = recOf(() => v.render(cx));
+  expect(svgs(c)).toContain("tag.svg");
+});
+
+test("an open bubble is at least as wide as its \"FROM … · MATCHED BY RULE\" line, up to the bubble's limit", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "From helper-a: green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+  ]);
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.width = 700;
+  v.open = new Set(["0:2"]);
+  draw(v, cx);
+  const r = v.rows().find((x) => x.kind === "you" && x.turn.n === 2);
+  // "From helper-a: green" alone makes a bubble of 160 px, the least an agent's has.
+  expect(v.youMd(r).bw).toBeGreaterThanOrEqual(260);
+  v.width = 240;
+  draw(v, cx);
+  const narrow = v.rows().find((x) => x.kind === "you" && x.turn.n === 2);
+  expect(v.youMd(narrow).bw).toBeLessThanOrEqual(240);
+});
+
+test("the dashed edge: on a matched message's bubble, closed and open, in the bubble's ink at 50% or the muted colour on Plain; none on a sent one", async () => {
+  const { bubbleStyle } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  const amber = bubbleStyle("amber", theme, true);
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([amber.bar]);
+  // Open (drawn twice: once more in the hidden probe that measures it). The sent one open
+  // beside the closed matched one adds none.
+  v.open = new Set(["0:2", "0:3"]);
+  draw(v, cx);
+  const open = dashes(recOf(() => v.render(cx)));
+  expect(open.length).toBeGreaterThanOrEqual(1);
+  expect(new Set(open)).toEqual(new Set([amber.bar]));
+  v.open = new Set(["0:3"]);
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([amber.bar]);
+  // Plain: the dashed edge takes the solid outline's place, in the muted colour; the sent
+  // bubble keeps its solid outline.
+  v.prefs = { ...v.prefs, agentBubbleColor: "plain" };
+  v.open = new Set();
+  draw(v, cx);
+  const c = recOf(() => v.render(cx));
+  expect(dashes(c)).toEqual([theme.muted]);
+  expect(c.filter((e) => e[0] === "border_1").length).toBeGreaterThanOrEqual(2);
+  // No rules: no edge anywhere.
+  v.applyPrefs("{}");
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([]);
+});
+
+test("on a Herdr whose elements have no border_dashed, the matched bubble keeps a solid edge in the same colour and the view still draws", async () => {
+  const { bubbleStyle } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  lacking.add("border_dashed");
+  try {
+    draw(v, cx);
+    const c = recOf(() => v.render(cx));
+    expect(c.some((e) => e[0] === "border_dashed")).toBe(false);
+    expect(c.some((e) => e[0] === "border_color" && e[1] === bubbleStyle("amber", theme, true).bar)).toBe(true);
+  } finally { lacking.delete("border_dashed"); }
+});
+
+test("the rail card has a second line for an agent message, matched or sent: its icon and label; none for the person's own", async () => {
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.width = 700;
+  draw(v, cx);
+  const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
+  const k = (n) => ({ key: `0:${n}`, turns: [entry(n)], live: false, pinned: false });
+  expect([1, 2, 3].map((n) => v.railCard(k(n)).who)).toEqual([null, "helper-a · matched by rule", "helper-a · agent message"]);
+  expect([1, 2, 3].map((n) => v.railCard(k(n)).icon)).toEqual([null, "tag", "bot"]);
+  const drawn = (n) => recOf(() => v.railCardView(theme, k(n)));
+  expect(svgs(drawn(2))).toContain("tag.svg");
+  expect(strsOf(drawn(2))).toEqual(expect.arrayContaining(["helper-a", "matched by rule"]));
+  expect(svgs(drawn(3))).toContain("bot.svg");
+  expect(strsOf(drawn(3))).toEqual(expect.arrayContaining(["helper-a", "agent message"]));
+  expect(svgs(drawn(1))).not.toContain("bot.svg");
+  expect(strsOf(drawn(1))).not.toContain("helper-a");
+});
+
 test("a sender rule that is not valid shows a note in the panel and is ignored", async () => {
   const { v, cx } = await scripted(senderEvents());
   v.applyPrefs(JSON.stringify({ senders: [{ pattern: "^(?<sender>(a+)+)!" }, { pattern: "^From (\\w+):" }] }));
   expect(v.prefsNotes).toEqual(["Sender rule 1: nested quantifier, as in (a+)+", "Sender rule 2: pattern has no (?<sender>...) group"]);
-  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not valid) · Quote key · q");
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not working) · Quote key · q");
   expect(v.current().turns.every((t) => !t.agent)).toBe(true);
   // The card's Sender rules page shows each on its rule, with the reason.
   v.settingsOpen = true;
@@ -1739,7 +1883,7 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
     { pattern: "(a+)+", url: "https://x.example/$1" },
   ] }));
   expect(v.links.length).toBe(2);
-  expect(v.settingsLine()).toBe("Link rules · 3 (1 not valid) · Quote key · q");
+  expect(v.settingsLine()).toBe("Link rules · 3 (1 not working) · Quote key · q");
   expect(v.prefsNotes).toEqual(["Link rule 3: nested quantifier, as in (a+)+"]);
   v.remote = { key: "t4|null", repo: "acme/widgets", owner: "acme", why: "test" };
   v.open = new Set(["0:1"]);
@@ -10149,6 +10293,113 @@ test("a change to the senders in the file shows on the page and the open rule fo
     onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
     onOf(cardOf(v), "th-set-back", "on_click")({}, cx);
     expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+// A Keep rule the file refuses (the owner, 18 Nov: as draft PR 121 does for link rules): the
+// open rule says why under its buttons, the File line's reason in the same red, and what was
+// typed is kept. inRule counts the reason between Keep rule and the File group, onFile after
+// the File note. The editor is shared, so link rules behave the same.
+const fileNotes = (kind) => [`Rules are kept under "${kind}" in the settings file. A change made there shows here within a second.`,
+  `"${kind}" in the settings file is not a list now, so rules change only in the file until it is fixed.`];
+function reasonIn(c, why, kind) {
+  const at = c.flatMap((e, i) => (e[0] === "child" && e[1] === why ? [i] : []));
+  const file = c.findIndex((e) => e[0] === "child" && fileNotes(kind).includes(e[1]));
+  const keep = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-keep");
+  return { inRule: at.filter((i) => keep >= 0 && i > keep && i < file).length, onFile: at.filter((i) => i > file).length };
+}
+const SENDERS_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+
+test("a sender Keep rule refused because \"senders\" is not a list stays open with what was typed and says why under its buttons, until the file is fixed or the rule closes", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-a: done", cx);
+    const oops = JSON.stringify({ textSize: 15, links: RULES, senders: "oops" });
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.ruleEdit?.kind).toBe("senders");
+    expect(v.senderInputs.example.value()).toBe("From helper-a: done");
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    // Discard: the reason stays on the File line only.
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 1 });
+    // Refused again, then the file fixed: the reason goes from both places, and Keep writes.
+    const fixed = JSON.stringify({ textSize: 15, links: RULES, senders: SENDS });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-b: done", cx);
+    v.applyPrefs(oops);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    v.applyPrefs(fixed);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastSenders()[0].example).toBe("From helper-b: done");
+    expect(strsOf(cardOf(v))).not.toContain(SENDERS_NOT_LIST);
+  } finally { done(v); }
+});
+
+test("a sender Keep rule whose save finds the file's rules changed opens again where its rule now is, with what was typed, and says why in it", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-a: done", cx);
+    const X = { name: "Top", prefix: "[{name}] " };
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: RULES, senders: [X, ...SENDS] }); // an editor adds a rule as Keep rule is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null); // closed at once, as for a Keep that is written
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect((v.senderList ?? []).map((r) => r.name)).toEqual(["Top", "Checker", "Nightly", "Broken", "Bare", "Miss"]);
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at]).toEqual(["senders", 1]);
+    expect(v.senderInputs.example.value()).toBe("From helper-a: done");
+    expect(reasonIn(cardOf(v), SENDERS_MOVED, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    // From the list it now shows, the same Keep is written, and the reason goes.
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastSenders()[0]).toEqual(X);
+    expect(lastSenders()[1]).toEqual({ ...SENDS[0], example: "From helper-a: done" });
+    expect(strsOf(cardOf(v))).not.toContain(SENDERS_MOVED);
+    // Refused while the card has gone to another page: nothing opens.
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: RULES, senders: SENDS });
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    typeSender(v, "example", "[nightly-bot] red", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    v.setPage = "links";
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+test("link rules share the editor: a Keep rule whose save finds the file's rules changed opens again with what was typed, and says why in it", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at]).toEqual(["links", 1]);
+    expect(v.ruleInputs.example.value()).toBe("Fixed in ACME-7.");
+    expect(reasonIn(cardOf(v), MOVED, "links")).toEqual({ inRule: 1, onFile: 1 });
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), MOVED, "links")).toEqual({ inRule: 0, onFile: 1 });
   } finally { done(v); }
 });
 

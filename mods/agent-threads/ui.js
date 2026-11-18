@@ -1693,15 +1693,16 @@ const KIND_WORDS = {
   hc: "hc report", peer: "agent message", scheduled: "Scheduled", sdk: "SDK",
   "task-notification": "Task notification", "auto-continuation": "Auto-continuation",
 };
+// A typed prompt a sender rule matched says so ("matched by rule"), whatever kind the rule
+// gave it: the session has no sender for it, only the rule's reading of its text.
 export function kindWords(sender) {
   if (!sender) return "Background agent";
+  if (sender.rule != null) return "matched by rule";
   if (sender.kind === "hc" && sender.request) return "hc request";
   return KIND_WORDS[sender.kind] ?? "Background agent";
 }
 const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
-// 300 px, "Agent message" with no name.
 // Where a turn's message came from: "you" (the person's own prompt), "rule" (typed in the
 // terminal and marked as an agent message by a sender rule, core/turns.js ruleSender) or
 // "sent" (another agent really sent it: hc, a peer session, a schedule, the SDK). Both
@@ -1712,15 +1713,25 @@ export function senderOrigin(sender) {
   return sender.rule != null ? "rule" : "sent";
 }
 
-export function senderLabel(sender, width) {
-  if (!sender || sender.kind === "you") return "User";
+// The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
+// 300 px, "Agent message" with no name; a message a sender rule matched, "build-bot ·
+// matched by rule". senderParts gives the name and the words apart, so a label too long for
+// its room cuts the name in the middle and never the words.
+export function senderParts(sender, width) {
+  if (!sender || sender.kind === "you") return { name: "User", words: null };
   const words = kindWords(sender);
-  if (!sender.name) return cap1(words);
-  return width < 300 ? sender.name : `${sender.name} · ${words}`;
+  if (!sender.name) return { name: cap1(words), words: null };
+  return { name: sender.name, words: width < 300 ? null : words };
+}
+export function senderLabel(sender, width) {
+  const p = senderParts(sender, width);
+  return p.words ? `${p.name} · ${p.words}` : p.name;
 }
 
-// Icon per sender kind.
+// Icon per sender kind; the tag for a message a sender rule matched (its label in words:
+// "Matched by a sender rule").
 export function senderIcon(sender) {
+  if (sender?.rule != null && sender.kind !== "you") return "tag";
   return { scheduled: "clock", sdk: "square-terminal" }[sender?.kind] ?? "bot";
 }
 

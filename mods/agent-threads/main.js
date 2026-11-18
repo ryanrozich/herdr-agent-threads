@@ -56,7 +56,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
+  rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
@@ -258,6 +258,10 @@ const rulesNotList = (key) => `"${key}" in settings.json is not a list, so the r
 // rules, "rule-sender-pattern" on Sender rules (Esc in either closes the rule).
 const fieldTag = (kind) => (kind === "senders" ? "rule-sender-" : "rule-");
 const RULES_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+// The edge on the bubble of a message a sender rule matched (the designer's option 2, which
+// the owner chose on 18 Nov): "dashed", a 1 px dashed line (bubbleEdge). "none" leaves the
+// words "matched by rule" and the tag icon to mark it alone (option 1).
+const RULE_EDGE = "dashed";
 const REGEX_REFERENCE = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet";
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
@@ -1341,7 +1345,10 @@ export default class Threads extends View {
   // changed meanwhile (a hand edit, another pane) or is no longer a list, nothing is written,
   // the pane shows the file again and the card says why. undo: the Undo line a Delete just
   // set, cleared when that Delete is not written, so Undo cannot add the rule a second time.
-  writeRules(kind, raw, cx, undo = null) {
+  // kept: the rule Keep rule just closed. When its save is refused it opens again where its
+  // rule now is, with what was typed, and says why under its buttons (as draft PR 121 does
+  // for link rules), while the card is still on its page and no other rule is open.
+  writeRules(kind, raw, cx, undo = null, kept = null) {
     const from = JSON.stringify(this.fileRules(kind));
     this.rulesPending[kind] = raw;
     this.useRules(kind, raw, cx);
@@ -1350,6 +1357,11 @@ export default class Threads extends View {
       const now = this.rulesIn(text, kind);
       const why = now == null ? rulesNotList(kind) : JSON.stringify(now) !== from ? RULES_MOVED : null;
       if (why && undo && this.ruleUndo === undo) this.ruleUndo = null;
+      if (why && kept && !this.ruleEdit && this.settingsOpen && this.setPage === kind) {
+        this.ruleEdit = kept;
+        for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, kept.draft[k], kind);
+      }
+      if (why && kept && this.ruleEdit === kept) kept.refused = why;
       return why;
     };
     const chain = this.changePrefs({}, cx, { [kind]: raw }, fits);
@@ -1428,7 +1440,7 @@ export default class Threads extends View {
     else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     const e = { kind, at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
-      shown: senders ? { prefix: null, pattern: null } : { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
+      shown: senders ? { prefix: null, pattern: null } : { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0, refused: null };
     this.ruleEdit = e;
     for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, d[k], kind);
     this.ruleCheck();
@@ -1589,14 +1601,14 @@ export default class Threads extends View {
       this.inputsOf(e.kind)[bad[0]].focus();
       return false;
     }
-    if (this.rulesRefused(e.kind)) return false;
+    if (this.rulesRefused(e.kind)) { e.refused = this.prefsError; return false; }
     const raw = this.fileRules(e.kind);
     this.followRules(raw);
     const o = this.ruleObject(e.draft, e.base, e.kind);
     if (e.at != null) raw[e.at] = o;
     else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
     this.closeRule();
-    this.writeRules(e.kind, raw, cx);
+    this.writeRules(e.kind, raw, cx, null, e);
     return true;
   }
   // The switch on a row: off keeps the rule and links (or marks) nothing with it.
@@ -2822,8 +2834,7 @@ export default class Threads extends View {
     const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0).cursor_pointer()
       .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
-      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-        .text_color(t.muted).child(senderLabel(turn.sender, this.width)))
+      .child(this.labelView(senderParts(turn.sender, this.width), t.muted, this.labelRoom(turn, replyWidth(this.width)), false))
       .child(svg(ICON(r.fold === "shown" ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
     if (r.open) return h_flex().px(ROW.PAD_X).min_w(0).child(line);
     return this.rowFrame(t, false, false, false, [line], ROW.PAD_T, 0);
@@ -6449,7 +6460,8 @@ export default class Threads extends View {
       .child(typeBlock)
       .children(RULE_FIELDS.map(field))
       .when(Boolean(result), (el) => el.child(result))
-      .child(this.ruleButtons(t, e));
+      .child(this.ruleButtons(t, e))
+      .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
   }
 
   // The parts both rule editors share. A field's label.
@@ -6481,6 +6493,11 @@ export default class Threads extends View {
         .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")));
   }
   // Keep rule, Discard, and on a kept rule Move up (not the first), Duplicate and Delete.
+  // Whether the open rule shows why its Keep rule was not saved: while the File line shows
+  // that same reason. It goes when the file is fixed, the next Keep is saved, or the rule
+  // closes. The same text in a second place, where the person is looking: a tall open rule
+  // can push the File line out of view.
+  refusedHere(e) { return Boolean(e.refused) && e.refused === this.prefsError; }
   ruleButtons(t, e) {
     const isNew = e.at == null;
     return h_flex().gap(6).flex_wrap()
@@ -6664,7 +6681,8 @@ export default class Threads extends View {
       .child(field(d.by))
       .child(field("example"))
       .when(Boolean(result), (el) => el.child(result))
-      .child(this.ruleButtons(t, e));
+      .child(this.ruleButtons(t, e))
+      .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
   }
 
   // Why a rule that needs the session's repository links nothing here, or null.
@@ -7410,10 +7428,16 @@ export default class Threads extends View {
   }
   youText(r) { return this.youClip(r.turn, r.full); }
 
-  // "USER", "USER · COMMAND" or "FROM T7 REVIEW".
+  // "USER", "USER · COMMAND", "FROM T7 REVIEW", or for a message a sender rule matched
+  // "FROM BUILD-BOT · MATCHED BY RULE". youParts gives the name and the words apart.
+  youParts(turn) {
+    if (!turn.agent) return { name: turn.cmd ? "USER · COMMAND" : "USER", words: null };
+    if (!turn.sender?.name) return { name: kindWords(turn.sender).toUpperCase(), words: null };
+    return { name: `FROM ${turn.sender.name.toUpperCase()}`, words: senderOrigin(turn.sender) === "rule" ? "MATCHED BY RULE" : null };
+  }
   youLabel(turn) {
-    if (turn.agent) return turn.sender?.name ? `FROM ${turn.sender.name.toUpperCase()}` : kindWords(turn.sender).toUpperCase();
-    return turn.cmd ? "USER · COMMAND" : "USER";
+    const p = this.youParts(turn);
+    return p.words ? `${p.name} · ${p.words}` : p.name;
   }
 
   // The YOU block as TextView Markdown (ui.js promptMd: quotes as blockquotes, code kept,
@@ -7427,7 +7451,11 @@ export default class Threads extends View {
     // does not read on a coloured bubble. There the message is plain text in the bubble's
     // ink, quotes behind their bar, as for a filter match.
     const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
-    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
+    // An agent's bubble is at least as wide as the line inside it ("FROM BUILD-BOT ·
+    // MATCHED BY RULE", 11.5 px capitals, about 7.5 px each, after an 11 px icon and a 5 px
+    // gap), up to the bubble's limit.
+    const head = r.turn.agent ? Math.ceil(this.youLabel(r.turn).length * 7.5) + 16 + 2 * ROW.BUBBLE_PX : 0;
+    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}|${head}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
@@ -7440,7 +7468,7 @@ export default class Threads extends View {
     const bmax = bubbleMax(this.width, this.prefs.textSize, this.chars());
     const yc = this.charW(YOU_CHAR);
     const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
-    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, Math.ceil(widest * yc) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
+    const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, head, Math.ceil(widest * yc) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
     const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / yc));
     const n = wrappedLines(c.text, per);
     // One spare line, so the first frame's estimate does not run short.
@@ -7895,8 +7923,17 @@ export default class Threads extends View {
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0)
       .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
-      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-        .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)));
+      .child(this.labelView(senderParts(turn.sender, this.width), ac, this.labelRoom(turn, replyWidth(this.width))));
+  }
+  // An agent message's label as drawn: its name, cut in the middle when the room is short,
+  // then "·" and its words ("hc report", "matched by rule"), which are never cut (ui.js
+  // senderParts). room: the most it may take, or null to shrink with its parent (the line
+  // inside an open bubble).
+  labelView(parts, color, room, semibold = true) {
+    return h_flex().gap(4).items_center().min_w(0).text_color(color).when(semibold, (el) => el.font_semibold())
+      .when(room != null, (el) => el.flex_none().max_w(room))
+      .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().child(parts.name))
+      .when(Boolean(parts.words), (el) => el.child(div().flex_none().child("·")).child(div().flex_none().whitespace_nowrap().child(parts.words)));
   }
 
   // The text of the strip under a bubble: "#7 · 9:12 AM" on the selected turn, the time alone
@@ -8063,13 +8100,28 @@ export default class Threads extends View {
   bubble(t, turn, kids, w) {
     const agent = turn.agent;
     const { style } = this.bubbleLook(t, agent);
-    const box = this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground)
-      .when(style.outline, (el) => el.border_1().border_color(t.border))
+    const inset = this.edgeInset(turn, style);
+    const box = this.bubbleEdge(this.readFont(v_flex().flex_none().w(w).max_w_full().px(ROW.BUBBLE_PX - inset).py(ROW.BUBBLE_PY - inset).min_w(0)).bg(style.fill).text_color(this.bubbleLook(t, agent).theme.foreground), t, turn, style)
       .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
       .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
       .children(kids);
     return h_flex().w_full().min_w(0).when(!agent, (el) => el.justify_end()).child(box);
   }
+  // Whether a turn's bubble has the dashed edge: a message a sender rule matched.
+  ruleEdge(turn) { return RULE_EDGE === "dashed" && Boolean(turn.agent) && senderOrigin(turn.sender) === "rule"; }
+  // The edge of a bubble. A message a sender rule matched: 1 px dashed, in the bubble's ink
+  // at 50% on a coloured fill (its quote bar's colour), in muted on Plain in place of the
+  // solid outline; the fill is the same. Any other agent's bubble: on Plain the solid
+  // outline, else none. A Herdr whose elements have no border_dashed draws the edge solid.
+  bubbleEdge(el, t, turn, style) {
+    if (!this.ruleEdge(turn)) return style.outline ? el.border_1().border_color(t.border) : el;
+    let e = el.border_1();
+    if ("border_dashed" in e) e = e.border_dashed();
+    return e.border_color(style.outline ? t.muted : style.bar);
+  }
+  // The padding an edge takes back on a coloured bubble, so its text sits where a bubble
+  // with no edge has it.
+  edgeInset(turn, style) { return this.ruleEdge(turn) && !style.outline ? 1 : 0; }
 
   // How a bubble is drawn (settings bubbleColor and agentBubbleColor, ui.js bubbleStyle),
   // and the theme its text is drawn with. On a coloured fill the bubble's ink stands in for
@@ -8216,8 +8268,7 @@ export default class Threads extends View {
           .child(div().flex_none().child("·"))
           .when(turn.agent, (el) => el
             .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
-            .child(div().flex_none().max_w(Math.floor(this.width * 0.4)).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
-              .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)))
+            .child(this.labelView(senderParts(turn.sender, this.width), ac, Math.floor(this.width * 0.4)))
             .child(div().flex_none().child("·")))
           .child(div().flex_1().min_w(0).truncate().child(st?.spin ? "now" : fmtTime(turn.ts)))
           .when(turn.followups > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center().child(svg(ICON("bell")).size(10)).child(countLabel(turn.followups))))
@@ -8546,15 +8597,14 @@ export default class Threads extends View {
         // The message in its bubble, on the right (an agent's outlined, on the left, under its
         // sender), as wide as its widest line.
         const agent = turn.agent;
+        const inset = this.edgeInset(turn, style);
         const bubbleRow = h_flex().w_full().when(!agent, (el) => el.justify_end())
-          .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
-            .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
+          .child(this.bubbleEdge(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX - inset).py(8 - inset).gap(4)).bg(style.fill), t, turn, style)
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
             .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
-            .when(agent, (el) => el.child(h_flex().gap(5).items_center()
+            .when(agent, (el) => el.child(h_flex().gap(5).items_center().min_w(0).text_size(11.5)
               .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
-              .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(11.5).font_semibold()
-                .text_color(ac).child(this.youLabel(turn)))))
+              .child(this.labelView(this.youParts(turn), ac, null))))
             .when(Boolean(cmd), (el) => el.child(h_flex().h(this.rt().line).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
             .when(Boolean(c.text), (el) => el.child(box.text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(text)))
             .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
@@ -8780,14 +8830,17 @@ export default class Threads extends View {
     const bad = (this.linkCount ?? 0) - this.links.length;
     const sn = this.senderCount ?? 0;
     const sbad = (this.senderList ?? []).filter((r) => r.why).length;
-    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
+    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not working)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not working)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
   }
 
   // Which sender rule made a typed prompt an agent message, for the tooltip on its sender:
-  // "Marked by sender rule 2 · Hourly report", or null for every other turn.
+  // "Typed into the terminal. Sender rule 2 · Hourly report named its sender.", or null for
+  // every other turn. Both the number and the name, since the number changes when rules move.
   ruleTip(turn) {
     const r = turn?.sender?.rule;
-    return r != null ? `Marked by sender rule ${r} · ${turn.sender.ruleLabel ?? ""}`.replace(/ · $/, "") : null;
+    if (r == null) return null;
+    const name = turn.sender.ruleLabel ? ` · ${turn.sender.ruleLabel}` : "";
+    return `Typed into the terminal. Sender rule ${r}${name} named its sender.`;
   }
 
   // Key hints that apply now, on one row: [key, label]. The most-used keys (move, open,
@@ -9060,7 +9113,8 @@ export default class Threads extends View {
   }
   // The rail card (Herdr 0.1.15, Popup): a first line with the day, the time and the number
   // ("Yesterday · 3:48 PM · #7", the running turn "Today · now · #149") and a pin when the turn
-  // is pinned; the prompt on two lines; the reply on three, flattened (a table's cells joined
+  // is pinned; for an agent message (sent, or matched by a sender rule) its icon and label on
+  // a 15 px line; the prompt on two lines; the reply on three, flattened (a table's cells joined
   // with a middle dot, code as "[code]"), or "Working · 0:48" for the running turn. A turn with
   // no reply shows its prompt alone.
   // The reply is flattened once per hovered turn (railReplyMemo), from its first 600
@@ -9081,7 +9135,8 @@ export default class Threads extends View {
         this.railReplyMemo = { turn: a, text: reply };
       }
     }
-    return { day: railDay(a.ts), rest: [k.live ? "now" : fmtTime(a.ts), `#${a.n}`].join(" · "), pinned: k.pinned, body, reply, origin: senderOrigin(a.sender) };
+    return { day: railDay(a.ts), rest: [k.live ? "now" : fmtTime(a.ts), `#${a.n}`].join(" · "), pinned: k.pinned, body, reply, origin: senderOrigin(a.sender),
+      who: a.agent ? senderLabel(a.sender, 400) : null, icon: a.agent ? senderIcon(a.sender) : null };
   }
   // The rail's side: "right" (the default) or "left" (settings railSide). Only the lane, the
   // side the ticks grow toward and the side the card opens on move.
@@ -9194,6 +9249,10 @@ export default class Threads extends View {
           .tooltip(`${c.pinned ? "Unpin" : "Pin"} #${k.turns[0].turn.n} (p)`)
           .on_click((_e, cx) => { cx.stop_propagation(); this.togglePin(k.key, cx); cx.notify(); })
           .child(svg(ICON("pin")).size(11))))
+      // An agent message, sent or matched by a sender rule: its icon and label, as in the list.
+      .when(Boolean(c.who), (el) => el.child(h_flex().h(15).gap(5).items_center().min_w(0).text_size(11).line_height("15px")
+        .child(svg(ICON(c.icon)).size(11).flex_none().text_color(this.agentColor(t)))
+        .child(this.labelView(senderParts(k.turns[0].turn.sender, 400), this.agentColor(t), null))))
       .when(Boolean(c.body), (el) => el.child(div().text_size(12.5).line_height("18px").max_h(36).overflow_hidden().font_medium().text_color(t.foreground).child(c.body)))
       .when(Boolean(c.reply), (el) => el.child(div().text_size(12).line_height("17px").max_h(51).overflow_hidden().text_color(t.muted).child(c.reply))));
   }
