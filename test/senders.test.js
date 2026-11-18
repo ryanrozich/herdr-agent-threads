@@ -147,6 +147,35 @@ test("the step count is an upper bound on the prompt's head, from the pattern al
   expect(senderCost("^(?=a*)(?:b+|c*)(?<sender>d{2,})").open).toBe(4);
 });
 
+test("[] and [^] are whole classes: the repeats after them are counted", () => {
+  // The third review's rule: read with "]" after "[^" as a literal, the class ran to the last
+  // "]" and hid six repeats (accepted at 402 steps; 1,433 ms on "xa", 97 spaces and "!").
+  const pattern = "^(?<sender>\\w+)[^]\\s*\\s*\\s*\\s*\\s*\\s*]Z";
+  expect(senderCost(pattern).open).toBe(7);
+  const { rules, notes } = parseSenders([{ pattern }]);
+  expect(notes).toEqual([`Sender rule 1: ${openNote(7)}`]);
+  expect(rules).toEqual([]);
+  // The empty class too, and a class with "]" escaped inside is still one class.
+  expect(senderCost("^(?<sender>\\w+)[]\\s*\\s*\\s*Z").open).toBe(4);
+  expect(parseSenders([{ pattern: "^(?<sender>\\w+)[]\\s*\\s*\\s*Z" }]).notes).toEqual([`Sender rule 1: ${openNote(4)}`]);
+  expect(senderCost("^(?<sender>[\\]a-z]+)\\s*Z").open).toBe(2);
+  // The same three runs once the class is read right: a fair rule with [^] is kept.
+  expect(parseSenders([{ pattern: "^(?<sender>[^]{1,20}?) hourly" }]).notes).toEqual([]);
+});
+
+test("an error in the step counter refuses that one rule and leaves the others", () => {
+  const boom = (source, ...rest) => {
+    if (source.includes("boom")) throw new Error("counter failed");
+    return senderCost(source, ...rest);
+  };
+  const { rules, notes } = parseSenders([{ pattern: "^(?<sender>boom)" }, { name: "Seat", pattern: "^From (?<sender>[a-z]+-[a-z]+):" }, { prefix: "boom {name}:" }, { prefix: "[{name}] " }], boom);
+  expect(notes).toEqual(["Sender rule 1: could not be checked; ignored", "Sender rule 3: could not be checked; ignored"]);
+  expect(rules.map((r) => r.n)).toEqual([2, 4]);
+  expect(ruleSender(rules, "From seat-one: done")?.name).toBe("seat-one");
+  // A counter that returns no count is refused the same way.
+  expect(parseSenders([{ pattern: "^(?<sender>x)" }], () => ({ open: 0, steps: Number.NaN })).notes).toEqual(["Sender rule 1: could not be checked; ignored"]);
+});
+
 test("the rules together have a step budget, so one prompt costs a bounded time whatever the rules", () => {
   expect(SENDER_TOTAL).toBe(2e6);
   // Each of these is kept alone (under a million steps), but not twenty of them.
