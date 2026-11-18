@@ -43,6 +43,15 @@ import * as gpuiKit from "gpui-kit";
 import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 // A stroked path (the Trajectory's bars and each turn's line), where Herdr has one; divs without.
+// An element method this Herdr may not have (on_pinch is new in 0.1.16): called only when
+// the element has it, else the element as it was. Every element shares one prototype that
+// holds each method the runtime has (gpui-kit's prelude, globalThis.__gpui), so `name in el`
+// answers truly on 0.1.15 and 0.1.16 alike, and on the diagnostic Proxy prototype too, which
+// traps only get. A missing method is undefined there: calling it throws "not a function",
+// and Herdr shows the view's last good version under "unknown element method", from a
+// re-run on that diagnostic prototype. typeof would not do on that re-run (its get returns
+// a function for any name).
+const maybe = (el, name, ...args) => (name in el ? el[name](...args) : el);
 const STROKE = PAINT && typeof gpuiKit.PathBuilder?.stroke === "function" ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -3640,8 +3649,8 @@ export default class Threads extends View {
     return v_flex().id("th-traj").flex_1().min_h(0).w_full()
       // A drag that began on the timeline (the bar under it) follows the pointer over the whole
       // body and ends on its release here.
-      .on_mouse_move((e, cx) => this.tlDragMove(e, cx))
-      .on_mouse_up("left", (e, cx) => this.tlDragEnd(e, cx))
+      .when(true, (el) => maybe(el, "on_mouse_move", (e, cx) => this.tlDragMove(e, cx)))
+      .when(true, (el) => maybe(el, "on_mouse_up", "left", (e, cx) => this.tlDragEnd(e, cx)))
       .when(pad, (el) => el.pt(TOP_BAND))
       .when(top, (el) => el.child(this.trajBar(t)))
       .when(this.timelineShown(), (el) => el.child(this.timelineView(t, cx)))
@@ -4361,7 +4370,7 @@ export default class Threads extends View {
       }
     }
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(H).cursor_pointer().overflow_hidden()
-      .on_mouse_down("left", (e, cx) => this.tlDown(e, cx))
+      .when(true, (el) => maybe(el, "on_mouse_down", "left", (e, cx) => this.tlDown(e, cx)))
       .children(kids);
     // The band: while a drag is held, where the pointer has been; else the range's. A light
     // wash of the text colour from the turn labels to the lanes' foot, a 2 px edge each side.
@@ -4369,16 +4378,14 @@ export default class Threads extends View {
     const bandEl = band && band.x1 >= 0 && band.x0 <= cw
       ? div().id("th-tl-band").absolute().top(TL_PT).left(Math.max(0, band.x0)).w(Math.max(2, Math.min(cw, band.x1) - Math.max(0, band.x0))).h(TL_AX + TL_TK + TL_LT + H)
         .bg(alpha(t.foreground, 0.07))
-        .when(band.x0 >= 0, (el) => el.border_l(2)).border_color(t.foreground)
-        // The right edge as a child, not border_r: no build the rig's Herdr drew used border_r.
-        .when(band.x1 <= cw, (el) => el.child(div().absolute().top(0).right(0).w(2).h_full().bg(t.foreground)))
+        .when(band.x0 >= 0, (el) => el.border_l(2)).when(band.x1 <= cw, (el) => el.border_r(2)).border_color(t.foreground)
       : null;
     // While zoomed, the bar under the lanes: the whole session, and the part in view.
     const zoomed = L.z > 1;
     const a = zoomed && L.total > 0 ? (L.x0 / L.z / L.total) * cw : 0;
     const mw = zoomed && L.total > 0 ? Math.max(6, (cw / L.z / L.total) * cw) : cw;
     const map = div().id("th-tl-map").relative().w(cw).h(TL_PB).when(zoomed, (el) => el.cursor_pointer()
-      .on_mouse_down("left", (e, cx) => this.tlMapPress(e, cx))
+      .when(true, (el) => maybe(el, "on_mouse_down", "left", (e, cx) => this.tlMapPress(e, cx)))
       .child(div().absolute().top(2).left(0).w(cw).h(3).rounded(2).bg(alpha(t.foreground, 0.07)))
       .child(div().id("th-tl-map-view").absolute().top(1).left(Math.min(cw - mw, a)).w(mw).h(5).rounded(2).bg(alpha(t.foreground, 0.32))));
     const labels = div().relative().w(cw).h(TL_AX).overflow_hidden()
@@ -4395,10 +4402,10 @@ export default class Threads extends View {
       .child(v_flex().flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
         .child(name("input", "Input")).child(name("model", "Model")).child(name("tools", "Tools")))
       .child(v_flex().id("th-tl-area").relative().flex_none().w(cw).pt(TL_PT)
-        .on_scroll_wheel((e, cx) => this.tlWheel(e, cx))
-        // on_pinch is new in Herdr 0.1.16 (its changelog); an older Herdr refuses the whole
-        // view over an element method it does not know, so it is asked for only from 0.1.16.
-        .when(this.pinchOk(), (el) => el.on_pinch((e, cx) => this.tlPinch(e, cx)))
+        .when(true, (el) => maybe(el, "on_scroll_wheel", (e, cx) => this.tlWheel(e, cx)))
+        // on_pinch is new in Herdr 0.1.16: on 0.1.15 the timeline zooms by the keys, the
+        // buttons and the map bar only.
+        .when(true, (el) => maybe(el, "on_pinch", (e, cx) => this.tlPinch(e, cx)))
         .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map)
         .when(Boolean(bandEl), (el) => el.child(bandEl)));
   }
@@ -4463,9 +4470,7 @@ export default class Threads extends View {
     const startsHere = R.ia >= ih;
     const endsHere = R.ib <= ih + (r.items?.length ?? 0);
     return (t) => div().id(`th-tlg-${r.key}`).absolute().top(0).h_full().left(`${(a * 100).toFixed(2)}%`).w(`${(Math.max(0.01, b - a) * 100).toFixed(2)}%`)
-      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1))
-      // The end's edge as a child, not border_r: no build the rig's Herdr drew used border_r.
-      .when(endsHere, (el) => el.child(div().absolute().top(0).right(0).w(1).h_full().bg(t.foreground)));
+      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1)).when(endsHere, (el) => el.border_r(1));
   }
 
   // The Trajectory's inks for this theme (ledger.js trajInks): the user's colour from one
@@ -4581,15 +4586,6 @@ export default class Threads extends View {
     // left under the footer); closing keeps the row in view.
     this.scrollTo = { key, how: this.open.has(key) ? "card" : "top" };
     cx.notify();
-  }
-
-  // Whether Herdr has on_pinch (new in 0.1.16). A Herdr that does not know an element method
-  // shows the view's last good version instead (seen on the rig at bedbd88).
-  pinchOk() {
-    if (this.pinchMemo == null) {
-      try { this.pinchMemo = atLeast(updates().app.version, "0.1.16"); } catch { this.pinchMemo = false; }
-    }
-    return this.pinchMemo;
   }
 
   // Whether the formatted reply can be selected: before Herdr 0.1.13 its Markdown view drew
