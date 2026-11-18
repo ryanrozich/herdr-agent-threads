@@ -94,9 +94,10 @@ mock.module("gpui-base", () => ({
   TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
-// ("in"), so a test can time the synchronous stretches between awaits.
+// ("in"), with the time and the work counted so far, so a test can measure the synchronous
+// stretches between awaits.
 let marks = null;
-const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
+const stamp = (what) => { if (marks) marks.push([what, performance.now(), { ...work }]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
@@ -112,6 +113,9 @@ let pinWrites = 0;
 // keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
 let keepSettings = false;
+// With settingsStale set, a settings write whose expected text is not what the file holds is
+// rejected, as Herdr rejects a stale snapshot.
+let settingsStale = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -139,7 +143,11 @@ function herdrRest() { return {
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
-    if (p.endsWith("settings.json")) { settingsWrites.push(text); if (keepSettings) recordFiles[p] = text; }
+    if (p.endsWith("settings.json")) {
+      if (settingsStale && (recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
+      settingsWrites.push(text);
+      if (keepSettings) recordFiles[p] = text;
+    }
     if (!p.endsWith("pins.json")) return null;
     if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
     recordFiles[p] = text;
@@ -158,6 +166,22 @@ function herdrRest() { return {
 // main.js finds its scripts under appHome()/mods/agent-threads.
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
+// The read's work, counted for the S1 child: lines parsed and events applied (through a
+// counting stand-in for core/turns.js, in the child only), turns reshaped, and turns whose
+// rows were built.
+const work = { lines: 0, events: 0, reshapes: 0, built: 0 };
+// What each costs in ms in bun with the JIT off, the interpreter's speed, on a developer
+// machine: 0.7 to 1.4 µs a line, 1.25 to 1.4 µs an event, 0.21 to 0.27 ms a reshape, and
+// 4.7 to 4.8 µs a turn's rows without its reshape.
+const PRICE = { lines: 0.001, events: 0.0013, reshapes: 0.22, built: 0.005 };
+// The S1 child's clock: the work done so far, at those prices.
+const worked = () => work.lines * PRICE.lines + work.events * PRICE.events + work.reshapes * PRICE.reshapes + work.built * PRICE.built;
+if (process.env.THREADS_CHILD === "read-timing") {
+  const turnsPath = join(modDir, "core/turns.js");
+  const real = await import(turnsPath);
+  const { parseLine, apply } = real;
+  mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
+}
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
@@ -183,6 +207,7 @@ function makeCx() {
     clip: null,
     write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
     read_from_clipboard() { return cx.clip ?? undefined; },
+    open_url(u) { log.push(["open_url", u]); },
   };
   return cx;
 }
@@ -1509,9 +1534,20 @@ async function until(f, what, n = 400) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-// Runs in a child bun with BUN_JSC_useJIT=0 (the interpreter's speed); the parent test below
-// starts it and checks what it wrote.
+// Runs in a child bun; the parent test below starts it and checks what it wrote.
+// The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
+// SHAPE_MS) moves only by the work counted, at the interpreter's prices (PRICE). On the wall
+// clock the read's last stretch came to 26 to 31 ms against a 30 ms bound, and 40 to 70 ms on
+// a busy machine: time spent waiting for a CPU counted as the read's. On this clock each run
+// does the same work in the same stretches on any machine, however busy, and more work in a
+// stretch still costs more.
 test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fixture and time each synchronous stretch", async () => {
+  for (const [name, n] of [["reshape", "reshapes"], ["turnRows", "built"]]) {
+    const f = Threads.prototype[name];
+    Threads.prototype[name] = function (...a) { work[n]++; return f.apply(this, a); };
+  }
+  const realPerf = performance.now.bind(performance);
+  performance.now = worked;
   const pcts = [];
   let v;
   const r = await paneWith(busy(), (cx, view) => {
@@ -1530,11 +1566,26 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   marks = null;
   // The longest stretch from a resume ("in") to the next hand-off ("out"), or to the end of
   // the read for the last one.
+  // most: the most work of each kind in one stretch.
   let longest = 0;
-  for (let i = 1; i < m.length; i++) if (m[i][0] === "out" && m[i - 1][0] === "in") longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+  const most = { lines: 0, events: 0, reshapes: 0, built: 0 };
+  for (let i = 1; i < m.length; i++) {
+    if (m[i][0] !== "out" || m[i - 1][0] !== "in") continue;
+    longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+    for (const k in most) most[k] = Math.max(most[k], m[i][2][k] - m[i - 1][2][k]);
+  }
+  const read = { ...work };
   // B1: the agent toggle rebuilds the rows, and an open card draws with its probe.
   const view = r.v;
-  const time = (f) => { const a = performance.now(); f(); return performance.now() - a; };
+  // The time a step takes (for the log) and the work it did.
+  const time = (f) => {
+    const w = { ...work };
+    const a = performance.now();
+    f();
+    const out = { ms: performance.now() - a };
+    for (const k in work) out[k] = work[k] - w[k];
+    return out;
+  };
   view.rows();
   const toggleOn = time(() => { view.setPrefs({ ...view.prefs, agentTurns: true }); view.rows(); });
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
@@ -1552,16 +1603,17 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   listWindow = null;
   view.toggle(keys.at(-3), r.cx);
   const allFrame = time(() => view.render(r.cx));
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
+  performance.now = realPerf;
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
-test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", async () => {
+test("S1: the read's longest synchronous stretch is at most 30 ms of work at the interpreter's speed, and the percentage rises chunk by chunk", async () => {
   const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
   // Not execFileSync: while the child runs, this process stays free to take a signal, so a
   // stopped run ends the child too (test/preload.js) instead of leaving it reading.
   await new Promise((resolve, reject) => {
     const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-      env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
+      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
     });
     const timer = setTimeout(() => child.kill(), 120000);
     child.on("error", reject);
@@ -1570,25 +1622,25 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);
   expect(r.turns).toBe(1305);
-  // The bounds below are for a developer machine. GitHub's shared runners measured about 1.3x
-  // slower (32 ms, 207 ms), so CI allows twice each: the regressions they guard against (a
-  // whole read parsed in one go, rows rebuilt per frame) cost several times more.
-  const slow = process.env.CI ? 2 : 1;
-  // 30 ms, not 25: 1,170 of this fixture's 1,305 turns are agent messages with a reply, which
-  // show folded while agent messages are hidden, and the last stretch shapes the turns in view
-  // from them (20 to 23 ms before they showed, 26 to 28 ms after).
-  expect(r.longest).toBeLessThanOrEqual(30 * slow);
+  // The bounds are in ms of work at the interpreter's prices (PRICE, the child's clock), so
+  // they are the same in CI, on any machine and under load. The longest stretch is the last:
+  // it builds the rows (BUILD_MS) and shapes the turns in view (SHAPE_MS), 18.6 ms here.
+  expect(r.longest).toBeLessThanOrEqual(30);
+  // The read yields after each chunk at least: no stretch parses or applies half the session.
+  // A whole read parsed in one go puts every line in one.
+  expect(r.most.lines).toBeLessThan(r.read.lines / 2);
+  expect(r.most.events).toBeLessThan(r.read.events / 2);
   expect(r.pcts.length).toBeGreaterThanOrEqual(4);
   for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
   expect(r.pcts.at(-1)).toBe(100);
-  // Showing agent messages shapes about 1,170 rows for the first time: 112 to 133 ms in this
-  // harness, the same as on a build checked in a drawn window, so the bound is loose. Hiding them and
-  // drawing an open card with its probe stay small.
-  expect(r.toggleOn).toBeLessThan(200 * slow);
-  expect(r.toggleOff).toBeLessThan(25 * slow);
-  expect(r.openFrame).toBeLessThan(50 * slow);
-  const f = (x) => x.toFixed(1);
-  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms; with every row drawn ${f(r.allFrame)} ms`);
+  // Showing agent messages shapes about 1,170 rows for the first time, within the draw's
+  // shaping time, so the bound is loose. Hiding them and drawing an open card with its probe
+  // stay small.
+  expect(r.toggleOn.ms).toBeLessThan(200);
+  expect(r.toggleOff.ms).toBeLessThan(25);
+  expect(r.openFrame.ms).toBeLessThan(50);
+  const f = (x) => `${x.ms.toFixed(1)} ms (${x.reshapes} reshaped, ${x.built} built)`;
+  console.log(`S1 work, at the interpreter's prices: longest stretch ${r.longest.toFixed(1)} ms over ${r.awaits} awaits, at most ${r.most.lines} lines and ${r.most.events} events in one; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)}, off ${f(r.toggleOff)}; open-card frame ${f(r.openFrame)}, next ${f(r.nextFrame)}; with every row drawn ${f(r.allFrame)}`);
 }, 130000);
 
 test("S1: before the first chunk the header says Reading… with no percentage, and the bar is indeterminate", async () => {
@@ -8681,11 +8733,14 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   expect(idsIn(c)).not.toContain("th-set-tab-general"); // no tabs and no preview on the page
   expect(idsIn(c)).not.toContain("th-set-preview");
   for (const x of ["Link rules", "A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", "Rules · 5",
-    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412", "On",
+    "Ticket", "Our tracker", "Fixed in ", "ACME-412", "https://tracker.example/ACME-412",
     "PR", "Off", "This session has no repository, so this rule links nothing here.",
     "Broken", "Not working: pattern not valid", "Bare", "No example yet", "\\bBUG-(\\d+)\\b", "Miss", "Finds nothing in its example",
     "When two rules match the same text, the higher one wins."]) expect(s).toContain(x);
   expect(c).toContainEqual(["underline"]);
+  // A switch on each rule that runs; a warning mark in its place on one that does not.
+  expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-on-1", "th-rule-on-2", "th-rule-on-4"]));
+  expect(idsIn(c)).not.toContain("th-rule-on-3");
   const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
   expect(icons).toEqual(expect.arrayContaining(["ticket.svg", "git-pull-request.svg", "regex.svg", "alert.svg"]));
   // With the session's repository, the PR rule's example shows its address (and it stays off).
@@ -8746,4 +8801,632 @@ test("a rule that turned slow on a reply shows Not working with the reason on th
   // A change to the file compiles it again, and it runs.
   v.applyPrefs(JSON.stringify({ links: [{ name: "Slowish", pattern: "\\bZ-(\\d+)\\b", url: "https://z.example/a/$1", example: "Z-1" }] }));
   expect(v.links[0].slow).toBe(undefined);
+});
+
+// ---- link rules changed on the card (chat-look round 10; settings-links) ----
+
+const RULES = [
+  { name: "Ticket", type: "ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tracker.example/ACME-$1", example: "Fixed in ACME-412.", keepMe: 1 },
+  { name: "Hash", pattern: "#(\\d+)", url: "https://h.example/$1", example: "See #58." },
+];
+async function rulesPane(rules = RULES) {
+  const r = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  settingsWrites.length = 0;
+  r.v.applyPrefs(JSON.stringify({ textSize: 15, links: rules }));
+  recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
+  r.v.action("settings", r.cx);
+  r.v.setPage = "links";
+  r.cx.pending = []; // the folder watch never ends: wait only for what follows
+  return r;
+}
+const settleAll = async (cx) => { for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); } };
+const lastLinks = () => JSON.parse(settingsWrites.at(-1)).links;
+function typeIn(v, k, text, cx) { v.ruleInputs[k].set_value(text); v.ruleInputs[k].handlers.change({}, cx); }
+function done(v) { keepSettings = false; settingsStale = false; delete recordFiles[v.prefsPath()]; }
+
+test("a fresh install has the pull request rule, on; the first write records it, and a file without links has none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  cx.pending = [];
+  try {
+    v.applyPrefs(null);
+    expect(v.linkList.map((r) => [r.name, r.type, r.on, r.why])).toEqual([["Pull request", "pull-request", true, null]]);
+    expect(v.links.length).toBe(1);
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme" };
+    expect(v.linkOne("Merged in #58 today.").md).toContain("https://github.com/acme/exports/pull/58");
+    settingsWrites.length = 0;
+    v.action("textSize:+", cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ name: "Pull request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58.", type: "pull-request" }]);
+    expect(w.textSize).toBe(15);
+    v.applyPrefs(JSON.stringify({ textSize: 14 }));
+    expect(v.linkList).toEqual([]);
+  } finally { done(v); }
+});
+
+test("the switch on a row turns a rule off and on, written to the file; an off rule links nothing and is dimmed with Off", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ ...RULES[0], on: false });
+    expect(JSON.parse(settingsWrites.at(-1)).textSize).toBe(15);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain("Off");
+    expect(v.settingsOpen).toBe(true); // the press stays in the card and opens nothing
+    expect(v.ruleEdit).toBe(null);
+    onOf(c, "th-rule-on-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual(RULES[0]);
+    expect(v.links.map((r) => r.name)).toEqual(["Ticket", "Hash"]);
+  } finally { done(v); }
+});
+
+test("Edit and Delete: icon buttons on every row before its switch, with a tooltip and a spoken label; Delete takes the rule at once, and Undo puts it back where it was", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    let c = cardOf(v);
+    // On every row, not only under the pointer, and the row has no hover handler for them.
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-edit-btn-2", "th-rule-delete-btn-2"]));
+    expect(onOf(c, "th-rule-1", "on_hover")).toBe(null);
+    expect(strsOf(c)).not.toContain("Change");
+    expect(strsOf(c)).not.toContain("Remove");
+    // Name, Edit, Delete, then the switch: the switch stays last, in a 36 by 24 hit area.
+    const ids = idsIn(c);
+    expect(ids.indexOf("th-rule-edit-btn-1")).toBeLessThan(ids.indexOf("th-rule-delete-btn-1"));
+    expect(ids.indexOf("th-rule-delete-btn-1")).toBeLessThan(ids.indexOf("th-rule-on-1"));
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    for (const [id, tip, icon] of [["th-rule-edit-btn-1", "Edit rule", "pencil"], ["th-rule-delete-btn-1", "Delete rule", "trash"]]) {
+      const b = own(id);
+      for (const x of [["size", 24], ["rounded", 5], ["text_color", theme.muted], ["tooltip", tip], ["accessibility_label", tip], ["role", "button"]]) expect(b).toContainEqual(x);
+      expect(b.some((e) => e[0] === "svg" && String(e[1]).endsWith(`/${icon}.svg`))).toBe(true);
+      // Lucide outlines at the mod's 1.5 stroke.
+      expect(readFileSync(new URL(`../mods/agent-threads/${icon}.svg`, import.meta.url), "utf8")).toContain('stroke-width="1.5"');
+    }
+    for (const x of [["w", 36], ["h", 24]]) expect(own("th-rule-on-1")).toContainEqual(x);
+    // Edit opens the rule, as a press on the row does.
+    onOf(c, "th-rule-edit-btn-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    expect(v.linkList.map((r) => r.name)).toEqual(["Hash"]);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([RULES[1]]);
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("Deleted Ticket.");
+    expect(idsIn(c)).toContain("th-rule-undo-line");
+    expect(v.ruleUndo.at).toBe(0); // drawn where the rule was
+    onOf(c, "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+    expect(strsOf(cardOf(v))).not.toContain("Deleted Ticket.");
+    // Undo lasts until the page is left.
+    v.removeRule(1, cx);
+    expect(v.ruleUndo).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.ruleUndo).toBe(null);
+    await settleAll(cx);
+  } finally { done(v); }
+});
+
+// settings-spacing 6: a rule's card 12 px in, its lines 4 px apart, a 14 px type icon 8 px
+// from a 13 px name, readable text muted, cards 8 px apart; nothing pressed under 24 px.
+test("Link rules spacing: 12 px cards, muted lines, a 32 px Undo line with a 24 px Undo, 24 px small buttons", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    let c = cardOf(v);
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    const row = own("th-rule-1");
+    for (const x of [["p", 12], ["gap", 4], ["gap", 8], ["size", 14], ["text_size", 13], ["font_semibold"]]) expect(row).toContainEqual(x);
+    v.removeRule(0, cx);
+    c = cardOf(v);
+    for (const x of [["min_h", 32], ["text_color", theme.muted]]) expect(own("th-rule-undo-line")).toContainEqual(x);
+    expect(own("th-rule-undo")).toContainEqual(["h", 24]);
+    expect(strsOf(c)).toContain("Undo");
+    await settleAll(cx);
+    rec = []; v.miniButton(theme, "x", "Use", () => {}); const m = rec; rec = null;
+    expect(m).toContainEqual(["h", 24]);
+  } finally { done(v); }
+});
+
+test("a press on a row opens the rule in place with its fields; Keep rule writes it, keeping keys this version does not know; Esc and Discard drop the change", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(Object.fromEntries(Object.entries(v.ruleInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Ticket", description: "", pattern: RULES[0].pattern, url: RULES[0].url, example: RULES[0].example });
+    let c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of ["Type", "Ticket key", "Name", "Description", "Finds", "Opens", "Example", "A JavaScript regular expression. Capitals count.", "Reference", "Keep rule", "Discard", "Duplicate", "Delete", "ACME-412", "https://tracker.example/ACME-412"]) expect(s).toContain(x);
+    expect(s).not.toContain("Move up"); // the first rule
+    expect(idsIn(c)).toContain("th-rule-edit-1");
+    expect(idsIn(c)).not.toContain("th-rule-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    // Open goes to the address, Reference to the pattern sheet, with Herdr's URL opener.
+    log = [];
+    onOf(c, "th-rule-open", "on_click")({}, cx);
+    onOf(c, "th-rule-reference", "on_click")({}, cx);
+    expect(log.filter((x) => x[0] === "open_url").map((x) => x[1])).toEqual(["https://tracker.example/ACME-412", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet"]);
+    // A change, kept.
+    typeIn(v, "description", "Our tracker", cx);
+    typeIn(v, "example", "Shipped ACME-7.", cx);
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example/ACME-7");
+    v.ruleInputs.name.handlers.submit({}, cx); // Enter in a field keeps it
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(lastLinks()[0]).toEqual({ name: "Ticket", type: "ticket", description: "Our tracker", pattern: RULES[0].pattern, url: RULES[0].url, example: "Shipped ACME-7.", keepMe: 1 });
+    expect(strsOf(cardOf(v))).toContain("Our tracker");
+    // Esc from a field closes the rule, not the card, and writes nothing.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    typeIn(v, "name", "Changed", cx);
+    v.key(keyEv("escape"), cx);
+    expect([v.ruleEdit, v.settingsOpen, v.fieldFocused]).toEqual([null, true, null]);
+    // Esc with no field focused, and Discard, do the same.
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    v.action("escape", cx);
+    expect([v.ruleEdit, v.settingsOpen]).toEqual([null, true]);
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    c = cardOf(v);
+    onOf(c, "th-rule-discard", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    expect(v.linkList[1].name).toBe("Hash");
+  } finally { done(v); }
+});
+
+test("Add rule: three types, Custom first; a type fills an untouched new rule, and after the first change to Finds, Opens or Example it is only the label", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["New rule, not kept yet", "Custom", "Write it yourself.", "Ticket key", "Pull request", "Links a ticket key such as ACME-412 to its ticket."]));
+    expect(idsIn(c).indexOf("th-rule-new")).toBeGreaterThan(idsIn(c).indexOf("th-rule-2"));
+    expect(v.ruleEdit.draft.type).toBe("custom");
+    expect(strsOf(c)).not.toContain("Duplicate");
+    onOf(c, "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bACME-(\\d+)\\b");
+    expect(v.ruleInputs.name.value()).toBe("Ticket");
+    expect(strsOf(cardOf(v))).toContain("https://tracker.example.com/ACME-412");
+    // The rule above takes the same text first, and the line says so.
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Keep this rule, then Move up to put it above.");
+    onOf(cardOf(v), "th-rule-type-custom", "on_click")({}, cx);
+    expect([v.ruleInputs.pattern.value(), v.ruleInputs.name.value()]).toEqual(["", ""]);
+    // Typed: the three rows fold to one line, and a type no longer fills.
+    typeIn(v, "pattern", "\\bBUG-(\\d+)\\b", cx);
+    c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    onOf(c, "th-rule-type-change", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("The label changes; the fields stay.");
+    onOf(cardOf(v), "th-rule-type-ticket", "on_click")({}, cx);
+    expect(v.ruleInputs.pattern.value()).toBe("\\bBUG-(\\d+)\\b");
+    expect(v.ruleEdit.draft.type).toBe("ticket");
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-type-ticket");
+    typeIn(v, "url", "https://bugs.example/$1", cx);
+    typeIn(v, "name", "Bug", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()[2]).toEqual({ name: "Bug", type: "ticket", pattern: "\\bBUG-(\\d+)\\b", url: "https://bugs.example/$1" });
+    // The description takes 80 characters at most.
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    typeIn(v, "description", "x".repeat(90), cx);
+    expect(v.ruleInputs.description.value().length).toBe(80);
+  } finally { done(v); }
+});
+
+test("a fault shows when typing stops or the field is left, never at a key; once shown it follows each key and goes the moment the rule runs", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-2", "on_click")({}, cx);
+    cx.timers = [];
+    typeIn(v, "pattern", "#(\\d+", cx);
+    let c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    // The result line keeps the last one that worked, dimmed.
+    expect(strsOf(c)).toContain("https://h.example/58");
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at, at + 3)).toContainEqual(["opacity", 0.45]);
+    // A second key restarts the pause: the first timer finds a newer key and does nothing.
+    typeIn(v, "pattern", "#(\\d+x", cx);
+    const [first] = cx.timers;
+    first.fn(cx);
+    expect(v.ruleEdit.shown.pattern).toBe(null);
+    cx.flush(REASON_MS);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    expect(cardOf(v)).toContainEqual(["border_color", theme.blocked]);
+    // Mended: gone at that key, and the result is back at full strength.
+    typeIn(v, "pattern", "#(\\d+)", cx);
+    c = cardOf(v);
+    expect(strsOf(c).some((x) => x.startsWith("Not working"))).toBe(false);
+    const at2 = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-result");
+    expect(c.slice(at2, at2 + 3)).not.toContainEqual(["opacity", 0.45]);
+    // Leaving the field shows it at once.
+    typeIn(v, "url", "ftp://h.example/$1", cx);
+    expect(v.ruleEdit.shown.url).toBe(null);
+    v.ruleInputs.url.handlers.blur({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: url must start with https:// or http:// and a fixed host; placeholders only in the path");
+    // Keep rule does not keep a rule that would not run: it stays open, nothing is written.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).not.toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    // An empty field is not a fault until Keep rule.
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    v.ruleInputs.pattern.handlers.blur({}, cx);
+    cx.flush(REASON_MS);
+    expect(v.ruleEdit.shown).toEqual({ pattern: null, url: null });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit.shown).toEqual({ pattern: "no pattern", url: "no url" });
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["Not working: no pattern", "Not working: no url"]));
+  } finally { done(v); }
+});
+const REASON_MS = 1500;
+
+test("a kept rule that is not working opens with its reason; Move up and Duplicate", async () => {
+  const { v, cx } = await rulesPane([...RULES, { name: "Broken", pattern: "x(", url: "https://x.example/$1" }, { name: "Late", pattern: "ACME-(\\d+)", url: "https://late.example/$1", example: "ACME-9" }]);
+  try {
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern not valid");
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-4", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Ticket is higher in the list and takes this text first. Move up puts this rule above it.");
+    for (let i = 0; i < 3; i++) onOf(cardOf(v), "th-rule-up", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-up");
+    expect(strsOf(cardOf(v)).some((x) => x.includes("takes this text first"))).toBe(false);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Ticket", "Hash", "Broken"]);
+    onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleInputs.name.value()]).toEqual([null, 1, "Late copy"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-change"); // a copy is never refilled by a type
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["Late", "Late copy", "Ticket", "Hash", "Broken"]);
+  } finally { done(v); }
+});
+
+test("no rules: the two types that fill a rule in dashed boxes, and Use opens one filled; a file that does not read as settings cannot be changed here", async () => {
+  const { v, cx } = await rulesPane([]);
+  try {
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Ticket key", "Pull request", "Links a number such as #58 to that pull request in this repository.", "Add rule"]));
+    expect(c).toContainEqual(["border_dashed"]);
+    onOf(c, "th-rule-use-pull-request", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.type).toBe("pull-request");
+    expect(v.ruleInputs.url.value()).toBe("https://github.com/{repo}/pull/$1");
+    expect(strsOf(cardOf(v))).toContain("This session has no repository, so this rule links nothing here.");
+    expect(strsOf(cardOf(v))).not.toContain("Examples, not rules until you keep one");
+    v.closeRule();
+    // A hand edit that does not parse: the rules show, with no switch, no Add rule and no editor.
+    v.applyPrefs(JSON.stringify({ links: RULES }));
+    v.applyPrefs("{ not json");
+    c = cardOf(v);
+    expect(idsIn(c)).not.toContain("th-rule-on-1");
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    expect(strsOf(c)).toContain("The settings file does not read as settings now, so rules change only in the file until it is fixed.");
+    v.openRule(0);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+const ABCD = ["A", "B", "C", "D"].map((n) => ({ name: n, pattern: `\\b${n}-(\\d+)\\b`, url: `https://${n.toLowerCase()}.example/$1` }));
+
+test("an open rule follows its rule when the list changes under it: Keep never writes over another rule", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    // Open C, remove A from its row, keep C: C changes, D stays.
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.removeRule(0, cx);
+    expect(v.ruleEdit.at).toBe(1);
+    typeIn(v, "example", "C-7", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.example ?? null])).toEqual([["B", null], ["C", "C-7"], ["D", null]]);
+    // A hand edit that adds a rule above: the open rule follows it.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...ABCD] }));
+    expect(v.ruleEdit.at).toBe(3);
+    typeIn(v, "name", "C2", cx);
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "B", "C2", "D"]);
+    // A hand edit that changes the open rule: it becomes a new rule where it was, typed text kept.
+    v.applyPrefs(JSON.stringify({ links: ABCD }));
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    typeIn(v, "example", "C-9", cx);
+    v.applyPrefs(JSON.stringify({ links: [ABCD[0], ABCD[1], { ...ABCD[2], url: "https://c.example/x/$1" }, ABCD[3]] }));
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.ruleEdit.lost]).toEqual([null, 2, true]);
+    expect(strsOf(cardOf(v))).toContain("This rule changed in the file or was removed. Keep rule adds it as a new rule.");
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => [r.name, r.url])).toEqual([["A", ABCD[0].url], ["B", ABCD[1].url], ["C", ABCD[2].url], ["C", "https://c.example/x/$1"], ["D", ABCD[3].url]]);
+  } finally { done(v); }
+});
+
+test("Undo puts a removed rule back beside the same neighbor, whatever was added meanwhile", async () => {
+  const { v, cx } = await rulesPane(ABCD);
+  try {
+    v.removeRule(2, cx); // C, after B
+    await settleAll(cx);
+    // A rule kept above it, here and by hand.
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    v.duplicateRule();
+    v.keepRule(cx);
+    await settleAll(cx);
+    v.applyPrefs(JSON.stringify({ links: [{ name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "D"]);
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name)).toEqual(["X", "A", "A copy", "B", "C", "D"]);
+    // The first rule removed goes back before the rule that followed it.
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    expect(lastLinks()[0].name).toBe("A");
+    v.applyPrefs(JSON.stringify({ links: [{ name: "Y", pattern: "\\bY-(\\d+)\\b", url: "https://y.example/$1" }, ...lastLinks()] }));
+    recordFiles[v.prefsPath()] = v.prefsRaw;
+    v.undoRemove(cx);
+    await settleAll(cx);
+    expect(lastLinks().map((r) => r.name).slice(0, 3)).toEqual(["Y", "X", "A"]);
+  } finally { done(v); }
+});
+
+const NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+
+// Review of PR 97, M2: a hand edit that makes "links" a string is never written over.
+test("Undo, Delete and the switch write nothing while \"links\" in the file is not a list, and the card says why", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(strsOf(cardOf(v))).toContain("Deleted Ticket.");
+    // In an editor "links" becomes the string "oops", and the pane reads it.
+    const oops = `${JSON.stringify({ textSize: 15, links: "oops" }, null, 2)}\n`;
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain(NOT_LIST);
+    expect(strsOf(c)).toContain("\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed.");
+    expect(v.ruleUndo).not.toBe(null); // Undo waits for the file to be fixed
+    // Delete and the switch are not drawn now; called anyway, they write nothing and say why.
+    expect(idsIn(c)).not.toContain("th-rule-delete-btn-2");
+    expect(idsIn(c)).not.toContain("th-rule-on-2");
+    for (const press of [() => v.removeRule(0, cx), () => v.toggleRule(0, cx)]) {
+      v.prefsError = null;
+      press();
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(v.prefsError).toBe(NOT_LIST);
+    }
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    // The file fixed: Undo puts the rule back.
+    const fixed = JSON.stringify({ textSize: 15, links: [RULES[1]] });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    expect(strsOf(cardOf(v))).not.toContain(NOT_LIST);
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+  } finally { done(v); }
+});
+
+test("a press that races the hand edit to a non-list \"links\" (the pane has not read it yet) writes nothing and says why", async () => {
+  for (const which of ["delete", "switch", "undo"]) {
+    const { v, cx } = await rulesPane();
+    try {
+      settingsStale = true;
+      if (which === "undo") { v.removeRule(0, cx); await settleAll(cx); }
+      const before = v.prefsRaw;
+      const oops = JSON.stringify({ textSize: 15, links: "oops" });
+      recordFiles[v.prefsPath()] = oops; // on disk, not read yet
+      settingsWrites.length = 0;
+      const c = cardOf(v);
+      expect(v.prefsRaw).toBe(before);
+      if (which === "delete") onOf(c, "th-rule-delete-btn-1", "on_click")({}, cx);
+      if (which === "switch") onOf(c, "th-rule-on-1", "on_click")({}, cx);
+      if (which === "undo") onOf(c, "th-rule-undo", "on_click")({}, cx);
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(recordFiles[v.prefsPath()]).toBe(oops);
+      // The pane shows the file as it is, and the card says why.
+      expect(v.prefsRaw).toBe(oops);
+      expect(v.linkList).toEqual([]);
+      expect(strsOf(cardOf(v))).toContain(NOT_LIST);
+    } finally { done(v); }
+  }
+});
+
+// Review of PR 97, L1: the card's change to the rules never replaces a newer list in the file.
+test("a rule change whose save finds the file's rules changed writes nothing over them; a change to other keys still merges", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    // An editor adds a rule in the same moment as the switch is pressed.
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited;
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]); // shown at once
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => [r.name, r.on])).toEqual([["X", true], ["Ticket", true], ["Hash", true]]);
+    expect(strsOf(cardOf(v))).toContain(MOVED);
+    // From the list it now shows, the same press is written.
+    onOf(cardOf(v), "th-rule-on-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, { ...RULES[0], on: false }, RULES[1]]);
+    expect(strsOf(cardOf(v))).not.toContain(MOVED);
+    // An editor changes only the text size: the rules match, so the change is written on top.
+    const sized = JSON.stringify({ ...JSON.parse(recordFiles[v.prefsPath()]), textSize: 17 });
+    recordFiles[v.prefsPath()] = sized;
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ ...RULES[0], on: false }, RULES[1]]);
+    expect(w.textSize).toBe(17);
+    expect(v.prefsError).toBe(null);
+  } finally { done(v); }
+});
+
+// Second review of PR 97, N1: a Delete whose save is refused leaves no Undo behind, so Undo
+// cannot write the rule a second time ("X, Ticket, Ticket, Hash").
+test("a Delete that is not saved because the file's rules changed offers no Undo", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Delete is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleUndo).toBe(null);
+    const s = strsOf(cardOf(v));
+    expect(s).toContain(MOVED);
+    expect(s.some((x) => String(x).startsWith("Deleted "))).toBe(false);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-undo");
+    // A Delete that is saved still offers Undo, and Undo puts the rule back once.
+    settingsStale = false;
+    onOf(cardOf(v), "th-rule-delete-btn-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, RULES[1]]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-undo");
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, ...RULES]);
+  } finally { done(v); }
+});
+
+// Review of PR 97, L2: the open rule's example follows the session's repository.
+test("the open rule's example is worked out again when the session's repository changes", async () => {
+  const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
+  const { v, cx } = await rulesPane([PR]);
+  try {
+    v.remote = { key: "t4|null", repo: "acme/exports", owner: "acme", host: "github.com", why: "test" };
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    // Another session, in another repository: no key is typed in the rule.
+    v.remote = { ...v.remote, repo: "acme/billing" };
+    frame(v, cx);
+    let s = strsOf(cardOf(v));
+    expect(s).toContain("https://github.com/acme/billing/pull/58");
+    expect(s).not.toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, repo: null, owner: null, why: "no git remote origin" };
+    frame(v, cx);
+    s = strsOf(cardOf(v));
+    expect(s).toContain("This session has no repository, so this rule links nothing here.");
+    expect(v.ruleEdit.draft.example).toBe("Merged in #58.");
+  } finally { done(v); }
+});
+
+test("the settings card stays open and as it was when the pane's session changes", async () => {
+  const f = sharedFolder();
+  f.record(5101, SESSION_A);
+  f.record(5102, SESSION_B);
+  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  const { v, cx } = sharedState(f, "t3c");
+  try {
+    await looked(v);
+    expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+    v.action("settings", cx);
+    v.setTab = "general";
+    v.setPage = "links";
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "name", "Pull", cx);
+    const before = idsIn(cardOf(v));
+    // The terminal's agent moves to session B (a /clear or a resume).
+    f.record(5101, SESSION_B);
+    v.resolve(cx);
+    await looked(v);
+    expect(v.current().file).toEndWith(`${SESSION_B}.jsonl`);
+    expect(shownPrompts(v)).toContain("Prompt in session B");
+    expect([v.settingsOpen, v.setTab, v.setPage]).toEqual([true, "general", "links"]);
+    expect(v.ruleEdit.draft.name).toBe("Pull");
+    const c = frame(v, cx);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-set-card", "th-rule-keep"]));
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Still closes as before.
+    v.key(keyEv("escape"), cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    hcBy = {};
+    recordFiles = {};
+  }
+});
+
+// Herdr tells a mod pane it lost focus only through its pane's focused flag (read in react);
+// there is no blur event for the pane in the API or the stubs.
+test("the settings card stays open and as it was when the pane loses focus, and the keys work when it comes back", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    state.panes[1].focused = true;
+    v.react(cx);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const before = idsIn(cardOf(v));
+    // Focus goes to the terminal's pane.
+    state.panes[1].focused = false;
+    state.panes[0].focused = true;
+    v.react(cx);
+    const c = frame(v, cx);
+    expect([v.settingsOpen, v.setPage, v.ruleEdit?.at]).toEqual([true, "links", 0]);
+    expect(v.ruleEdit.draft.example).toBe("Fixed in ACME-7.");
+    expect(idsIn(c)).toContain("th-set-card");
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Back: the pane takes the keyboard, and Esc closes the rule, then the card.
+    state.panes[0].focused = false;
+    state.panes[1].focused = true;
+    v.react(cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(v.settingsOpen).toBe(true);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    delete state.panes[0].focused;
+    delete state.panes[1].focused;
+    done(v);
+  }
+});
+
+test("a rule whose address is on github.com links only when the session's origin is on GitHub; elsewhere it says why", async () => {
+  const { v, cx } = await rulesPane([
+    { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." },
+    { name: "MR", pattern: "!(\\d+)\\b", url: "https://gitlab.com/{repo}/-/merge_requests/$1", example: "See !12." },
+  ]);
+  try {
+    v.remote = { ...v.remote, repo: "acme/exports", owner: "acme", host: "gitlab.com" };
+    expect(v.linkOne("Merged in #58 and !12.").md).not.toContain("github.com");
+    expect(v.linkOne("Merged in #58 and !12.").md).toContain("https://gitlab.com/acme/exports/-/merge_requests/12");
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("This repository is on gitlab.com, not GitHub, so this rule links nothing here.");
+    v.closeRule();
+    v.remote = { ...v.remote, host: "github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, host: "ssh.github.com" };
+    expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+  } finally { done(v); }
 });
