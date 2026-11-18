@@ -5196,6 +5196,29 @@ test("the image viewer: a fenced code block in the reply gets the language, a Co
   expect(g.galleryParts()).toBe(6);
 });
 
+// Issue 117: a long code line ran past the panel's right edge. The viewer's code wraps as
+// the open turn's does: the editor's soft_wrap is on and the box is as tall as the wrapped
+// rows at the panel's text width (452 px at 1460 wide: 58 characters a row).
+test("the image viewer: a long code line in the reply wraps inside the panel, and the box has room for its rows", () => {
+  editors.length = 0;
+  const code = "@media (min-width: 640px) {\n  .filters { display: flex; flex-wrap: nowrap; overflow-x: auto; }\n}";
+  const md = `The fix:\n\n\`\`\`css\n${code}\n\`\`\``;
+  const { calls, size } = viewer({ turn: { ...VIEW_TURN, md } });
+  size(1460, 1150);
+  expect(editors.at(-1).opts).toMatchObject({ value: code, readonly: true, soft_wrap: true });
+  // Three lines, the middle one two rows: four rows of 20 px and the 16 px inset.
+  const box = afterId(calls(), "th-gallery-code-copy-1");
+  expect(box.some(([n, x]) => n === "h" && x === 4 * 20 + 16)).toBe(true);
+  // A plain block (no editor) wraps too, and scrolls only down.
+  const plain = viewer({ turn: { ...VIEW_TURN, md } });
+  plain.g.gal.code[1].st = false;
+  plain.size(1460, 1150);
+  const drawn = afterId(plain.calls(), "th-gallery-code-1");
+  expect(drawn.some(([n]) => n === "whitespace_nowrap")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_scroll")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_y_scroll")).toBe(true);
+});
+
 test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {
   const off = viewer({ panel: false });
   off.size(1600, 1000);
