@@ -8626,6 +8626,19 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
 });
 const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
 
+test("Reset also covers Agent messages on the rail: switched off alone, Reset is lit and turns it back on", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.action("settings", cx);
+  expect(v.prefsDiffer()).toBe(false);
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(false);
+  expect(v.prefsDiffer()).toBe(true);
+  v.action("resetSettings", cx);
+  expect(v.prefs.agentRail).toBe(true);
+  expect(v.prefsDiffer()).toBe(false);
+  await new Promise((r) => setTimeout(r, 20));
+});
+
 test("the file: its path with Copy path, which says Copied in its own place with no toast; no Open, which the mod has no way to do", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.action("settings", cx);
