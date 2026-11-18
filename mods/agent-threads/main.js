@@ -65,6 +65,8 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
+import { VERSION, versionLine } from "./version.js";
+import { BUILD } from "./build.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -191,7 +193,7 @@ const CARD_SECTIONS = [
   ["Agent messages", ["agents", "agentRail", "agentColor"]],
   ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
-  ["File", ["file"]],
+  ["File", ["file", "version"]],
 ];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
@@ -795,6 +797,7 @@ export default class Threads extends View {
     this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
+    this.build = BUILD; // build.js, what install.sh found (version.js)
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
     this.senders = []; // compiled sender rules (settings.js parseSenders)
@@ -6161,6 +6164,7 @@ export default class Threads extends View {
           .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
         .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
+      version: () => [this.versionRow(t)],
     };
     return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
   }
@@ -6229,6 +6233,14 @@ export default class Threads extends View {
       .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
         .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
       .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
+  }
+
+  // Under the file: the mod's name and version (version.js), with the commit install.sh
+  // found. A plain line, not a control; a copy without a build says the commit is not known,
+  // and its tooltip says why.
+  versionRow(t) {
+    const line = versionLine(VERSION, this.build);
+    return div().id("th-set-version").text_size(11.5).text_color(t.muted).when(Boolean(line.tip), (el) => el.tooltip(line.tip)).child(line.text);
   }
 
   // The quote key field's note: a letter that cannot be the quote key, and why it stays.

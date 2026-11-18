@@ -8750,7 +8750,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color"]],
     ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
     ["Links and keys", ["Link rules", "Quote key"]],
-    ["File", ["Copy path"]],
+    ["File", ["Copy path", "Agent Threads 1.0.0 (commit not known)"]],
   ];
   const heads = PAGE.map(([name]) => gs.indexOf(name));
   expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
@@ -8868,6 +8868,30 @@ test("the file: its path with Copy path, which says Copied in its own place with
   expect(strsOf(cardOf(v))).toContain("Copy path");
   expect(log.filter((x) => x[0] === "open")).toEqual([]);
   expect(v.action("openSettingsFile", cx)).toBe(false);
+});
+
+test("under the file: the mod's name and version as a plain line, with the commit when install.sh found one; not a control", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const { VERSION } = await import("../mods/agent-threads/version.js");
+  v.action("settings", cx);
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  // The repo's own build.js, or a copy made without install.sh: the commit is not known, and
+  // the tooltip says what that means. (The section's heading is recorded after its rows.)
+  let line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION} (commit not known)`);
+  expect(tooltips(v, cx)).toContain("Copied without ./install.sh, so the commit is not known: this release or a later commit on main.");
+  expect(line.some((e) => e[0] === "on_click" || e[0] === "on_mouse_down")).toBe(false);
+  // Installed from the release's tag, then from three commits after it with a change.
+  v.build = `v${VERSION}-0-gd7c9cfb`;
+  line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION}`);
+  v.build = `v${VERSION}-3-gabc1234-dirty`;
+  expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`);
+  // It sits after the path row, and Reset stays last.
+  const gs = strsOf(cardOf(v));
+  expect(gs.indexOf("Copy path")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`));
+  expect(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`)).toBeLessThan(gs.indexOf("Reset to defaults"));
+  draw(v, cx);
 });
 
 test("a field that leaves the screen gives the keyboard back: the Link rules row, Back, or a command, after typing in the quote key field", async () => {
