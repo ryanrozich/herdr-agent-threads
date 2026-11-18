@@ -57,7 +57,7 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
+  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
@@ -232,6 +232,11 @@ const PROMPT_LINES = 3; // in the open card's YOU block (collapsed rows use the 
 const PROMPT_CHARS = 600;
 const FULL_PROMPT_CHARS = 200000; // of a prompt with Show all; a note says what is left out
 const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU block
+// The line of links under a coloured bubble (issue 116): its gap, line height and the width of
+// a character of its 12 px text, for the estimate the probe then measures.
+const YOU_LINK_GAP = 4;
+const YOU_LINK_LINE = 18;
+const YOU_LINK_CHAR = 6.6;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
@@ -7148,7 +7153,12 @@ export default class Threads extends View {
     // until Show all (r.all) draws it whole at its measured height, with Show less.
     const long = raw >= YOU_MAX;
     const capped = long && !r.all;
-    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long };
+    // A coloured bubble draws the prompt as plain text, so the links its rules make go on a
+    // line of their own under the bubble (youLinks), each once (issue 116).
+    const lk = plain && this.links.length ? promptLinks(c.text, this.links, this.linkCtx()) : [];
+    const linkMd = lk.length ? lk.map((p) => `[${escapeMd(p.t)}](${p.url})`).join(" \u00b7 ") : null;
+    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * Math.max(1, Math.ceil((lk.reduce((n, p) => n + p.t.length + 3, 0) * YOU_LINK_CHAR) / Math.max(1, bw))) : 0;
+    const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long, linkMd, linkH };
     r.turn.youMemo = { sig, v };
     return v;
   }
@@ -7160,7 +7170,8 @@ export default class Threads extends View {
     const chip = r.turn.cmd ? this.rt().line + 4 : 0;
     const label = r.turn.agent ? 16 + 4 : 0;
     // 8 padding, the sender (an agent's), the text, Show all or Show less, 8 padding.
-    return 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8;
+    // Then the line of links under a coloured bubble, if its rules made any.
+    return 8 + label + chip + (y.text ? y.bodyH : 0) + (clipped || canLess ? 22 : 0) + 8 + y.linkH;
   }
 
   // The caption under an open turn's line: what the reply does not show, [icon, text]. The
@@ -8238,7 +8249,7 @@ export default class Threads extends View {
         // The message in its bubble, on the right (an agent's outlined, on the left, under its
         // sender), as wide as its widest line.
         const agent = turn.agent;
-        return h_flex().w_full().when(!agent, (el) => el.justify_end())
+        const bubbleRow = h_flex().w_full().when(!agent, (el) => el.justify_end())
           .child(this.readFont(v_flex().flex_none().w(y.bw).px(ROW.BUBBLE_PX).py(8).gap(4))
             .bg(style.fill).when(style.outline, (el) => el.border_1().border_color(t.border))
             .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
@@ -8255,6 +8266,13 @@ export default class Threads extends View {
               .child(y.capped ? "Show all" : "Show less").child(svg(ICON(y.capped ? "chevron-down" : "chevron-up")).size(12))))
             .when(canLess, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child("Show less").child(svg(ICON("chevron-up")).size(12)))));
+        if (!y.linkMd) return bubbleRow;
+        // Under a coloured bubble, the links its rules made, as wide as the bubble and on its
+        // side, in the theme's text and link colours (issue 116).
+        return v_flex().w_full().child(bubbleRow)
+          .child(h_flex().w_full().pt(YOU_LINK_GAP).when(!agent, (el) => el.justify_end())
+            .child(div().flex_none().w(y.bw).px(ROW.BUBBLE_PX).text_size(12).line_height(`${YOU_LINK_LINE}px`)
+              .child(this.mdView(tv(`th-ylk-${r.key}`), y.linkMd, false))));
       }
       case "ustrip": return this.reveal(t, div().id(`ush:${tkey}`).pt(ROW.GAP)).child(this.youStrip(t, turn, tkey, this.sel === tkey, "all"));
       case "rhead":

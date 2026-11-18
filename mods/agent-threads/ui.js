@@ -1412,6 +1412,33 @@ export function linkify(md, rules, ctx = {}, { maxChars = 20000, maxMatches = 25
 // a code block; each line break is a hard break; bare http(s) URLs become autolinks; link
 // rule matches become [text](url). Reads at most max * 8 characters (32,000 by default);
 // when the prompt is longer, a last line says how many characters are not shown.
+// The links the rules make in a prompt, each once, for a coloured bubble, where the prompt is
+// plain text in the bubble's ink (TextView draws only in the theme's text colour) and the links
+// go on a line of their own under it (issue 116). Code spans and fenced code get none, as in
+// promptMd. At most `max`, within promptMd's budgets.
+export function promptLinks(text, rules, ctx = {}, max = 8) {
+  const out = [];
+  if (!rules?.length || !text) return out;
+  const budget = { chars: 20000, matches: 25 };
+  const seen = new Set();
+  let fence = false;
+  for (const line of String(text).split("\n")) {
+    if (out.length >= max || budget.chars <= 0) break;
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; continue; }
+    if (fence) continue;
+    for (const tok of inlineTokens(line, { markdown: false })) {
+      if (tok.kind !== "text") { budget.chars -= tok.t.length; continue; }
+      for (const p of linkPieces(tok.t, rules, ctx, budget)) {
+        if (!p.url || seen.has(p.url)) continue;
+        seen.add(p.url);
+        out.push({ t: p.t, url: p.url });
+        if (out.length >= max) return out;
+      }
+    }
+  }
+  return out;
+}
+
 // Returns { md, quotes, code, links, cut }: cut is the characters left out.
 export function promptMd(text, { links: rules = [], repo = null, owner = null, host = null, max = 4000 } = {}) {
   const ctx = { repo, owner, host };
