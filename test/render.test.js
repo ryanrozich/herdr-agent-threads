@@ -10059,3 +10059,90 @@ test("a rule whose address is on github.com links only when the session's origin
     expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
   } finally { done(v); }
 });
+
+
+// Issue 131, the owner's third report: in an open turn whose reply ends in a numbered list, above
+// its LATEST UPDATE, a press in the list's fourth item jumped the list so the item went above the
+// top of the pane. The pane was following the newest turn, a prompt just sent, and its reply came
+// in during the drag. A drag that selects text left following on, so the growing reply (and then
+// a new turn) pulled the view to the bottom under the pointer.
+function selectFixture() {
+  const file = fixture("--only", "1", "--latest");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const reply = "Here is where things stand.\n\n**Waiting on you:**\n\n1. The staging login: press Enter, then approve it.\n2. The chart colours: pick one of the three.\n3. A word on the cache change.\n4. The old `acme-web-v1` folder: keep it or remove it.";
+  const update = "The nightly export ran clean and stays on.\n\nTwo of the four changes are in. The other two follow, then the docs.\n\nThe staging login still waits for you.";
+  for (const j of lines) {
+    const c = j.message?.content;
+    if (j.type !== "assistant" || !Array.isArray(c)) continue;
+    for (const b of c) {
+      if (b.type !== "text") continue;
+      if (b.text.startsWith("Started the export")) b.text = reply;
+      else if (b.text.startsWith("The export finished")) b.text = update;
+    }
+  }
+  const human = lines.find((j) => j.type === "user" && j.origin?.kind === "human");
+  const said = lines.findLast((j) => j.type === "assistant" && j.message?.content?.some?.((b) => b.type === "text"));
+  const last = lines.findLast((j) => j.uuid);
+  const id = (n) => `00000000-0000-4000-9000-0000000009${String(n).padStart(2, "0")}`;
+  const next = { ...human, promptId: id(1), uuid: id(2), parentUuid: last.uuid, timestamp: "2026-11-01T09:25:00.000Z", turnPosition: { promptIndex: 3, turnIndex: 4 }, message: { role: "user", content: "Merge the cache change when it is ready" } };
+  const text = (n, t, at) => ({ ...said, uuid: id(n), parentUuid: id(n - 1), timestamp: at, requestId: `req_9${n}`, message: { ...said.message, id: `msg_9${n}`, stop_reason: null, content: [{ type: "text", text: t }] } });
+  const body = lines.filter((j) => j.type !== "last-prompt");
+  writeFileSync(file, `${[...body, next].map((j) => JSON.stringify(j)).join("\n")}\n`);
+  const grow = `${JSON.stringify(text(3, "Checking the cache change now. The tests are running.", "2026-11-01T09:25:20.000Z"))}\n`;
+  return { file, grow };
+}
+
+test("a drag that selects text in an open turn stops following: the newest reply growing under it does not move the list (issue 131)", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, grow } = selectFixture();
+  const { v, cx } = await pane(file);
+  const turns = v.current().turns;
+  expect(turns.length).toBe(3);
+  const t = turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `0:${t.n}`;
+  expect(v.replyText(t)).toContain("4. The old `acme-web-v1` folder");
+  expect(t.latest.split("\n\n").length).toBe(3);
+  v.open = new Set([key]);
+  expect(v.follow).toBe(true);
+  atBottom(v, cx);
+  const md = v.rows().find((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`));
+  expect(md).toBeTruthy();
+  expect(v.rows().some((r) => r.kind === "latest" && r.key === `lt:${key}`)).toBe(true);
+  // The frames so far asked for the bottom (following, on load): those scrolls run first.
+  cx.flush();
+  const scrolls = [];
+  v.scroll = { scroll_to_bottom() { scrolls.push("bottom"); }, scroll_to_item(i, how) { scrolls.push([i, how]); } };
+  // The press in item 4 and a drag along it, past DRAG_SLOP. The release has not come yet.
+  const calls = frame(v, cx);
+  const ev = (p) => ({ position: p, local_position: p, bounds: { width: v.width, height: 800 }, modifiers: {} });
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  for (let i = 1; i <= 6; i++) handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: 120 + 30 * i, y: 300 }), cx);
+  expect(v.selectGesture()).toBe(true);
+  // The newest turn's reply comes in during the drag.
+  appendFileSync(file, grow);
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.at(-1).reply ?? v.replyText(v.current().turns.at(-1))).toContain("The tests are running");
+  draw(v, cx);
+  cx.flush();
+  expect(v.toBottom).toBe(false);
+  expect(v.follow).toBe(false);
+  expect(scrolls).not.toContain("bottom");
+  // The release lands on the reply: the open turn is selected and stays where it is.
+  v.click(md.key, cx);
+  expect(v.sel).toBe(key);
+  expect(v.open.has(key)).toBe(true);
+  // A double press (a word) stops following straight away, before any move.
+  v.follow = true;
+  atBottom(v, cx);
+  const calls2 = frame(v, cx);
+  handlerAfterId(calls2, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 2 }, cx);
+  expect(v.follow).toBe(false);
+  // A press that does not move is not a selection: following stays as it was until the click.
+  v.follow = true;
+  atBottom(v, cx);
+  const calls3 = frame(v, cx);
+  handlerAfterId(calls3, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  handlerAfterId(calls3, "threads-body", "on_mouse_move")(ev({ x: 121, y: 300 }), cx);
+  expect(v.follow).toBe(true);
+});

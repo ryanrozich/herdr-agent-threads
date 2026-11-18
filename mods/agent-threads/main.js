@@ -4024,7 +4024,18 @@ export default class Threads extends View {
   notePointer(at, cx) {
     if (!this.pressAt || !at) return;
     this.pressMoved = Math.max(this.pressMoved ?? 0, Math.hypot(at.x - this.pressAt.x, at.y - this.pressAt.y));
-    if (cx && this.selectGesture()) this.liftFill(this.sel, cx);
+    if (cx && this.selectGesture()) { this.holdForSelect(); this.liftFill(this.sel, cx); }
+  }
+  // Selecting text is reading: following stops, as a click on a turn stops it (toggle). Left on,
+  // the newest reply growing during the drag, or a new turn, pulled the view to the bottom and
+  // carried the text under the pointer off the top of the pane (issue 131). Scrolling back down
+  // to the end follows again (stickCheck).
+  holdForSelect() {
+    if (!this.follow && !this.toBottom) return;
+    this.follow = false;
+    this.toBottom = false;
+    this.pinningUntil = 0;
+    this.stickStep = null;
   }
   // Herdr paints a text selection under the text in the theme's selection colour, which a
   // mod cannot change. On the selected turn's fill it is hard to see (graphite: #394454 on
@@ -4742,7 +4753,8 @@ export default class Threads extends View {
     // Tests only: "debugWidth:240" lays the pane out for that width.
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
-    if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
+    // What a drag does once it passes DRAG_SLOP, for the rig, which has no pointer.
+    if (this.debug && name === "debugLift") { this.holdForSelect(); this.liftFill(this.sel); cx?.notify(); return true; }
     // Tests only: "debugRailJump:3" is a click on the turn #3 tick (railJump), and reports
     // the tick's height in px (railJumpAt) for the rig to compare with where the turn lands.
     if (this.debug && name.startsWith("debugRailJump:")) {
@@ -6765,7 +6777,7 @@ export default class Threads extends View {
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
         // A double or triple press selects a word or a paragraph straight away.
-        if (this.pressCount > 1) this.liftFill(this.sel, cx);
+        if (this.pressCount > 1) { this.holdForSelect(); this.liftFill(this.sel, cx); }
         this.notePress(cx);
       })
       .when(strip, (el) => el.child(h_flex().id("th-day-strip").h(DAY_STRIP).flex_none().w_full().justify_center().items_center().bg(t.background)
