@@ -571,6 +571,96 @@ test("an agent turn whose reply is shared with the person's prompt stays hidden:
   expect(v.counts()).toMatchObject({ foldedAll: 0, hiddenAll: 1 });
 });
 
+// Sender rules (settings.json senders): typed prompts that are really agents' messages.
+// Made-up names and text.
+const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
+const FROM = "From release-checker: two links in the changelog are dead";
+const SENDERS = { senders: [{ name: "Hourly report", prefix: "{name} hourly" }, { prefix: "From {name}:" }] };
+const senderEvents = () => [
+  { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+  // The hourly report, with a reply of its own: folded once a rule marks it.
+  { k: "p", o: "human", t: HOURLY, ts: at(2) }, { k: "t", t: "Noted, nothing to do." }, { k: "d", ms: 800, ts: at(3) },
+  // The From message, with no reply: hidden once a rule marks it.
+  { k: "p", o: "human", t: FROM, ts: at(4) }, { k: "d", ms: 200, ts: at(5) },
+];
+const tooltips = (v, cx) => { rec = []; v.render(cx); const out = rec.filter(([n]) => n === "tooltip").map(([, x]) => x); rec = null; return out; };
+
+test("with no sender rules nothing changes: typed prompts stay the person's", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.applyPrefs("{}");
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(v.rows().some((r) => r.kind === "afold")).toBe(false);
+  expect(v.current().turns.every((t) => !t.agent)).toBe(true);
+  expect(v.counts()).toMatchObject({ agentAll: 0, foldedAll: 0, hiddenAll: 0 });
+  expect(v.settingsLine()).toBe("Link rules · 0 · Quote key · q");
+  expect(v.sendersVer).toBe(0);
+});
+
+test("a typed prompt a sender rule matches folds, hides and counts as an agent message, and the rule is named", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  const ver = v.current().version;
+  // Rules arrive after the rows were built: the turns are marked again and the rows follow.
+  v.applyPrefs(JSON.stringify(SENDERS));
+  expect(v.current().version).toBe(ver + 1);
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2"]);
+  const rows = v.rows();
+  const i = rows.findIndex((r) => r.kind === "turn" && r.key === "0:2");
+  expect(rows[i - 1]).toMatchObject({ kind: "afold", key: "af:0:2", fold: "folded" });
+  const detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · agent message rule1"))).toBe(true);
+  expect(v.counts()).toMatchObject({ agentAll: 2, foldedAll: 1, hiddenAll: 1 });
+  expect(v.headerButtons().find((b) => b[0] === "th-agents")[2]).toBe("Show agent messages (1 folded, 1 hidden) (a)");
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 · Quote key · q");
+  // Which rule: the folded line's tooltip names it.
+  expect(v.ruleTip(v.current().turns[1])).toBe("Marked by sender rule 1 · Hourly report");
+  expect(tooltips(v, cx)).toContain("Marked by sender rule 1 · Hourly report");
+  // Shown whole (a), the sender line over the message carries the same tooltip.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.includes("agent:peer:release-checker"))).toBe(true);
+  expect(tooltips(v, cx)).toContain("Marked by sender rule 2 · From {name}:");
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // In Pinned: a pinned rule-marked turn carries its sender like any agent message.
+  v.sel = "0:2";
+  v.action("pin", cx);
+  v.setView("pinned");
+  rec = [];
+  v.render(cx);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(v.rows().find((r) => r.key === "0:2")?.turn.agent).toBe(true);
+  expect(kids).toContain("build-bot · agent message");
+  v.setView("all");
+  // The rules removed: every turn is the person's again, with no stale row kept.
+  v.applyPrefs("{}");
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect(v.rows().some((r) => r.kind === "afold")).toBe(false);
+  expect(v.counts()).toMatchObject({ agentAll: 0, foldedAll: 0, hiddenAll: 0 });
+  expect(v.shape(v.current().turns[1]).blank).toBeFalsy();
+});
+
+test("a sender rule that is not valid shows a note in the panel and is ignored", async () => {
+  const { v, cx } = await scripted(senderEvents());
+  v.applyPrefs(JSON.stringify({ senders: [{ pattern: "^(?<sender>(a+)+)!" }, { pattern: "^From (\\w+):" }] }));
+  expect(v.prefsNotes).toEqual(["Sender rule 1: nested quantifier, as in (a+)+", "Sender rule 2: pattern has no (?<sender>...) group"]);
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not valid) · Quote key · q");
+  expect(v.current().turns.every((t) => !t.agent)).toBe(true);
+  v.settingsOpen = true;
+  rec = [];
+  v.render(cx);
+  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
+  rec = null;
+  expect(kids).toContain("Sender rule 1: nested quantifier, as in (a+)+");
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+});
+
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "First question", ts: at(0) },

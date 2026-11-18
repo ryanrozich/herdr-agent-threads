@@ -28,7 +28,8 @@
 // default); i in the viewer shows or hides it, and the viewer writes the choice here.
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
-// terminal's git remote). No link rules ship.
+// terminal's git remote). No link rules ship. senders: rules that mark a typed prompt as an
+// agent message and name its sender (parseSenders). No sender rules ship.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -86,7 +87,7 @@ export function parseSettings(text) {
   };
 }
 
-// ---- keys the panel reads but never rewrites: quoteKey and links ----
+// ---- keys the panel reads but never rewrites: quoteKey, links and senders ----
 // They stay out of the values above, so a save made from the panel (which writes
 // {...file, ...values}) keeps them exactly as they were written, even mid-edit.
 
@@ -136,6 +137,41 @@ export function templateHost(url) {
   return m[1].toLowerCase();
 }
 
+// A rule's pattern compiled with flags, or why it is refused: over 200 characters, a
+// backreference, a nested quantifier or an alternation under a quantifier (riskyShape), not
+// valid, or matching empty text. { re } or { why }.
+function patternShape(pattern, flags) {
+  if (pattern.length > 200) return { why: "pattern over 200 characters" };
+  if (/\\[1-9]|\\k</.test(pattern)) return { why: "backreferences are not allowed" };
+  const risky = riskyShape(pattern);
+  if (risky) return { why: risky };
+  let re;
+  try { re = new RegExp(pattern, flags); } catch { return { why: "pattern not valid" }; }
+  for (const probe of ["", "a", "a b", "#1", " "]) {
+    re.lastIndex = 0;
+    const m = re.exec(probe);
+    if (m && m[0] === "") return { why: "pattern matches empty text" };
+  }
+  return { re };
+}
+
+// Hostile probes of growing length, two characters at a time, stopping at the first one
+// over 5 ms: a pattern whose time grows exponentially is caught at a length where one
+// probe still costs only a few times the last (a long first probe would hang on it).
+// Why the pattern is refused, or null.
+function patternSlow(re, pattern) {
+  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
+  for (let len = 12; len <= 32; len += 2) {
+    for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
+      const t0 = now();
+      re.lastIndex = 0;
+      re.exec(probe);
+      if (now() - t0 > 5) return "too slow on a short test text; disabled";
+    }
+  }
+  return null;
+}
+
 // links: [{ name, pattern, url }] → { rules, notes }. A rule is dropped, with a note, when
 // it has no pattern or URL, the pattern is over 200 characters, does not compile, matches
 // the empty string, has a nested quantifier, an alternation under a quantifier or a
@@ -154,46 +190,79 @@ export function parseLinks(raw) {
     const { pattern, url } = r;
     if (typeof pattern !== "string" || !pattern) return no("no pattern");
     if (typeof url !== "string" || !url) return no("no url");
-    if (pattern.length > 200) return no("pattern over 200 characters");
-    if (/\\[1-9]|\\k</.test(pattern)) return no("backreferences are not allowed");
-    const risky = riskyShape(pattern);
-    if (risky) return no(risky);
-    let re;
-    try { re = new RegExp(pattern, "g"); } catch { return no("pattern not valid"); }
-    for (const probe of ["", "a", "a b", "#1", " "]) {
-      re.lastIndex = 0;
-      const m = re.exec(probe);
-      if (m && m[0] === "") return no("pattern matches empty text");
-    }
+    const shape = patternShape(pattern, "g");
+    if (shape.why) return no(shape.why);
+    const { re } = shape;
     const host = templateHost(url);
     if (!host) return no("url must start with https:// or http:// and a fixed host; placeholders only in the path");
-    // Hostile probes of growing length, two characters at a time, stopping at the first one
-    // over 5 ms: a pattern whose time grows exponentially is caught at a length where one
-    // probe still costs only a few times the last (a long first probe would hang on it).
-    const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
-    for (let len = 12; len <= 32; len += 2) {
-      for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
-        const t0 = now();
-        re.lastIndex = 0;
-        re.exec(probe);
-        if (now() - t0 > 5) return no("too slow on a short test text; disabled");
-      }
-    }
+    const slow = patternSlow(re, pattern);
+    if (slow) return no(slow);
     const name = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : `Rule ${n}`;
     rules.push({ n, name, re, url, host, repo: /\{(repo|owner)\}/.test(url) });
   });
   return { rules, notes };
 }
 
-// quoteKey and links from the file's text, with their notes. Text that does not parse
-// gives the defaults (parseSettings reports that).
+// senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
+// matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
+// prompt's start with at most one {name} in it, the sender: "From {name}:". A pattern is a
+// JavaScript regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
+// A rule is dropped, with a note, when it has both or neither, a prefix is over 100
+// characters, holds {name} twice or has under 2 characters besides it, a pattern has no
+// sender group or fails a check link patterns have (patternShape, patternSlow), or it is
+// past the 20th. Each kept rule: { n, label (its name, else its prefix or pattern), re,
+// named (the match names the sender) }. No rule ships.
+export function parseSenders(raw) {
+  const rules = [];
+  const notes = [];
+  if (raw == null) return { rules, notes };
+  if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
+  raw.forEach((r, i) => {
+    const n = i + 1;
+    const no = (why) => notes.push(`Sender rule ${n}: ${why}`);
+    if (i >= MAX_RULES) return no(`past the ${MAX_RULES}th rule; ignored`);
+    if (!r || typeof r !== "object") return no("not an object");
+    const { prefix, pattern } = r;
+    const hasPrefix = typeof prefix === "string" && prefix !== "";
+    const hasPattern = typeof pattern === "string" && pattern !== "";
+    if (hasPrefix === hasPattern) return no(hasPrefix ? "has both a prefix and a pattern; use one" : "no prefix or pattern");
+    const label = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : (hasPrefix ? prefix : pattern).slice(0, 60);
+    if (hasPrefix) {
+      if (prefix.length > 100) return no("prefix over 100 characters");
+      const parts = prefix.split("{name}");
+      if (parts.length > 2) return no("{name} more than once");
+      if (parts.join("").trim().length < 2) return no("prefix needs 2 characters or more besides {name}");
+      const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // The name runs to the text after it, or to a space or the end when it ends the prefix.
+      const name = parts.length < 2 ? "" : parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
+      rules.push({ n, label, re: new RegExp(`^${esc(parts[0])}${name}${parts.length < 2 ? "" : esc(parts[1])}`), named: parts.length === 2 });
+      return;
+    }
+    if (!/\(\?<sender>/.test(pattern)) return no("pattern has no (?<sender>...) group");
+    const shape = patternShape(pattern, "");
+    if (shape.why) return no(shape.why);
+    const slow = patternSlow(shape.re, pattern);
+    if (slow) return no(slow);
+    rules.push({ n, label, re: shape.re, named: true });
+  });
+  return { rules, notes };
+}
+
+// quoteKey, links and senders from the file's text, with their notes. Text that does not
+// parse gives the defaults (parseSettings reports that).
 export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
-  return { quoteKey: quote.key, links: links.rules, notes: [...(quote.note ? [quote.note] : []), ...links.notes], linkCount: Array.isArray(raw.links) ? raw.links.length : 0 };
+  const senders = parseSenders(raw.senders);
+  return {
+    quoteKey: quote.key, links: links.rules, senders: senders.rules,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes],
+    linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
+    senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
+  };
 }
 
 // The file's text for a set of values. Keys this version does not know are kept, so a
