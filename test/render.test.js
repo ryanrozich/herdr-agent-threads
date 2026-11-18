@@ -8555,8 +8555,17 @@ test("Trajectory timeline in a debug pane drawn before the session is read: bars
   expect(v.follow).toBe(true);
 
   // A long one: no spacer either, and it opens at its end, as before.
-  const long = await pane(fixture("--extra", "80"), { view: "trajectory" });
+  // Found on CI (a slower machine): the read ended while the first rows build was still going
+  // over several frames, so there was no turn to select then, and nothing selected one after.
+  // Each reading of the clock moves it 2 ms here, so the build takes several slices anywhere.
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  performance.now = () => (fake += 2);
+  let long;
+  try { long = await pane(fixture("--extra", "80"), { view: "trajectory" }); } finally { performance.now = realPerf; }
   const w = long.v;
+  expect(w.rowJob).not.toBe(null);
+  expect(w.sel).toBe(null);
   w.paneW = 1100; w.rootH = 900; w.listH = 790;
   let toEnd = 0;
   w.scroll = { scroll_to_bottom() { toEnd++; }, scroll_to_item() {} };

@@ -1907,6 +1907,7 @@ export default class Threads extends View {
     // The selection is on a turn the list no longer shows: agent turns were hidden, or a
     // hidden agent turn that showed while it was live has finished.
     if (this.reselect || this.selHidden()) this.reselectVisible();
+    this.latestAfterBuild();
   }
 
   // Whether a build stopped between slices can go on: the same sessions, earlier ones as they
@@ -2250,6 +2251,7 @@ export default class Threads extends View {
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
+    this.latestAfterBuild();
     return true;
   }
 
@@ -3206,7 +3208,20 @@ export default class Threads extends View {
     this.unseen = false;
     const last = this.lastTurnKey(this.rows());
     if ((select || !this.sel) && last) this.sel = last;
+    // The first rows build is still going over several frames (a long session, a slow
+    // machine), so there is no turn to select yet: its end selects the newest (latestAfterBuild).
+    else if ((select || !this.sel) && this.rowJob) this.latestDue = { sel: this.sel };
     this.toBottom = true;
+  }
+  // Selects the newest turn when the build that jumpLatest waited for is done, if the pane is
+  // still following and nothing moved the selection meanwhile.
+  latestAfterBuild() {
+    const due = this.latestDue;
+    if (!due) return;
+    this.latestDue = null;
+    if (!this.follow || this.sel !== due.sel) return;
+    const last = this.lastTurnKey(this.baseRows);
+    if (last) { this.sel = last; this.toBottom = true; }
   }
 
   // ---- the outline (o) ----
