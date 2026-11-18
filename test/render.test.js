@@ -2489,6 +2489,36 @@ test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and 
   expect(strs(calls)).toContain("Show less");
 });
 
+// The outside review of the fifth build: the Markdown update's measure key held only its length,
+// so a measure taken with Shorten long messages off (no Show less row) carried over to Show all
+// with it on (a Show less row, 22 px taller), and Show less sat over the next item.
+test("LATEST UPDATE: a measure taken whole is not reused after Shorten long messages and Show all, nor across the 12,000 character note", async () => {
+  const { v } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  t.latest = "The run finished.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- one\n- two";
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  v.meas = new Map([[r.key, { h: 120, sig: v.partSig(r) }]]);
+  expect(v.measured(r)).toBe(120);
+  v.prefs = { ...v.prefs, truncate: true };
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(t.latest);
+  expect(r.whole).toBe(false);
+  expect(v.measured(r)).toBe(null);
+  // A cut text and the same length uncut are different layouts too (the note's line).
+  v.full.clear();
+  v.prefs = { ...v.prefs, truncate: false };
+  r = lt();
+  const sigWhole = v.partSig(r);
+  expect(v.partSig({ ...r, left: 500 })).not.toBe(sigWhole);
+});
+
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
 
 test("Turn card: i opens the selected turn's numbers over the bottom of the pane, follows the selection, and opens nothing in the list", async () => {
