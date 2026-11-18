@@ -1689,14 +1689,77 @@ export function linkify(md, rules, ctx = {}, { maxChars = 20000, maxMatches = 25
   return { md: changedAny ? lines.join("\n") : src, links };
 }
 
+// ---- breaks in a long hyphenated token (issue 112) ----
+// Herdr wraps an open message's bubble itself, at a space and before a "/" (so a long path
+// breaks between its parts), but never after a "-", so a hyphenated name longer than the
+// line broke inside a word ("…rounding-a" then "nd-receipt…"). In the drawn text only,
+// HYPHEN_BREAK goes after each "-" of such a token: Herdr (0.1.15 and 0.1.16) may end a line
+// before it, and it draws nothing. It is the zero-width non-joiner (U+200C): Herdr breaks at
+// none of U+200B (zero-width space), U+2060, U+FEFF, U+2063 or a soft hyphen, and U+2010
+// breaks before the hyphen, so it starts the next line. Copy, quote, Select view, search
+// and the size estimates read the message itself, which never holds it; quoteText drops it.
+export const HYPHEN_BREAK = "\u200c";
+
+// Where HYPHEN_BREAK goes in one line: the index after each "-" of a token (a run without
+// white space) longer than `per` characters, except a "-" that ends the token or comes
+// before another "-". A Set, or null when there is none.
+export function hyphenSpots(line, per) {
+  const s = String(line ?? "");
+  if (!(per > 0) || s.length <= per || !s.includes("-")) return null;
+  let out = null;
+  const re = /\S+/g;
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    const w = m[0];
+    if (w.length <= per) continue;
+    for (let i = w.indexOf("-"); i >= 0 && i < w.length - 1; i = w.indexOf("-", i + 1)) {
+      if (w[i + 1] !== "-") (out ??= new Set()).add(m.index + i + 1);
+    }
+  }
+  return out;
+}
+
+// A piece of a line that starts at index `from`, with HYPHEN_BREAK at each spot after one of
+// its characters (a spot at its very start belongs to the piece before, which ends in "-").
+export function putBreaks(s, from, spots) {
+  if (!spots || !s) return s;
+  let out = "";
+  let at = 0;
+  for (let i = 1; i <= s.length; i++) {
+    if (spots.has(from + i)) { out += s.slice(at, i) + HYPHEN_BREAK; at = i; }
+  }
+  return out ? out + s.slice(at) : s;
+}
+
+// Text as drawn in a bubble `per` characters wide: HYPHEN_BREAK in its long hyphenated tokens.
+export function hyphenBreaks(text, per) {
+  const s = String(text ?? "");
+  if (!(per > 0) || !s.includes("-")) return s;
+  return s.split("\n").map((l) => putBreaks(l, 0, hyphenSpots(l, per))).join("\n");
+}
+
+// A line split around the search's matches, as spans() does on the message itself (so a
+// match across a "-" is still found and marks the same characters), each piece then as
+// drawn, with HYPHEN_BREAK in long hyphenated tokens.
+export function breakSpans(line, q, per) {
+  const spots = hyphenSpots(line, per);
+  let at = 0;
+  return spans(line, q).map((p) => {
+    const t = putBreaks(p.t, at, spots);
+    at += p.t.length;
+    return { t, hit: p.hit };
+  });
+}
+
 // A prompt as Markdown for TextView that changes nothing the person typed except: quote
 // runs become blockquotes, followed by a blank line so the comment is never pulled into
 // the quote; fenced code stays fenced code and inline code stays inline code; every other
 // ASCII punctuation character (and so "<") is escaped, so "#", "*", "-" and "1." show as
 // typed and no HTML is read; leading spaces become no-break spaces, so indentation is not
 // a code block; each line break is a hard break; bare http(s) URLs become autolinks; link
-// rule matches become [text](url). Reads at most max * 8 characters (32,000 by default);
-// when the prompt is longer, a last line says how many characters are not shown.
+// rule matches become [text](url); with per (characters a line), a hyphenated token
+// longer than that gets HYPHEN_BREAK after its "-"s (hyphenBreaks). Reads at most max * 8
+// characters (32,000 by default); when the prompt is longer, a last line says how many
+// characters are not shown.
 // The links the rules make in a prompt, each once, for a coloured bubble, where the prompt is
 // plain text in the bubble's ink (TextView draws only in the theme's text colour) and the links
 // go on a line of their own under it (issue 116). Code spans and fenced code get none, as in
@@ -1746,21 +1809,27 @@ export function promptLinks(text, rules, ctx = {}, max = 8) {
 }
 
 // Returns { md, quotes, code, links, cut }: cut is the characters left out.
-export function promptMd(text, { links: rules = [], repo = null, owner = null, host = null, max = 4000 } = {}) {
+export function promptMd(text, { links: rules = [], repo = null, owner = null, host = null, max = 4000, per = 0 } = {}) {
   const ctx = { repo, owner, host };
   const budget = { chars: 20000, matches: 25 };
   let nLinks = 0;
   const lineMd = (line) => {
     const lead = /^[ \t]*/.exec(line)[0];
     const head = lead.replace(/\t/g, "    ").replace(/ /g, "\u00a0");
-    return head + inlineTokens(line.slice(lead.length).replace(/\t/g, "    "), { markdown: false }).map((tok) => {
-      if (tok.kind === "code") return tok.t;
-      if (tok.kind === "url") return SAFE_URL.test(tok.t) && tok.t.length < 2000 ? `<${tok.t}>` : escapeMd(tok.t);
-      if (tok.kind !== "text") return escapeMd(tok.t);
+    const body = line.slice(lead.length).replace(/\t/g, "    ");
+    // With per: HYPHEN_BREAK in long hyphenated tokens, in text and a link's text, never in
+    // code, a URL or a link's address.
+    const spots = per ? hyphenSpots(body, per) : null;
+    let at = 0;
+    const put = (s) => { const out = putBreaks(s, at, spots); at += s.length; return out; };
+    return head + inlineTokens(body, { markdown: false }).map((tok) => {
+      if (tok.kind === "code") { at += tok.t.length; return tok.t; }
+      if (tok.kind === "url") { at += tok.t.length; return SAFE_URL.test(tok.t) && tok.t.length < 2000 ? `<${tok.t}>` : escapeMd(tok.t); }
+      if (tok.kind !== "text") return escapeMd(put(tok.t));
       return linkPieces(tok.t, rules, ctx, budget).map((p) => {
-        if (!p.url) return escapeMd(p.t);
+        if (!p.url) return escapeMd(put(p.t));
         nLinks++;
-        return `[${escapeMd(p.t)}](${p.url})`;
+        return `[${escapeMd(put(p.t))}](${p.url})`;
       }).join("");
     }).join("");
   };
