@@ -77,15 +77,15 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 |---|---|---|---|
 | `preview.png` | 1460x1150, `render.py` running | `open` | `552 96 2912 2232` |
 | `panel.png` | the same shot | | `1808 96 2912 2232` |
-| `open-turn.png` | the same shot | | `1808 1140 2912 2090` |
+| `open-turn.png` | the same shot | | `1808 1140 2912 2064`, which ends under the code block so no line is cut |
 | `light.png` | 1460x1150, `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `open` | `552 96 2912 2232` |
-| `days.png` | 1460x1150, `days.jsonl` | `search:#3`, `open`, `open`, so the list scrolls into the first day and its pill sits in the strip | `1808 96 2912 2232` |
+| `days.png` | 1460x1150, `"debug": true`, `days.jsonl` | `search:#3`, `open`, `open`, `debugDayPill`, so the list is in the first day and its pill shows at the top for the shot (it goes 1.5 s after a scroll otherwise) | `1808 96 2912 2232` |
 | `search.png` | 1460x700 | `search:tests` | `1808 96 2912 1332` |
 | `images.png` | 1460x1150, `"debug": true` | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5` | `1808 242 2912 2232`, below the header, which shows timings in debug |
-| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5 and a reply with a list, code and a table for the reading panel) | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5`, `debugClick:300:img:0:5:0` | none, the whole window |
+| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5 and a reply with a list, code and a table for the reading panel) | `search:#5`, `open`, `open`, `debugClick:300:imgs:0:5` (a press on the first tile opens the viewer; there is no `img:` press any more) | none, the whole window |
 | `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open`, `open`, then `agents:off` after the shot | `1808 96 2912 2232` |
 | `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
-| `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1904 96 3512 2232` |
+| `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1704 96 3512 2232` |
 | `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
 | `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
 | `work.png` | 1460x1150, `"debug": true`, a transcript made with the cwd `/home/dev/acme-web` (`make-hero.js herodev.jsonl /home/dev/acme-web …`), because level 3 shows each call's whole file path | `search:#7`, `escape`, `deeper`, `deeper`, `debugClick:100:cl:0:7:0:4`, so turn 7's line and its run open and the test command's output shows | `1808 242 2912 2232`, below the header, which shows timings in debug |
@@ -93,6 +93,8 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
 | `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
-`quote.png`, `images.png` and `work.png` need `"debug": true` in the props, because `debugQuote` and `debugClick` run only with it, and debug adds a timing text to the pane header, which those crops leave out. `agents:on` saves to settings, so turn it off before the next shot.
+The stand-in has to run as a program named `claude` (copy the build to `bin/claude`), or Threads does not treat the terminal as Claude Code and a quote does not paste. Use the 1.0 defaults for every shot (the settings file holds only the two link rules): blue user bubbles, amber agent bubbles, and no key-hints row, so `keys.png` is reached with the `keys` command (the `?` key).
+
+`quote.png`, `images.png`, `days.png` and `work.png` need `"debug": true` in the props, because `debugQuote` and `debugClick` run only with it, and debug adds a timing text to the pane header, which those crops leave out. `agents:on` saves to settings, so turn it off before the next shot.
 
 After changing an image, run `sh test/scan-private.sh` with its line removed from `test/scan-approved.txt`, so OCR reads it, and pin the new hash only once the owner has approved it.
