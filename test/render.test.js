@@ -485,6 +485,8 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
     { k: "p", o: "human", t: prompt, ts: at(0) }, { k: "t", t: "Done." }, { k: "d", ms: 1000, ts: at(1) },
     { k: "p", o: "human", t: `Open ${path} next`, ts: at(2) }, { k: "t", t: "Opened." }, { k: "d", ms: 1000, ts: at(3) },
   ]);
+  // Blue bubbles (the default since the settings card) draw plain lines; this checks the plain path.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
   v.width = 380;
   settleRows(v, cx);
   const shape = (k) => v.rows().find((r) => r.key === k).shape;
@@ -502,6 +504,7 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
   const { v: w, cx: wx } = await scripted([
     { k: "p", o: "human", cmd: true, t: `/review-pr ${path} now`, ts: at(0) }, { k: "t", t: "Reviewed." }, { k: "d", ms: 1000, ts: at(1) },
   ]);
+  w.prefs = { ...w.prefs, bubbleColor: "plain" };
   w.width = 380;
   settleRows(w, wx);
   const cs = w.rows().find((r) => r.key === "0:1").shape;
@@ -510,6 +513,121 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
   views.length = 0;
   draw(w, wx);
   expect(drawn("th-sp-p-0:1")).toBe(`${path} now`);
+});
+
+// A long reply with bold, nested lists and links, for the rows a search lists.
+const LONG_MD = Array.from({ length: 6 }, (_, i) => `**Step ${i + 1}** moves the tax rounding in [the cart module](https://example.com/acme/cart/blob/main/src/total-${i}.ts) to the order total.\n\n- First change for step ${i + 1}, with **bold words** in it\n  - a nested detail about the receipt sum\n  - another nested detail with \`lineTax()\` in it\n- Second change for step ${i + 1}, a little longer than the first so it wraps`).join("\n\n");
+
+// The owner, 17 Nov, on Codex: with a search on, the newest turn's reply drew as one flat run
+// cut mid-word, with no Show more. It was listed only because the prompt it answered together
+// with held the match, so its own reply had none. A reply with no match draws as Markdown under
+// a search too; one with a match stays flat around it, with the hit marked.
+test("under a search, a reply listed for the prompt it answered together with draws as Markdown (Codex)", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
+  const file = join(dir, "rollout-2026-11-01T09-00-00-00000000-0000-4000-8000-0000000000c9.jsonl");
+  let ord = 0;
+  let ct = Date.parse("2026-11-01T09:00:00.000Z");
+  const line = (type, payload) => `${JSON.stringify({ timestamp: new Date((ct += 1000)).toISOString(), ordinal: ord++, type, payload })}\n`;
+  const ask = (turn, text) => line("event_msg", { type: "item_completed", turn_id: turn, item: { type: "UserMessage", content: [{ type: "text", text }] } });
+  const say = (text, phase = "final_answer") => line("response_item", { type: "message", role: "assistant", phase, content: [{ type: "output_text", text }] });
+  const call = () => line("response_item", { type: "function_call", name: "exec_command", arguments: "{}", call_id: `c${ord}` });
+  const fin = (ms) => line("event_msg", { type: "task_complete", duration_ms: ms });
+  const head = [line("session_meta", { id: "00000000-0000-4000-8000-0000000000c9", cwd: "/tmp/threads-demo" }), line("turn_context", { model: "gpt-5.5-codex", effort: "medium" })];
+  for (let i = 0; i < 4; i++) head.push(ask(`t${i}`, `Earlier question ${i} about the cart`), say(`Earlier answer ${i}.`), fin(2000));
+  // Two prompts in one Codex turn: the second steers it, and one reply answers both.
+  head.push(ask("t9", "Run $ketchup on the cart"), say("Looking at the cart.", "commentary"), call(), ask("t9", "And make the receipt add up the same way"), call());
+  writeFileSync(file, head.join(""));
+  const { v, cx } = await pane(file);
+  v.width = 400;
+  v.setQuery("ketchup", cx);
+  settleRows(v, cx);
+  const s = v.current();
+  const n = s.turns.length;
+  expect(s.turns.at(-1).done).toBe(false);
+  // The turn ends while the search is on.
+  appendFileSync(file, say(LONG_MD) + fin(49000));
+  v.read(cx);
+  await settle(v);
+  settleRows(v, cx);
+  expect(s.turns[n - 2].answeredBy).toBe(n);
+  const row = (k) => v.rows().find((r) => r.key === k);
+  expect(v.rows().some((r) => r.kind === "hidden")).toBe(true);
+  // The first prompt holds the match; the reply row is listed for it and draws its Markdown.
+  expect(row(`0:${n - 1}`).shape.tone).toBe("note");
+  const sh = row(`0:${n}`).shape;
+  expect(sh.md).toBe(LONG_MD);
+  expect(sh.rMore).toBe(false);
+  mdSources.length = 0;
+  draw(v, cx);
+  expect(mdSources.some(([id, md]) => id.startsWith(`th-cmd-cmd:0:${n}`) && md.includes("**bold words**") && md.includes("  - a nested detail"))).toBe(true);
+  // A search that the reply itself matches keeps the search's look: flat, around the hit.
+  v.setQuery("receipt sum", cx);
+  settleRows(v, cx);
+  expect(row(`0:${n}`).shape.md).toBeUndefined();
+  expect(row(`0:${n}`).shape.reply.join(" ")).toContain("receipt sum");
+  // Cleared: Markdown, as before.
+  v.setQuery("", cx);
+  settleRows(v, cx);
+  expect(row(`0:${n}`).shape.md).toBe(LONG_MD);
+});
+
+test("under a search, a reply listed for the prompt it answered together with draws as Markdown (Claude Code)", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await scripted([
+    { k: "p", o: "human", t: "Earlier question about the cart", ts: at(0) }, { k: "t", t: "Earlier answer." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "Run ketchup on the cart", ts: at(2) }, { k: "u", n: "Bash", id: "b1" },
+    { k: "p", o: "human", t: "And make the receipt add up the same way", ts: at(3) }, { k: "u", n: "Bash", id: "b2" },
+  ]);
+  v.width = 400;
+  v.setQuery("ketchup", cx);
+  settleRows(v, cx);
+  apply(s, { k: "t", t: LONG_MD });
+  apply(s, { k: "d", ms: 49000, ts: at(4) });
+  settleRows(v, cx);
+  expect(s.turns[1].answeredBy).toBe(3);
+  const sh = v.rows().find((r) => r.key === "0:3").shape;
+  expect(sh.md).toBe(LONG_MD);
+  expect(sh.rMore).toBe(false);
+});
+
+// Review of PR 101: a search's hit is the filter's own (the reply as written, all of it), not a
+// word in the flattened text. "[code]" and " · " are the flattening's, and a hit past the first
+// 2,400 characters, in a code fence or in a link's address is still a hit, shown and marked.
+test("under a search, the reply's own text decides flat or Markdown, and a hit anywhere shows marked", async () => {
+  const fence = "Here is the fix:\n\n```js\nconst total = items.reduce((a, b) => a + b, 0);\n```\n\n- one\n- two";
+  const far = `${"plain words here ".repeat(180)}\n\nAt the end the needle shows up.`;
+  const inCode = `${"plain words here ".repeat(180)}\n\n\`\`\`js\nconst haystack = findThimble(pins);\n\`\`\``;
+  const inLink = `${"plain words here ".repeat(180)}\n\nSee [the guide](https://example.com/docs/bobbin-guide) for more.`;
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "fix the code", ts: at(0) }, { k: "t", t: fence }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "Count the items", ts: at(2) }, { k: "t", t: far }, { k: "d", ms: 1000, ts: at(3) },
+    { k: "p", o: "human", t: "Count them again", ts: at(4) }, { k: "t", t: inCode }, { k: "d", ms: 1000, ts: at(5) },
+    { k: "p", o: "human", t: "Where is it written", ts: at(6) }, { k: "t", t: inLink }, { k: "d", ms: 1000, ts: at(7) },
+  ]);
+  v.width = 400;
+  const row = (k) => v.rows().find((r) => r.key === k);
+  // M1: listed for its prompt; "code" is only in the flattening's "[code]".
+  v.setQuery("code", cx);
+  settleRows(v, cx);
+  expect(row("0:1").shape.md).toBe(fence);
+  v.setQuery("·", cx);
+  settleRows(v, cx);
+  expect(row("0:1")).toBeUndefined();
+  // M2: a hit past the first 2,400 characters, in a fence and in a link's address: flat around
+  // it, and drawn marked (the hit is a span of its own).
+  for (const [q, k] of [["needle", "0:2"], ["Thimble", "0:3"], ["bobbin", "0:4"]]) {
+    v.setQuery(q, cx);
+    settleRows(v, cx);
+    const sh = row(k).shape;
+    expect(sh.md).toBeUndefined();
+    expect(sh.reply.join(" ").toLowerCase()).toContain(q.toLowerCase());
+    rec = [];
+    draw(v, cx);
+    const drawn = rec;
+    rec = null;
+    expect(drawn.some(([n, x]) => n === "child" && x === q)).toBe(true);
+  }
 });
 
 test("a prompt answered together with a hidden agent message borrows its reply (F2)", async () => {

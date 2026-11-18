@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
-  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
+  keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
@@ -93,6 +93,14 @@ test("spans split around every match, any case", () => {
   expect(spans("", "x")).toEqual([{ t: "", hit: false }]);
   expect(around(`${"a ".repeat(40)}needle here`, "needle")).toStartWith("…");
   expect(around("short needle", "needle")).toBe("short needle");
+  // A match inside a long token keeps it: the start is cut in the token, not past the match.
+  expect(around(`${"a ".repeat(40)}see https://example.com/docs/bobbin-guide now`, "bobbin")).toBe("…/example.com/docs/bobbin-guide now");
+  // A reply under a search: its own text decides, all of it; the flattening's words never count.
+  expect(searchPreview("Fix:\n\n```js\nlet x = 1;\n```\n\n- a\n- b", "code")).toBe(null);
+  expect(searchPreview("- a\n- b", "·")).toBe(null);
+  expect(searchPreview("Start **here** and go on", "here")).toBe("Start here and go on");
+  expect(searchPreview(`${"word ".repeat(600)}\n\nThe needle is late.`, "needle")).toBe("… The needle is late.");
+  expect(searchPreview("Read [it](https://example.com/bobbin) now", "bobbin")).toContain("https://example.com/bobbin");
 });
 
 test("languages map to a highlighter or plain text", () => {
