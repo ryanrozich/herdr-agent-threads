@@ -77,7 +77,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 |---|---|---|---|
 | `preview.png` | 1460x1150, `render.py` running | `open` | `552 96 2912 2232` |
 | `panel.png` | the same shot | | `1808 96 2912 2232` |
-| `open-turn.png` | the same shot | | `1808 1140 2912 2064`, which ends under the code block so no line is cut |
+| `open-turn.png` | the same shot | | `1808 1178 2912 2102`, which ends under the code block so no line is cut |
 | `light.png` | 1460x1150, `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `open` | `552 96 2912 2232` |
 | `days.png` | 1460x1150, `"debug": true`, `days.jsonl` | `search:#3`, `open`, `open`, `debugDayPill`, so the list is in the first day and its pill shows at the top for the shot (it goes 1.5 s after a scroll otherwise) | `1808 96 2912 2232` |
 | `search.png` | 1460x700 | `search:tests` | `1808 96 2912 1332` |
