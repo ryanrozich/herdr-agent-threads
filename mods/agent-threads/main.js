@@ -7157,7 +7157,8 @@ export default class Threads extends View {
     // line of their own under the bubble (youLinks), each once (issue 116).
     const lk = plain && this.links.length ? promptLinks(c.text, this.links, this.linkCtx()) : [];
     const linkMd = lk.length ? lk.map((p) => `[${escapeMd(p.t)}](${p.url})`).join(" \u00b7 ") : null;
-    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * Math.max(1, Math.ceil((lk.reduce((n, p) => n + p.t.length + 3, 0) * YOU_LINK_CHAR) / Math.max(1, bw))) : 0;
+    // Its lines at the width inside the bubble's padding (the line has the same padding).
+    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * Math.max(1, Math.ceil((lk.reduce((n, p) => n + p.t.length + 3, 0) * YOU_LINK_CHAR) / Math.max(1, bw - 2 * ROW.BUBBLE_PX))) : 0;
     const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long, linkMd, linkH };
     r.turn.youMemo = { sig, v };
     return v;
@@ -7293,7 +7294,7 @@ export default class Threads extends View {
   partSig(r, base = this.sigBase()) {
     const head = `${base}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}|${y.linkMd ?? ""}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;

@@ -1644,6 +1644,38 @@ test("link rules in a coloured bubble: the open turn lists the prompt's links un
   expect(withLinks - v.youHeight(v.rows().find((r) => r.kind === "you"))).toBeGreaterThan(0);
 });
 
+test("the link line is in the prompt part's measure key: a measure taken without the line is not used once it draws (PR 120 follow-up)", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--links"));
+  v.width = 380;
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
+  v.open = new Set(["0:1"]);
+  draw(v, cx);
+  const you = v.rows().find((r) => r.kind === "you");
+  // Another session lands on the same part key (the session's place and the turn number): a
+  // prompt of the same length, first with no match, measured at 60 px with no line.
+  const asTurn = (prompt) => ({ ...you, turn: { ...you.turn, prompt, youMemo: undefined } });
+  const before = asTurn("Fix the rounding bug in ACMX-123 today");
+  const after = asTurn("Fix the rounding bug in ACME-123 today");
+  expect(before.turn.prompt.length).toBe(after.turn.prompt.length);
+  expect(v.youMd(before).linkMd).toBe(null);
+  v.probed(before.key, v.partSig(before), { width: 300, height: 60 * v.zoom() }, cx);
+  expect(v.measured(before)).toBe(60);
+  // The same key and length, now with a link line: the old 60 px would put the line over the
+  // time strip, so the measure is not used and the slot falls back to the estimate, which
+  // counts the line, until the probe measures again.
+  expect(v.youMd(after).linkMd).toContain("ACME\\-123");
+  expect(v.measured(after)).toBe(null);
+  expect(v.youHeight(after)).toBeGreaterThan(v.youHeight(before));
+  // A line that wraps is estimated at the width inside the bubble's padding, so the estimate
+  // is never short of the drawn line.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
+  const many = asTurn(Array.from({ length: 8 }, (_, i) => `ACME-${1000 + i}`).join(" "));
+  const y = v.youMd(many);
+  const inner = y.bw - 2 * 10;
+  const chars = (y.linkMd.match(/\[[^\]]+\]/g) ?? []).reduce((n, x) => n + x.length - 2 + 3, 0);
+  expect(y.linkH).toBeGreaterThanOrEqual(4 + 18 * Math.ceil((chars * 6.6) / inner));
+});
+
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--links"));
   v.width = 380;
