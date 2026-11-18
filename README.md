@@ -36,19 +36,31 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 ### Read a long session as a chat
 
-Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Point at a message for its time, and select a turn for the copy, pin, quote and terminal icons. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted.
+Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Every message shows in full unless you turn on Shorten long messages in the settings. Point at a message for its time, and select a turn for the copy, pin and quote icons. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted. A code block wraps and shows its first 12 rows, with Show all under it for the rest. A Mermaid block has View diagram under it, which opens the diagram drawn as text in a viewer over the window.
+
+On Herdr 0.1.13 or newer, drag across any turn's text, open or closed, to highlight it, and press `Cmd-C` to copy it. A drag never opens or closes a turn; only a click that does not move does.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
 ### See what the agent did
 
-In an open turn, click the grey line to see the work before the reply: what the agent said along the way, each run of tool calls, then tokens and model. For every agent but Cursor, open a run to see each command, file or search, and click one to see its output. A run's calls are read from the transcript only when you open it, and kept in memory only. `→` and `←` open and close the work a level at a time.
+In an open turn, click the grey line to see the work before the reply: what the agent said along the way, and each run of tool calls. For every agent but Cursor, open a run to see each command, file or search, and click one to see its output: its first 12 rows, with Show all for the rest. An output over 400 lines has a link that opens all of it in a viewer over the window, with numbered lines. A run's calls are read from the transcript only when you open it, and kept in memory only. `→` and `←` open and close the work a level at a time.
 
 <a href="docs/screenshots/work.png"><img src="docs/screenshots/work.png" alt="An open turn's work: a run of tool calls, each naming its file or command, with one command's test output open" width="400"></a>
 
+### Follow subagents
+
+Subagents get a line of their own in a turn's work, such as "Ran 4 subagents". While any still works, the line says how many ("2 working"), even after the reply, and it says how many failed. Open it to see each subagent: a check when it is back, a red cross when it failed, how long it took, and its model when it is not the turn's. While a turn runs, its subagents show without a click. Only Claude Code records each subagent's state; for the other agents the line lists the calls.
+
+### See a turn's numbers
+
+Press `i` for the Turn card of the selected turn: the model and effort, the tokens, the tool calls and the cache hit, each with a sentence on what it means. It also says when the conversation was compacted during the turn. Rest the pointer on the small info icon at the end of a turn's "Worked for" line to see the same card. While the card is open, `↑` and `↓` move it to the next turn, so you can compare turns. `i` or `Esc` closes it.
+
 ### Find an answer
 
-Press `/` and type. The list narrows to the turns that match. `g` jumps to a turn number, and `[` `]` move a day at a time. The rail on the list's right edge has a tick for each turn: point at one for the turn's number and the start of your prompt, and click it to go there.
+Press `/` and type. The list narrows to the turns that match. `g` jumps to a turn number, and `[` `]` move a day at a time.
+
+The rail on the list's right edge (or left, in the settings) has a tick for each turn. Point at a tick for a card with the turn's day, time and number, the start of your prompt and the start of the reply; `p` pins that turn while the card is open. Click a tick to go to the turn: its top lands level with the tick, and the turn flashes for a moment. In a long session the rail shows a window of ticks that follows the list, and the wheel on the rail moves that window. A narrow pane hides the rail.
 
 <a href="docs/screenshots/search.png"><img src="docs/screenshots/search.png" alt="The list narrowed by a search for tests" width="400"></a>
 
@@ -60,7 +72,7 @@ Press `o` for the outline. Each turn is one line, so a few days fit on one scree
 
 ### Pin the turns you need
 
-Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 5. Press a number to go back to that turn. `u` undoes an unpin.
+Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 5. Press a number to go back to that turn. `u` undoes an unpin. `-` and `=` make the Pinned column narrower or wider, and Threads takes or gives the difference so the terminal keeps its width.
 
 <a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns in the Pinned column beside the list" width="560"></a>
 
@@ -72,25 +84,29 @@ Press `q`. The reply goes into your prompt as a `>` quote, with a blank line und
 
 ### Know what the agent is doing
 
-Beside the agent's badge, the header says Working, Needs you, Done or Exited. Click it to go to the terminal. Only Claude Code reports its state live; for the other agents the header shows only Done or Exited, and nothing while a turn runs. While you read further up, a Jump to latest pill floats at the bottom of the list, with a dot when something new arrived below.
+At the top left of the pane, the agent's state says Working, Needs you, Done or Exited. Click it to go to the terminal. Only Claude Code reports its state live; for the other agents the state shows only Done or Exited, and nothing while a turn runs. Search, Pinned and Settings show at the top right while the pointer is in the pane. While you read further up, a Jump to latest pill floats at the bottom of the list, with a dot when something new arrived below.
 
 <a href="docs/screenshots/panel.png"><img src="docs/screenshots/panel.png" alt="The Agent Threads pane on its own" width="400"></a>
 
 ### Check a reply against its screenshots
 
-Images you pasted show as tiles over your message. In an open turn, click one to see it larger, and click it again to open the image viewer. The viewer fills the window with the image and puts your prompt and the reply beside it, so you can read the reply against each screenshot. `←` `→` step through the images, `j` `k` scroll the reply, `i` hides it and `Esc` closes the viewer.
+Images you pasted show as tiles over your message. Click a tile to open the image viewer at that image, on a closed turn, an open one or the running one. The viewer fills the window with the image and puts your prompt and the reply beside it, so you can read the reply against each screenshot. `←` `→` step through the images, `j` `k` scroll the reply, `i` hides it and `Esc` closes the viewer.
 
 <a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it" width="300"></a> <a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer: a screenshot on the left, the prompt and the reply in a panel on the right" width="500"></a>
 
 ### See agent messages
 
-Press `a` to show messages other agents sent the session, such as a subagent's report.
+Press `a` to show messages other agents sent the session, such as a subagent's report. They are hidden by default. When the agent wrote a reply to one of them on its own, that reply still shows, under one folded line that names the sender ("helper-a · agent message"). Click the line to see the message, and again to fold it.
 
 <a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
 
+### Read wide tables
+
+A table in a reply can run wider than the reading line when the pane has room beside it, so its columns need not wrap. The text around it keeps to the reading line. In a narrow pane the table keeps to the reading line and its cells wrap.
+
 ### Make it yours
 
-Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), how many lines a row shows, bubble colours, and whether agent messages show. You can also turn ticket and PR numbers into links. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), whether the pane keeps that width, which side the rail is on, bubble colours, whether every message shows its time, and whether agent messages show. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more, and set how many lines. You can also turn ticket and PR numbers into links in the settings file. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
@@ -104,16 +120,31 @@ Press `,` for settings: text size, the reading width (Comfortable, Wide or Full)
 | `q` | Quote the reply into the terminal |
 | `s` | Select text in the reply |
 | `→` `←` | Open or close a turn's work, a level at a time |
+| `i` | Show or hide the Turn card |
 | `p` | Pin or unpin |
 | `1` to `5` | Go to a pin |
+| `u` | Undo the last unpin |
 | `v` | Show the Pinned column |
+| `-` `=` | Make the Pinned column narrower or wider |
 | `g` | Go to a turn number |
+| `[` `]` | Previous or next day |
 | `End` or `G` | Newest turn |
 | `t` | Go to the terminal |
 | `a` | Show or hide agent messages |
+| `w` | Fit the pane to the reading width |
 | `,` | Settings |
 | `?` | Every key |
 | `Esc` | Back out |
+
+With the mouse:
+
+| Action | What it does |
+|---|---|
+| Click a tick on the rail | Go to that turn |
+| Drag across text | Highlight it; `Cmd-C` copies it |
+| Click Show all | Show the rest of a code block or a command's output |
+| Click View diagram | Open a Mermaid block's diagram in a viewer |
+| Click an image tile | Open the image viewer |
 
 ## Agents
 
