@@ -6748,20 +6748,21 @@ export default class Threads extends View {
   // row keeps the height the list was given.
   // A closed turn's message or reply start, as one selectable text view, so a drag selects in
   // it as in an open reply; only a click that does not move opens the turn (click). The
-  // lines are the shape's, already cut to fit, joined with line breaks and clipped to their
-  // rows. TextView draws in the theme's text colour whatever its parent or the HTML sets
+  // lines are the shape's, already cut to fit, joined by the spaces their wrap took out
+  // (htmlChunks: Herdr draws no break at "<br>" and wraps the text itself), and clipped to
+  // their rows. TextView draws in the theme's text colour whatever its parent or the HTML sets
   // (checked on the rig: neither <font color> nor a style attribute reaches it), so lines in
   // any other colour (a quote, an agent's message, a coloured bubble, a stop's reason) stay
   // plain lines, as do lines while a search marks its hits, or where Herdr cannot select.
   // TextView sets its text half a px lower than a centred line (rig, 2x), hence mt(-0.5).
-  selLines(t, id, lines, color, size, lh) {
+  selLines(t, id, lines, color, size, lh, hard = null) {
     const ink = String(theme().foreground ?? "").toLowerCase();
     if (this.liteDraw || !this.replySelectable() || this.filterText() || String(color ?? "").toLowerCase() !== ink) return this.lines(t, lines, color, size, lh);
     // Escaped once per line list (the shape's, kept on the turn), and split as a long reply is,
     // since one TextView holds at most MD_MAX bytes. A drag selects within one of them.
     const memo = (this.htmlMemo ??= new WeakMap());
     let chunks = memo.get(lines);
-    if (!chunks) { chunks = htmlChunks(lines); memo.set(lines, chunks); }
+    if (!chunks) { chunks = htmlChunks(lines, undefined, hard); memo.set(lines, chunks); }
     const block = (c, i) => div().w_full().h(c.n * lh).overflow_hidden()
       .child(TextView.html(chunks.length > 1 ? `${id}-${i}` : id, c.html).selectable(true).w_full().mt(-0.5));
     return v_flex().flex_1().min_w(0).text_size(size).line_height(`${lh}px`).text_color(color).children(chunks.map(block));
@@ -7712,7 +7713,7 @@ export default class Threads extends View {
 
   // A command's chip, then its arguments wrapping to its right.
   promptBlock(t, turn, sh, sel = false, key = null) {
-    const sl = (id, ls, c, sz) => (key ? this.selLines(t, `th-sp-${id}-${key}`, ls, c, sz, lh) : this.lines(t, ls, c, sz, lh));
+    const sl = (id, ls, c, sz, hard = null) => (key ? this.selLines(t, `th-sp-${id}-${key}`, ls, c, sz, lh, hard) : this.lines(t, ls, c, sz, lh));
     const agent = turn.agent;
     const color = agent ? t.muted : t.foreground;
     const rt = this.rt();
@@ -7721,7 +7722,7 @@ export default class Threads extends View {
     if (sh.chip) {
       return h_flex().gap(6).items_start().min_w(0)
         .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
-        .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size)));
+        .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size, sh.pHard)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
     // quote that is the whole prompt keeps the prompt's own colour and size.
@@ -7736,7 +7737,7 @@ export default class Threads extends View {
             : sl(i, [l], t.muted, rt.small));
       }));
     }
-    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl("p", sh.prompt, color, size));
+    return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl("p", sh.prompt, color, size, sh.pHard));
   }
 
   // A collapsed exchange: the sender (an agent's), the message, the strip under it, the line,
@@ -7763,7 +7764,7 @@ export default class Threads extends View {
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
-        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line, sh.rHard))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ], r.split || r.fold ? ROW.GAP : ROW.PAD_T);
