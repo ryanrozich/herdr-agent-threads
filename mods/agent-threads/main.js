@@ -5550,7 +5550,10 @@ export default class Threads extends View {
       .children([0, 1, 2, 3].map((i) => div().w(8).h(i === 2 ? 3 : 2).rounded(1).bg(i === 2 ? t.accent : alpha(t.muted, 0.5))));
     return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? railPad : pad).pr(left ? pad : railPad).py(10).gap(12).items_center()
       .border_b(1).border_color(t.border).bg(t.background)
-      .child(v_flex().flex_1().min_w(0).gap(2).items_start().when(hidden, (el) => el.opacity(0.45))
+      // Hidden agent messages show only in the label over the bubble ("Agent · hidden in the
+      // list"). The bubble keeps full strength, so its words read as in the list (a faded bubble
+      // was 1.9:1 on a light theme).
+      .child(v_flex().flex_1().min_w(0).gap(2).items_start()
         .child(line(label, this.agentColor(t)))
         .child(bubble(true, "From an agent"))
         .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
@@ -5699,9 +5702,11 @@ export default class Threads extends View {
     const pw = this.pw();
     const room = Math.max(1, pw - 2 * gutter(pw));
     const want = this.prefs.width === "full" ? room : readType(this.prefs.textSize, this.chars()).measure;
-    const inner = w - 2 * cardPad(w);
+    // The line fills its row, so it ends on the controls' right edge; the column is placed in
+    // the row's width, the card less its 1 px border and the inset on each side.
+    const inner = w - 2 - 2 * cardPad(w);
     const col = Math.max(4, Math.round((Math.min(want, room) / Math.max(1, pw)) * inner));
-    return div().id("th-set-ruler").relative().w(inner).h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
+    return div().id("th-set-ruler").relative().w_full().h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
       .child(div().absolute().top(0).h(4).rounded(2).left(Math.round((inner - col) / 2)).w(col).bg(t.muted));
   }
   widthNote() {
