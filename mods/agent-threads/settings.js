@@ -40,7 +40,9 @@
 // page). The card's Link rules page writes the whole list. A fresh install (no file) has one
 // rule, the pull request rule (DEFAULT_LINKS), switched on; the first write records it.
 // senders: rules that mark a typed prompt as an agent message and name its sender
-// (parseSenders), kept as written. No sender rules ship.
+// (parseSenders), each with two optional keys: on (false skips the rule) and example (a
+// prompt shown on the Sender rules page). The card's Sender rules page writes the whole
+// list. No sender rules ship.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -425,7 +427,7 @@ function linkFault(r, i) {
 const LONG_PROBE = 2048;
 export const SLOW_LONG = "too slow on long text; disabled";
 
-// senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
+// senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes, list }. A typed prompt one
 // matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
 // prompt's start with one {name} in it, the sender: "[{name}] ". A pattern is a JavaScript
 // regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
@@ -439,11 +441,17 @@ export const SLOW_LONG = "too slow on long text; disabled";
 // prompt (senderCost), or it is past the 20th. Each kept rule: { n, label (its name, else
 // its prefix or pattern), re, named (true: the match names the sender) }. No clock is read,
 // so the same file always gives the same rules. No rule ships.
+// Two optional keys: on (false keeps the rule out of rules, so it marks nothing; it is still
+// checked, takes no part of the step budget, and stays on the page) and example (a prompt
+// shown on the Sender rules page, never used to mark). list: one entry a rule in the file,
+// for the page: { n, name and label (its name, else its prefix or pattern, else "Rule n"),
+// on, prefix, pattern, example, why (null when it works), rule (compiled, also when off) }.
 export function parseSenders(raw, cost = senderCost) {
   const rules = [];
   const notes = [];
-  if (raw == null) return { rules, notes };
-  if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
+  const list = [];
+  if (raw == null) return { rules, notes, list };
+  if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"], list };
   let spent = 0;
   // The step count, or why it could not be had: an error in the counter refuses this one
   // rule and leaves the others alone.
@@ -456,14 +464,25 @@ export function parseSenders(raw, cost = senderCost) {
       return { why: "could not be checked; ignored" };
     }
   };
-  const keep = (rule, steps) => {
-    if (spent + steps > SENDER_TOTAL) return notes.push(`Sender rule ${rule.n}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
-    spent += steps;
-    rules.push(rule);
-  };
   raw.forEach((r, i) => {
     const n = i + 1;
-    const no = (why) => notes.push(`Sender rule ${n}: ${why}`);
+    const o = r && typeof r === "object" && !Array.isArray(r) ? r : {};
+    const str = (v) => (typeof v === "string" ? v : "");
+    const named = typeof o.name === "string" ? o.name.replace(/\s+/g, " ").trim().slice(0, 40) : "";
+    const entry = {
+      n, name: named || `Rule ${n}`, label: named || `Rule ${n}`, on: o.on !== false, prefix: str(o.prefix), pattern: str(o.pattern),
+      example: str(o.example).slice(0, EXAMPLE_MAX), why: null, rule: null,
+    };
+    list.push(entry);
+    const no = (why) => { entry.why = why; notes.push(`Sender rule ${n}: ${why}`); };
+    // An off rule is compiled for the page and kept out of the rules and the budget.
+    const keep = (rule, steps) => {
+      if (!entry.on) { entry.rule = rule; return; }
+      if (spent + steps > SENDER_TOTAL) return no("the rules before it and this one could take over 2 million steps between them on a prompt; ignored");
+      spent += steps;
+      entry.rule = rule;
+      rules.push(rule);
+    };
     if (i >= MAX_RULES) return no(`past the ${MAX_RULES}th rule; ignored`);
     if (!r || typeof r !== "object") return no("not an object");
     const { prefix, pattern } = r;
@@ -471,6 +490,8 @@ export function parseSenders(raw, cost = senderCost) {
     const hasPattern = typeof pattern === "string" && pattern !== "";
     if (hasPrefix === hasPattern) return no(hasPrefix ? "has both a prefix and a pattern; use one" : "no prefix or pattern");
     const label = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : (hasPrefix ? prefix : pattern).slice(0, 60);
+    // A rule with no name shows its text as its name, on the page as in the tooltip.
+    entry.name = entry.label = label;
     if (hasPrefix) {
       if (prefix.length > 100) return no("prefix over 100 characters");
       const parts = prefix.split("{name}");
@@ -495,7 +516,14 @@ export function parseSenders(raw, cost = senderCost) {
     if (c.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
     keep({ n, label, re: shape.re, named: true }, c.steps);
   });
-  return { rules, notes };
+  return { rules, notes, list };
+}
+
+// A rule from the Sender rules page's editor, alone, as the file would read it (on or off):
+// { rule (compiled, or null), why (null when it would run) }.
+export function checkSender(r) {
+  const { list } = parseSenders([{ ...r, on: true }]);
+  return { rule: list[0].rule, why: list[0].why };
 }
 
 // Whether a valid pattern has a group named sender: an empty match of it or of nothing
@@ -515,8 +543,8 @@ export function parseExtras(text) {
   const links = parseLinks(raw.links);
   const senders = parseSenders(raw.senders);
   return {
-    quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules,
-    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], senderNotes: senders.notes,
+    quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules, senderList: senders.list,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], linkNotes: links.notes, senderNotes: senders.notes,
     linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
     senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
   };

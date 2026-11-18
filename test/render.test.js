@@ -836,14 +836,15 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   expect(v.prefsNotes).toEqual(["Sender rule 1: nested quantifier, as in (a+)+", "Sender rule 2: pattern has no (?<sender>...) group"]);
   expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not valid) · Quote key · q");
   expect(v.current().turns.every((t) => !t.agent)).toBe(true);
-  // The card shows them where it shows notes the Link rules page cannot place on a rule.
+  // The card's Sender rules page shows each on its rule, with the reason.
   v.settingsOpen = true;
-  v.setPage = "links";
+  v.setPage = "senders";
   rec = [];
   v.render(cx);
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
   rec = null;
-  expect(kids).toContain("Sender rule 1: nested quantifier, as in (a+)+");
+  expect(kids).toContain("Not working: nested quantifier, as in (a+)+");
+  expect(kids).toContain("Not working: pattern has no (?<sender>...) group");
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
@@ -8570,7 +8571,7 @@ test("one page: Text and colors, Messages, Layout, Rules and keys and File, in t
     ["Text and colors", ["Text size", "User messages", "Agent messages"]],
     ["Messages", ["Show agent messages", "Agent messages on the rail", "Shorten long messages", "Always show time"]],
     ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
-    ["Rules and keys", ["Link rules", "Quote key"]],
+    ["Rules and keys", ["Link rules", "Sender rules", "Quote key"]],
     ["File", ["Copy path"]],
   ];
   const heads = PAGE.map(([name]) => gs.indexOf(name));
@@ -8587,7 +8588,7 @@ test("one page: Text and colors, Messages, Layout, Rules and keys and File, in t
   });
   // Then Reset, once, with its line, at the end.
   expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
-  expect(gs.indexOf("Link rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
+  expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Links and keys", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
@@ -8714,6 +8715,11 @@ test("a field that leaves the screen gives the keyboard back: the Link rules row
   back(() => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-back"); c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx); });
   into();
   back(() => v.action("settingsPage:links", cx));
+  into();
+  back(() => onOf(cardOf(v), "th-set-senders", "on_click")({}, cx));
+  expect(v.setPage).toBe("senders");
+  into();
+  back(() => v.action("settingsPage:senders", cx));
 });
 
 test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
@@ -8866,7 +8872,7 @@ test("nothing under the settings card or the keys sheet reacts: the rail and its
   v.reveal(theme, el);
   expect(hovered).toBe(1);
   for (const side of ["right", "left"]) {
-    for (const page of ["main", "links"]) {
+    for (const page of ["main", "links", "senders"]) {
       v.prefs = { ...v.prefs, railSide: side };
       // A tick's card is open when the card opens: it closes, and does not come back after.
       hovers()[1](true, cx);
@@ -8946,7 +8952,7 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no t
   expect(own(c, "th-bubbleColor-blue")).toContainEqual(["size", 24]);
   expect(own(c, "th-bubbleColor-plain")).toContainEqual(["border_color", muted]);
   // Reset's line is under the button, muted, whole.
-  expect(strsOf(c)).toContain("Link rules and the quote key stay.");
+  expect(strsOf(c)).toContain("Link rules, sender rules and the quote key stay.");
   // The file's path: muted 11.5 mono, cut at a slash, whole in its tooltip.
   const path = own(c, "th-set-path");
   for (const x of [["text_size", 11.5], ["text_color", muted]]) expect(path).toContainEqual(x);
@@ -9398,27 +9404,30 @@ test("no rules: the two types that fill a rule in dashed boxes, and Use opens on
 
 // The merge of the settings card with sender rules: a link rule change worked out the notes
 // again from the link rules alone, and the sender rules' notes went from the card.
-test("a link rule kept, switched or deleted on the card leaves the sender rules' notes on the Link rules page", async () => {
+test("a link rule kept, switched or deleted on the card leaves the sender rules and their notes, which show on the Sender rules page", async () => {
   const { v, cx } = await rulesPane();
   try {
     const bad = "Sender rule 1: pattern has no (?<sender>...) group";
+    const why = "Not working: pattern has no (?<sender>...) group";
+    const onSenders = () => { v.setPage = "senders"; const s = strsOf(cardOf(v)); v.setPage = "links"; return s; };
     const file = JSON.stringify({ textSize: 15, links: RULES, senders: [{ pattern: "^From (\\w+):" }] });
     recordFiles[v.prefsPath()] = file;
     v.applyPrefs(file);
-    expect(strsOf(cardOf(v))).toContain(bad);
+    expect(strsOf(cardOf(v))).not.toContain(bad);
+    expect(onSenders()).toContain(why);
     onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
     typeIn(v, "example", "Fixed in ACME-7.", cx);
     onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
     expect(v.prefsNotes).toContain(bad);
-    expect(strsOf(cardOf(v))).toContain(bad);
+    expect(onSenders()).toContain(why);
     await settleAll(cx);
     expect(lastLinks()[0].example).toBe("Fixed in ACME-7.");
     expect(JSON.parse(settingsWrites.at(-1)).senders).toEqual([{ pattern: "^From (\\w+):" }]);
     for (const press of [() => v.toggleRule(1, cx), () => v.removeRule(1, cx)]) {
       press();
-      expect(strsOf(cardOf(v))).toContain(bad);
+      expect(v.prefsNotes).toContain(bad);
       await settleAll(cx);
-      expect(strsOf(cardOf(v))).toContain(bad);
+      expect(onSenders()).toContain(why);
     }
   } finally { done(v); }
 });
@@ -9733,5 +9742,380 @@ test("a rule whose address is on github.com links only when the session's origin
     expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
     v.remote = { ...v.remote, host: "ssh.github.com" };
     expect(v.linkOne("Merged in #58.").md).toContain("https://github.com/acme/exports/pull/58");
+  } finally { done(v); }
+});
+
+// ---- sender rules on the card: the Sender rules page, beside Link rules ----
+
+const SENDS = [
+  { name: "Checker", prefix: "From {name}:", example: "From release-checker: two links are dead", keepMe: 1 },
+  { name: "Nightly", pattern: "^\\[(?<sender>[a-z-]+)\\] ", example: "[nightly-bot] all green", on: false },
+  { name: "Broken", prefix: "From:" },
+  { name: "Bare", prefix: "{name} hourly" },
+  { name: "Miss", prefix: "Status {name}:", example: "nothing here" },
+];
+const SENDER_NOTE = "A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.";
+const SENDERS_NOT_LIST = "\"senders\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+async function sendersPane(senders = SENDS) {
+  const r = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  settingsWrites.length = 0;
+  r.v.applyPrefs(JSON.stringify({ textSize: 15, links: RULES, senders }));
+  recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
+  r.v.action("settings", r.cx);
+  r.v.setPage = "senders";
+  r.cx.pending = []; // the folder watch never ends: wait only for what follows
+  return r;
+}
+const lastSenders = () => JSON.parse(settingsWrites.at(-1)).senders;
+function typeSender(v, k, text, cx) { v.senderInputs[k].set_value(text); v.senderInputs[k].handlers.change({}, cx); }
+const idsAt = (c, id) => c.findIndex((e) => e[0] === "id" && e[1] === id);
+const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+
+test("General has a Sender rules row under Link rules with its count and how many are not working; it opens the page, as the command does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ senders: SENDS }));
+  v.action("settings", cx);
+  let c = cardOf(v);
+  const ids = idsIn(c);
+  expect(ids.indexOf("th-set-senders")).toBe(ids.indexOf("th-set-links") + 1);
+  expect(strsOf(ownOf(c, "th-set-senders"))).toEqual(["Sender rules", "5", "1 not working"]);
+  expect(ownOf(c, "th-set-senders")).toContainEqual(["text_color", theme.blocked]);
+  expect(ownOf(c, "th-set-senders").some((e) => e[0] === "svg" && String(e[1]).endsWith("/chevron-right.svg"))).toBe(true);
+  onOf(c, "th-set-senders", "on_click")({}, cx);
+  expect(v.setPage).toBe("senders");
+  c = cardOf(v);
+  expect(strsOf(c)).toContain("Sender rules");
+  expect(idsIn(c)).toContain("th-set-back");
+  expect(idsIn(c)).not.toContain("th-set-tab-general");
+  expect(idsIn(c)).not.toContain("th-set-preview");
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.page).toBe("senders");
+  onOf(c, "th-set-back", "on_click")({}, cx);
+  expect(v.setPage).toBe("main");
+  // The command, beside settingsPage:links; only while the card is open.
+  expect(v.action("settingsPage:senders", cx)).toBe(true);
+  expect(v.setPage).toBe("senders");
+  v.action("settingsPage:links", cx);
+  expect(v.setPage).toBe("links");
+  v.closeSettings();
+  expect(v.action("settingsPage:senders", cx)).toBe(false);
+  // No rules: None, with nothing in the blocked colour.
+  v.applyPrefs("{}");
+  v.action("settings", cx);
+  expect(strsOf(ownOf(cardOf(v), "th-set-senders"))).toEqual(["Sender rules", "None"]);
+});
+
+test("the Sender rules page: each rule with its name, what it matches, the sender its example gives, its switch, or why it is not working", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of [SENDER_NOTE, "Rules · 5", "Checker", "Starts with", "From {name}:", "From ", "release-checker", ": two links are dead", "release-checker · matched by rule",
+      "Nightly", "Pattern", "^\\[(?<sender>[a-z-]+)\\] ", "Off", "nightly-bot", "] all green", "nightly-bot · matched by rule",
+      "Broken", "From:", "Not working: prefix has no {name}; it would mark every prompt that starts with it",
+      "Bare", "{name} hourly", "No example yet", "Miss", "nothing here", "Finds no sender in its example",
+      "When two rules match the same prompt, the higher one wins.", "Add rule",
+      "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."]) expect(s).toContain(x);
+    // The link rules are not on this page.
+    expect(s).not.toContain("Ticket");
+    expect(s).not.toContain("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.");
+    // The sender's name in the example underlined; the type's icon; the tag on what a match shows as.
+    expect(c).toContainEqual(["underline"]);
+    const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+    expect(icons).toEqual(expect.arrayContaining(["text-cursor.svg", "regex.svg", "tag.svg", "alert.svg"]));
+    expect(readFileSync(new URL("../mods/agent-threads/tag.svg", import.meta.url), "utf8")).toContain('stroke-width="1.5"');
+    // A switch on each rule that runs; the warning mark in its place on the refused one.
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-sender-on-1", "th-sender-on-2", "th-sender-on-4", "th-sender-on-5"]));
+    expect(idsIn(c)).not.toContain("th-sender-on-3");
+    const card3 = c.slice(idsAt(c, "th-sender-3"), idsAt(c, "th-sender-4"));
+    expect(card3.some((e) => e[0] === "svg" && String(e[1]).endsWith("/alert.svg"))).toBe(true);
+    expect(strsOf(card3)).toContain("Not working: prefix has no {name}; it would mark every prompt that starts with it");
+    // What it matches, in the mono font; Edit and Delete before the switch, as on Link rules.
+    expect(c.slice(idsAt(c, "th-sender-1"), idsAt(c, "th-sender-2"))).toContainEqual(["font_family", v.mono()]);
+    const ids = idsIn(c);
+    expect(ids.indexOf("th-sender-edit-btn-1")).toBeLessThan(ids.indexOf("th-sender-delete-btn-1"));
+    expect(ids.indexOf("th-sender-delete-btn-1")).toBeLessThan(ids.indexOf("th-sender-on-1"));
+    for (const x of [["tooltip", "Edit rule"], ["accessibility_label", "Edit rule"], ["size", 24]]) expect(ownOf(c, "th-sender-edit-btn-1")).toContainEqual(x);
+    for (const x of [["w", 36], ["h", 24]]) expect(ownOf(c, "th-sender-on-1")).toContainEqual(x);
+    // The example's result is worked out once, not at every draw.
+    const memo = v.senderExample(v.senderList[0]);
+    expect(v.senderExample(v.senderList[0])).toBe(memo);
+    // Esc closes the card from the page.
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally { done(v); }
+});
+
+test("sender notes that are not about one rule show blocked, and the page then changes rules only in the file; the Link rules page no longer shows sender notes", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const bad = JSON.stringify({ textSize: 15, links: RULES, senders: { prefix: "From {name}:" } });
+    recordFiles[v.prefsPath()] = bad;
+    v.applyPrefs(bad);
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["senders is not a list; no sender rules", "No rules yet.",
+      "\"senders\" in the settings file is not a list now, so rules change only in the file until it is fixed."]));
+    expect(c).toContainEqual(["text_color", theme.blocked]);
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    // Called anyway: nothing written, and the card says why.
+    settingsWrites.length = 0;
+    v.prefsError = null;
+    v.toggleRule(0, cx);
+    v.openRule(null);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.prefsError).toBe(SENDERS_NOT_LIST);
+    v.setPage = "links";
+    expect(strsOf(cardOf(v))).not.toContain("senders is not a list; no sender rules");
+    // A file that does not read as settings.
+    v.applyPrefs("{ not json");
+    v.setPage = "senders";
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("The settings file does not read as settings now, so rules change only in the file until it is fixed.");
+  } finally { done(v); }
+});
+
+test("the switch on a sender rule writes \"on\": false and takes it back out, keeping every other key; an off rule marks nothing", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const ver = v.sendersVer;
+    expect(v.senders.map((r) => r.n)).toEqual([1, 4, 5]);
+    onOf(cardOf(v), "th-sender-on-1", "on_click")({}, cx);
+    expect(v.senders.map((r) => r.n)).toEqual([4, 5]);
+    expect(v.sendersVer).toBe(ver + 1);
+    expect(v.ruleEdit).toBe(null); // the press opens nothing
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual({ ...SENDS[0], on: false });
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual(RULES);
+    expect(w.textSize).toBe(15);
+    onOf(cardOf(v), "th-sender-on-2", "on_click")({}, cx);
+    await settleAll(cx);
+    const { on: _off, ...nightly } = SENDS[1];
+    expect(lastSenders()[1]).toEqual(nightly);
+    expect(v.senders.map((r) => r.n)).toEqual([2, 4, 5]);
+    onOf(cardOf(v), "th-sender-on-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual(SENDS[0]);
+  } finally { done(v); }
+});
+
+test("Delete takes a sender rule at once with Undo in its place; Undo puts it back; leaving the page drops Undo", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-delete-btn-1", "on_click")({}, cx);
+    expect(v.senderList.map((r) => r.name)).toEqual(["Nightly", "Broken", "Bare", "Miss"]);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual(SENDS.slice(1));
+    let c = cardOf(v);
+    expect(strsOf(c)).toContain("Deleted Checker.");
+    // Drawn where the rule was.
+    expect(idsIn(c)).toContain("th-rule-undo-line");
+    expect(v.ruleUndo.at).toBe(0);
+    onOf(c, "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual(SENDS);
+    c = cardOf(v);
+    expect(strsOf(c)).not.toContain("Deleted Checker.");
+    v.removeRule(1, cx);
+    expect(v.ruleUndo).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.ruleUndo).toBe(null);
+    await settleAll(cx);
+    expect(JSON.parse(settingsWrites.at(-1)).links).toEqual(RULES);
+  } finally { done(v); }
+});
+
+test("a press on a sender rule opens it in place: Name, Matches by, the prefix, Example and what it does to the example; Keep rule writes it, keeping keys this version does not know", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at]).toEqual(["senders", 0]);
+    expect(Object.fromEntries(Object.entries(v.senderInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Checker", prefix: "From {name}:", pattern: "", example: SENDS[0].example });
+    let c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of ["Type", "Starts with", "Change", "Name", "Example", "It shows in the list, and in the tooltip on a message it matched.",
+      "{name} is the sender's name. It ends at the text you put after it, or at a space.", "Read against the first 100 characters of a prompt's first line.",
+      "A prompt this rule should match. Type any prompt here to try the rule.", "Matches. It shows as", "release-checker · matched by rule",
+      "Keep rule", "Discard", "Duplicate", "Delete"]) expect(s).toContain(x);
+    for (const x of ["Move up", "Finds", "Opens", "Description", "Matches by"]) expect(s).not.toContain(x);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-edit-1", "th-rule-f-prefix", "th-sender-type-change", "th-rule-result"]));
+    for (const x of ["th-rule-f-pattern", "th-sender-1", "th-sender-type-prefix"]) expect(idsIn(c)).not.toContain(x);
+    // A kept rule's type is one line with Change; Change shows both, and a choice folds them.
+    onOf(c, "th-sender-type-change", "on_click")({}, cx);
+    c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["Text at the start, with {name} where the sender's name is.", "A regular expression with a group named sender."]));
+    expect(ownOf(c, "th-sender-type-prefix")).toContainEqual(["border_color", theme.accent]);
+    onOf(c, "th-sender-type-prefix", "on_click")({}, cx);
+    expect(idsIn(cardOf(v))).toContain("th-sender-type-change");
+    // The result follows the example at each key.
+    typeSender(v, "example", "From helper-a: done", cx);
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["helper-a", "helper-a · matched by rule"]));
+    typeSender(v, "example", "Nothing to see", cx);
+    expect(strsOf(cardOf(v))).toContain("No match. This prompt would stay yours.");
+    expect(strsOf(cardOf(v))).not.toContain("Only the first 100 characters of the first line are read.");
+    // The rule's first line, first 100 characters, as the reader sees it.
+    typeSender(v, "example", `${"x".repeat(95)} From helper-a: late`, cx);
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["No match. This prompt would stay yours.", "Only the first 100 characters of the first line are read."]));
+    typeSender(v, "example", "Nothing to see", cx);
+    v.senderInputs.name.handlers.submit({}, cx); // Enter in a field keeps it
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual({ name: "Checker", prefix: "From {name}:", example: "Nothing to see", keepMe: 1 });
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual(RULES);
+    expect(w.textSize).toBe(15);
+    // Esc from a field closes the rule, not the card, and writes nothing; so does Discard.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-sender-name");
+    typeSender(v, "name", "Changed", cx);
+    v.key(keyEv("escape"), cx);
+    expect([v.ruleEdit, v.settingsOpen, v.fieldFocused]).toEqual([null, true, null]);
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    c = cardOf(v);
+    expect(v.senderInputs.pattern.value()).toBe(SENDS[1].pattern);
+    expect(idsIn(c)).toContain("th-rule-f-pattern");
+    onOf(c, "th-rule-discard", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+  } finally { done(v); }
+});
+
+test("Add rule: Start of the prompt or Pattern; a draft that would not run says why when the field is left, and is never kept", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    let c = cardOf(v);
+    expect(strsOf(c)).toContain("New rule, not kept yet");
+    expect(idsIn(c).indexOf("th-rule-new")).toBeGreaterThan(idsIn(c).indexOf("th-sender-5"));
+    expect(v.ruleEdit.draft.by).toBe("prefix");
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["Text at the start, with {name} where the sender's name is.", "A regular expression with a group named sender."]));
+    // An empty field is not a fault until Keep rule.
+    onOf(c, "th-rule-keep", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: no prefix");
+    onOf(cardOf(v), "th-sender-type-pattern", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.by).toBe("pattern");
+    c = cardOf(v);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-f-pattern", "th-sender-type-prefix"])); // a new rule keeps both rows
+    expect(idsIn(c)).not.toContain("th-rule-f-prefix");
+    // No reason at a key; leaving the field shows it.
+    typeSender(v, "pattern", "^From (\\w+):", cx);
+    expect(strsOf(cardOf(v))).not.toContain("Not working: pattern has no (?<sender>...) group");
+    v.senderInputs.pattern.handlers.blur({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern has no (?<sender>...) group");
+    // A draft that will not run shows no result: the reason is under its field.
+    typeSender(v, "example", "From nightly-bot: ok", cx);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-result");
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).not.toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    // Mended: the reason goes at that key, and the example says who it is from.
+    typeSender(v, "pattern", "^From (?<sender>[a-z]+-[a-z]+):", cx);
+    expect(v.ruleEdit.shown).toEqual({ prefix: null, pattern: null });
+    expect(strsOf(cardOf(v))).not.toContain("Not working: pattern has no (?<sender>...) group");
+    expect(strsOf(cardOf(v))).toContain("nightly-bot · matched by rule");
+    // A rule higher in the list takes the same prompt first, and the line says so.
+    expect(strsOf(cardOf(v))).toContain("Checker is higher in the list and takes this prompt first. Keep this rule, then Move up to put it above.");
+    typeSender(v, "name", "Seat", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[5]).toEqual({ name: "Seat", pattern: "^From (?<sender>[a-z]+-[a-z]+):", example: "From nightly-bot: ok" });
+    expect(lastSenders().slice(0, 5)).toEqual(SENDS);
+  } finally { done(v); }
+});
+
+test("a refused sender rule opens with its reason; Move up and Duplicate", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-3", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: prefix has no {name}; it would mark every prompt that starts with it");
+    v.closeRule();
+    onOf(cardOf(v), "th-sender-5", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-up", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(3);
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Miss", "Bare"]);
+    onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.senderInputs.name.value()]).toEqual([null, 4, "Miss copy"]);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Miss", "Miss copy", "Bare"]);
+  } finally { done(v); }
+});
+
+test("a change to the senders in the file shows on the page and the open rule follows it; leaving the page drops an unkept rule", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-4", "on_click")({}, cx);
+    typeSender(v, "example", "helper-a hourly 2026-11-18T01:00:00Z", cx);
+    const added = JSON.stringify({ textSize: 15, links: RULES, senders: [{ name: "Top", prefix: "[{name}] " }, ...SENDS] });
+    recordFiles[v.prefsPath()] = added;
+    v.applyPrefs(added);
+    expect(v.ruleEdit.at).toBe(4);
+    expect(strsOf(cardOf(v))).toContain("Top");
+    expect(v.senders.map((r) => r.label)).toEqual(["Top", "Checker", "Bare", "Miss"]);
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastSenders()[4]).toEqual({ name: "Bare", prefix: "{name} hourly", example: "helper-a hourly 2026-11-18T01:00:00Z" });
+    expect(lastSenders()[0].name).toBe("Top");
+    // Leaving the page, to Link rules or back to the card, drops a rule not kept.
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.action("settingsPage:links", cx);
+    expect(v.ruleEdit).toBe(null);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.action("settingsPage:main", cx);
+    expect([v.ruleEdit, v.setPage]).toEqual([null, "main"]);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    onOf(cardOf(v), "th-set-back", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+test("Reset leaves sender rules alone, and its note names them", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    v.setPage = "main";
+    expect(strsOf(cardOf(v)).filter((x) => x === "Link rules, sender rules and the quote key stay.")).toHaveLength(1);
+    v.action("textSize:+", cx);
+    await settleAll(cx);
+    v.action("resetSettings", cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.senders).toEqual(SENDS);
+    expect(w.links).toEqual(RULES);
+    expect(v.senders.map((r) => r.n)).toEqual([1, 4, 5]);
+  } finally { done(v); }
+});
+
+test("no sender rules: the two examples in dashed boxes, and Use opens a new rule filled from one", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Name in brackets", "[build-bot] at the start of a prompt",
+      "From line", "From build-bot: at the start of a prompt", "Add rule"]));
+    expect(strsOf(c)).not.toContain("When two rules match the same prompt, the higher one wins.");
+    expect(c).toContainEqual(["border_dashed"]);
+    onOf(c, "th-sender-use-brackets", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at, v.senderInputs.name.value(), v.senderInputs.prefix.value()]).toEqual(["senders", null, "Name in brackets", "[{name}] "]);
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("build-bot · matched by rule");
+    expect(strsOf(c)).not.toContain("Examples, not rules until you keep one");
+    onOf(c, "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([{ name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" }]);
+    // A rule with no name shows its text as its name.
+    const bare = JSON.stringify({ textSize: 15, links: RULES, senders: [{ prefix: "From {name}: " }] });
+    recordFiles[v.prefsPath()] = bare;
+    v.applyPrefs(bare);
+    expect(strsOf(cardOf(v)).filter((x) => x === "From {name}: ").length).toBe(2);
   } finally { done(v); }
 });

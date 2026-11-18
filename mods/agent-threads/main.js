@@ -49,7 +49,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -63,7 +63,7 @@ import {
   keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
@@ -188,7 +188,7 @@ const CARD_SECTIONS = [
   ["Text and colors", ["textSize", "userColor", "agentColor"]],
   ["Messages", ["agents", "agentRail", "truncate", "time"]],
   ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
-  ["Rules and keys", ["linkRules", "quoteKey"]],
+  ["Rules and keys", ["linkRules", "senderRules", "quoteKey"]],
   ["File", ["file"]],
 ];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
@@ -201,7 +201,7 @@ const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 // The Width chooser's words.
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
-// image viewer's own switch (i), and quoteKey and links are never reset.
+// image viewer's own switch (i), and quoteKey, links and senders are never reset.
 const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
@@ -213,11 +213,50 @@ const RULE_FIELDS = [
   ["url", "Opens", "An address, such as https://tracker.example.com/ACME-$1", 2000],
   ["example", "Example", "Text this rule should link, such as Fixed in ACME-412.", 200],
 ];
+// The Sender rules page's editor: its fields, as RULE_FIELDS. One of Starts with and Pattern
+// shows, as its Type says; each keeps its own text.
+const SENDER_FIELDS = [
+  ["name", "Name", "Optional", 40],
+  ["prefix", "Starts with", "[{name}] ", 100],
+  ["pattern", "Pattern", "^From (?<sender>[a-z]+-[a-z-]+):", 200],
+  ["example", "Example", "[build-bot] nightly build green on main", 200],
+];
+// A sender rule's two types: the key it writes, its word, its icon and its line in the editor.
+const SENDER_TYPES = [
+  ["prefix", "Starts with", "text-cursor", "Text at the start, with {name} where the sender's name is."],
+  ["pattern", "Pattern", "regex", "A regular expression with a group named sender."],
+];
+// No sender rules: two that fill a new rule, with Use.
+const SENDER_EXAMPLES = {
+  brackets: { line: "[build-bot] at the start of a prompt", rule: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" } },
+  from: { line: "From build-bot: at the start of a prompt", rule: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" } },
+};
+// A rule's example with the sender's name marked (as examplePieces draws a link), or null
+// when the rule finds no sender in it. The rule reads it as core/turns.js ruleSender does:
+// the first line from its first non-space, RULE_TEXT characters.
+function senderPieces(rule, text) {
+  let a = 0;
+  while (a < text.length && a < RULE_TEXT && /\s/.test(text[a])) a++;
+  let head = text.slice(a, a + RULE_TEXT);
+  const nl = head.indexOf("\n");
+  if (nl >= 0) head = head.slice(0, nl);
+  rule.re.lastIndex = 0;
+  const m = rule.re.exec(head);
+  const raw = m?.groups?.sender;
+  if (!m || !raw?.trim()) return null;
+  const at = a + m.index + m[0].indexOf(raw);
+  return [{ t: text.slice(0, at) }, { t: raw, url: true }, { t: text.slice(at + raw.length) }].filter((p) => p.t);
+}
+// Whether an example runs past what a sender rule reads.
+const pastRuleText = (text) => { const t = text.trimStart(); return t.length > RULE_TEXT || t.slice(0, RULE_TEXT).includes("\n"); };
 // How long typing may stop before a rule's fault is shown (chat-look round 10).
 const REASON_PAUSE = 1500;
-// Why a change to the link rules was not written, on the card's File line.
+// Why a change to the link or sender rules was not written, on the card's File line.
 const RULES_NOT_JSON = "settings.json is not valid JSON, so the rule change was not saved. Fix the file first.";
-const RULES_NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const rulesNotList = (key) => `"${key}" in settings.json is not a list, so the rule change was not saved. Fix the file first.`;
+// The fieldFocused value of a rule editor field, before its key: "rule-pattern" on Link
+// rules, "rule-sender-pattern" on Sender rules (Esc in either closes the rule).
+const fieldTag = (kind) => (kind === "senders" ? "rule-sender-" : "rule-");
 const RULES_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
 const REGEX_REFERENCE = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet";
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
@@ -747,20 +786,27 @@ export default class Threads extends View {
     this.quoteInput.on("change", (_e, cx) => { this.quoteTyped(cx); cx.notify(); });
     this.quoteInput.on("focus", (_e, cx) => { this.fieldFocused = "quote"; cx.notify(); });
     this.quoteInput.on("blur", (_e, cx) => { if (this.fieldFocused === "quote") this.fieldFocused = null; cx.notify(); });
-    this.ruleInputs = {};
-    for (const [k, , hint] of RULE_FIELDS) {
-      const inp = InputState.new({ placeholder: hint, value: "" });
-      inp.on("change", (_e, cx) => { this.ruleTyped(k, cx); cx.notify(); });
-      inp.on("focus", (_e, cx) => { this.fieldFocused = `rule-${k}`; cx.notify(); });
-      inp.on("blur", (_e, cx) => { if (this.fieldFocused === `rule-${k}`) this.fieldFocused = null; this.ruleShow(k); cx.notify(); });
-      inp.on("submit", (_e, cx) => { this.keepRule(cx); cx.notify(); });
-      this.ruleInputs[k] = inp;
-    }
+    // The rule editor's fields: the Link rules page's, and the Sender rules page's.
+    const ruleInputs = (fields, kind) => {
+      const out = {};
+      for (const [k, , hint] of fields) {
+        const tag = `${fieldTag(kind)}${k}`;
+        const inp = InputState.new({ placeholder: hint, value: "" });
+        inp.on("change", (_e, cx) => { this.ruleTyped(k, cx, kind); cx.notify(); });
+        inp.on("focus", (_e, cx) => { this.fieldFocused = tag; cx.notify(); });
+        inp.on("blur", (_e, cx) => { if (this.fieldFocused === tag) this.fieldFocused = null; this.ruleShow(k); cx.notify(); });
+        inp.on("submit", (_e, cx) => { this.keepRule(cx); cx.notify(); });
+        out[k] = inp;
+      }
+      return out;
+    };
+    this.ruleInputs = ruleInputs(RULE_FIELDS, "links");
+    this.senderInputs = ruleInputs(SENDER_FIELDS, "senders");
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
     this.settingsOpen = false;
-    // The settings card's page ("main" or "links") and its rows' height as last drawn
+    // The settings card's page ("main", "links" or "senders") and its rows' height as last drawn
     // ({ key, h }). Not saved. Each opening counts (cardOpens), so its scroll area is a new
     // one and it opens at the top.
     this.cardOpens = 0;
@@ -772,11 +818,13 @@ export default class Threads extends View {
     this.fieldFocused = null;
     this.quoteFileNote = null;
     this.linkList = [];
-    // The Link rules page: the rule open in the editor (null: none), the rule just deleted
-    // (for Undo), and the list just written (until the file shows it).
+    this.senderList = [];
+    // The Link rules and Sender rules pages: the rule open in the editor (null: none), the
+    // rule just deleted (for Undo), each with the kind of rule ("links" or "senders"), and
+    // each kind's list just written (until the file shows it).
     this.ruleEdit = null;
     this.ruleUndo = null;
-    this.linksPending = null;
+    this.rulesPending = { links: null, senders: null };
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
     this.links = []; // compiled link rules (settings.js parseLinks)
@@ -1051,12 +1099,21 @@ export default class Threads extends View {
     // The card's field shows the key the file now holds, unless it is being typed in.
     if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
-    this.setLinks(x.links, x.linkList, x.linkCount);
-    if (this.ruleEdit || this.ruleUndo) this.followRules(this.fileLinks());
-    this.senderCount = x.senderCount;
+    this.linkNotes = x.linkNotes;
     this.senderNotes = x.senderNotes;
-    const ssig = JSON.stringify(x.senders.map((r) => [r.n, r.re.source, r.label]));
-    if (ssig !== (this.sendersSig ?? "[]")) { this.sendersSig = ssig; this.senders = x.senders; this.sendersVer++; this.remark(cx); }
+    this.setLinks(x.links, x.linkList, x.linkCount);
+    this.setSenders(x.senders, x.senderList, x.senderCount, cx);
+    const kind = this.ruleEdit?.kind ?? this.ruleUndo?.kind;
+    if (kind) this.followRules(this.fileRules(kind));
+  }
+
+  // New sender rules: the turns are marked again when the rules that run changed.
+  setSenders(rules, list, count, cx = null) {
+    this.senderCount = count;
+    this.senderList = list;
+    this.senderListVer = (this.senderListVer ?? 0) + 1;
+    const ssig = JSON.stringify(rules.map((r) => [r.n, r.re.source, r.label]));
+    if (ssig !== (this.sendersSig ?? "[]")) { this.sendersSig = ssig; this.senders = rules; this.sendersVer++; this.remark(cx); }
   }
 
   // New sender rules: every session read so far is marked again (turns.js remarkSenders),
@@ -1100,14 +1157,14 @@ export default class Threads extends View {
   // that finds the file changed meanwhile reads it again and applies the change on top.
   // extra: keys written as they are (the card's quote key, the link rules). fits: given the
   // file's text, why extra may not be written over it, or null; asked before the save and
-  // again on the text read after a stale one (writeLinks). Returns the save.
+  // again on the text read after a stale one (writeRules). Returns the save.
   changePrefs(patch, cx, extra = null, fits = null) {
     // The current mark, so a slate chosen here is kept (settings.js LOOK).
     const next = parseSettings(JSON.stringify({ ...this.prefs, ...patch, look: LOOK })).values;
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
     // Not written: the pane shows the file as it is, and the card says why.
-    const refuse = (text, why) => { this.linksPending = null; this.applyPrefs(text); this.prefsError = why; };
+    const refuse = (text, why) => { this.rulesPending = { links: null, senders: null }; this.applyPrefs(text); this.prefsError = why; };
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
       const why = writable(this.prefsRaw) ? fits?.(this.prefsRaw) : null;
       if (why) { refuse(this.prefsRaw, why); return; }
@@ -1178,7 +1235,8 @@ export default class Threads extends View {
     this.leaveLinks();
     this.dropField();
   }
-  // Leaving the Link rules page: a rule open in the editor is dropped unkept, and Undo goes.
+  // Leaving the Link rules or Sender rules page: a rule open in the editor is dropped unkept,
+  // and Undo goes.
   leaveLinks() {
     this.ruleEdit = null;
     this.ruleUndo = null;
@@ -1225,56 +1283,77 @@ export default class Threads extends View {
     if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
   }
 
-  // ---- link rules changed on the card (chat-look round 10) ----
+  // ---- link rules and sender rules changed on the card (chat-look round 10) ----
+  // One editor serves both pages. kind is the list a rule is in, "links" or "senders", and
+  // the file's key that holds it; a rule's row, its editor and its Undo carry their kind.
 
-  // Whether the card may change rules: not while the file holds text that is not settings
-  // (a hand edit in progress) or a "links" that is not a list, which a write would replace.
-  linksEditable() {
-    return writable(this.prefsRaw) && this.linksOf(this.prefsRaw) != null;
+  // The kind of rule the page shown holds: the Sender rules page's, else the Link rules page's.
+  ruleKind() { return this.setPage === "senders" ? "senders" : "links"; }
+  inputsOf(kind) { return kind === "senders" ? this.senderInputs : this.ruleInputs; }
+  fieldsOf(kind) { return kind === "senders" ? SENDER_FIELDS : RULE_FIELDS; }
+  listOf(kind) { return (kind === "senders" ? this.senderList : this.linkList) ?? []; }
+
+  // Whether the card may change rules of a kind: not while the file holds text that is not
+  // settings (a hand edit in progress) or that kind is not a list, which a write would replace.
+  rulesEditable(kind = this.ruleKind()) {
+    return writable(this.prefsRaw) && this.rulesIn(this.prefsRaw, kind) != null;
   }
   // A change to the rules (Delete, Undo, the switch, Keep rule, Move up) while the card may
   // not change them: refused, and the card's File line says why. Returns true when refused.
-  linksRefused() {
-    if (this.linksEditable()) return false;
-    this.prefsError = writable(this.prefsRaw) ? RULES_NOT_LIST : RULES_NOT_JSON;
+  rulesRefused(kind = this.ruleKind()) {
+    if (this.rulesEditable(kind)) return false;
+    this.prefsError = writable(this.prefsRaw) ? rulesNotList(kind) : RULES_NOT_JSON;
     return true;
   }
-  // The rules a settings text holds, as copies to change: the fresh install's rule for no
-  // file or an empty one, none for a file without "links" (or one that does not parse), and
-  // null when "links" is not a list.
-  linksOf(text) {
-    if (text == null || String(text).trim() === "") return defaultLinks();
+  // The rules of a kind a settings text holds, as copies to change: for links, the fresh
+  // install's rule for no file or an empty one; none for a file without the key (or one that
+  // does not parse); null when the key is not a list.
+  rulesIn(text, kind) {
+    if (text == null || String(text).trim() === "") return kind === "links" ? defaultLinks() : [];
     let raw = null;
     try { raw = JSON.parse(text); } catch { return []; }
-    if (raw?.links == null) return [];
-    return Array.isArray(raw.links) ? raw.links.map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : null;
+    if (raw?.[kind] == null) return [];
+    return Array.isArray(raw[kind]) ? raw[kind].map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : null;
   }
   // The rules as the file holds them, as copies to change: the list just written while its
-  // save runs, or the fresh install's rule while there is no file.
-  fileLinks() {
-    if (this.linksPending) return this.linksPending.map((r) => (r && typeof r === "object" ? { ...r } : r));
-    return this.linksOf(this.prefsRaw) ?? [];
+  // save runs, or the fresh install's link rule while there is no file.
+  fileRules(kind = this.ruleKind()) {
+    const pending = this.rulesPending[kind];
+    if (pending) return pending.map((r) => (r && typeof r === "object" ? { ...r } : r));
+    return this.rulesIn(this.prefsRaw, kind) ?? [];
   }
-  // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
-  // The save writes it only over the list it was made from: when the file's "links" changed
-  // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
-  // pane shows the file again and the card says why. undo: the Undo line a Delete just set,
-  // cleared when that Delete is not written, so Undo cannot add the rule a second time.
-  writeLinks(raw, cx, undo = null) {
-    const from = JSON.stringify(this.fileLinks());
-    this.linksPending = raw;
-    const l = parseLinks(raw);
-    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes, ...(this.senderNotes ?? [])];
-    this.setLinks(l.rules, l.list, raw.length);
+  // A list of a kind as the pane's rules now, before the file holds it. The notes of the
+  // other kind stay as they were.
+  useRules(kind, raw, cx) {
+    if (kind === "senders") {
+      const p = parseSenders(raw);
+      this.senderNotes = p.notes;
+      this.setSenders(p.rules, p.list, raw.length, cx);
+    } else {
+      const l = parseLinks(raw);
+      this.linkNotes = l.notes;
+      this.setLinks(l.rules, l.list, raw.length);
+    }
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...(this.linkNotes ?? []), ...(this.senderNotes ?? [])];
+  }
+  // Applies a changed list at once, then writes it under its kind (settings.js keeps the
+  // rest). The save writes it only over the list it was made from: when the file's list
+  // changed meanwhile (a hand edit, another pane) or is no longer a list, nothing is written,
+  // the pane shows the file again and the card says why. undo: the Undo line a Delete just
+  // set, cleared when that Delete is not written, so Undo cannot add the rule a second time.
+  writeRules(kind, raw, cx, undo = null) {
+    const from = JSON.stringify(this.fileRules(kind));
+    this.rulesPending[kind] = raw;
+    this.useRules(kind, raw, cx);
     this.followRules(raw);
     const fits = (text) => {
-      const now = this.linksOf(text);
-      const why = now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+      const now = this.rulesIn(text, kind);
+      const why = now == null ? rulesNotList(kind) : JSON.stringify(now) !== from ? RULES_MOVED : null;
       if (why && undo && this.ruleUndo === undo) this.ruleUndo = null;
       return why;
     };
-    const chain = this.changePrefs({}, cx, { links: raw }, fits);
-    chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
+    const chain = this.changePrefs({}, cx, { [kind]: raw }, fits);
+    chain.then(() => { if (this.rulesPending[kind] === raw) this.rulesPending[kind] = null; });
     return chain;
   }
   // The list changed, here or in the file: the open rule and the Undo line follow their
@@ -1302,47 +1381,59 @@ export default class Threads extends View {
     }
   }
   // A draft as the file's rule: the keys in a fixed order, the optional ones only when set,
-  // and any key this version does not know kept from the rule it replaces.
-  ruleObject(d, base) {
+  // and any key this version does not know kept from the rule it replaces. A sender rule
+  // keeps the one of prefix and pattern that Matches by names.
+  ruleObject(d, base, kind = "links") {
     const o = {};
     if (d.name.trim()) o.name = d.name.trim();
-    if (d.type !== "custom") o.type = d.type;
-    const desc = d.description.replace(/\s+/g, " ").trim();
-    if (desc) o.description = desc;
-    o.pattern = d.pattern;
-    o.url = d.url.trim();
+    let known;
+    if (kind === "senders") {
+      o[d.by] = d[d.by];
+      known = ["name", "prefix", "pattern", "example", "on"];
+    } else {
+      if (d.type !== "custom") o.type = d.type;
+      const desc = d.description.replace(/\s+/g, " ").trim();
+      if (desc) o.description = desc;
+      o.pattern = d.pattern;
+      o.url = d.url.trim();
+      known = ["name", "type", "description", "pattern", "url", "example", "on"];
+    }
     if (d.example) o.example = d.example;
     if (!d.on) o.on = false;
-    const known = new Set(["name", "type", "description", "pattern", "url", "example", "on"]);
-    for (const [k, v] of Object.entries(base && typeof base === "object" ? base : {})) if (!known.has(k)) o[k] = v;
+    for (const [k, v] of Object.entries(base && typeof base === "object" ? base : {})) if (!known.includes(k)) o[k] = v;
     return o;
   }
-  setRuleField(k, v) {
+  setRuleField(k, v, kind = this.ruleEdit?.kind ?? "links") {
     this.ruleSetting = true;
-    try { this.ruleInputs[k]?.set_value(v ?? ""); } finally { this.ruleSetting = false; }
+    try { this.inputsOf(kind)[k]?.set_value(v ?? ""); } finally { this.ruleSetting = false; }
   }
   // Opens rule `at` (its index in the file) in place, or a new rule (at null) placed at
   // insertAt, blank or filled from `from` (Duplicate). One rule is open at a time.
-  openRule(at, from = null, insertAt = null) {
-    if (!this.linksEditable()) return;
-    const raw = this.fileLinks();
+  openRule(at, from = null, insertAt = null, kind = this.ruleKind()) {
+    if (!this.rulesEditable(kind)) return;
+    const raw = this.fileRules(kind);
+    const senders = kind === "senders";
     let d;
     let base = null;
     if (at != null) {
-      const r = this.linkList[at];
+      const r = this.listOf(kind)[at];
       if (!r) return;
       base = raw[at];
-      d = { name: typeof base?.name === "string" ? base.name : "", description: r.description, pattern: r.pattern, url: r.url, example: r.example, type: r.type, on: r.on };
+      const name = typeof base?.name === "string" ? base.name : "";
+      d = senders
+        ? { name, by: r.pattern && !r.prefix ? "pattern" : "prefix", prefix: r.prefix, pattern: r.pattern, example: r.example, on: r.on }
+        : { name, description: r.description, pattern: r.pattern, url: r.url, example: r.example, type: r.type, on: r.on };
     } else if (from) d = { ...from, name: from.name ? `${from.name} copy`.slice(0, 40) : "" };
+    else if (senders) d = { name: "", by: "prefix", prefix: "", pattern: "", example: "", on: true };
     else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
-    const e = { at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
-      shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
+    const e = { kind, at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
+      shown: senders ? { prefix: null, pattern: null } : { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
     this.ruleEdit = e;
-    for (const [k] of RULE_FIELDS) this.setRuleField(k, d[k]);
+    for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, d[k], kind);
     this.ruleCheck();
     // A kept rule that is not working says why at once.
-    if (at != null) for (const f of ["pattern", "url"]) e.shown[f] = e.faults[f];
+    if (at != null) for (const f of Object.keys(e.shown)) e.shown[f] = e.faults[f];
   }
   closeRule() {
     this.ruleEdit = null;
@@ -1352,7 +1443,7 @@ export default class Threads extends View {
   // (and the name, unless one was typed); otherwise it is only the label.
   chooseType(k) {
     const e = this.ruleEdit;
-    if (!e || !LINK_TYPES.includes(k)) return;
+    if (e?.kind !== "links" || !LINK_TYPES.includes(k)) return;
     e.draft.type = k;
     if (e.at == null && !e.touched) {
       const tpl = LINK_TEMPLATES[k].rule;
@@ -1363,32 +1454,59 @@ export default class Threads extends View {
       this.ruleCheck();
     } else e.typeOpen = false;
   }
+  // A sender rule's type pressed: its field shows, with the text it had, and on a kept rule
+  // the two rows fold back to one line.
+  chooseSenderType(by) {
+    const e = this.ruleEdit;
+    if (e?.kind !== "senders" || !SENDER_TYPES.some(([k]) => k === by)) return;
+    e.typeOpen = false;
+    if (e.draft.by === by) return;
+    if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+    e.draft.by = by;
+    e.shown = { prefix: null, pattern: null };
+    this.ruleCheck();
+  }
+  // Use on an example: a new rule filled from it, not kept until Keep rule.
+  useSenderExample(k) {
+    const x = SENDER_EXAMPLES[k];
+    if (!x) return;
+    this.openRule(null, null, null, "senders");
+    const e = this.ruleEdit;
+    if (e?.kind !== "senders") return;
+    Object.assign(e.draft, x.rule, { by: "prefix" });
+    e.touched = true;
+    for (const [f] of SENDER_FIELDS) this.setRuleField(f, e.draft[f], "senders");
+    this.ruleCheck();
+  }
   // A key in one of the rule's fields. Good news at every key; a fault shows when typing
   // stops for REASON_PAUSE, when the field is left or on Keep rule, and once shown it follows
   // the field and goes the moment the rule runs.
-  ruleTyped(k, cx) {
+  ruleTyped(k, cx, kind = "links") {
     if (this.ruleSetting) return;
     const e = this.ruleEdit;
-    if (!e) return;
-    const max = RULE_FIELDS.find((f) => f[0] === k)?.[3] ?? 200;
-    let v = String(this.ruleInputs[k].value() ?? "");
-    if (v.length > max) { v = v.slice(0, max); this.setRuleField(k, v); }
+    if (!e || e.kind !== kind) return;
+    const inp = this.inputsOf(kind)[k];
+    const max = this.fieldsOf(kind).find((f) => f[0] === k)?.[3] ?? 200;
+    let v = String(inp.value() ?? "");
+    if (v.length > max) { v = v.slice(0, max); this.setRuleField(k, v, kind); }
     e.draft[k] = v;
-    if (k === "pattern" || k === "url" || k === "example") { e.touched = true; e.typeOpen = false; }
+    if (k === "pattern" || k === "url" || k === "example" || k === "prefix") { e.touched = true; e.typeOpen = false; }
     this.ruleCheck();
     const gen = ++e.gen;
     cx.timer.after(REASON_PAUSE, (cx) => { if (this.ruleEdit === e && e.gen === gen) { this.ruleShow(k); cx.notify(); } });
   }
-  // Shows the fault of Finds or Opens, if it has one; an empty field waits for Keep rule.
+  // Shows the fault of a field that can have one (Finds and Opens, or Starts with and
+  // Pattern), if it has one; an empty field waits for Keep rule.
   ruleShow(k) {
     const e = this.ruleEdit;
-    if (!e || (k !== "pattern" && k !== "url") || !e.draft[k]) return;
+    if (!e || !(k in e.shown) || !e.draft[k]) return;
     e.shown[k] = e.faults[k];
   }
   // The open rule's faults, one per field, and what it does to its example. A pattern that
   // does not run keeps the last result that did, dimmed.
   ruleCheck() {
     const e = this.ruleEdit;
+    if (e.kind === "senders") return this.senderCheck();
     const d = e.draft;
     const url = d.url.trim();
     const pf = d.pattern ? ruleFault({ pattern: d.pattern, url: "https://example.com/$1" }) : "no pattern";
@@ -1401,11 +1519,41 @@ export default class Threads extends View {
     e.lastGood = e.result;
     e.stale = false;
   }
+  // A sender rule's fault, in parseSenders' words, is on the field its type names: the draft
+  // alone, as the file would read it (settings.js checkSender).
+  senderCheck() {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const f = d.by;
+    const { rule, why } = d[f] ? checkSender({ [f]: d[f] }) : { rule: null, why: `no ${f}` };
+    e.faults = { prefix: null, pattern: null, [f]: why };
+    for (const k of ["prefix", "pattern"]) if (e.shown[k] != null) e.shown[k] = e.faults[k];
+    if (why) { e.stale = true; return; }
+    e.result = this.senderResult(e, rule);
+    e.lastGood = e.result;
+    e.stale = false;
+  }
+  // What a sender rule does to its example, as the reader would (core/turns.js ruleSender:
+  // the first line, its first 100 characters): the example with the sender's name marked and
+  // the label a match shows, or no match; a rule higher in the list that takes it first; and
+  // whether the example runs past what a rule reads. null with no example.
+  senderResult(e, rule) {
+    const d = e.draft;
+    if (!d.example) return null;
+    const past = pastRuleText(d.example);
+    const hit = ruleSender([rule], d.example);
+    if (!hit) return { past };
+    const pos = e.at ?? e.insertAt;
+    const above = (this.senders ?? []).filter((r) => r.n - 1 < pos);
+    const first = above.length ? ruleSender(above, d.example) : null;
+    const beaten = first ? (this.senderList[first.rule - 1]?.name ?? "A rule above") : null;
+    return { pieces: senderPieces(rule, d.example) ?? [{ t: d.example }], label: hit.name ? `${hit.name} · matched by rule` : "matched by rule", beaten, past };
+  }
   // The session's repository changed (another session, another folder) under the open
   // rule: its example's result is worked out again for the new one.
   ruleRepoCheck() {
     const e = this.ruleEdit;
-    if (!e || e.repo === this.repoSig()) return;
+    if (e?.kind !== "links" || e.repo === this.repoSig()) return;
     e.repo = this.repoSig();
     if (!e.stale) e.result = e.lastGood = this.ruleResult(e);
   }
@@ -1435,70 +1583,70 @@ export default class Threads extends View {
     const e = this.ruleEdit;
     if (!e) return false;
     this.ruleCheck();
-    const bad = ["pattern", "url"].filter((f) => e.faults[f]);
+    const bad = Object.keys(e.faults).filter((f) => e.faults[f]);
     if (bad.length) {
       for (const f of bad) e.shown[f] = e.faults[f];
-      this.ruleInputs[bad[0]].focus();
+      this.inputsOf(e.kind)[bad[0]].focus();
       return false;
     }
-    if (this.linksRefused()) return false;
-    const raw = this.fileLinks();
+    if (this.rulesRefused(e.kind)) return false;
+    const raw = this.fileRules(e.kind);
     this.followRules(raw);
-    const o = this.ruleObject(e.draft, e.base);
+    const o = this.ruleObject(e.draft, e.base, e.kind);
     if (e.at != null) raw[e.at] = o;
     else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
     this.closeRule();
-    this.writeLinks(raw, cx);
+    this.writeRules(e.kind, raw, cx);
     return true;
   }
-  // The switch on a row: off keeps the rule and links nothing with it.
-  toggleRule(at, cx) {
-    if (this.linksRefused()) return;
-    const raw = this.fileLinks();
+  // The switch on a row: off keeps the rule and links (or marks) nothing with it.
+  toggleRule(at, cx, kind = this.ruleKind()) {
+    if (this.rulesRefused(kind)) return;
+    const raw = this.fileRules(kind);
     const o = raw[at];
     if (!o || typeof o !== "object") return;
     if (o.on === false) delete o.on;
     else o.on = false;
-    this.writeLinks(raw, cx);
+    this.writeRules(kind, raw, cx);
   }
   // Remove: gone at once, with Undo in its place until the page is left or another goes.
-  removeRule(at, cx) {
-    if (this.linksRefused()) return;
-    const raw = this.fileLinks();
+  removeRule(at, cx, kind = this.ruleKind()) {
+    if (this.rulesRefused(kind)) return;
+    const raw = this.fileRules(kind);
     if (at < 0 || at >= raw.length) return;
     const key = (r) => (r === undefined ? null : JSON.stringify(r));
     const prev = at > 0 ? key(raw[at - 1]) : null;
     const next = key(raw[at + 1]);
     const [rule] = raw.splice(at, 1);
     // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
-    this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
+    this.ruleUndo = { kind, at, rule, prev, next, name: this.listOf(kind)[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
-    this.writeLinks(raw, cx, this.ruleUndo);
+    this.writeRules(kind, raw, cx, this.ruleUndo);
   }
   undoRemove(cx) {
     const u = this.ruleUndo;
-    if (!u || this.linksRefused()) return;
-    const raw = this.fileLinks();
+    if (!u || this.rulesRefused(u.kind)) return;
+    const raw = this.fileRules(u.kind);
     this.followRules(raw);
     raw.splice(Math.min(u.at, raw.length), 0, u.rule);
     this.ruleUndo = null;
-    this.writeLinks(raw, cx);
+    this.writeRules(u.kind, raw, cx);
   }
   // Move up: the open rule one place higher, so it takes text before the rule it passes.
   moveRuleUp(cx) {
     const e = this.ruleEdit;
-    if (!e || e.at == null || e.at < 1 || this.linksRefused()) return;
-    const raw = this.fileLinks();
+    if (!e || e.at == null || e.at < 1 || this.rulesRefused(e.kind)) return;
+    const raw = this.fileRules(e.kind);
     [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
     e.at -= 1; // so the twin nearest the new place is the one followed
-    this.writeLinks(raw, cx);
+    this.writeRules(e.kind, raw, cx);
     this.ruleCheck();
   }
   // Duplicate: a new rule under this one, filled from it, not kept until Keep rule.
   duplicateRule() {
     const e = this.ruleEdit;
     if (!e) return;
-    this.openRule(null, { ...e.draft }, (e.at ?? e.insertAt) + 1);
+    this.openRule(null, { ...e.draft }, (e.at ?? e.insertAt) + 1, e.kind);
   }
 
   // ---- pins (pins.js has the file's format) ----
@@ -4616,9 +4764,9 @@ export default class Threads extends View {
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
-      // Every control on the settings card back to its default; link rules and the quote key stay.
+      // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
-      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
+      case "settingsPage:links": case "settingsPage:senders": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -5868,7 +6016,8 @@ export default class Threads extends View {
   // are chosen against the real list; the border and a deep shadow mark the layer.
   settingsCard(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
-    const links = this.setPage === "links";
+    // A rules page (Link rules or Sender rules) has the head with Back, and no tabs or preview.
+    const page = this.setPage === "links" || this.setPage === "senders" ? this.setPage : null;
     const top = this.floating() ? TOP_BAND : 46;
     const h = this.rootH || 600;
     const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
@@ -5877,10 +6026,10 @@ export default class Threads extends View {
     const pad = cardPad(w);
     const fixed = CARD_HEAD + CARD_FOOT + 2;
     const bodyMax = Math.max(60, room - fixed);
-    // The rows' own height, as last drawn on this page and tab, up to the room left.
-    const key = links ? "links" : "main";
+    // The rows' own height, as last drawn on this page, up to the room left.
+    const key = page ?? "main";
     const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
-    const rows = links ? this.linkRulesRows(t, w) : this.settingsRows(t, w);
+    const rows = page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w);
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
@@ -5889,7 +6038,7 @@ export default class Threads extends View {
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_2xl()
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
-        .child(this.cardHead(t, links, close, pad))
+        .child(this.cardHead(t, page, close, pad))
         .child(v_flex().id(`th-set-body-${key}-${this.cardOpens}`).flex_none().h(bodyH).overflow_y_scrollbar()
           .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
             .on_size_change((size, cx) => {
@@ -5903,10 +6052,10 @@ export default class Threads extends View {
 
   // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
   // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
-  cardHead(t, links, close, pad) {
+  cardHead(t, page, close, pad) {
     return h_flex().flex_none().h(CARD_HEAD).px(pad).gap(8).items_center().border_b(1).border_color(t.border)
-      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
-      .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
+      .when(Boolean(page), (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
+      .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(page === "links" ? "Link rules" : page === "senders" ? "Sender rules" : "Settings"))
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
   }
 
@@ -5971,15 +6120,15 @@ export default class Threads extends View {
   }
 
   // Reset to defaults, once, at the end of the page: every control on the card, faded when
-  // every one is at its default. Link rules and the quote key are never touched, which the
-  // line under the button says.
+  // every one is at its default. Link rules, sender rules and the quote key are never
+  // touched, which the line under the button says.
   resetRow(t) {
     const differ = this.prefsDiffer();
     const { note } = this.cardKit(t);
     return v_flex().gap(6).items_start()
       .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); }, "refresh", CARD_BUTTON)
         .when(!differ, (el) => el.opacity(0.45)))
-      .child(note("Link rules and the quote key stay."));
+      .child(note("Link rules, sender rules and the quote key stay."));
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
@@ -5990,17 +6139,6 @@ export default class Threads extends View {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
     const qn = this.quoteNote();
-    const linkRules = () => {
-      const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
-      const n = this.linkCount ?? 0;
-      return h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
-        .hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
-        .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
-        .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
-        .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
-        .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
-    };
     // Each row by its key in CARD_SECTIONS; a row may be more than one element.
     const rows = {
       textSize: () => [stepper("textSize", "Text size")],
@@ -6024,7 +6162,8 @@ export default class Threads extends View {
       keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
-      linkRules: () => [linkRules()],
+      linkRules: () => [this.linkRulesEntry(t)],
+      senderRules: () => [this.senderRulesEntry(t)],
       quoteKey: () => [v_flex().gap(4)
         .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
           .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
@@ -6033,6 +6172,27 @@ export default class Threads extends View {
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
     };
     return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
+  }
+
+  // A row that opens a rules page: its name, how many rules the file holds (or None), how
+  // many are not working in the blocked color, and a chevron. Each page has its own row
+  // method, so the row can move to another section on its own (CARD_SECTIONS).
+  pageEntry(t, id, page, name, n, bad) {
+    return h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.leaveLinks(); this.setPage = page; cx.notify(); })
+      .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child(name))
+      .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+      .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
+      .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
+  }
+  linkRulesEntry(t) {
+    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+    return this.pageEntry(t, "th-set-links", "links", "Link rules", this.linkCount ?? 0, bad);
+  }
+  senderRulesEntry(t) {
+    const bad = (this.senderList ?? []).filter((r) => r.why).length;
+    return this.pageEntry(t, "th-set-senders", "senders", "Sender rules", this.senderCount ?? 0, bad);
   }
 
   // Under Width: the pane as a thin line and the reading column as its dark part, at their
@@ -6119,12 +6279,13 @@ export default class Threads extends View {
   linkRulesRows(t, w) {
     const { note, group } = this.cardKit(t);
     const list = this.linkList ?? [];
-    const e = this.ruleEdit;
-    const edit = this.linksEditable();
-    const other = (this.prefsNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
+    const e = this.ruleEdit?.kind === "links" ? this.ruleEdit : null;
+    const edit = this.rulesEditable("links");
+    // Notes on the link rules that are not about one rule ("links is not a list").
+    const other = (this.linkNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n));
     const rows = list.map((r, i) => (e?.at === i ? this.ruleEditor(t) : this.ruleRow(t, r, i, edit)));
     if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.ruleEditor(t));
-    if (this.ruleUndo) rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
+    if (this.ruleUndo?.kind === "links") rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
       group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
@@ -6243,7 +6404,7 @@ export default class Threads extends View {
     const d = e.draft;
     const { note } = this.cardKit(t);
     const isNew = e.at == null;
-    const label = (text) => div().text_size(11.5).font_medium().text_color(t.muted).child(text);
+    const label = (text) => this.ruleLabel(t, text);
     const hints = {
       description: note("It shows under the name in the list."),
       pattern: h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
@@ -6253,18 +6414,7 @@ export default class Threads extends View {
           .child("Reference")),
       url: note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
     };
-    const field = ([k, name]) => {
-      const shown = e.shown[k] ?? null;
-      const focused = this.fieldFocused === `rule-${k}`;
-      return v_flex().gap(3)
-        .child(label(name))
-        .child(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
-          .border_color(shown ? t.blocked : focused ? t.accent : t.border).bg(t.background)
-          .child(Input.new(this.ruleInputs[k]).w_full().h_full().text_size(12.5).text_color(t.foreground)
-            .when(k === "pattern" || k === "url", (el) => el.font_family(this.mono()))))
-        .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))
-        .when(Boolean(hints[k]), (el) => el.child(hints[k]));
-    };
+    const field = ([k, name]) => this.ruleField(t, e, k, name, hints[k]);
     const typeRows = (isNew && !e.touched) || e.typeOpen;
     const tpl = LINK_TEMPLATES[d.type] ?? LINK_TEMPLATES.custom;
     const typeBlock = typeRows
@@ -6293,22 +6443,228 @@ export default class Threads extends View {
         .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
           .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(r.under))
           .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniButton(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); })))))
-        .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(`${r.beaten} is higher in the list and takes this text first. ${!isNew && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`, t.muted)))
+        .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this text first"), t.muted)))
       : null;
-    const buttons = h_flex().gap(6).flex_wrap()
+    return this.ruleShell(t, e)
+      .child(typeBlock)
+      .children(RULE_FIELDS.map(field))
+      .when(Boolean(result), (el) => el.child(result))
+      .child(this.ruleButtons(t, e));
+  }
+
+  // The parts both rule editors share. A field's label.
+  ruleLabel(t, text) { return div().text_size(11.5).font_medium().text_color(t.muted).child(text); }
+  // A field: its label, its box (the accent while it has the keys, the blocked color while
+  // its fault shows), its fault as "Not working: why", and its hint.
+  ruleField(t, e, k, name, hint) {
+    const { note } = this.cardKit(t);
+    const shown = e.shown[k] ?? null;
+    const focused = this.fieldFocused === `${fieldTag(e.kind)}${k}`;
+    return v_flex().gap(3)
+      .child(this.ruleLabel(t, name))
+      .child(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
+        .border_color(shown ? t.blocked : focused ? t.accent : t.border).bg(t.background)
+        .child(Input.new(this.inputsOf(e.kind)[k]).w_full().h_full().text_size(12.5).text_color(t.foreground)
+          .when(k === "pattern" || k === "url" || k === "prefix", (el) => el.font_family(this.mono()))))
+      .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))
+      .when(Boolean(hint), (el) => el.child(hint));
+  }
+  // A rule higher in the list that takes the example first, and how to put this one above it.
+  beatenLine(e, name, what) {
+    return `${name} is higher in the list and ${what}. ${e.at != null && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`;
+  }
+  // The open rule's box: the accent border, and over a new rule the line that says it is not kept.
+  ruleShell(t, e) {
+    const isNew = e.at == null;
+    return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
+      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
+        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")));
+  }
+  // Keep rule, Discard, and on a kept rule Move up (not the first), Duplicate and Delete.
+  ruleButtons(t, e) {
+    const isNew = e.at == null;
+    return h_flex().gap(6).flex_wrap()
       .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check", CARD_BUTTON))
       .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }, null, CARD_BUTTON))
       .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up", CARD_BUTTON)))
       .when(!isNew, (el) => el
         .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy", CARD_BUTTON))
-        .child(this.button(t, "th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); }, "trash", CARD_BUTTON)));
-    return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
-      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
-        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")))
+        .child(this.button(t, "th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx, e.kind); cx.notify(); }, "trash", CARD_BUTTON)));
+  }
+
+  // The Sender rules page, on the Link rules page's pattern: what a sender rule is, then
+  // each rule in the file as a card (senderRow), the two examples with Use when there are
+  // none, Add rule, a note not about one rule ("senders is not a list") in the blocked color
+  // above File, and File. A press on a card opens the rule in place, as Edit does; Delete
+  // takes it at once, with Undo.
+  senderRulesRows(t, w) {
+    const { note, group } = this.cardKit(t);
+    const list = this.senderList ?? [];
+    const e = this.ruleEdit?.kind === "senders" ? this.ruleEdit : null;
+    const edit = this.rulesEditable("senders");
+    const other = (this.senderNotes ?? []).filter((n) => !/^Sender rule \d+:/.test(n));
+    const rows = list.map((r, i) => (e?.at === i ? this.senderEditor(t) : this.senderRow(t, r, i, edit)));
+    if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.senderEditor(t));
+    if (this.ruleUndo?.kind === "senders") rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
+    return [
+      note("A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.", t.muted),
+      group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
+      !list.length && !e && edit ? this.senderExamples(t) : null,
+      list.length >= 2 ? note("When two rules match the same prompt, the higher one wins.") : null,
+      edit && !e && list.length < MAX_RULES
+        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null, null, null, "senders"); cx.notify(); }, "plus", CARD_BUTTON)) : null,
+      ...other.map((n) => note(n, t.blocked)),
+      group("File", [
+        note(edit ? "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."
+          : writable(this.prefsRaw) ? "\"senders\" in the settings file is not a list now, so rules change only in the file until it is fixed."
+            : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
+        this.fileRow(t, w),
+        this.prefsError ? note(this.prefsError, t.blocked) : null,
+      ]),
+    ].filter(Boolean);
+  }
+
+  // A sender rule's card, the box a link rule's has (ruleRow): 12 px in, lines 4 px apart.
+  // Line 1: its type's icon (text-cursor for Starts with, regex for Pattern), its name (its
+  // text when it has none), Off, Edit, Delete, and the switch at the far right, or the
+  // warning mark in its place on a rule the mod will not run. Then its example with the
+  // sender's name underlined, or "No example yet"; with the tag icon, what a match shows as,
+  // or "Finds no sender in its example"; "Starts with" or "Pattern" and its text in the code
+  // font, in a small box so a space at its end shows; and on a refused rule, why.
+  senderRow(t, r, i, edit = false) {
+    const { toggle } = this.cardKit(t);
+    const bad = r.why != null;
+    const off = !bad && !r.on;
+    const ex = this.senderExample(r);
+    const pattern = Boolean(r.pattern) && !r.prefix;
+    const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i, null, null, "senders"); cx.notify(); };
+    const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
+    const text = r.prefix || r.pattern;
+    return v_flex().id(`th-sender-${r.n}`).p(12).gap(4).rounded(6).border_1()
+      .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
+      .when(edit, (el) => el.cursor_pointer().on_click(open))
+      .child(h_flex().gap(8).items_center()
+        .child(svg(ICON(pattern ? "regex" : "text-cursor")).size(14).flex_none().text_color(t.dim).when(off, (el) => el.opacity(0.55)))
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(off ? t.muted : t.foreground).child(r.name))
+        .when(off, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
+        .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
+          .child(this.ruleIcon(t, `th-sender-edit-btn-${r.n}`, "pencil", "Edit rule", open))
+          .child(this.ruleIcon(t, `th-sender-delete-btn-${r.n}`, "trash", "Delete rule", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx, "senders"); cx.notify(); }, true))))
+        .child(bad ? end(null).child(svg(ICON("alert")).size(14).text_color(t.blocked))
+          : edit ? end(`th-sender-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx, "senders"); cx.notify(); })
+            .child(toggle(r.on))
+            : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
+      .child(v_flex().gap(4).when(off, (el) => el.opacity(0.55))
+        .child(this.examplePieces(t, ex))
+        .when(Boolean(ex.label), (el) => el.child(this.matchedLine(t, ex.label)))
+        .when(Boolean(ex.under), (el) => el.child(div().text_size(12).text_color(t.muted).child(ex.under)))
+        .when(Boolean(text), (el) => el.child(this.senderText(t, pattern ? "Pattern" : "Starts with", text))))
+      .when(bad, (el) => el.child(div().text_size(12).text_color(t.blocked).child(`Not working: ${r.why}`)));
+  }
+  // What a match shows as: the tag icon and the label, in the accent.
+  matchedLine(t, label, lead = null) {
+    return h_flex().gap(6).items_center().min_w(0)
+      .child(svg(ICON("tag")).size(13).flex_none().text_color(lead ? t.muted : t.accent))
+      .when(Boolean(lead), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(lead)))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(t.accent).child(label));
+  }
+  // "Starts with" or "Pattern", then the rule's text in the code font in a small box.
+  senderText(t, word, text) {
+    return h_flex().gap(6).items_center().min_w(0)
+      .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(word))
+      .child(div().min_w(0).truncate().px(4).rounded(3).border_1().border_color(t.border).bg(t.background)
+        .text_size(11.5).font_family(this.mono()).text_color(t.foreground).child(text));
+  }
+
+  // What a sender rule does to its own example, kept until the list changes, in the shape
+  // examplePieces draws: { pieces (the sender's name marked), label } on a match,
+  // { pieces, under: "Finds no sender in its example" }, or { line: "No example yet" }. A
+  // refused rule shows its example as it is.
+  senderExample(r) {
+    const k = this.senderListVer ?? 0;
+    if (this.senderExKey !== k) { this.senderExKey = k; this.senderExMemo = new Map(); }
+    const hit = this.senderExMemo.get(r);
+    if (hit) return hit;
+    let out;
+    if (!r.example) out = { line: "No example yet" };
+    else if (!r.rule) out = { pieces: [{ t: r.example }] };
+    else {
+      const m = ruleSender([r.rule], r.example);
+      out = m ? { pieces: senderPieces(r.rule, r.example) ?? [{ t: r.example }], label: m.name ? `${m.name} · matched by rule` : "matched by rule" }
+        : { pieces: [{ t: r.example }], under: "Finds no sender in its example" };
+    }
+    this.senderExMemo.set(r, out);
+    return out;
+  }
+
+  // No sender rules: two that fill a rule, in dashed boxes, each with Use.
+  senderExamples(t) {
+    return v_flex().gap(6)
+      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
+      .children(Object.entries(SENDER_EXAMPLES).map(([k, x]) => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+        .child(svg(ICON("text-cursor")).size(14).flex_none().text_color(t.dim))
+        .child(v_flex().flex_1().min_w(0).gap(4)
+          .child(div().text_size(13).font_semibold().text_color(t.foreground).child(x.rule.name))
+          .child(div().text_size(12).text_color(t.muted).child(x.line)))
+        .child(this.miniButton(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }))));
+  }
+
+  // The open sender rule: Type (two rows on a new rule, else one line with Change), Name,
+  // Starts with or Pattern, Example, what the rule does to the example, and Keep rule with
+  // the rest. A draft that would not run shows no result: its reason is under its field.
+  senderEditor(t) {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const { note } = this.cardKit(t);
+    const label = (text) => this.ruleLabel(t, text);
+    const firstLine = note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
+    const hints = {
+      name: note("It shows in the list, and in the tooltip on a message it matched."),
+      prefix: v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine),
+      pattern: v_flex().gap(2)
+        .child(h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
+          .child(div().flex_none().child("A JavaScript regular expression with a group named sender. Capitals count."))
+          .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
+            .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
+            .child("Reference")))
+        .child(firstLine),
+      example: note("A prompt this rule should match. Type any prompt here to try the rule."),
+    };
+    const field = (k) => this.ruleField(t, e, k, SENDER_FIELDS.find((x) => x[0] === k)[1], hints[k]);
+    const type = SENDER_TYPES.find(([k]) => k === d.by) ?? SENDER_TYPES[0];
+    const typeBlock = e.at == null || e.typeOpen
+      ? v_flex().gap(4).child(label("Type"))
+        .children(SENDER_TYPES.map(([k, word, icon, line]) => {
+          const on = d.by === k;
+          return h_flex().id(`th-sender-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+            .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
+            .hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseSenderType(k); cx.notify(); })
+            .child(svg(ICON(icon)).size(13).flex_none().text_color(on ? t.foreground : t.dim))
+            .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(word))
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(line));
+        }))
+      : h_flex().gap(6).items_center()
+        .child(label("Type"))
+        .child(svg(ICON(type[2])).size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(type[1]))
+        .child(this.miniButton(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+    const r = e.stale ? null : e.result;
+    const result = r
+      ? v_flex().id("th-rule-result").gap(4)
+        .when(Boolean(r.label), (el) => el.child(this.examplePieces(t, r)).child(this.matchedLine(t, r.label, "Matches. It shows as")))
+        .when(!r.label, (el) => el.child(note("No match. This prompt would stay yours.")))
+        .when(Boolean(r.beaten), (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this prompt first"))))
+        .when(Boolean(r.past), (el) => el.child(note(`Only the first ${RULE_TEXT} characters of the first line are read.`)))
+      : null;
+    return this.ruleShell(t, e)
       .child(typeBlock)
-      .children(RULE_FIELDS.map(field))
+      .child(field("name"))
+      .child(field(d.by))
+      .child(field("example"))
       .when(Boolean(result), (el) => el.child(result))
-      .child(buttons);
+      .child(this.ruleButtons(t, e));
   }
 
   // Why a rule that needs the session's repository links nothing here, or null.
@@ -8423,7 +8779,7 @@ export default class Threads extends View {
   settingsLine() {
     const bad = (this.linkCount ?? 0) - this.links.length;
     const sn = this.senderCount ?? 0;
-    const sbad = sn - this.senders.length;
+    const sbad = (this.senderList ?? []).filter((r) => r.why).length;
     return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
   }
 
