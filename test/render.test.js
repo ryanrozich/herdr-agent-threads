@@ -1606,6 +1606,44 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full.clear();
 });
 
+test("link rules in a coloured bubble: the open turn lists the prompt's links under the bubble (issue 116)", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--links"));
+  v.width = 380;
+  v.applyPrefs(JSON.stringify({ links: [
+    { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" },
+    { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
+  ] }));
+  expect(v.prefs.bubbleColor).toBe("blue");
+  v.remote = { key: "t4|null", repo: "acme/widgets", owner: "acme", why: "test" };
+  v.open = new Set(["0:1"]);
+  mdSources.length = 0;
+  draw(v, cx);
+  const you = v.rows().find((r) => r.kind === "you");
+  const y = v.youMd(you);
+  // The bubble is plain text in its own ink, so the links go on a line of their own under it,
+  // drawn as Markdown, each once.
+  expect(y.plain).toBe(true);
+  expect(y.linkMd).toContain("[ACME\\-123](https://linear.app/acme/issue/ACME-123)");
+  expect(y.linkMd).toContain("(https://github.com/acme/widgets/pull/");
+  expect(new Set(y.linkMd.match(/\]\(([^)]+)\)/g)).size).toBe(y.linkMd.match(/\]\(([^)]+)\)/g).length);
+  expect(mdSources.some(([id, md]) => id.startsWith("th-ylk-") && md === y.linkMd)).toBe(true);
+  const withLinks = v.youHeight(you);
+  // The same turn with a plain bubble carries its links inside the bubble and has no link line.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
+  const plain = v.youMd(you);
+  expect(plain.plain).toBe(false);
+  expect(plain.linkMd).toBe(null);
+  v.prefs = { ...v.prefs, bubbleColor: "blue" };
+  expect(v.youHeight(you)).toBe(withLinks);
+  // With no rule that matches, a coloured bubble has no link line and its height is the same
+  // as before this line existed.
+  v.applyPrefs(JSON.stringify({ links: [{ name: "None", pattern: "\\bZZZ-(\\d+)\\b", url: "https://z.example/$1" }] }));
+  draw(v, cx);
+  const bare = v.youMd(v.rows().find((r) => r.kind === "you"));
+  expect(bare.linkMd).toBe(null);
+  expect(withLinks - v.youHeight(v.rows().find((r) => r.kind === "you"))).toBeGreaterThan(0);
+});
+
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--links"));
   v.width = 380;

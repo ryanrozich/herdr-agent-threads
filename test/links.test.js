@@ -13,7 +13,7 @@ mock.module("herdr", () => ({
     "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
 const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG } = await import("../mods/agent-threads/settings.js");
-const { linkify, linkPieces, fillUrl, parseRemote, promptMd, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
+const { linkify, linkPieces, fillUrl, parseRemote, promptMd, promptLinks, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
 
 const ISSUE = { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" };
 const PR = { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" };
@@ -270,4 +270,16 @@ test("a rule slow on a reply is skipped from then on, and says why, so one rule 
   const n = calls;
   expect(linkify("ACME-5 again", [slow, fast]).links).toBe(1);
   expect(calls).toBe(n);
+});
+
+test("promptLinks: each link a rule makes in a prompt, once, outside code, at most 8", () => {
+  const acme = rules({ pattern: "\\bACME-(\\d+)\\b", url: "https://t.example/ACME-$1" });
+  const got = promptLinks("Fix ACME-1 and ACME-2, then ACME-1 again.\n`ACME-3` in code\n```\nACME-4 in a fence\n```\nACME-5", acme);
+  expect(got).toEqual([
+    { t: "ACME-1", url: "https://t.example/ACME-1" },
+    { t: "ACME-2", url: "https://t.example/ACME-2" },
+    { t: "ACME-5", url: "https://t.example/ACME-5" },
+  ]);
+  expect(promptLinks("no keys here", acme)).toEqual([]);
+  expect(promptLinks(Array.from({ length: 20 }, (_, i) => `ACME-${i}`).join(" "), acme)).toHaveLength(8);
 });
