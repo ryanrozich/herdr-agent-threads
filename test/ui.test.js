@@ -4,10 +4,10 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
-  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
+  keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
@@ -42,6 +42,19 @@ test("keys: plain keys act, chords with cmd, ctrl, alt or fn never do", () => {
   expect(keyAction(key("c"), true)).toBe(null);
   expect(keyAction(key("down"), true)).toBe("next");
   expect(keyAction(key("escape"), true)).toBe("escape");
+});
+
+test("Shift w steps the reading width; plain w still fits the pane, and a filter being typed takes the letter", () => {
+  expect(keyAction(key("w", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W", { shift: true }))).toBe("widthStep");
+  expect(keyAction(key("W"))).toBe("widthStep");
+  expect(keyAction(key("w"))).toBe("fit");
+  expect(keyAction(key("w", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("W"), true)).toBe(null);
+  expect(keyAction(key("w", { shift: true, platform: true }))).toBe(null);
+  // Listed under View, beside w.
+  const view = keySheet().find(([g]) => g === "View")[1].map(([k, what]) => `${k.join(" ")}: ${what}`);
+  expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
 });
 
 test("alpha: every colour form", () => {
@@ -80,6 +93,14 @@ test("spans split around every match, any case", () => {
   expect(spans("", "x")).toEqual([{ t: "", hit: false }]);
   expect(around(`${"a ".repeat(40)}needle here`, "needle")).toStartWith("…");
   expect(around("short needle", "needle")).toBe("short needle");
+  // A match inside a long token keeps it: the start is cut in the token, not past the match.
+  expect(around(`${"a ".repeat(40)}see https://example.com/docs/bobbin-guide now`, "bobbin")).toBe("…/example.com/docs/bobbin-guide now");
+  // A reply under a search: its own text decides, all of it; the flattening's words never count.
+  expect(searchPreview("Fix:\n\n```js\nlet x = 1;\n```\n\n- a\n- b", "code")).toBe(null);
+  expect(searchPreview("- a\n- b", "·")).toBe(null);
+  expect(searchPreview("Start **here** and go on", "here")).toBe("Start here and go on");
+  expect(searchPreview(`${"word ".repeat(600)}\n\nThe needle is late.`, "needle")).toBe("… The needle is late.");
+  expect(searchPreview("Read [it](https://example.com/bobbin) now", "bobbin")).toContain("https://example.com/bobbin");
 });
 
 test("languages map to a highlighter or plain text", () => {
@@ -187,7 +208,10 @@ test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () =
     expect(path.length).toBeGreaterThanOrEqual(300);
     const p = rowLines(path, 2, per(w));
     expect(p.lines.length).toBe(2);
-    expect(p.lines[0].length).toBe(Math.floor(per(w)));
+    // It breaks after a slash, at most a segment short of the full line.
+    expect(p.lines[0].endsWith("/")).toBe(true);
+    expect(p.lines[0].length).toBeGreaterThan(Math.floor(per(w)) - "segment/".length);
+    expect(p.lines[0].length).toBeLessThanOrEqual(Math.floor(per(w)));
     expect(p.lines[1].endsWith("…")).toBe(true);
     const cjk = rowLines("检查一下这个函数为什么在生产环境里会失败然后修复它并添加测试用例再更新文档说明", 2, per(w));
     expect(cjk.lines.length).toBe(2);
@@ -201,6 +225,46 @@ test("rowLines: short, exactly two lines, long paths, CJK, limits 1 and 6", () =
   expect(fits).toEqual({ lines: ["aaaa bbbb", "cccc dddd"], cut: false });
   expect(rowLines("line one\nline two", 2, 40)).toEqual({ lines: ["line one line two"], cut: false });
   expect(rowLines("", 2, 30)).toEqual({ lines: [], cut: false });
+});
+
+// A token longer than the line (a path, a long hyphenated name) breaks right after its last
+// "/" or "-" that fits, so no word is cut in two; with neither it still breaks at any
+// character. Joined back, the lines are the text: nothing lost or added.
+test("rowLines: a long token breaks after a slash or a hyphen, else by character, and loses nothing", () => {
+  const path = "src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js";
+  const hy = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const bare = "x".repeat(37) + "y".repeat(37);
+  const join = (r) => r.lines.join("");
+  for (const per of [12, 20, 31, 44, 60]) {
+    const p = rowLines(path, 20, per);
+    expect(p.cut).toBe(false);
+    expect(join(p)).toBe(path);
+    for (const l of p.lines) expect(l.length).toBeLessThanOrEqual(per);
+    // Every line but the last ends at a slash or a hyphen.
+    for (const l of p.lines.slice(0, -1)) expect(l).toMatch(/[/-]$/);
+    const h = rowLines(hy, 20, per);
+    expect(join(h)).toBe(hy);
+    for (const l of h.lines.slice(0, -1)) expect(l).toMatch(/-$/);
+    // Neither: full lines, broken at any character.
+    const b = rowLines(bare, 20, per);
+    expect(join(b)).toBe(bare);
+    for (const l of b.lines.slice(0, -1)) expect(l.length).toBe(per);
+  }
+  // At 31 characters: the slash break, where a character break cut "median-of-three.js".
+  expect(rowLines(path, 6, 31).lines).toEqual(["src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/", "helpers/median-of-three.js"]);
+  expect(rowLines(hy, 6, 20).lines).toEqual(["pre-merge-check-for-", "the-nightly-", "rounding-and-", "receipt-totals-run"]);
+  // A break that would leave the line less than half full is a character break instead.
+  expect(rowLines(`ab/${"c".repeat(30)}`, 4, 16).lines).toEqual(["ab/ccccccccccccc", "cccccccccccccccc", "c"]);
+  // "." and "_" are not breaks: an extension or a snake_case name stays whole only if it fits.
+  expect(rowLines("aaaa_bbbb_cccc_dddd.eeee", 3, 10).lines).toEqual(["aaaa_bbbb_", "cccc_dddd.", "eeee"]);
+  // Words around the token wrap as before, and the joined text is the original with each
+  // wrap's space put back.
+  const text = `Check ${path} before the run`;
+  const t = rowLines(text, 8, 31);
+  expect(t.lines).toEqual(["Check", "src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/", "helpers/median-of-three.js", "before the run"]);
+  expect(t.lines.reduce((s, l, i) => s + (i && !t.lines[i - 1].match(/[/-]$/) ? " " : "") + l, "")).toBe(text);
+  // Cut to two lines, the second still ends at a break, with the ellipsis after it.
+  expect(rowLines(path, 2, 31).lines).toEqual(["src/cart/rounding/order-total/", "receipt-sum/line-tax/per-item/…"]);
 });
 
 test("flattenMd: bullets, fences, links, emphasis, headings", () => {
@@ -1019,15 +1083,30 @@ test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and stil
   expect(wrapCap("aaaa bbbb cccc dddd eeee ffff gggg", 10, 2).text).toBe("aaaa bbbb cccc dddd…");
 });
 
-test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines, each chunk within MD_MAX bytes", () => {
+test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines joined by their spaces, each chunk within MD_MAX bytes", () => {
   expect(htmlLine("a  b")).toBe("a&nbsp; b");
   expect(htmlLine(" x<y> & z")).toBe("&nbsp;x&lt;y&gt; &amp; z");
   expect(htmlLine("\tq")).toBe("&nbsp;&nbsp;&nbsp; q");
-  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one<br>two", n: 2 }]);
+  // One wrap's lines: joined by the space the wrap took out, or by nothing after a hard break.
+  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one two", n: 2 }]);
+  expect(htmlChunks(["src/cart/ro", "unding.js", "next"], undefined, [0])).toEqual([{ html: "src/cart/rounding.js next", n: 3 }]);
+  const hard = rowLines("open src/cart/rounding/order-total/receipt.js now", 10, 12);
+  expect(hard.hard?.length).toBeGreaterThan(0);
+  expect(htmlChunks(hard.lines, undefined, hard.hard).map((x) => x.html).join(" ")).toBe("open src/cart/rounding/order-total/receipt.js now");
   const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of a long pasted prompt, with é and ü in it`);
   const c = htmlChunks(lines);
   expect(c.length).toBeGreaterThan(1);
   expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
   for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
-  expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
+  expect(c.map((x) => x.html).join(" ")).toBe(lines.map(htmlLine).join(" "));
+});
+
+test("cutPath: a path cut from its start at a slash, so it begins with a whole folder", () => {
+  const p = "~/.config/herdr-app/data/agent-threads/settings.json";
+  expect(cutPath(p, 80)).toBe(p);
+  expect(cutPath(p, p.length)).toBe(p);
+  expect(cutPath(p, 40)).toBe("…/data/agent-threads/settings.json");
+  expect(cutPath(p, 30)).toBe("…/agent-threads/settings.json");
+  // The file's name stays whole when it alone is longer.
+  expect(cutPath(p, 8)).toBe("…/settings.json");
 });

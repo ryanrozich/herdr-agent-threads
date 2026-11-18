@@ -106,7 +106,7 @@ A table in a reply can run wider than the reading line when the pane has room be
 
 ### Make it yours
 
-Press `,` for settings: text size, the reading width (Comfortable, Wide or Full), whether the pane keeps that width, which side the rail is on, bubble colours, whether every message shows its time, and whether agent messages show. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more, and set how many lines. You can also turn ticket and PR numbers into links in the settings file. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with one page: text size, your message color, Shorten long messages and its lines, and the time; agent messages, their rail ticks and their color; the reading width (Comfortable, Wide or Full, which `Shift w` also steps), the rail's side and the key hints; link rules and the quote key; and the file. A change shows in the list behind the card as you make it. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
@@ -133,6 +133,7 @@ Press `,` for settings: text size, the reading width (Comfortable, Wide or Full)
 | `a` | Show or hide agent messages |
 | `w` | Fit the pane to the reading width |
 | `,` | Settings |
+| `Shift w` | Step the reading width |
 | `?` | Every key |
 | `Esc` | Back out |
 
