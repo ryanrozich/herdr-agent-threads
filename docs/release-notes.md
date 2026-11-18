@@ -60,7 +60,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 
 ## Settings
 
-- `,` opens the settings card, with General and Chat tabs and a preview at the top.
+- `,` opens the settings card, one page that scrolls: Text and colors, Messages, Layout, Rules and keys, and File, then Reset to defaults. A change shows in the list behind the card.
 - General: text size, rail side, key hints at the bottom, the User messages and Agent messages colours, link rules, the quote key and the settings file's path.
 - User messages are blue by default and agent messages amber. A colour you already chose is kept.
 - Chat: agent messages, Shorten long messages and how many lines it shows, always show time, the reading width and whether the pane keeps it.
