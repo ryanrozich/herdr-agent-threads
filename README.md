@@ -162,6 +162,7 @@ Amp keeps its conversations on its own servers, not on your computer. Reading th
 - [More screenshots](docs/usage.md#more-screenshots)
 - [Developing](docs/develop.md): tests, fixtures and trying it in a separate Herdr window.
 - [RECIPE.md](RECIPE.md): what the pane draws and how it is built.
+- [Reference](docs/reference.md): every surface the pane draws, and how each agent's session is found and read, in full.
 - [Listing](docs/listing.md): what the herdr.dev/mods listing reads.
 
 ## License
