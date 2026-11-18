@@ -190,7 +190,7 @@ const SETTING_TABS = [["general", "General"], ["chat", "Chat"]];
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey and links are never reset.
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The preview's times: 9:12 AM for yours, two minutes before for an agent's.
