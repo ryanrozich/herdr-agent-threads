@@ -5869,11 +5869,12 @@ export default class Threads extends View {
     const group = (title, kids) => v_flex().gap(4)
       .child(div().mb(2).text_size(11).font_semibold().text_color(t.muted).child(title))
       .children(kids.filter(Boolean));
-    // 32 by 18 with a 14 px knob. Off, the track has an outline, since the track alone barely
-    // shows on the card; the outline takes a px of the padding so the knob stays put.
+    // 32 by 18 with a 14 px knob. Off, the track has a `muted` outline, since the track alone
+    // barely shows on the card (full `muted`, so the edge reaches 3:1 on light themes too); the
+    // outline takes a px of the padding so the knob stays put.
     const toggle = (on) => div().flex_none().w(32).h(18).rounded(9).flex().items_center()
       .when(on, (el) => el.p(2).justify_end().bg(t.ansi5))
-      .when(!on, (el) => el.p(1).bg(t.border).border_1().border_color(alpha(t.muted, 0.5)))
+      .when(!on, (el) => el.p(1).bg(t.border).border_1().border_color(t.muted))
       .child(div().size(14).rounded(7).bg(on ? t.background : t.muted));
     // A switch row: the whole row flips it.
     const sw = (id, text, on, act, value = null) => h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer()
