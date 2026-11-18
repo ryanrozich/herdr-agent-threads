@@ -8573,35 +8573,70 @@ test("the switch on a row turns a rule off and on, written to the file; an off r
   } finally { done(v); }
 });
 
-test("Change and Remove show on the row under the pointer; Remove takes the rule at once, and Undo puts it back where it was", async () => {
+test("Edit and Delete: icon buttons on every row before its switch, with a tooltip and a spoken label; Delete takes the rule at once, and Undo puts it back where it was", async () => {
   const { v, cx } = await rulesPane();
   try {
-    expect(idsIn(cardOf(v))).not.toContain("th-rule-remove-1");
-    onOf(cardOf(v), "th-rule-1", "on_hover")(true, cx);
     let c = cardOf(v);
-    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-change-1", "th-rule-remove-1"]));
-    expect(idsIn(c)).not.toContain("th-rule-remove-2");
-    onOf(c, "th-rule-1", "on_hover")(false, cx);
-    expect(idsIn(cardOf(v))).not.toContain("th-rule-change-1");
-    onOf(cardOf(v), "th-rule-1", "on_hover")(true, cx);
-    onOf(cardOf(v), "th-rule-remove-1", "on_click")({}, cx);
+    // On every row, not only under the pointer, and the row has no hover handler for them.
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-edit-btn-2", "th-rule-delete-btn-2"]));
+    expect(onOf(c, "th-rule-1", "on_hover")).toBe(null);
+    expect(strsOf(c)).not.toContain("Change");
+    expect(strsOf(c)).not.toContain("Remove");
+    // Name, Edit, Delete, then the switch: the switch stays last, in a 36 by 24 hit area.
+    const ids = idsIn(c);
+    expect(ids.indexOf("th-rule-edit-btn-1")).toBeLessThan(ids.indexOf("th-rule-delete-btn-1"));
+    expect(ids.indexOf("th-rule-delete-btn-1")).toBeLessThan(ids.indexOf("th-rule-on-1"));
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    for (const [id, tip, icon] of [["th-rule-edit-btn-1", "Edit rule", "pencil"], ["th-rule-delete-btn-1", "Delete rule", "trash"]]) {
+      const b = own(id);
+      for (const x of [["size", 24], ["rounded", 5], ["tooltip", tip], ["accessibility_label", tip], ["role", "button"]]) expect(b).toContainEqual(x);
+      expect(b.some((e) => e[0] === "svg" && String(e[1]).endsWith(`/${icon}.svg`))).toBe(true);
+      // Lucide outlines at the mod's 1.5 stroke.
+      expect(readFileSync(new URL(`../mods/agent-threads/${icon}.svg`, import.meta.url), "utf8")).toContain('stroke-width="1.5"');
+    }
+    for (const x of [["w", 36], ["h", 24]]) expect(own("th-rule-on-1")).toContainEqual(x);
+    // Edit opens the rule, as a press on the row does.
+    onOf(c, "th-rule-edit-btn-1", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(0);
+    v.closeRule();
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
     expect(v.linkList.map((r) => r.name)).toEqual(["Hash"]);
     await settleAll(cx);
     expect(lastLinks()).toEqual([RULES[1]]);
     c = cardOf(v);
-    expect(strsOf(c)).toContain("Removed Ticket.");
+    expect(strsOf(c)).toContain("Deleted Ticket.");
     expect(idsIn(c)).toContain("th-rule-undo-line");
     expect(v.ruleUndo.at).toBe(0); // drawn where the rule was
     onOf(c, "th-rule-undo", "on_click")({}, cx);
     await settleAll(cx);
     expect(lastLinks()).toEqual(RULES);
-    expect(strsOf(cardOf(v))).not.toContain("Removed Ticket.");
+    expect(strsOf(cardOf(v))).not.toContain("Deleted Ticket.");
     // Undo lasts until the page is left.
     v.removeRule(1, cx);
     expect(v.ruleUndo).not.toBe(null);
     v.action("settingsPage:main", cx);
     expect(v.ruleUndo).toBe(null);
     await settleAll(cx);
+  } finally { done(v); }
+});
+
+// settings-spacing 6: a rule's card 12 px in, its lines 4 px apart, a 14 px type icon 8 px
+// from a 13 px name, readable text muted, cards 8 px apart; nothing pressed under 24 px.
+test("Link rules spacing: 12 px cards, muted lines, a 32 px Undo line with a 24 px Undo, 24 px small buttons", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    let c = cardOf(v);
+    const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+    const row = own("th-rule-1");
+    for (const x of [["p", 12], ["gap", 4], ["gap", 8], ["size", 14], ["text_size", 13], ["font_semibold"]]) expect(row).toContainEqual(x);
+    v.removeRule(0, cx);
+    c = cardOf(v);
+    for (const x of [["min_h", 32], ["text_color", theme.muted]]) expect(own("th-rule-undo-line")).toContainEqual(x);
+    expect(own("th-rule-undo")).toContainEqual(["h", 24]);
+    expect(strsOf(c)).toContain("Undo");
+    await settleAll(cx);
+    rec = []; v.miniButton(theme, "x", "Use", () => {}); const m = rec; rec = null;
+    expect(m).toContainEqual(["h", 24]);
   } finally { done(v); }
 });
 
@@ -8613,7 +8648,7 @@ test("a press on a row opens the rule in place with its fields; Keep rule writes
     expect(Object.fromEntries(Object.entries(v.ruleInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Ticket", description: "", pattern: RULES[0].pattern, url: RULES[0].url, example: RULES[0].example });
     let c = cardOf(v);
     const s = strsOf(c);
-    for (const x of ["Type", "Ticket key", "Name", "Description", "Finds", "Opens", "Example", "A JavaScript regular expression. Capitals count.", "Reference", "Keep rule", "Discard", "Duplicate", "Remove", "ACME-412", "https://tracker.example/ACME-412"]) expect(s).toContain(x);
+    for (const x of ["Type", "Ticket key", "Name", "Description", "Finds", "Opens", "Example", "A JavaScript regular expression. Capitals count.", "Reference", "Keep rule", "Discard", "Duplicate", "Delete", "ACME-412", "https://tracker.example/ACME-412"]) expect(s).toContain(x);
     expect(s).not.toContain("Move up"); // the first rule
     expect(idsIn(c)).toContain("th-rule-edit-1");
     expect(idsIn(c)).not.toContain("th-rule-1");

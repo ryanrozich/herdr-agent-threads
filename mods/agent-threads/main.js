@@ -753,11 +753,10 @@ export default class Threads extends View {
     this.fieldFocused = null;
     this.quoteFileNote = null;
     this.linkList = [];
-    // The Link rules page: the rule open in the editor (null: none), the rule just removed
-    // (for Undo), the row under the pointer, and the list just written (until the file shows it).
+    // The Link rules page: the rule open in the editor (null: none), the rule just deleted
+    // (for Undo), and the list just written (until the file shows it).
     this.ruleEdit = null;
     this.ruleUndo = null;
-    this.ruleHover = null;
     this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
@@ -1126,7 +1125,6 @@ export default class Threads extends View {
   leaveLinks() {
     this.ruleEdit = null;
     this.ruleUndo = null;
-    this.ruleHover = null;
   }
   // While the settings card or the keys sheet is open, it and its clear layer are all that
   // react: nothing under them takes a hover, a press or the wheel (settings-spacing 7). The
@@ -1262,7 +1260,6 @@ export default class Threads extends View {
     const e = { at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
       shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
     this.ruleEdit = e;
-    this.ruleHover = null;
     for (const [k] of RULE_FIELDS) this.setRuleField(k, d[k]);
     this.ruleCheck();
     // A kept rule that is not working says why at once.
@@ -1385,7 +1382,6 @@ export default class Threads extends View {
     // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
     this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
-    this.ruleHover = null;
     this.writeLinks(raw, cx);
   }
   undoRemove(cx) {
@@ -6061,8 +6057,8 @@ export default class Threads extends View {
   // The Link rules page: what a link rule is, then each rule in the file with its type's
   // icon, its name, its description, its example with the linked part marked and the address
   // that opens, and its switch (or why the mod will not run it). A press on a row opens the
-  // rule in place; Change and Remove show on the row under the pointer. The rules change on
-  // the card and in the file alike.
+  // rule in place, as Edit does; Delete takes it at once, with Undo. The rules change on the
+  // card and in the file alike. Rule cards are 8 px apart (boxes with borders).
   linkRulesRows(t, w) {
     const { note, group } = this.cardKit(t);
     const list = this.linkList ?? [];
@@ -6074,12 +6070,12 @@ export default class Threads extends View {
     if (this.ruleUndo) rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
-      group(`Rules${list.length ? ` · ${list.length}` : ""}`, rows.length ? rows : [note("No rules yet.")]),
+      group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
       !list.length && !e && edit ? this.ruleExamples(t) : null,
       ...other.map((n) => note(n, t.blocked)),
       list.length >= 2 ? note("When two rules match the same text, the higher one wins.") : null,
       edit && !e && list.length < MAX_RULES
-        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus")) : null,
+        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus", CARD_BUTTON)) : null,
       group("File", [
         note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
           : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
@@ -6088,61 +6084,80 @@ export default class Threads extends View {
     ].filter(Boolean);
   }
 
+  // A rule's card (settings-spacing 6): 12 px in, its lines 4 px apart. The type's icon, 8 px,
+  // the name, then Edit and Delete, always shown (a button that shows only under the pointer
+  // cannot be found and pushes the name aside), 4 px apart, then 12 px and the switch in a 36
+  // by 24 hit area, at the far right so the switches line up down the list. A rule Threads
+  // will not run has its warning mark in the switch's place.
   ruleRow(t, r, i, edit = false) {
     const { toggle } = this.cardKit(t);
     const why = r.why ?? r.rule?.slow ?? null;
     const bad = why != null;
     const ex = this.ruleExample(r);
-    const hover = edit && this.ruleHover === r.n;
     const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i); cx.notify(); };
-    return v_flex().id(`th-rule-${r.n}`).p(8).gap(3).rounded(6).border_1()
+    const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
+    return v_flex().id(`th-rule-${r.n}`).p(12).gap(4).rounded(6).border_1()
       .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
-      .when(edit, (el) => el.cursor_pointer().on_click(open)
-        .on_hover((on, cx) => {
-          const next = on ? r.n : this.ruleHover === r.n ? null : this.ruleHover;
-          if (next !== this.ruleHover) { this.ruleHover = next; cx.notify(); }
-        }))
-      .child(h_flex().gap(6).items_center()
-        .child(svg(ICON(LINK_ICON[r.type] ?? "regex")).size(13).flex_none().text_color(t.dim).when(!bad && !r.on, (el) => el.opacity(0.55)))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_semibold().text_color(!bad && !r.on ? t.dim : t.foreground).child(r.name))
-        .when(hover, (el) => el
-          .child(this.miniButton(t, `th-rule-change-${r.n}`, "Change", open))
-          .child(this.miniButton(t, `th-rule-remove-${r.n}`, "Remove", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); })))
-        .when(!bad && !r.on, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child("Off")))
-        .child(bad ? svg(ICON("alert")).size(13).flex_none().text_color(t.blocked)
-          : edit ? div().id(`th-rule-on-${r.n}`).flex_none().cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+      .when(edit, (el) => el.cursor_pointer().on_click(open))
+      .child(h_flex().gap(8).items_center()
+        .child(svg(ICON(LINK_ICON[r.type] ?? "regex")).size(14).flex_none().text_color(t.dim).when(!bad && !r.on, (el) => el.opacity(0.55)))
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(!bad && !r.on ? t.muted : t.foreground).child(r.name))
+        .when(!bad && !r.on, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
+        .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
+          .child(this.ruleIcon(t, `th-rule-edit-btn-${r.n}`, "pencil", "Edit rule", open))
+          .child(this.ruleIcon(t, `th-rule-delete-btn-${r.n}`, "trash", "Delete rule", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); }, true))))
+        .child(bad ? end(null).child(svg(ICON("alert")).size(14).text_color(t.blocked))
+          : edit ? end(`th-rule-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
             .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx); cx.notify(); })
             .child(toggle(r.on))
-            : div().flex_none().text_size(11.5).text_color(t.muted).child(r.on ? "On" : "Off")))
-      .child(v_flex().gap(3).when(!bad && !r.on, (el) => el.opacity(0.55))
-        .when(Boolean(r.description), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(r.description)))
+            : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
+      .child(v_flex().gap(4).when(!bad && !r.on, (el) => el.opacity(0.55))
+        .when(Boolean(r.description), (el) => el.child(div().text_size(12).text_color(t.muted).child(r.description)))
         .child(this.examplePieces(t, ex))
-        .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(ex.under))))
-      .when(bad, (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(`Not working: ${why}`)));
+        .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(ex.under))))
+      .when(bad, (el) => el.child(div().text_size(12).text_color(t.blocked).child(`Not working: ${why}`)));
+  }
+
+  // Edit and Delete on a rule's card: a 24 px icon button, the icon dim with no fill at rest;
+  // under the pointer the hover fill and the foreground, or for Delete the blocked color on a
+  // 12% tint of it. Its tooltip is also what a screen reader says.
+  ruleIcon(t, id, icon, tip, onClick, danger = false) {
+    return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer()
+      .text_color(t.dim)
+      .hover((s) => (danger ? s.bg(alpha(t.blocked, 0.12)).text_color(t.blocked) : s.bg(t.hover).text_color(t.foreground)))
+      .tooltip(tip).accessibility_label(tip).role("button")
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(svg(ICON(icon)).size(14));
   }
 
   // An example as a reply would show it, the part a rule links underlined in the accent.
   examplePieces(t, ex) {
     return ex.pieces
-      ? h_flex().flex_wrap().text_size(12.5).text_color(t.foreground).children(ex.pieces.map((p) => (p.url
+      ? h_flex().flex_wrap().text_size(12).text_color(t.muted).children(ex.pieces.map((p) => (p.url
         ? div().flex_none().underline().text_color(t.accent).child(p.t)
         : div().flex_none().whitespace_nowrap().child(p.t))))
-      : div().text_size(12).text_color(t.dim).child(ex.line);
+      : div().text_size(12).text_color(t.muted).child(ex.line);
   }
 
+  // A small bordered button inside a rule (Use, Open, the type's Change): 24 px high, the
+  // least anything pressed is.
   miniButton(t, id, label, onClick) {
-    return div().id(id).flex_none().h(20).px(6).flex().items_center().rounded(4).cursor_pointer()
-      .border_1().border_color(t.border).bg(t.background).text_size(11.5).text_color(t.muted)
+    return div().id(id).flex_none().h(24).px(8).flex().items_center().rounded(6).cursor_pointer()
+      .border_1().border_color(t.border).bg(t.background).text_size(12).text_color(t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
       .child(label);
   }
 
-  // Where a removed rule was: a quiet line with Undo.
+  // Where a deleted rule was: a quiet dashed line, 32 px high, with Undo as a 24 px text button.
+  // No confirm step: Undo is the way back.
   undoLine(t) {
-    return h_flex().id("th-rule-undo-line").min_h(28).px(8).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(`Removed ${this.ruleUndo.name}.`))
-      .child(this.miniButton(t, "th-rule-undo", "Undo", (_e, cx) => { this.undoRemove(cx); cx.notify(); }));
+    return h_flex().id("th-rule-undo-line").min_h(32).pl(12).pr(4).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(`Deleted ${this.ruleUndo.name}.`))
+      .child(div().id("th-rule-undo").flex_none().h(24).px(8).flex().items_center().rounded(5).cursor_pointer()
+        .text_size(12).font_medium().text_color(t.foreground).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.undoRemove(cx); cx.notify(); })
+        .child("Undo"));
   }
 
   // No rules: the two types that fill a rule, in dashed boxes. Use opens a new rule with that
@@ -6152,11 +6167,11 @@ export default class Threads extends View {
       .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
       .children(["ticket", "pull-request"].map((k) => {
         const tpl = LINK_TEMPLATES[k];
-        return h_flex().id(`th-rule-example-${k}`).p(8).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
-          .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(t.dim))
-          .child(v_flex().flex_1().min_w(0).gap(1)
-            .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(tpl.word))
-            .child(div().text_size(11.5).text_color(t.muted).child(tpl.line)))
+        return h_flex().id(`th-rule-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+          .child(svg(ICON(LINK_ICON[k])).size(14).flex_none().text_color(t.dim))
+          .child(v_flex().flex_1().min_w(0).gap(4)
+            .child(div().text_size(13).font_semibold().text_color(t.foreground).child(tpl.word))
+            .child(div().text_size(12).text_color(t.muted).child(tpl.line)))
           .child(this.miniButton(t, `th-rule-use-${k}`, "Use", (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); }));
       }));
   }
@@ -6171,7 +6186,7 @@ export default class Threads extends View {
     const label = (text) => div().text_size(11.5).font_medium().text_color(t.muted).child(text);
     const hints = {
       description: note("It shows under the name in the list."),
-      pattern: h_flex().flex_wrap().gap(4).text_size(11.5).text_color(t.dim)
+      pattern: h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
         .child(div().flex_none().child("A JavaScript regular expression. Capitals count."))
         .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
           .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
@@ -6203,7 +6218,7 @@ export default class Threads extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); })
             .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(on ? t.foreground : t.dim))
             .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(x.word))
-            .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.muted).child(x.line));
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(x.line));
         }))
         .when(!isNew || e.touched, (el) => el.child(note("The label changes; the fields stay.")))
       : h_flex().gap(6).items_center()
@@ -6216,17 +6231,17 @@ export default class Threads extends View {
       ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
         .child(this.examplePieces(t, r))
         .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
-          .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.dim).child(r.under))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(r.under))
           .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniButton(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); })))))
         .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(`${r.beaten} is higher in the list and takes this text first. ${!isNew && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`, t.muted)))
       : null;
     const buttons = h_flex().gap(6).flex_wrap()
-      .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check"))
-      .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }))
-      .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up")))
+      .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check", CARD_BUTTON))
+      .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }, null, CARD_BUTTON))
+      .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up", CARD_BUTTON)))
       .when(!isNew, (el) => el
-        .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy"))
-        .child(this.button(t, "th-rule-remove", "Remove", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); })));
+        .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy", CARD_BUTTON))
+        .child(this.button(t, "th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); }, "trash", CARD_BUTTON)));
     return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
       .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
         .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")))
