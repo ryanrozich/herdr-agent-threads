@@ -56,7 +56,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
+  rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
@@ -3155,8 +3155,14 @@ export default class Threads extends View {
     let preview;
     let md = null;
     let tone = "reply";
-    // A reply, with no search on, starts as Markdown (mdPreview): whole source lines.
-    if (!live && !why && text && !q) {
+    // A search shows a reply with a match as one run around its first match, wherever it is
+    // (searchPreview). A reply with none (a row listed for the prompt it answered together
+    // with) draws as it does with no search.
+    const flat = q && text ? searchPreview(text, q, PREVIEW_CHARS) : null;
+    const hit = flat != null;
+    // A reply, unless a search marks a match in it, starts as Markdown (mdPreview): whole
+    // source lines.
+    if (!live && !why && text && !hit) {
       md = cut ? mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply)
         : mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply, text.length);
       if (!md.md.trim()) md = null;
@@ -3164,7 +3170,7 @@ export default class Threads extends View {
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
     else if (md) preview = " ";
-    else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : cut ? flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))) : flattenMd(text));
+    else if (text) preview = src(q ? flat ?? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : cut ? flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))) : flattenMd(text));
     else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
     else if (turn.answeredBy) {
@@ -3182,9 +3188,9 @@ export default class Threads extends View {
     // A running turn draws its live line where a finished one has its line, then a 16 px
     // stats line where the reply and the strip under it go.
     if (live) sh.height += ROW.STATS - sh.r * this.rt().line - ROW.GAP - ROW.ACTS;
-    // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
-    // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
-    // and until then an estimate; mdBase is the row without it.
+    // A reply as Markdown (no search on, or no match in it): its start, as an open turn draws
+    // it, cut at a whole source line (mdPreview). Its height is the probe's measure of that
+    // block ("cmd"), and until then an estimate; mdBase is the row without it.
     if (md && tone === "reply") {
       const { line } = this.rt();
       // No link rules here: a click on a row opens the turn, so rows never carry links.
