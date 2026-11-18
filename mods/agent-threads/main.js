@@ -6122,8 +6122,9 @@ export default class Threads extends View {
   // under the pointer the hover fill and the foreground, or for Delete the blocked color on a
   // 12% tint of it. Its tooltip is also what a screen reader says.
   ruleIcon(t, id, icon, tip, onClick, danger = false) {
+    // `muted` at rest, not `dim`: a control a person has to find needs 3:1 on light themes too.
     return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer()
-      .text_color(t.dim)
+      .text_color(t.muted)
       .hover((s) => (danger ? s.bg(alpha(t.blocked, 0.12)).text_color(t.blocked) : s.bg(t.hover).text_color(t.foreground)))
       .tooltip(tip).accessibility_label(tip).role("button")
       .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })

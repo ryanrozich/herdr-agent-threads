@@ -8644,7 +8644,7 @@ test("Edit and Delete: icon buttons on every row before its switch, with a toolt
     const own = (id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
     for (const [id, tip, icon] of [["th-rule-edit-btn-1", "Edit rule", "pencil"], ["th-rule-delete-btn-1", "Delete rule", "trash"]]) {
       const b = own(id);
-      for (const x of [["size", 24], ["rounded", 5], ["tooltip", tip], ["accessibility_label", tip], ["role", "button"]]) expect(b).toContainEqual(x);
+      for (const x of [["size", 24], ["rounded", 5], ["text_color", theme.muted], ["tooltip", tip], ["accessibility_label", tip], ["role", "button"]]) expect(b).toContainEqual(x);
       expect(b.some((e) => e[0] === "svg" && String(e[1]).endsWith(`/${icon}.svg`))).toBe(true);
       // Lucide outlines at the mod's 1.5 stroke.
       expect(readFileSync(new URL(`../mods/agent-threads/${icon}.svg`, import.meta.url), "utf8")).toContain('stroke-width="1.5"');
