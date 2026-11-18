@@ -674,36 +674,6 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
-test("a sender rule switched off at run time for being slow gets a note in the panel and the debug report", async () => {
-  const { ruleSender } = await import("../mods/agent-threads/core/turns.js");
-  const { v, cx } = await scripted(senderEvents());
-  v.applyPrefs(JSON.stringify({ senders: [{ name: "Seat", pattern: "^(?<sender>[a-z]+-[a-z]+) hourly" }] }));
-  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 1 · Quote key · q");
-  // As if a slow pattern had passed the checks: a prompt of a word and a long run of spaces.
-  v.senders[0].re = /^(?<sender>\w+)\s*\s*\s*\s*\s*Z/;
-  expect(ruleSender(v.senders, `x${" ".repeat(250)}!`)).toBe(null);
-  const note = "Sender rule 1: too slow on a typed prompt (over 20 ms); switched off";
-  expect(v.notesNow()).toEqual([note]);
-  expect(v.prefsNotes).toEqual([]);
-  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 1 (1 not valid) · Quote key · q");
-  v.report();
-  const snap = state.shared["threads.debug"].t4;
-  expect(snap.settingsNotes).toEqual([note]);
-  expect(snap.senders.rules).toEqual(["1 Seat off"]);
-  // The card shows it on the Link rules page, with the notes it cannot place on a link rule.
-  v.settingsOpen = true;
-  v.setPage = "links";
-  rec = [];
-  v.render(cx);
-  const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
-  rec = null;
-  expect(kids).toContain(note);
-  // The rule written again in the file is compiled anew and runs again.
-  v.applyPrefs(JSON.stringify({ senders: [{ name: "Seat", pattern: "^(?<sender>[a-z]+-[a-z]+) hourly" }, { prefix: "[{name}] " }] }));
-  expect(v.notesNow()).toEqual([]);
-  expect(v.senders.every((r) => !r.off)).toBe(true);
-});
-
 test("agentRail: on by default, agent messages have rail ticks; off, only the person's turns and the running one do", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },

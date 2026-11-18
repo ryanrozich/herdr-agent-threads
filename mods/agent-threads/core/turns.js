@@ -157,10 +157,12 @@ export function senderOf(origin, text, originName = null) {
 // Sender rules (settings.js parseSenders, kept on the session as s.senders): a prompt typed
 // in the terminal (sender "you", not a command) that a rule matches is an agent message,
 // { kind: "peer", name, rule: its number, ruleLabel }. A rule sees the prompt's first line
-// from its first non-space, up to RULE_TEXT characters, so a long prompt costs no more.
-// Never a reply, and never a turn that already carries an agent marker. A rule switched off
-// for being slow (its off field, ruleExec) is passed over.
-export const RULE_TEXT = 300;
+// from its first non-space, up to RULE_TEXT characters: a sender's mark sits at the start
+// ("<seat> hourly 2026-11-18T01:47:20Z", "From <seat>:", with a seat name of up to 60
+// characters), and a short text keeps the most work a rule can take small (settings.js
+// senderCost bounds it from the pattern, at load). Never a reply, and never a turn that
+// already carries an agent marker. No clock is read: a rule that loads always runs.
+export const RULE_TEXT = 100;
 export function ruleSender(rules, prompt) {
   if (!rules?.length || typeof prompt !== "string") return null;
   let a = 0;
@@ -169,63 +171,14 @@ export function ruleSender(rules, prompt) {
   const nl = head.indexOf("\n");
   if (nl >= 0) head = head.slice(0, nl);
   for (const r of rules) {
-    if (r.off) continue;
-    const m = ruleExec(r, head);
+    r.re.lastIndex = 0;
+    const m = r.re.exec(head);
     if (!m) continue;
     const name = r.named ? (m.groups?.sender ?? "").trim().slice(0, 60) : "";
     if (r.named && !name) continue;
     return { kind: "peer", ...(name ? { name } : {}), rule: r.n, ruleLabel: r.label };
   }
   return null;
-}
-
-// The hard time budget of one rule on one prompt, in ms of the rule's own time. A regular
-// expression cannot be stopped once it runs, so ruleExec runs the rule on the prompt's
-// first RULE_STEP characters, then on half again as many each time, up to the whole text,
-// and stops before the next step when the time so far plus the next step's likely cost
-// would pass the budget. The next step is taken to cost RULE_GROWTH times the last (a step
-// half again as long costs up to 1.5^5, about 8, times the last for a pattern of degree 5,
-// as five stacked \s* are), or the last two steps' growth to the power 1.5 when that is
-// more (a pattern whose time grows exponentially grows by more each step). A step
-// that looks too slow and also took longer than the step before said it could (the first
-// step may take a ninth of the budget) is run once more, and the faster time counts, so one
-// pause of the whole process does not switch a rule off. A rule that would pass the budget
-// is switched off for every session: r.off holds the note, the prompt counts as not
-// matched, and the turns it marked before keep their sender until the rules change.
-// Settings compile the rules anew (settings.js parseSenders), so editing the rule or
-// restarting the pane gives it another try. Shapes that grow exponentially are refused
-// before they get here (settings.js).
-export const RULE_BUDGET_MS = 20;
-const RULE_STEP = 12;
-const RULE_GROWTH = 8;
-export const RULE_SLOW = `too slow on a typed prompt (over ${RULE_BUDGET_MS} ms); switched off`;
-const clock = () => globalThis.performance?.now?.() ?? Date.now();
-function timed(r, text) {
-  const t0 = clock();
-  r.re.lastIndex = 0;
-  const m = r.re.exec(text);
-  return { m, dt: clock() - t0 };
-}
-export function ruleExec(r, head) {
-  let spent = 0;
-  let allow = RULE_BUDGET_MS / (1 + RULE_GROWTH);
-  let prev = 0;
-  for (let len = Math.min(RULE_STEP, head.length); ; len = Math.min(head.length, Math.ceil(len * 1.5))) {
-    const text = len < head.length ? head.slice(0, len) : head;
-    const last = text === head;
-    const grow = (d) => Math.max(RULE_GROWTH, prev > 0.01 ? (d / prev) ** 1.5 : 0);
-    const over = (d) => spent + d + (last ? 0 : d * grow(d)) > RULE_BUDGET_MS;
-    let { m, dt } = timed(r, text);
-    if (over(dt) && dt > allow) {
-      const again = timed(r, text);
-      if (again.dt < dt) ({ m, dt } = again);
-    }
-    if (over(dt)) { r.off = RULE_SLOW; return null; }
-    spent += dt;
-    if (last) return m;
-    allow = dt * grow(dt);
-    prev = dt;
-  }
 }
 
 // A turn the rules may mark: typed in the terminal, or marked by a rule before.

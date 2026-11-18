@@ -4,8 +4,8 @@
 import { test, expect, mock } from "bun:test";
 
 mock.module("herdr", () => ({ writeTextFile: async () => null }));
-const { parseSenders, parseExtras } = await import("../mods/agent-threads/settings.js");
-const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT, RULE_BUDGET_MS, RULE_SLOW } = await import("../mods/agent-threads/core/turns.js");
+const { parseSenders, parseExtras, senderCost, SENDER_OPEN, SENDER_STEPS } = await import("../mods/agent-threads/settings.js");
+const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT } = await import("../mods/agent-threads/core/turns.js");
 
 const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
 const FROM = "From release-checker: two links in the changelog are dead";
@@ -66,43 +66,116 @@ test("a pattern that is not valid says so, and only a real sender group counts",
   expect(parseSenders([{ pattern: "^(?:x|From (?<sender>[a-z-]+):)" }, { pattern: "^(?<k>\\d) (?<sender>[a-z-]+):" }]).notes).toEqual([]);
 });
 
-// The outside review's rule: five stacked optional-space runs after a word. Read as written
-// it took about 4.9 s on one prompt of "x", 250 spaces and "!".
+// The outside review's rules. Read as written on 300 characters, the first took about 4.9 s
+// on one prompt of "x", 250 spaces and "!", and the @@ rule froze the pane for 6 s with the
+// "@@" at character 200, past every early probe.
 const STACKED = "(?<sender>\\w+)\\s*\\s*\\s*\\s*\\s*Z";
-const SPACED = `x${" ".repeat(250)}!`;
+const AT_AT = "^(?<sender>\\w+)[^@]*@@\\s*\\s*\\s*\\s*\\s*\\s*\\s*Z";
+const AT_AT_PROMPT = `x ${"a".repeat(200)}@@${" ".repeat(80)}`;
+const openNote = (n) => `${n} open-ended repeats (*, + or {n,}); 3 at most`;
+const TOO_LONG = "could take too long on a prompt (over a million steps on its first 100 characters): start it with ^, or use fewer repeats";
 
-test("a pattern slow on a long run of one character is refused, as the long-run probes refuse link rules", () => {
-  const { rules, notes } = parseSenders([{ pattern: STACKED }, { pattern: `^${STACKED}` }, { pattern: "^(?<sender>\\w+)\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*Z" }]);
-  expect(notes).toEqual([
-    "Sender rule 1: too slow on long text; disabled",
-    "Sender rule 2: too slow on long text; disabled",
-    "Sender rule 3: too slow on long text; disabled",
+test("the outside review's slow rules are refused at load, with no clock read", () => {
+  const clock = performance.now;
+  let reads = 0;
+  performance.now = () => { reads++; return clock.call(performance); };
+  let got;
+  try {
+    got = parseSenders([
+      { pattern: STACKED }, { pattern: `^${STACKED}` }, { pattern: AT_AT },
+      // Stacked runs of other characters: hyphens, any character, accented and CJK classes.
+      { pattern: "(?<sender>\\w+)-*-*-*-*-*Z" }, { pattern: "(?<sender>\\w+)[.]*[.]*[.]*[.]*[.]*Z" },
+      { pattern: "(?<sender>\\w+).*.*.*.*.*Z" }, { pattern: "(?<sender>\\w+)[à-ÿ]*[à-ÿ]*[à-ÿ]*[à-ÿ]*[à-ÿ]*Z" },
+      { pattern: "(?<sender>\\w+)[一-龥]*[一-龥]*[一-龥]*[一-龥]*[一-龥]*Z" },
+      // The slow part in a lookahead after a late literal.
+      { pattern: "^(?<sender>\\w+)(?=[^@]*@@\\s*\\s*\\s*\\s*\\s*Z)" },
+      // An exponential the nested-repeat check does not see, and repeats with a bound that
+      // are as slow as open ones on a short prompt.
+      { pattern: "^(?<sender>\\w+)(?:\\w\\w?)+Z" },
+      { pattern: `(?<sender>\\w)${"\\s?".repeat(40)}Z` },
+      { pattern: "(?<sender>\\w)\\s{0,99}\\s{0,99}\\s{0,99}\\s{0,99}Z" },
+    ]);
+  } finally {
+    performance.now = clock;
+  }
+  expect(got.notes).toEqual([
+    `Sender rule 1: ${openNote(6)}`, `Sender rule 2: ${openNote(6)}`, `Sender rule 3: ${openNote(9)}`,
+    `Sender rule 4: ${openNote(6)}`, `Sender rule 5: ${openNote(6)}`, `Sender rule 6: ${openNote(6)}`, `Sender rule 7: ${openNote(6)}`, `Sender rule 8: ${openNote(6)}`,
+    `Sender rule 9: ${openNote(7)}`,
+    `Sender rule 10: ${TOO_LONG}`,
+    `Sender rule 11: ${TOO_LONG}`,
+    `Sender rule 12: ${TOO_LONG}`,
   ]);
-  expect(rules).toEqual([]);
-  // A plain pattern passes them.
-  expect(parseSenders([{ pattern: "^(?<sender>[a-z][a-z0-9-]*) hourly \\d{4}-\\d{2}-\\d{2}" }]).notes).toEqual([]);
+  expect(got.rules).toEqual([]);
+  expect(reads).toBe(0);
 });
 
-test("a rule that slips past every check keeps to the time budget on a prompt and is switched off", () => {
-  // Built by hand, as if the checks had passed it.
-  const slow = { n: 2, label: "Stacked", re: new RegExp(`^${STACKED}`), named: true };
-  const quick = { n: 3, label: "Seat", re: /^(?<sender>x) /, named: true };
-  const t0 = performance.now();
-  const got = ruleSender([slow, quick], SPACED);
-  const spent = performance.now() - t0;
-  expect(spent).toBeLessThan(RULE_BUDGET_MS);
-  expect(slow.off).toBe(RULE_SLOW);
-  expect(RULE_SLOW).toBe("too slow on a typed prompt (over 20 ms); switched off");
-  // The prompt goes on to the next rule, and the slow rule is passed over from then on.
-  expect(got).toEqual({ kind: "peer", name: "x", rule: 3, ruleLabel: "Seat" });
-  const t1 = performance.now();
-  expect(ruleSender([slow], SPACED)).toBe(null);
-  expect(performance.now() - t1).toBeLessThan(5);
-  // A plain rule on many long prompts is never switched off.
-  const { rules } = parseSenders([{ pattern: "^From (?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]):" }]);
-  for (let i = 0; i < 2000; i++) ruleSender(rules, `From ${i % 2 ? "seat-one" : "scratch"}: ${"word ".repeat(60)}`);
-  expect(rules[0].off).toBeUndefined();
-  expect(ruleSender(rules, "From seat-one: done")?.name).toBe("seat-one");
+test("four open-ended repeats are refused with a note that says so; three that stay cheap are kept", () => {
+  expect(SENDER_OPEN).toBe(3);
+  const { rules, notes } = parseSenders([
+    { pattern: "^(?<sender>\\w+)[^@]*@@\\s*\\s*Z" },
+    { pattern: "^(?<sender>[a-z]+)\\s+\\S+\\s{2,}Z" },
+    { pattern: "^(?<sender>\\w+)[^@]*@@\\s*Z" },
+  ]);
+  expect(notes).toEqual([
+    "Sender rule 1: 4 open-ended repeats (*, + or {n,}); 3 at most",
+    "Sender rule 2: 4 open-ended repeats (*, + or {n,}); 3 at most",
+  ]);
+  expect(rules.map((r) => r.n)).toEqual([3]);
+  // Three that may start anywhere cost a start for each character too, and are refused for
+  // the steps; the same three held to the start are kept.
+  expect(parseSenders([{ pattern: "(?<sender>\\s+)\\s*\\s*Z" }]).notes).toEqual([`Sender rule 1: ${TOO_LONG}`]);
+  expect(parseSenders([{ pattern: "^(?<sender>\\s+)\\s*\\s*Z" }]).notes).toEqual([]);
+});
+
+test("the step count is an upper bound on the prompt's head, from the pattern alone", () => {
+  expect(SENDER_STEPS).toBe(1e6);
+  // A literal pattern held to the start: a step a character, nothing to try again.
+  expect(senderCost("^From (?<sender>x):").steps).toBeLessThan(1000);
+  // Each open-ended repeat that can take the same characters multiplies the ways to split
+  // the text: two run in about RULE_TEXT squared, three in about its cube.
+  const two = senderCost("^(?<sender>\\s+)\\s*Z").steps;
+  const three = senderCost("^(?<sender>\\s+)\\s*\\s*Z").steps;
+  expect(three / two).toBeGreaterThan(RULE_TEXT / 5);
+  // The bound holds to the head: on a longer one the same pattern costs more.
+  expect(senderCost("^(?<sender>\\s+)\\s*\\s*Z", 300).steps).toBeGreaterThan(SENDER_STEPS);
+  // ? and a bounded count are repeats too: 2^k ways for k stacked \s?.
+  expect(senderCost(`^(?<sender>\\w)${"\\s?".repeat(10)}Z`).steps).toBeGreaterThan(2 ** 10);
+  expect(senderCost(`^(?<sender>\\w)${"\\s?".repeat(18)}Z`).steps).toBeLessThan(SENDER_STEPS);
+  expect(senderCost(`^(?<sender>\\w)${"\\s?".repeat(19)}Z`).steps).toBeGreaterThan(SENDER_STEPS);
+  // Open-ended repeats are counted inside groups and lookarounds too.
+  expect(senderCost("^(?=a*)(?:b+|c*)(?<sender>d{2,})").open).toBe(4);
+});
+
+test("a rule sees the first RULE_TEXT characters of the prompt's first line, in one try a rule", () => {
+  expect(RULE_TEXT).toBe(100);
+  const seen = [];
+  const rule = { n: 1, label: "Spy", re: /^(?<sender>[a-z-]+) hourly/, named: true };
+  const exec = rule.re.exec.bind(rule.re);
+  rule.re.exec = (t) => { seen.push(t.length); return exec(t); };
+  const clock = performance.now;
+  let reads = 0;
+  performance.now = () => { reads++; return clock.call(performance); };
+  try {
+    expect(ruleSender([rule], `   seat-one hourly ${"x".repeat(400)}`)?.name).toBe("seat-one");
+    expect(ruleSender([rule], `${" ".repeat(250)}seat-one hourly`)).toBe(null);
+    expect(ruleSender([rule], "seat-one\nhourly")).toBe(null);
+    // The review's @@ prompt: the "@@" at character 200 is past the head.
+    expect(ruleSender([rule], AT_AT_PROMPT)).toBe(null);
+  } finally {
+    performance.now = clock;
+  }
+  // One call a prompt, never on growing slices: the head after leading spaces (RULE_TEXT),
+  // only RULE_TEXT spaces skipped, and the first line only.
+  expect(seen).toEqual([100, 100, 8, 100]);
+  expect(reads).toBe(0);
+  // Nothing on the rule changes with use, so a rule that loads keeps running.
+  expect(Object.keys(rule).sort()).toEqual(["label", "n", "named", "re"]);
+  // A seat name of 60 characters still fits with " hourly " and a timestamp to the second.
+  const long = `seat-${"a".repeat(55)}`;
+  const { rules } = parseSenders([{ name: "Hourly report", prefix: "{name} hourly" }, { pattern: "^(?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]) hourly \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z" }]);
+  expect(ruleSender([rules[1]], `${long} hourly 2026-11-18T01:47:20Z: 3 merged`)?.name).toBe(long);
+  expect(ruleSender([rules[0]], `${long} hourly 2026-11-18T01:47:20Z: 3 merged`)?.name).toBe(long);
 });
 
 // The rules the PR body offers for an owner's own seats, with made-up seat names: relay, and

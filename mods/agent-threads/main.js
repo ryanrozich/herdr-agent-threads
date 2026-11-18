@@ -877,10 +877,10 @@ export default class Threads extends View {
       selColors: themes().map((x) => ({ name: x.name, light: x.light, background: x.colors?.background, selected: x.colors?.selected, selection: x.colors?.selection })),
       // Round 2: the quote key, the last quote press (never its text), the link rules and
       // the repo they use.
-      quoteKey: this.quoteKey, settingsNotes: this.notesNow(), lastQuote: this.lastQuote,
+      quoteKey: this.quoteKey, settingsNotes: this.prefsNotes, lastQuote: this.lastQuote,
       editorFocused: Boolean(this.editorFocused), panelFocused: this.panelFocused(), focusEvents: this.focusEvents ?? null,
       links: { count: this.linkCount ?? 0, valid: this.links.length, ver: this.linksVer, rules: this.links.map((r) => `${r.n} ${r.name}${r.repo ? " {repo}" : ""}`) },
-      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}${r.off ? " off" : ""}`) },
+      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
     };
@@ -6155,7 +6155,7 @@ export default class Threads extends View {
     const list = this.linkList ?? [];
     const e = this.ruleEdit;
     const edit = this.linksEditable();
-    const other = (this.notesNow() ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
+    const other = (this.prefsNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
     const rows = list.map((r, i) => (e?.at === i ? this.ruleEditor(t) : this.ruleRow(t, r, i, edit)));
     if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.ruleEditor(t));
     if (this.ruleUndo) rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
@@ -8442,15 +8442,8 @@ export default class Threads extends View {
   settingsLine() {
     const bad = (this.linkCount ?? 0) - this.links.length;
     const sn = this.senderCount ?? 0;
-    const sbad = sn - this.senders.filter((r) => !r.off).length;
+    const sbad = sn - this.senders.length;
     return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
-  }
-
-  // The settings notes: the file's (prefsNotes), then a note for each sender rule switched
-  // off at run time for being too slow (core/turns.js ruleExec).
-  notesNow() {
-    const off = this.senders.filter((r) => r.off);
-    return off.length ? [...this.prefsNotes, ...off.map((r) => `Sender rule ${r.n}: ${r.off}`)] : this.prefsNotes;
   }
 
   // Which sender rule made a typed prompt an agent message, for the tooltip on its sender:

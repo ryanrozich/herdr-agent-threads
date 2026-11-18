@@ -170,49 +170,146 @@ function patternShape(pattern, flags) {
   return { re };
 }
 
-// Hostile probes of growing length, two characters at a time, stopping at the first one
-// over 5 ms: a pattern whose time grows exponentially is caught at a length where one
-// probe still costs only a few times the last (a long first probe would hang on it).
-// Why the pattern is refused, or null.
-function patternSlow(re, pattern) {
-  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
-  for (let len = 12; len <= 32; len += 2) {
-    for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
-      const t0 = now();
-      re.lastIndex = 0;
-      re.exec(probe);
-      if (now() - t0 > 5) return "too slow on a short test text; disabled";
-    }
-  }
-  return null;
-}
-
-// Long runs of one kind of character, alone or after a word or the pattern's own opening
-// words: quantifiers side by side that can take the same characters ("\s*\s*Z", "\w+\w+X")
-// cost polynomial time on a near miss, which the short probes miss and riskyShape does not
-// see. Lengths grow by half from 16 to max, stopping at the first probe over 3 ms, and the
-// whole check stops at 100 ms. The same probes as PR 97's link check (SLOW_LONG there), plus
-// the leads, which catch "^(?<sender>\w+)\s*\s*\s*Z" on "x" and spaces. Why, or null.
-function patternRuns(re, pattern, max) {
-  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
-  const open = (/^\^?((?:[A-Za-z0-9_ :-]|\\.)+)/.exec(pattern)?.[1] ?? "").replace(/\\(.)/g, "$1").slice(0, 20);
-  const leads = [...new Set(["", "x", `${open}x`])];
-  const start = now();
-  for (const lead of leads) {
-    for (const unit of [" ", "a", "1", "a1 _-.", "#", lit]) {
-      for (let len = 16; ; len = Math.min(max, Math.ceil(len * 1.5))) {
-        const probe = `${lead}${unit.repeat(Math.ceil(len / unit.length)).slice(0, len)}!`;
-        const t0 = now();
-        re.lastIndex = 0;
-        re.exec(probe);
-        const t1 = now();
-        if (t1 - t0 > 3 || t1 - start > 100) return "too slow on long text; disabled";
-        if (len >= max) break;
+// The most work a sender pattern can take on one prompt, worked out from the pattern alone
+// and never timed, so neither a slow machine nor a pause can change it. A regular
+// expression with no backreference and no nested repeat (both refused before this) tries
+// each way of splitting the text between its repeats at most once from each start: the
+// count of those ways, bounded by the RULE_TEXT characters a rule ever sees, bounds its
+// steps. { open, steps }: open is the number of open-ended repeats (*, + and {n,}); steps
+// counts every place the matcher can stand at every part of the pattern, as if every
+// character matched, so it is an upper bound. A lookahead or lookbehind is tried once each
+// time it is reached and never backed into. Stops counting past stop, or 1e12.
+export function senderCost(pattern, room = RULE_TEXT, stop = Infinity) {
+  let i = 0;
+  let open = 0;
+  const p = pattern;
+  // The pattern as a tree: { alt: [seq] }, a seq is a list of items, an item is
+  // { kind: "char" | "start" | "zero" | "look" | "group", alt?, min, max }.
+  const parseAlt = () => {
+    const alt = [parseSeq()];
+    while (p[i] === "|") { i++; alt.push(parseSeq()); }
+    return alt;
+  };
+  const parseSeq = () => {
+    const seq = [];
+    while (i < p.length && p[i] !== "|" && p[i] !== ")") {
+      const item = parseAtom();
+      const q = /^(?:([*+?])|\{(\d+)(?:(,)(\d*))?\})\??/.exec(p.slice(i));
+      if (q) {
+        i += q[0].length;
+        if (q[1]) { item.min = q[1] === "+" ? 1 : 0; item.max = q[1] === "?" ? 1 : Infinity; } else { item.min = Number(q[2]); item.max = q[3] ? (q[4] ? Number(q[4]) : Infinity) : item.min; }
+        if (item.max === Infinity) open++;
       }
+      seq.push(item);
     }
-  }
-  return null;
+    return seq;
+  };
+  const parseAtom = () => {
+    const c = p[i];
+    if (c === "(") {
+      const m = /^\(\?(?:[:=!]|<[=!]|<[A-Za-z_$][\w$]*>)/.exec(p.slice(i));
+      const look = m && /^\(\?(?:[=!]|<[=!])$/.test(m[0]);
+      i += m ? m[0].length : 1;
+      const alt = parseAlt();
+      i++; // ")"
+      return { kind: look ? "look" : "group", alt, min: 1, max: 1 };
+    }
+    if (c === "[") {
+      let j = i + 1;
+      if (p[j] === "^") j++;
+      if (p[j] === "]") j++;
+      while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; }
+      i = j + 1;
+      return { kind: "char", min: 1, max: 1 };
+    }
+    if (c === "\\") {
+      const e = p[i + 1] ?? "";
+      i += 2;
+      if (e === "b" || e === "B") return { kind: "zero", min: 1, max: 1 };
+      if (e === "u" && /^[0-9A-Fa-f]{4}/.test(p.slice(i))) i += 4;
+      else if (e === "x" && /^[0-9A-Fa-f]{2}/.test(p.slice(i))) i += 2;
+      else if (e === "c" && /^[A-Za-z]/.test(p[i] ?? "")) i++;
+      return { kind: "char", min: 1, max: 1 };
+    }
+    i++;
+    if (c === "^") return { kind: "start", min: 1, max: 1 };
+    if (c === "$") return { kind: "zero", min: 1, max: 1 };
+    return { kind: "char", min: 1, max: 1 };
+  };
+  const tree = parseAlt();
+  const CAP = 1e12;
+  const size = room + 1;
+  const STOP = {};
+  let spent = 0;
+  const add = (n) => { spent = Math.min(CAP, spent + n); if (spent > stop) throw STOP; };
+  const sum = (d) => { let s = 0; for (let x = 0; x < size; x++) s += d[x]; return Math.min(CAP, s); };
+  const unit = () => { const d = new Float64Array(size); d[0] = 1; return d; };
+  // The steps a group or lookaround takes once, from one place, kept apart from spent.
+  const alone = (alt) => { const before = spent; const d = runAlt(alt, unit(), false); const c = spent - before; spent = before; return { d, c }; };
+  // d[x]: the number of paths that stand x characters into the head. abs: x counts from the
+  // head's start, so ^ keeps only 0 (inside a repeat it counts from where the repeat began).
+  const runAlt = (alt, d, abs) => {
+    if (alt.length === 1) return runSeq(alt[0], d, abs);
+    const out = new Float64Array(size);
+    for (const seq of alt) { const r = runSeq(seq, d, abs); for (let x = 0; x < size; x++) out[x] = Math.min(CAP, out[x] + r[x]); }
+    return out;
+  };
+  const runSeq = (seq, d, abs) => {
+    for (const item of seq) d = item.min === 1 && item.max === 1 ? once(item, d, abs) : repeat(item, d, abs);
+    return d;
+  };
+  const once = (item, d, abs) => {
+    const n = sum(d);
+    add(n);
+    if (item.kind === "char") { const out = new Float64Array(size); out.set(d.subarray(0, room), 1); return out; }
+    if (item.kind === "start") { if (!abs) return d; const out = new Float64Array(size); out[0] = d[0]; return out; }
+    if (item.kind === "look") { if (n) add(n * alone(item.alt).c); return d; }
+    if (item.kind === "zero") return d;
+    return runAlt(item.alt, d, abs);
+  };
+  const repeat = (item, d, abs) => {
+    if (item.kind === "char") {
+      // min times, then up to max - min more: each path ends anywhere in that window.
+      for (let k = 0; k < Math.min(item.min, size); k++) d = once(item, d, abs);
+      if (item.min >= size) return new Float64Array(size);
+      const span = Math.min(item.max - item.min, room);
+      const out = new Float64Array(size);
+      let win = 0;
+      for (let x = 0; x < size; x++) { win += d[x]; if (x > span) win -= d[x - span - 1]; out[x] = Math.min(CAP, win); }
+      add(sum(out));
+      return out;
+    }
+    if (item.kind !== "group") { add(sum(d) * Math.min(item.min, size)); return d; }
+    // A group of fixed shape (no repeat inside a repeated group gets this far): one time of
+    // it from one place (rel), min times, then each further time while the head lasts. A
+    // further time that takes no text ends the repeat, as in JavaScript.
+    const rel = alone(item.alt);
+    const at = [];
+    for (let k = 0; k < size; k++) if (rel.d[k]) at.push(k, rel.d[k]);
+    const step = (from, skip0) => {
+      add(sum(from) * (1 + rel.c));
+      const out = new Float64Array(size);
+      for (let x = 0; x < size; x++) {
+        if (!from[x]) continue;
+        for (let j = 0; j < at.length; j += 2) if ((at[j] || !skip0) && x + at[j] < size) out[x + at[j]] = Math.min(CAP, out[x + at[j]] + from[x] * at[j + 1]);
+      }
+      return out;
+    };
+    for (let k = 0; k < Math.min(item.min, size + 1); k++) d = step(d, false);
+    if (item.min > size + 1 && sum(d) > 0) add(CAP);
+    const out = d.slice();
+    for (let k = item.min; k < item.max && sum(d) > 0; k++) {
+      d = step(d, true);
+      for (let x = 0; x < size; x++) out[x] = Math.min(CAP, out[x] + d[x]);
+    }
+    return out;
+  };
+  try { runAlt(tree, new Float64Array(size).fill(1), true); } catch (e) { if (e !== STOP) throw e; }
+  return { open, steps: spent };
 }
+// The most open-ended repeats a sender pattern may have, and the most steps (senderCost).
+export const SENDER_OPEN = 3;
+export const SENDER_STEPS = 1e6;
 
 // A rule's type: the icon the Link rules page shows for it, and nothing else.
 export const LINK_TYPES = Object.freeze(["custom", "ticket", "pull-request"]);
@@ -332,12 +429,11 @@ export const SLOW_LONG = "too slow on long text; disabled";
 // A rule is dropped, with a note, when it has both or neither, a prefix is over 100
 // characters, has no {name} (it would mark every prompt that starts with it, "From:" or
 // "ab", with no sender), holds {name} twice or has under 2 characters besides it, a pattern
-// is not valid, has no sender group, or fails a check link patterns have (patternShape,
-// patternSlow) or the long-run probes (patternRuns, up to RULE_TEXT and a little more), or
-// it is past the 20th. Each kept rule: { n, label (its name, else its prefix or pattern),
-// re, named (true: the match names the sender) }. At run time a rule that passes all this
-// and is still slow on a real prompt is switched off (core/turns.js ruleSender, its off
-// field). No rule ships.
+// is not valid, has no sender group, fails a check link patterns have (patternShape), has
+// more than SENDER_OPEN open-ended repeats, or could take more than SENDER_STEPS steps on a
+// prompt (senderCost), or it is past the 20th. Each kept rule: { n, label (its name, else
+// its prefix or pattern), re, named (true: the match names the sender) }. No clock is read,
+// so the same file always gives the same rules. No rule ships.
 export function parseSenders(raw) {
   const rules = [];
   const notes = [];
@@ -368,8 +464,9 @@ export function parseSenders(raw) {
     const shape = patternShape(pattern, "");
     if (shape.why) return no(shape.why);
     if (!senderGroup(pattern)) return no("pattern has no (?<sender>...) group");
-    const slow = patternSlow(shape.re, pattern) ?? patternRuns(shape.re, pattern, RULE_TEXT + 20);
-    if (slow) return no(slow);
+    const cost = senderCost(pattern, RULE_TEXT, SENDER_STEPS);
+    if (cost.open > SENDER_OPEN) return no(`${cost.open} open-ended repeats (*, + or {n,}); ${SENDER_OPEN} at most`);
+    if (cost.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
     rules.push({ n, label, re: shape.re, named: true });
   });
   return { rules, notes };
