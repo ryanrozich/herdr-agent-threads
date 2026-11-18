@@ -653,8 +653,9 @@ const headFit = (s, room) => {
 // Text wrapped at word boundaries into lines of at most `perLine` average characters
 // (a long unbroken token, such as a path, breaks hard), clipped to `limit` lines. The
 // last line ends in "…" only when text was left out. Newlines collapse to spaces.
-// Returns { lines: string[], cut } . The drawing shows each line as its own one-line
-// element, so the row height the list is given is exact.
+// Returns { lines: string[], cut }, and hard: the indexes of lines that end inside a token
+// broken hard, when there are any (every other line ends where a space was). The drawing
+// shows each line as its own one-line element, so the row height the list is given is exact.
 //
 // Only the start of the text is read: `limit` lines of `perLine` units cover at most
 // limit * (perLine + 1) characters, so the text is cut a line beyond that before it is
@@ -675,6 +676,7 @@ export function rowLines(text, limit, perLine) {
   }
   const words = src ? src.split(" ") : [];
   const lines = [];
+  const hard = [];
   let line = "";
   let used = 0;
   let cut = false;
@@ -692,6 +694,7 @@ export function rowLines(text, limit, perLine) {
       w = w.slice(head.length);
       wu = units(w);
       push();
+      if (w) hard.push(lines.length - 1);
       if (lines.length >= max) { cut = Boolean(w) || wi < words.length - 1 || clipped; break outer; }
     }
     if (!w) continue;
@@ -707,7 +710,7 @@ export function rowLines(text, limit, perLine) {
     if (units(last) + 1 > per) last = headFit(last, per - 1);
     lines[lines.length - 1] = `${last.replace(/[\s.,;:]+$/, "")}…`;
   }
-  return { lines, cut };
+  return hard.length ? { lines, cut, hard } : { lines, cut };
 }
 
 // A reply as one paragraph of plain text for a row preview: no emphasis, code, heading or
@@ -942,6 +945,7 @@ export function rowHeight(p, r, more = 0, line = readType().line, agent = false)
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
 // and the arguments wrap in the space to its right.
+// hard: rowLines' hard breaks in the arguments, for the selectable HTML.
 export function commandLayout(name, args, width, limit, agent = false, size = TEXT_SIZE, chars = MEASURE) {
   const rt = readType(size);
   const tw = rowTextWidth(width, agent, size, chars);
@@ -951,7 +955,7 @@ export function commandLayout(name, args, width, limit, agent = false, size = TE
   const chipW = Math.min(maxChip, Math.ceil([...label].length * ROW.CHIP_CHAR + 12));
   const per = Math.floor((tw - chipW - 6) / rt.prompt);
   const a = args ? rowLines(args, limit, per) : { lines: [], cut: false };
-  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length) };
+  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length), hard: a.hard };
 }
 
 // The lines a collapsed row shows: { p, r, prompt, reply, chip?, kinds?, q }. kinds, when
@@ -965,13 +969,13 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   let chip = null;
   if (cmd) {
     chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size, chars);
-    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut };
+    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut, hard: chip.hard };
   } else {
     pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {
       // A task notification that opens a session carries no text: the sender label names it.
       const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? rt.agent : rt.prompt));
-      pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut };
+      pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut, hard: l.hard };
     }
   }
   const rl = rowLines(reply, replyLimit ?? replyLines, readWidth(width, size, chars) / rt.reply);
@@ -986,6 +990,8 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   const bubbleW = Math.min(bubbleMax(width, size, chars), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
   return {
     p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
+    // The lines that end inside a token broken hard (rowLines), for the selectable HTML.
+    pHard: pr.hard ?? null, rHard: rl.hard ?? null,
     height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line, agent),
   };
 }
@@ -1523,19 +1529,26 @@ export function htmlLine(line) {
 }
 
 // Lines of plain text as HTML for stacked TextViews, each at most max UTF-8 bytes (MD_MAX, as
-// mdChunks), whole lines only: [{ html, n }] with n lines in each.
-export function htmlChunks(lines, max = MD_MAX) {
+// mdChunks), whole lines only: [{ html, n }] with n lines in each. The lines are one text's
+// wrap (rowLines), so they are joined by the space the wrap took out, or by nothing after a
+// line in `hard` (a token broken across lines), never by "<br>": Herdr 0.1.15 draws no break
+// there and wraps the text itself, which ran "for" and "an" together as "foran".
+export function htmlChunks(lines, max = MD_MAX, hard = null) {
   const out = [];
-  let cur = [];
+  let cur = "";
+  let n = 0;
   let bytes = 0;
+  let i = 0;
   for (const l of lines ?? []) {
     const h = htmlLine(l);
-    const b = utf8Len(h) + 4;
-    if (cur.length && bytes + b > max) { out.push({ html: cur.join("<br>"), n: cur.length }); cur = []; bytes = 0; }
-    cur.push(h);
+    const b = utf8Len(h) + 1;
+    if (n && bytes + b > max) { out.push({ html: cur, n }); cur = ""; n = 0; bytes = 0; }
+    cur += (n && !hard?.includes(i - 1) ? " " : "") + h;
+    n++;
     bytes += b;
+    i++;
   }
-  if (cur.length) out.push({ html: cur.join("<br>"), n: cur.length });
+  if (n) out.push({ html: cur, n });
   return out;
 }
 
