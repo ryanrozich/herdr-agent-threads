@@ -20,9 +20,11 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const m = e?.modifiers ?? {};
   if (m.platform || m.control || m.alt || m.function) return null;
   const k = e?.key ?? "";
-  // ? is Shift-/ on most layouts; Herdr may name it either way.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
+  // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   if (k === "G") return "latest";
+  if (k === "W") return filtering ? null : "widthStep";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
@@ -50,7 +52,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["c"], "Copy the reply"], [["1-9"], "Go to that image"], [["Esc", "q"], "Close"],
     ]],
     ["View", [
-      [["w"], "Fit to the reading width"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }
@@ -149,12 +151,15 @@ export function outlineHeight(size = TEXT_SIZE) { return Math.max(30, readType(s
 export function outlineNumW(maxN) { return Math.ceil((String(Math.max(1, maxN | 0)).length + 1) * 7.2) + 6; }
 
 // One line of text that keeps the first match in view: the start is cut to "…" plus
-// `lead` characters before the match.
+// `lead` characters before the match, from a word's start when one begins in them (a match
+// inside a long token, such as an address, keeps the token's cut end).
 export function around(text, q, lead = 18) {
   const s = text ?? "";
   const i = q ? s.toLowerCase().indexOf(q.toLowerCase()) : -1;
   if (i <= lead) return s;
-  return `…${s.slice(i - lead).replace(/^\S*\s/, "")}`;
+  const t = s.slice(i - lead);
+  const sp = t.search(/\s/);
+  return `…${sp >= 0 && sp < lead ? t.slice(sp + 1) : t}`;
 }
 
 // Code fence names to the read-only editor's highlighters. Herdr's editor highlights the
@@ -658,8 +663,10 @@ function tokenBreak(head) {
 // Text wrapped at word boundaries into lines of at most `perLine` average characters
 // (a long unbroken token, such as a path, breaks after a "/" or "-", else hard), clipped
 // to `limit` lines. The last line ends in "…" only when text was left out. Newlines
-// collapse to spaces. Returns { lines: string[], cut } . The drawing shows each line as its
-// own one-line element, so the row height the list is given is exact.
+// collapse to spaces. Returns { lines: string[], cut }, and hard: the indexes of lines that
+// end inside a token (after its "/" or "-", or broken hard), when there are any (every other
+// line ends where a space was). The drawing shows each line as its own one-line element,
+// so the row height the list is given is exact.
 //
 // Only the start of the text is read: `limit` lines of `perLine` units cover at most
 // limit * (perLine + 1) characters, so the text is cut a line beyond that before it is
@@ -680,6 +687,7 @@ export function rowLines(text, limit, perLine) {
   }
   const words = src ? src.split(" ") : [];
   const lines = [];
+  const hard = [];
   let line = "";
   let used = 0;
   let cut = false;
@@ -698,6 +706,7 @@ export function rowLines(text, limit, perLine) {
       w = w.slice(head.length);
       wu = units(w);
       push();
+      if (w) hard.push(lines.length - 1);
       if (lines.length >= max) { cut = Boolean(w) || wi < words.length - 1 || clipped; break outer; }
     }
     if (!w) continue;
@@ -713,7 +722,7 @@ export function rowLines(text, limit, perLine) {
     if (units(last) + 1 > per) last = headFit(last, per - 1);
     lines[lines.length - 1] = `${last.replace(/[\s.,;:]+$/, "")}…`;
   }
-  return { lines, cut };
+  return hard.length ? { lines, cut, hard } : { lines, cut };
 }
 
 // A reply as one paragraph of plain text for a row preview: no emphasis, code, heading or
@@ -810,6 +819,25 @@ export function flattenMd(md, max = Infinity) {
     else out += (p.bullet && parts[i - 1].bullet ? " · " : " ") + p.t;
   });
   return out.replace(/\s+/g, " ").trim();
+}
+
+// A reply under a search, as one run that holds its first match, or null when it has none.
+// The match is the filter's (core/turns.js matches): the reply as written, all of it, case
+// ignored, so the flattening's own words ("[code]", " · ") never count. The run is the reply
+// flattened from the start of the match's line (from the top when the match is near it); a
+// match the flattening drops (in a code fence's opening line, a link's address, emphasis marks
+// inside the query) shows in the source around it instead.
+export function searchPreview(md, q, chars = 1200) {
+  const s = String(md ?? "");
+  const needle = String(q ?? "").toLowerCase();
+  const at = needle ? s.toLowerCase().indexOf(needle) : -1;
+  if (at < 0) return null;
+  const from = at < chars ? 0 : s.lastIndexOf("\n", at) + 1;
+  const lead = from > 0 ? "… " : "";
+  const flat = flattenMd(s.slice(from, Math.max(from + chars * 2, at + needle.length + chars)));
+  if (flat.toLowerCase().includes(needle)) return lead + flat;
+  const a = Math.max(0, at - chars);
+  return (a > 0 ? "… " : "") + s.slice(a, at + needle.length + chars).replace(/\s+/g, " ").trim();
 }
 
 // Text cut in the middle to at most `max` characters: "plugin:rev…ew-pr".
@@ -929,6 +957,7 @@ export function rowHeight(p, r, more = 0, line = readType().line, agent = false)
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
 // and the arguments wrap in the space to its right.
+// hard: rowLines' hard breaks in the arguments, for the selectable HTML.
 export function commandLayout(name, args, width, limit, agent = false, size = TEXT_SIZE, chars = MEASURE) {
   const rt = readType(size);
   const tw = rowTextWidth(width, agent, size, chars);
@@ -938,7 +967,7 @@ export function commandLayout(name, args, width, limit, agent = false, size = TE
   const chipW = Math.min(maxChip, Math.ceil([...label].length * ROW.CHIP_CHAR + 12));
   const per = Math.floor((tw - chipW - 6) / rt.prompt);
   const a = args ? rowLines(args, limit, per) : { lines: [], cut: false };
-  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length) };
+  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length), hard: a.hard };
 }
 
 // The lines a collapsed row shows: { p, r, prompt, reply, chip?, kinds?, q }. kinds, when
@@ -952,13 +981,13 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   let chip = null;
   if (cmd) {
     chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size, chars);
-    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut };
+    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut, hard: chip.hard };
   } else {
     pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {
       // A task notification that opens a session carries no text: the sender label names it.
       const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? rt.agent : rt.prompt));
-      pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut };
+      pr = { lines: l.lines, rows: Math.max(1, l.lines.length), cut: l.cut, hard: l.hard };
     }
   }
   const rl = rowLines(reply, replyLimit ?? replyLines, readWidth(width, size, chars) / rt.reply);
@@ -973,6 +1002,8 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   const bubbleW = Math.min(bubbleMax(width, size, chars), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
   return {
     p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
+    // The lines that end inside a token broken hard (rowLines), for the selectable HTML.
+    pHard: pr.hard ?? null, rHard: rl.hard ?? null,
     height: rowHeight(pr.rows, r, (pMore ? 1 : 0) + (rMore ? 1 : 0), rt.line, agent),
   };
 }
@@ -1199,9 +1230,17 @@ export function fillUrl(rule, m, ctx = {}) {
 // that matches at the earliest position wins; a match over 80 characters, or one whose URL
 // fails the checks, stays plain. budget (shared across calls for one text): characters
 // scanned and matches left. Rules that use {repo} or {owner} are skipped without a repo.
+// A rule that still runs slow on a reply's text (the checks in settings.js are a guard, not
+// a proof) is marked slow after one search over SLOW_SEARCH ms, or SLOW_TEXT ms in one text,
+// and skipped from then on, until the file changes the rule (it is compiled again). The page
+// shows the reason. One search already running cannot be stopped.
+export const SLOW_SEARCH = 8;
+const SLOW_TEXT = 20;
+export const SLOW_REPLY = "too slow on a reply; skipped until the rule changes";
+const clock = () => globalThis.performance?.now?.() ?? Date.now();
 export function linkPieces(text, rules, ctx = {}, budget = { chars: 20000, matches: 25 }) {
   const s = String(text ?? "");
-  const usable = (rules ?? []).filter((r) => r.re && (!r.repo || ctx.repo));
+  const usable = (rules ?? []).filter((r) => r.re && !r.slow && (!r.repo || ctx.repo));
   const scan = Math.max(0, Math.min(s.length, budget.chars));
   budget.chars -= s.length;
   if (!usable.length || !scan || budget.matches <= 0) return [{ t: s }];
@@ -1209,12 +1248,18 @@ export function linkPieces(text, rules, ctx = {}, budget = { chars: 20000, match
   let at = 0;
   let pos = 0;
   const next = usable.map(() => undefined);
+  const spent = usable.map(() => 0);
   const find = (i) => {
     const r = usable[i];
+    if (r.slow) return null;
     let p = pos;
     for (;;) {
       r.re.lastIndex = p;
+      const t0 = clock();
       const m = r.re.exec(s);
+      const dt = clock() - t0;
+      spent[i] += dt;
+      if (dt > SLOW_SEARCH || spent[i] > SLOW_TEXT) { r.slow = SLOW_REPLY; return null; }
       if (!m || m.index >= scan) return null;
       if (m[0].length) return m;
       p = m.index + 1; // a zero-width match moves on by one
@@ -1485,19 +1530,26 @@ export function htmlLine(line) {
 }
 
 // Lines of plain text as HTML for stacked TextViews, each at most max UTF-8 bytes (MD_MAX, as
-// mdChunks), whole lines only: [{ html, n }] with n lines in each.
-export function htmlChunks(lines, max = MD_MAX) {
+// mdChunks), whole lines only: [{ html, n }] with n lines in each. The lines are one text's
+// wrap (rowLines), so they are joined by the space the wrap took out, or by nothing after a
+// line in `hard` (a token broken across lines), never by "<br>": Herdr 0.1.15 draws no break
+// there and wraps the text itself, which ran "for" and "an" together as "foran".
+export function htmlChunks(lines, max = MD_MAX, hard = null) {
   const out = [];
-  let cur = [];
+  let cur = "";
+  let n = 0;
   let bytes = 0;
+  let i = 0;
   for (const l of lines ?? []) {
     const h = htmlLine(l);
-    const b = utf8Len(h) + 4;
-    if (cur.length && bytes + b > max) { out.push({ html: cur.join("<br>"), n: cur.length }); cur = []; bytes = 0; }
-    cur.push(h);
+    const b = utf8Len(h) + 1;
+    if (n && bytes + b > max) { out.push({ html: cur, n }); cur = ""; n = 0; bytes = 0; }
+    cur += (n && !hard?.includes(i - 1) ? " " : "") + h;
+    n++;
     bytes += b;
+    i++;
   }
-  if (cur.length) out.push({ html: cur.join("<br>"), n: cur.length });
+  if (n) out.push({ html: cur, n });
   return out;
 }
 
@@ -1592,7 +1644,7 @@ const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
 // 300 px, "Agent message" with no name.
 export function senderLabel(sender, width) {
-  if (!sender || sender.kind === "you") return "You";
+  if (!sender || sender.kind === "you") return "User";
   const words = kindWords(sender);
   if (!sender.name) return cap1(words);
   return width < 300 ? sender.name : `${sender.name} · ${words}`;
@@ -1779,6 +1831,17 @@ export function outLang(out, input = "", kind = "") {
     if (lang && !/^\s*\d+[→\t|:]/.test(s)) return lang;
   }
   return null;
+}
+// A path cut from its start to at most `max` characters at a slash, so what shows begins with
+// a whole folder: "…/agent-threads/settings.json". The file's own name stays whole even when
+// it alone is longer (the element cuts its end then).
+export function cutPath(path, max) {
+  const p = String(path ?? "");
+  if (p.length <= max) return p;
+  const parts = p.split("/");
+  let tail = parts.pop();
+  while (parts.length > 1 && `…/${parts.at(-1)}/${tail}`.length <= max) tail = `${parts.pop()}/${tail}`;
+  return `…/${tail}`;
 }
 // A call's text on its row: what it ran or read (calls.sh picks the command, path, pattern,
 // query or URL), on one line; the tool's name until that is read.
