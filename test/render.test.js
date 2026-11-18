@@ -10132,6 +10132,20 @@ test("a drag that selects text in an open turn stops following: the newest reply
   v.click(md.key, cx);
   expect(v.sel).toBe(key);
   expect(v.open.has(key)).toBe(true);
+  // A scroll to the bottom asked for by the frame just before the drag (its 16 ms timer still
+  // queued when the drag passes DRAG_SLOP) does not run either.
+  v.follow = true;
+  atBottom(v, cx);
+  cx.flush();
+  scrolls.length = 0;
+  v.toBottom = true;
+  const calls1 = frame(v, cx);
+  expect(v.toBottom).toBe(false);
+  handlerAfterId(calls1, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  for (let i = 1; i <= 6; i++) handlerAfterId(calls1, "threads-body", "on_mouse_move")(ev({ x: 120 + 30 * i, y: 300 }), cx);
+  cx.flush();
+  expect(scrolls).not.toContain("bottom");
+  v.click(md.key, cx);
   // A double press (a word) stops following straight away, before any move.
   v.follow = true;
   atBottom(v, cx);
