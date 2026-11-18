@@ -2717,8 +2717,13 @@ export default class Threads extends View {
     let preview;
     let md = null;
     let tone = "reply";
-    // A reply, with no search on, starts as Markdown (mdPreview): whole source lines.
-    if (!live && !why && text && !q) {
+    // A search shows a reply as one run around its match. A reply with no match in that run
+    // (a row listed for the prompt it answered together with) draws as it does with no search.
+    const flat = q && text ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : null;
+    const hit = Boolean(flat?.toLowerCase().includes(q.toLowerCase()));
+    // A reply, unless a search marks a match in it, starts as Markdown (mdPreview): whole
+    // source lines.
+    if (!live && !why && text && !hit) {
       md = cut ? mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply)
         : mdPreview(text, replyLines, readWidth(this.width, P.textSize, this.chars()) / readType(P.textSize).reply, text.length);
       if (!md.md.trim()) md = null;
@@ -2726,7 +2731,7 @@ export default class Threads extends View {
     if (live) { preview = ""; tone = "live"; }
     else if (why) { preview = why; tone = "why"; }
     else if (md) preview = " ";
-    else if (text) preview = src(q ? flattenMd(text.slice(0, PREVIEW_CHARS * 2)) : cut ? flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))) : flattenMd(text));
+    else if (text) preview = src(q ? flat : cut ? flattenMd(text, Math.min(PREVIEW_CHARS, (P.replyLines + 1) * Math.ceil(Math.max(this.width || 0, 120) / 5))) : flattenMd(text));
     else if (turn.answeredIn) { preview = `Answered in #${turn.answeredIn}`; tone = "note"; }
     else if (turn.errors.length) { preview = turn.errors[turn.errors.length - 1]; tone = "error"; }
     else if (turn.answeredBy) {
@@ -2744,9 +2749,9 @@ export default class Threads extends View {
     // A running turn draws its live line where a finished one has its line, then a 16 px
     // stats line where the reply and the strip under it go.
     if (live) sh.height += ROW.STATS - sh.r * this.rt().line - ROW.GAP - ROW.ACTS;
-    // A reply, with no search on: its start as Markdown, as an open turn draws it, cut at a
-    // whole source line (mdPreview). Its height is the probe's measure of that block ("cmd"),
-    // and until then an estimate; mdBase is the row without it.
+    // A reply as Markdown (no search on, or no match in it): its start, as an open turn draws
+    // it, cut at a whole source line (mdPreview). Its height is the probe's measure of that
+    // block ("cmd"), and until then an estimate; mdBase is the row without it.
     if (md && tone === "reply") {
       const { line } = this.rt();
       // No link rules here: a click on a row opens the turn, so rows never carry links.
