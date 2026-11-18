@@ -650,12 +650,23 @@ const headFit = (s, room) => {
   return head;
 };
 
+// The part of a too-long token's head that ends a line: up to and including its last "/" or
+// "-", so a path breaks between its parts ("median-of-" then "three.js") rather than inside
+// a word, or the whole head (a break at any character) when it has neither, or when the
+// last one would leave the line less than half full. "." would split off a file's extension
+// or a number's decimals, and "_" a snake_case name, so neither is a break.
+function tokenBreak(head) {
+  const i = Math.max(head.lastIndexOf("/"), head.lastIndexOf("-"));
+  return i + 1 >= Math.ceil(head.length / 2) ? head.slice(0, i + 1) : head;
+}
+
 // Text wrapped at word boundaries into lines of at most `perLine` average characters
-// (a long unbroken token, such as a path, breaks hard), clipped to `limit` lines. The
-// last line ends in "…" only when text was left out. Newlines collapse to spaces.
-// Returns { lines: string[], cut }, and hard: the indexes of lines that end inside a token
-// broken hard, when there are any (every other line ends where a space was). The drawing
-// shows each line as its own one-line element, so the row height the list is given is exact.
+// (a long unbroken token, such as a path, breaks after a "/" or "-", else hard), clipped
+// to `limit` lines. The last line ends in "…" only when text was left out. Newlines
+// collapse to spaces. Returns { lines: string[], cut }, and hard: the indexes of lines that
+// end inside a token (after its "/" or "-", or broken hard), when there are any (every other
+// line ends where a space was). The drawing shows each line as its own one-line element,
+// so the row height the list is given is exact.
 //
 // Only the start of the text is read: `limit` lines of `perLine` units cover at most
 // limit * (perLine + 1) characters, so the text is cut a line beyond that before it is
@@ -685,9 +696,10 @@ export function rowLines(text, limit, perLine) {
     let w = words[wi];
     let wu = units(w);
     if (used && used + 1 + wu > per) { push(); if (lines.length >= max) { cut = true; break; } }
-    // Hard breaks for a token longer than a line.
+    // Hard breaks for a token longer than a line: right after its last "/" or "-" that fits
+    // (tokenBreak), else at any character.
     while (wu > per - (used ? used + 1 : 0)) {
-      const head = headFit(w, per - (used ? used + 1 : 0));
+      const head = tokenBreak(headFit(w, per - (used ? used + 1 : 0)));
       if (!head) { push(); if (lines.length >= max) { cut = true; break outer; } continue; }
       line += (used ? " " : "") + head;
       used += (used ? 1 : 0) + units(head);
