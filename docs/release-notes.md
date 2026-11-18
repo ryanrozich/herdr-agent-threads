@@ -9,7 +9,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 - Each prompt you sent is a bubble on the right, with the reply under it and a line between that says how long the agent worked. A band marks each day, and while you scroll a pill at the top names the day you are in.
 - Messages and replies show in full. Turn on Shorten long messages to show the first lines of each, with Show more.
 - Text is set for reading: about 70 characters a line by default, with Wide (90) and Full as choices. The pane opens at that width.
-- Open a turn to read the whole reply as Markdown. Code blocks wrap, show their first 12 rows with Show all for the rest, and are coloured by language. A table can run wider than the reading line when the pane has room.
+- Open a turn to read the whole reply as Markdown, and a background update after it (LATEST UPDATE) formatted the same way. Code blocks wrap, show their first 12 rows with Show all for the rest, and are coloured by language. A table can run wider than the reading line when the pane has room.
 - Click a turn's "Worked for" line to see the agent's work before the reply: what it said along the way and each run of tool calls. Open a run to see each command, file or search, and a call to see its output. `→` and `←` open and close the work a level at a time.
 - The Turn card (`i`, or rest the pointer on the info icon) shows a turn's model and effort, tokens, tool calls and cache hit.
 - Drag across any turn's text, open or closed, to highlight it. `s` shows the reply's Markdown source for selecting.

@@ -2217,7 +2217,9 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       for (const r of parts) {
         const i = lastList.keys.indexOf(r.key);
         const H = fed.get(r.key);
-        const design = r.kind === "latest" ? 6 + H : H;
+        // The flat preview's box is drawn 6 px under the heading; the Markdown form (Shorten
+        // long messages off) is measured with its margin in it.
+        const design = r.kind === "latest" && !r.md ? 6 + H : H;
         expect(v.height(rows[i])).toBe(design);
         expect(lastList.sizes[i]).toBe(Math.ceil(design));
         // No slot is below its measure.
@@ -2365,6 +2367,59 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
       v.full.clear();
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+// The owner, 18 Nov, on the fourth test build: LATEST UPDATE drew as one flat paragraph (a
+// table and lists joined with " · ", no bold, no breaks), and with Shorten long messages off
+// (the default) there was no Show all to reach the Markdown. Off, it draws as Markdown from the
+// start, like the reply above it, with no Show all or Show less; on, the clamped preview stays.
+test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and with no Show all or Show less; on, the clamped preview with Show all", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  const md = "The nightly run finished.\n\n| job | before | after |\n| --- | --- | --- |\n| build | 4m | 3m |\n| tests | 9m | 6m |\n\n**Still open:**\n\n- the flaky cart test\n- the cache key\n\nSee `ci/nightly.yml`.";
+  t.latest = md;
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  const strs = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  // Off (the default): the Markdown, whole.
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); let calls = rec; rec = null;
+  expect(calls.some((e) => e[0] === "TextView" && String(e[1]).startsWith(`th-lmd-${r.key}`))).toBe(true);
+  expect(strs(calls)).not.toContain("Show all");
+  expect(strs(calls)).not.toContain("Show less");
+  expect(strs(calls).some((x) => x.includes(" · "))).toBe(false);
+  expect(v.height(r)).toBe(6 + v.mdHeight(md));
+  // A click on it changes nothing: there is nothing to show or hide.
+  v.click(r.key, cx);
+  expect(v.full.has(`l:${key}`)).toBe(false);
+  // Past 12,000 characters the rest is not drawn, and a note says how much.
+  const long = `${md}\n\n${"More detail on the cart totals. ".repeat(500)}`;
+  t.latest = long;
+  s.version++;
+  r = lt();
+  expect(r.md.length).toBeLessThanOrEqual(12000);
+  expect(r.md.endsWith(" …")).toBe(true);
+  expect(r.left).toBe(long.trim().length - r.md.replace(/\s*…$/, "").length);
+  expect(r.left).toBeGreaterThan(3000);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain(`… ${r.left.toLocaleString()} more characters not shown`);
+  // On: the clamped one-block preview, as before, with Show all past 6 lines.
+  t.latest = md;
+  s.version++;
+  v.prefs = { ...v.prefs, truncate: true };
+  r = lt();
+  expect(r.md).toBe(null);
+  expect(r.text).not.toContain("|");
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain("Show less");
 });
 
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
