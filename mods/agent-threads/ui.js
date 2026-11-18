@@ -1844,7 +1844,10 @@ export function callText(name, input) {
 // most WIN_PCT of the list's height and WIN_MAX px (60 ticks); it keeps the turns on screen
 // SPARE ticks from its ends, and the FADE ticks before a cut end fade. A pin or the running
 // turn past an end shows as a DOT px dot in a 9 px row there.
-export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36, WIN_PCT: 0.6, WIN_MAX: 540, SPARE: 3, FADE: [0.25, 0.5, 0.75], DOT: 4, SLIDE_MS: 90, CARD_KEEP_MS: 200 };
+// A clicked tick grows to GROW px (GROW_SMALL in a gutter under 40 px) until the turn's flash
+// starts to fade, then shrinks back over the same FLASH.FADE (main.js railGrow); GROW_KEEP_MS
+// ends it if no flash comes.
+export const RAIL = { PAD: 6, MAX: 9, MIN: 3, DAY: 7, LANE: 32, CARD_W: 300, CARD_GAP: 4, CARD_CHARS: 40, REPLY_CHARS: 46, PEAK: 24, PEAK_SMALL: 16, SWELL: 36, WIN_PCT: 0.6, WIN_MAX: 540, SPARE: 3, FADE: [0.25, 0.5, 0.75], DOT: 4, SLIDE_MS: 90, CARD_KEEP_MS: 200, GROW: 36, GROW_SMALL: 24, GROW_KEEP_MS: 2000 };
 // The ticks' look from the pane's side gutter (side px from the pane's edge to the text): a
 // tick MARK wide, SEL when selected, RIGHT px in from the pane's edge, in a lane as wide as
 // the gutter up to RAIL.LANE that takes the press. A gutter under 40 px has smaller ticks.
@@ -1897,7 +1900,7 @@ export function railMinPane(size = TEXT_SIZE) {
 }
 export function railLook(side) {
   const small = side < 40;
-  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14, peak: small ? RAIL.PEAK_SMALL : RAIL.PEAK };
+  return { lane: Math.max(16, Math.min(RAIL.LANE, side)), mark: small ? 8 : 10, sel: small ? 12 : 16, right: small ? 6 : 14, peak: small ? RAIL.PEAK_SMALL : RAIL.PEAK, grow: small ? RAIL.GROW_SMALL : RAIL.GROW };
 }
 // A tick's width at d px from the hovered tick: the peak at 0, then less by the square of
 // how near it is, back to its own width w at SWELL px. At 9 px apart: 24, 18, 13.5 and 11.
