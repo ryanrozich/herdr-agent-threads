@@ -1040,17 +1040,22 @@ test("wrapCap: text cut to a number of wrapped rows ends in an ellipsis and stil
   expect(wrapCap("aaaa bbbb cccc dddd eeee ffff gggg", 10, 2).text).toBe("aaaa bbbb cccc dddd…");
 });
 
-test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines, each chunk within MD_MAX bytes", () => {
+test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole lines joined by their spaces, each chunk within MD_MAX bytes", () => {
   expect(htmlLine("a  b")).toBe("a&nbsp; b");
   expect(htmlLine(" x<y> & z")).toBe("&nbsp;x&lt;y&gt; &amp; z");
   expect(htmlLine("\tq")).toBe("&nbsp;&nbsp;&nbsp; q");
-  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one<br>two", n: 2 }]);
+  // One wrap's lines: joined by the space the wrap took out, or by nothing after a hard break.
+  expect(htmlChunks(["one", "two"])).toEqual([{ html: "one two", n: 2 }]);
+  expect(htmlChunks(["src/cart/ro", "unding.js", "next"], undefined, [0])).toEqual([{ html: "src/cart/rounding.js next", n: 3 }]);
+  const hard = rowLines("open src/cart/rounding/order-total/receipt.js now", 10, 12);
+  expect(hard.hard?.length).toBeGreaterThan(0);
+  expect(htmlChunks(hard.lines, undefined, hard.hard).map((x) => x.html).join(" ")).toBe("open src/cart/rounding/order-total/receipt.js now");
   const lines = Array.from({ length: 400 }, (_, i) => `line ${i} of a long pasted prompt, with é and ü in it`);
   const c = htmlChunks(lines);
   expect(c.length).toBeGreaterThan(1);
   expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
   for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
-  expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
+  expect(c.map((x) => x.html).join(" ")).toBe(lines.map(htmlLine).join(" "));
 });
 
 test("cutPath: a path cut from its start at a slash, so it begins with a whole folder", () => {
