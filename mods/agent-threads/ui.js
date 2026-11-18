@@ -27,11 +27,16 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
     if (k === "f" || k === "F") return filtering ? null : "prevFail";
     if (k === "m" || k === "M") return filtering ? null : "nextUser";
     if (k === "+" || k === "=") return filtering ? null : "wider";
+    // Shift with j, k or an arrow: the focus range.
+    if (k === "j" || k === "J" || k === "down") return filtering ? null : "rangeNext";
+    if (k === "k" || k === "K" || k === "up") return filtering ? null : "rangePrev";
     return k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   }
   if (k === "G") return "latest";
   if (k === "F") return filtering ? null : "prevFail";
   if (k === "M") return filtering ? null : "nextUser";
+  if (k === "J") return filtering ? null : "rangeNext";
+  if (k === "K") return filtering ? null : "rangePrev";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
@@ -50,7 +55,8 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
       [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "The user's message before, or after"],
       [["d", "↵"], "Show or hide the detail of the selected row"], [["b"], "Show or hide the timeline"],
-      [["-", "="], "Zoom the timeline out or in"], [["w"], "Fit the whole session in the timeline"], [["z"], "Zoom the timeline to the selected turn"],
+      [["-", "="], "Zoom the timeline out or in"], [["w"], "Fit the whole session in the timeline"], [["z"], "Zoom the timeline to the range, or the selected turn"],
+      [["Shift j", "Shift k"], "Make or move the focus range a row (Shift ↑ ↓ too; or drag on the timeline)"], [["Esc"], "Clear the range, then hide the detail"],
     ]]] : []),
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],

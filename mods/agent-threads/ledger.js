@@ -499,7 +499,37 @@ export function tlBox(L, ti) {
   const t = L.turns[ti];
   return t ? { x: t.x * L.z - L.x0, w: t.w * L.z } : null;
 }
-export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null) {
+// range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
+// rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
+// The rows a band holds, lo to hi px of the view L: the first and last whose bar starts inside
+// it ({ a, b } keys, in order), or null when no bar starts there. Walks the turns the band
+// covers, found by halving.
+export function bandRows(L, heads, lo, hi, nowMs = Date.now()) {
+  const G = L.geo;
+  const T = G?.turns ?? [];
+  if (!T.length || !(hi >= lo)) return null;
+  const z = L.z ?? 1;
+  const x0 = L.x0 ?? 0;
+  const f0 = (lo + x0) / z;
+  const f1 = (hi + x0) / z;
+  let i = 0;
+  let j = T.length - 1;
+  while (i < j) { const m = (i + j) >> 1; if (T[m].x + T[m].w < f0) i = m + 1; else j = m; }
+  let a = null;
+  let b = null;
+  for (let ti = i; ti < T.length && T[ti].x <= f1; ti++) {
+    const h = heads[ti];
+    const wall = G.walls[ti] ?? wallOf(h, nowMs);
+    for (const it of h?.items ?? []) {
+      const bx = itemBox(it, T[ti].x * z - x0, T[ti].w * z, wall, L.scale, h.items.length);
+      if (!bx || bx.x0 < lo || bx.x0 > hi) continue;
+      if (a == null) a = it.key;
+      b = it.key;
+    }
+  }
+  return a == null ? null : { a, b };
+}
+export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null) {
   const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
   const { z, x0 } = tlClamp(G, view);
   const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], from: 0, to: -1 };
@@ -539,15 +569,19 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
     if (w < 2) {
       const c = h.cnt ?? {};
       const x1 = x + Math.max(w, 1);
-      if (c.input) add(c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0", x, x1);
-      if (c.model) add("model|model|0", x, x1);
-      if (c.tools) add(c.failed ? "tools|failed|0" : "tools|tools|0", x, x1);
+      // A turn too narrow for its steps is inside the range when any of its rows is.
+      const ih = range ? range.pos.get(h.key) : null;
+      const o = range && !(ih != null && ih <= range.ib && ih + (h.items?.length ?? 0) >= range.ia) ? "|o" : "";
+      if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
+      if (c.model) add(`model|model|0${o}`, x, x1);
+      if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
       if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
     } else {
       for (const it of h.items ?? []) {
         const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
         if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
-        add(it.sk[b.track ? 1 : 0], b.x0, b.x1);
+        const ip = range ? range.pos.get(it.key) : null;
+        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1);
         if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step

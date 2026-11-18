@@ -147,6 +147,7 @@ execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 const { ledgerTotals: ledgerTotalsForTest, tlBox: tlBoxForTest } = await import("../mods/agent-threads/ledger.js");
+const rowTurnForTest = (r) => (r.kind === "trh" ? r.key : `${r.si}:${r.turn.n}`);
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -5684,8 +5685,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  v.rootH = 1400;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 39 * 25 + 5 * 12 + 8);
+  v.rootH = 1500;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 41 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -8238,6 +8239,154 @@ test("Trajectory timeline zoom and pan: - = w z, the buttons, the limit, wheel, 
   v.paneW = 900;
   draw(v, cx);
   expect((L().x0 + L().cw / 2) / L().z / L().total).toBeCloseTo(fmid, 2);
+});
+
+// Round 6 sections 5 to 7: the focus range. A drag of more than 4 px on the timeline makes it
+// on release (the moves and release caught on the Trajectory's body), snapped to the rows
+// whose bars start inside the band; under 4 px it is a press that selects. Rows outside dim
+// to 40% and bars to 20%, once, on release. Its edges drag; Shift with j or k and Shift with a
+// press make and move it. The Range bar (a chip from 900 px) names it, Zoom fits it, its close
+// button clears it. The footer leads with it, the failure counter counts inside it, f and m
+// stay inside and wrap. Esc clears it before it hides the detail; a press on the empty
+// timeline outside it clears it. It survives b, a width change, and Chat and back.
+test("Trajectory focus range: a drag on the timeline, its edges, Shift keys and press, the dimming, the Range bar, footer, counter, f inside, Esc, and what it survives", async () => {
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
+  v.paneW = 640; v.rootH = 900; v.listH = 600;
+  settleRows(v, cx);
+  const snap = () => { draw(v, cx); return state.shared["threads.debug"].t4; };
+  const calls = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  const L = () => v.tlLayout().L;
+  const cw = L().cw;
+  const down = (x, more = {}) => v.tlDown({ local_position: { x, y: 2 * 16 + 6 }, position: { x: 58 + x, y: 100 }, modifiers: { shift: false }, ...more }, cx);
+  const move = (x) => v.tlDragMove({ position: { x: 58 + x, y: 100 } }, cx);
+  const up = () => v.tlDragEnd({}, cx);
+  const rows = ledgerOnly(v);
+  const heads = v.ledgerSums().heads;
+  // A press that moves 4 px or less is a click: it selects, and makes no range.
+  const [f0, f1] = L().spans.get("tools|failed|0")[0];
+  down((f0 + f1) / 2); move((f0 + f1) / 2 + 3); up();
+  expect(rows.find((r) => r.key === v.ledgerSel())?.failed).toBe(true);
+  expect(v.trange ?? null).toBe(null);
+  // A drag over the second turn's span: the selection made by the press goes back, the band
+  // follows, the ledger waits; on release the range is the rows whose bars start inside.
+  const sel0 = v.ledgerSel();
+  const T = tlBoxForTest(L(), 1);
+  down(T.x - 2);
+  expect(v.ledgerSel()).not.toBe(sel0);
+  move(T.x + T.w * 0.6);
+  expect(v.ledgerSel()).toBe(sel0);
+  expect(v.trange ?? null).toBe(null);
+  let c = calls();
+  expect(c.some(([n, x]) => n === "id" && x === "th-tl-band")).toBe(true);
+  expect(c.some(([n, x]) => n === "opacity" && x === 0.4)).toBe(false);
+  up();
+  const R = v.rangeIdx();
+  expect(R).not.toBe(null);
+  const inside = v.baseRows.slice(R.ia, R.ib + 1);
+  expect(inside.every((r) => rowTurnForTest(r) === heads[1].key)).toBe(true);
+  // The selection was outside: the first row inside, and the list to it with a row above.
+  expect(v.ledgerSel()).toBe(R.a);
+  expect(v.scrollTo).toMatchObject({ how: "top", key: v.baseRows[R.ia - 1].key });
+  c = calls();
+  expect(c.some(([n, x]) => n === "opacity" && x === 0.4)).toBe(true);
+  expect(c.some(([n, x]) => n === "id" && String(x).endsWith("|o"))).toBe(true);
+  expect(c.some(([n, x]) => n === "id" && x === "th-range")).toBe(true);
+  const st = v.rangeStats();
+  expect(st.n).toBe(R.ib - R.ia + 1);
+  expect(st.name).toMatch(/^\d+\.\d+ to \d+\.\d+$/);
+  expect(c.some(([n, x]) => n === "child" && x === st.name)).toBe(true);
+  // The footer leads with the range.
+  expect(snap().tfoot).toMatch(new RegExp(`^${st.n} rows in range`));
+  // An edge drags: the range's end to the third turn's start.
+  const rb = v.tlRangeBox(L());
+  const T2 = tlBoxForTest(L(), 2);
+  down(rb.x1); move(T2.x + 4); up();
+  const R2 = v.rangeIdx();
+  expect(R2.ia).toBe(R.ia);
+  expect(R2.ib).toBeGreaterThan(R.ib);
+  // Inside the band, a press on no bar does nothing; outside it clears.
+  const rb2 = v.tlRangeBox(L());
+  const gapX = L().gaps.find(([a, z]) => a > rb2.x1 + 4 && z - a > 4);
+  v.tlPress({ local_position: { x: (gapX[0] + gapX[1]) / 2, y: 6 } }, cx);
+  expect(v.trange ?? null).toBe(null);
+  // Shift j from the selected row: a range of two rows; Shift k takes the nearer edge back.
+  v.ledgerPick(heads[0].key, false, cx);
+  v.key(keyEv("j", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.rangeIdx().ib - v.rangeIdx().ia).toBe(1);
+  v.key(keyEv("J"), cx);
+  v.key(keyEv("J"), cx);
+  expect(v.rangeIdx().ib - v.rangeIdx().ia).toBe(3);
+  v.key(keyEv("K"), cx);
+  expect(v.rangeIdx().ib - v.rangeIdx().ia).toBe(2);
+  // Shift and a press on a row (the body's press carries Shift; the list's click follows):
+  // the nearer edge moves there.
+  const far = rows.find((r) => r.kind === "tr" && v.baseIndex.get(r.key) > v.rangeIdx().ib + 3);
+  v.pressShift = true;
+  v.click(far.key, cx);
+  expect(v.rangeIdx().b).toBe(far.key);
+  expect(v.ledgerSel()).toBe(far.key);
+  // The failure counter counts inside the range; f stays inside and wraps; with none inside,
+  // the pane says so and the selection stays.
+  const sums = v.ledgerSums();
+  v.setRange(sums.fails[0], sums.fails[1], cx);
+  c = calls();
+  expect(c.some(([n, x]) => n === "child" && x === `2 of ${sums.fails.length} failed`)).toBe(true);
+  v.ledgerPick(sums.fails[0], false, cx);
+  v.key(keyEv("f"), cx);
+  expect(v.ledgerSel()).toBe(sums.fails[1]);
+  v.key(keyEv("f"), cx);
+  expect(v.ledgerSel()).toBe(sums.fails[0]);
+  v.setRange(heads[0].key, heads[0].key, cx);
+  const before = v.ledgerSel();
+  v.key(keyEv("f"), cx);
+  expect(v.ledgerSel()).toBe(before);
+  expect(toastText(v)).toBe("No failed call in the range");
+  // z zooms the timeline to the range.
+  v.setRange(rows[2].key, rows[5].key, cx);
+  v.key(keyEv("z"), cx);
+  const zb = v.tlRangeBox(L());
+  expect(L().z === L().zmax || Math.abs(zb.x1 - zb.x0 - 0.8 * cw) < 0.05 * cw).toBe(true);
+  expect(L().z).toBeGreaterThan(1);
+  // It survives b, a width change, and Chat and back; with the timeline hidden the thin line
+  // carries it.
+  const keep = { ...v.trange };
+  v.key(keyEv("b"), cx);
+  c = calls();
+  expect(c.some(([n, x]) => n === "id" && String(x).startsWith("th-tlg-"))).toBe(true);
+  expect(c.some(([n, x]) => n === "id" && x === "th-range")).toBe(true);
+  v.key(keyEv("b"), cx);
+  v.paneW = 1000;
+  c = calls();
+  // From 900 px, a chip in the filter bar.
+  const fbar = c.findIndex(([n, x]) => n === "id" && x === "th-fbar");
+  const chip = c.findIndex(([n, x]) => n === "id" && x === "th-range");
+  expect(fbar).toBeGreaterThanOrEqual(0);
+  expect(chip).toBeGreaterThan(fbar);
+  expect(snap().tfoot).toMatch(/ of \d+ turns/);
+  v.setTraj(false, cx);
+  v.setTraj(true, cx);
+  expect(v.trange).toEqual(keep);
+  // Esc clears the range, then hides the detail.
+  v.detailWant = true;
+  v.key(keyEv("escape"), cx);
+  expect(v.trange ?? null).toBe(null);
+  expect(v.detailShown()).toBe(true);
+  v.key(keyEv("escape"), cx);
+  expect(v.detailShown()).toBe(false);
+  // The close button clears it.
+  v.setRange(rows[2].key, rows[5].key, cx);
+  afterId(calls(), "th-range-close").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.trange ?? null).toBe(null);
+  // Zoomed, a band held at the timeline's edge pans it, from a timer.
+  v.paneW = 640;
+  draw(v, cx);
+  for (let i = 0; i < 3; i++) v.key(keyEv("="), cx);
+  const x0 = L().x0;
+  down(cw / 2); move(cw - 4);
+  cx.flush(40, 3);
+  expect(L().x0).toBeGreaterThan(x0);
+  up();
+  expect(v.trange).not.toBe(null);
 });
 
 // Found on the rig with a real three-turn session: the pane draws before it has read the

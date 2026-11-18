@@ -65,7 +65,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, TL_LANES } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, bandRows, TL_LANES } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -180,6 +180,8 @@ const TRAJ_NUMS = 640;
 const TRAJ_SIDE = 900;
 const TRAJ_SHORT = 560;
 const TRAJ_FBAR = 34;
+// The Range bar under the timeline (a chip in the filter bar from TRAJ_SIDE).
+const TRAJ_RBAR = 28;
 // The timeline at the top of the Trajectory (from TRAJ_BAR wide): a 58 px gutter of lane
 // names, then the turn labels (TL_AX), the ticks (TL_TK) and three 16 px lanes (TL_LANE), with
 // TL_PT above and TL_PB below; 98 px with its line.
@@ -3459,18 +3461,26 @@ export default class Threads extends View {
 
   // m and Shift m: the user's message before the selection, or after it. At the first or
   // last one it stops, as f does.
-  stepUser(d, cx) { return this.stepIn(this.ledgerSums().users, d, cx); }
+  stepUser(d, cx) { return this.stepIn(this.ledgerSums().users, d, cx, "user message"); }
   // f and Shift f: the next or previous failed call from the selection. At the last one it
   // stops; nothing pops up.
-  stepFail(d, cx) { return this.stepIn(this.ledgerSums().fails, d, cx); }
-  stepIn(all, d, cx) {
+  stepFail(d, cx) { return this.stepIn(this.ledgerSums().fails, d, cx, "failed call"); }
+  // With a focus range, only those inside it, and it wraps: past the last, the first. None
+  // inside: the pane says so (what), and the selection stays.
+  stepIn(all, d, cx, what = "row") {
     // Only the rows the filter bar lists (Failed only lists every failure).
-    const fails = this.filtIndex ? all.filter((k) => this.filtIndex.has(k)) : all;
+    let fails = this.filtIndex ? all.filter((k) => this.filtIndex.has(k)) : all;
+    const R = this.rangeIdx();
+    if (R) {
+      fails = fails.filter((k) => { const i = this.baseIndex.get(k); return i != null && i >= R.ia && i <= R.ib; });
+      if (!fails.length) { this.say(`No ${what} in the range`, "alert", cx); return true; }
+    }
     if (!fails.length) return false;
     const at = this.baseIndex?.get(this.ledgerSel()) ?? (d > 0 ? -1 : Infinity);
     let to = null;
     if (d > 0) to = fails.find((k) => (this.baseIndex.get(k) ?? -1) > at) ?? null;
     else for (let k = fails.length - 1; k >= 0 && to == null; k--) if ((this.baseIndex.get(fails[k]) ?? Infinity) < at) to = fails[k];
+    if (to == null && R) to = d > 0 ? fails[0] : fails[fails.length - 1];
     if (to == null) return true;
     return this.ledgerPick(to, true, cx, true);
   }
@@ -3502,8 +3512,14 @@ export default class Threads extends View {
       case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
       case "prevDay": case "nextDay": return false;
       case "outline:off": return true;
+      // Esc: an open menu first (the chat's own handling), then the range, then the detail.
       case "escape":
-        return this.detailsOpen || this.keysOpen || this.settingsOpen || this.choosing || this.selecting || this.filtering || this.query ? undefined : false;
+        if (this.detailsOpen || this.keysOpen || this.settingsOpen || this.choosing || this.selecting || this.filtering || this.query) return undefined;
+        if (this.trange) return this.clearRange(cx);
+        if (this.detailShown()) { this.detailWant = false; return true; }
+        return false;
+      case "rangeNext": return this.rangeStep(1, cx);
+      case "rangePrev": return this.rangeStep(-1, cx);
       default: return undefined;
     }
   }
@@ -3567,7 +3583,9 @@ export default class Threads extends View {
       .child(svg(ICON(icon)).size(13));
     return h_flex().id("th-fails").flex_none().h(24).pl(6).pr(1).gap(4).items_center().rounded(5).bg(t.background)
       .child(div().flex_none().size(6).rounded(3).bg(t.blocked))
-      .child(div().flex_none().text_size(12).text_color(t.muted).child(k >= 0 ? `${k + 1} of ${fails.length}${partial.length ? "+" : ""}` : `${fails.length}${partial.length ? "+" : ""} failed`))
+      .child(div().flex_none().text_size(12).text_color(t.muted).child(this.trange && this.rangeStats()
+        ? `${this.rangeStats().failed} of ${fails.length}${partial.length ? "+" : ""} failed`
+        : k >= 0 ? `${k + 1} of ${fails.length}${partial.length ? "+" : ""}` : `${fails.length}${partial.length ? "+" : ""} failed`))
       .child(arrow("th-fail-prev", "chevron-up", "Previous failure (Shift f)", -1))
       .child(arrow("th-fail-next", "chevron-down", "Next failure (f)", 1));
   }
@@ -3624,6 +3642,7 @@ export default class Threads extends View {
       .when(pad, (el) => el.pt(TOP_BAND))
       .when(top, (el) => el.child(this.trajBar(t)))
       .when(this.timelineShown(), (el) => el.child(this.timelineView(t, cx)))
+      .when(Boolean(this.trange) && !(top && this.pw() >= TRAJ_SIDE), (el) => el.child(this.rangeView(t, false) ?? div()))
       .child(main);
   }
 
@@ -3659,6 +3678,7 @@ export default class Threads extends View {
       .child(chip("tools", sw(ink.tools), "Tools", s.tools.toLocaleString(), "Tools: each call"))
       .child(chip("failed", div().size(6).rounded(3).bg(ink.failed), wide ? "Failed only" : "Failed", `${s.failed.toLocaleString()}${partial}`, "Only the failed calls (f goes to the next)"))
       .child(chip("user", svg(ICON("user")).size(12).text_color(ink.user), wide ? "User only" : "User", s.user.toLocaleString(), "Only the user's messages (m goes to the user's message before)"))
+      .when(wide && Boolean(this.trange), (el) => el.child(div().w(4)).child(this.rangeView(t, true) ?? div()))
       .when(this.timelineShown(), (el) => el.child(div().flex_1()).child(this.zoomButtons(t)).child(this.scaleSwitch(t, wide)));
   }
   // The timeline's zoom: minus, Fit and plus (- w =), each dim where it can go no further.
@@ -3732,6 +3752,18 @@ export default class Threads extends View {
     const W = this.pw();
     const s = this.ledgerSums();
     const running = Boolean(s.heads?.at(-1)?.going);
+    // A focus range leads: its rows, its failed calls, the time from its first row to its
+    // last, tokens when it holds whole turns; in a wide pane the session's turns and steps
+    // after "of".
+    const st = this.rangeStats();
+    if (st) {
+      const r = [[st.n.toLocaleString(), st.n === 1 ? "row in range" : "rows in range"]];
+      if (st.failed) r.push([st.failed.toLocaleString(), "failed", true]);
+      if (st.ms != null) r.push([durText(st.ms) || "0s", "first to last"]);
+      if (st.tokens != null && W >= 400) r.push([fmtTokens(st.tokens), "tok"]);
+      if (W >= TRAJ_SIDE) r.push([`of ${s.turns.toLocaleString()}`, s.turns === 1 ? "turn" : "turns"], [s.steps.toLocaleString(), s.steps === 1 ? "step" : "steps"]);
+      return r;
+    }
     const out = [[s.turns.toLocaleString(), s.turns === 1 ? "turn" : "turns"], [s.steps.toLocaleString(), s.steps === 1 ? "step" : "steps"]];
     if (s.failed) out.push([`${s.failed.toLocaleString()}${s.partial?.length ? "+" : ""}`, "failed", true]);
     if (W >= 400) out.push([fmtTokens(s.tokens ?? 0), "tok"]);
@@ -3786,7 +3818,8 @@ export default class Threads extends View {
     const live = Boolean(last?.going);
     const g = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
     const tv = this.tlView ?? { z: 1, x0: 0 };
-    const k = `${g}|${tv.z}|${tv.x0}`;
+    const R = this.rangeIdx();
+    const k = `${g}|${tv.z}|${tv.x0}|${R ? `${R.ia}-${R.ib}` : ""}`;
     // Not in the frame that finished a build (its slowest): the last layout stays for that
     // frame, and the next one lays out. Never two frames in a row: a debug pane (measure) and
     // a session that grows every frame finish a build in every frame, and the layout would
@@ -3804,7 +3837,7 @@ export default class Threads extends View {
       // keeps the same moment in the middle.
       const v = tv.total && geo.total && (tv.total !== geo.total || tv.cw !== geo.cw)
         ? { z: tv.z, x0: ((tv.x0 + tv.cw / 2) / tv.total) * geo.total - geo.cw / 2 } : tv;
-      this.tlMemo = { s, g, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), nowMs, v, geo) };
+      this.tlMemo = { s, g, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), nowMs, v, geo, R ? { ia: R.ia, ib: R.ib, pos: this.baseIndex } : null) };
       this.tlMemo.ms = now() - t0;
     }
     return this.tlMemo;
@@ -3821,7 +3854,7 @@ export default class Threads extends View {
   tlAnchor() {
     const L = this.tlLayout().L;
     const cw = L.cw;
-    const r = this.tlRangeBox?.(L);
+    const r = this.tlRangeBox(L);
     if (r) return (r.x0 + r.x1) / 2;
     const b = this.tlSelBox(L);
     if (b && b.x1 >= 0 && b.x0 <= cw) return (b.x0 + b.x1) / 2;
@@ -3839,21 +3872,25 @@ export default class Threads extends View {
     return b ? { x0: b.x0, x1: b.x1 } : { x0: T.x, x1: T.x + T.w };
   }
   // - and = (or the buttons): half or twice the zoom, the anchor put in the middle. w: the whole
-  // session. z: the focus range (step 5), else the selected turn, fills most of the strip.
+  // session. z: the focus range, else the selected turn, fills most of the strip.
   tlZoom(f, cx) {
     const L = this.tlLayout().L;
     const at = this.tlAnchor();
     return this.setTlView(tlZoomAt(L.geo, L, L.z * f, at, L.cw / 2), cx);
   }
   tlFit(cx) { return this.setTlView({ z: 1, x0: 0 }, cx); }
+  // Twice: a short bar keeps its least width at any zoom, so one pass can fall short.
   tlZoomTo(cx) {
-    const L = this.tlLayout().L;
-    const r = this.tlRangeBox?.(L);
-    const ti = L.index.get(this.sel);
-    const T = r ? null : ti != null ? tlBox(L, ti) : null;
-    const [a, b] = r ? [r.x0, r.x1] : T ? [T.x, T.x + T.w] : [0, L.cw];
-    const z = L.z * ((0.8 * L.cw) / Math.max(1, b - a));
-    return this.setTlView(tlZoomAt(L.geo, L, z, (a + b) / 2, L.cw / 2), cx);
+    for (let pass = 0; pass < 2; pass++) {
+      const L = this.tlLayout().L;
+      const r = this.tlRangeBox(L);
+      const ti = L.index.get(this.sel);
+      const T = r ? null : ti != null ? tlBox(L, ti) : null;
+      const [a, b] = r ? [r.x0, r.x1] : T ? [T.x, T.x + T.w] : [0, L.cw];
+      const z = L.z * ((0.8 * L.cw) / Math.max(1, b - a));
+      this.setTlView(tlZoomAt(L.geo, L, z, (a + b) / 2, L.cw / 2), cx);
+    }
+    return true;
   }
   // A selection that moved off the zoomed strip (j, k, f, m) brings it into the middle.
   tlFollow() {
@@ -3899,18 +3936,229 @@ export default class Threads extends View {
     const f = (x / L.cw) * L.total;
     this.setTlView({ z: L.z, x0: f * L.z - L.cw / 2 }, cx);
   }
-  // A move over the Trajectory's body while a drag on the timeline is held.
+  // A press on the lanes. Within 6 px of an edge of the range, that edge is held. Else it
+  // selects at once (tlPress), and becomes a band when it moves more than 4 px, which puts the
+  // selection back: a drag does not select.
+  tlDown(e, cx) {
+    const lx = e?.local_position?.x;
+    if (lx == null) return;
+    const x = lx / this.zoom();
+    const L = this.tlLayout().L;
+    const f = (x + L.x0) / L.z;
+    const base = { left: (Number(e.position?.x) || 0) - lx, x, px: x, f1: f };
+    const rb = e.modifiers?.shift ? null : this.tlRangeBox(L);
+    if (rb && Math.abs(x - rb.x0) <= 6) { this.tlDrag = { ...base, kind: "edge", from: (rb.x1 + L.x0) / L.z }; return; }
+    if (rb && Math.abs(x - rb.x1) <= 6) { this.tlDrag = { ...base, kind: "edge", from: (rb.x0 + L.x0) / L.z }; return; }
+    this.tlDrag = { ...base, kind: "press", from: f, before: { tsel: this.tsel, sel: this.sel, scrollTo: this.scrollTo, follow: this.follow } };
+    this.tlPress(e, cx);
+  }
+  // A move over the Trajectory's body while a drag that began on the timeline is held: the
+  // band follows the pointer (the ledger waits for the release); at the timeline's edge while
+  // zoomed it pans.
   tlDragMove(e, cx) {
     const d = this.tlDrag;
     if (!d || e?.position?.x == null) return;
     const x = (e.position.x - d.left) / this.zoom();
-    if (d.kind === "map") this.tlMapTo(x, cx);
-  }
-  tlDragEnd(_e, cx) {
-    if (!this.tlDrag) return;
-    this.tlDrag = null;
+    if (d.kind === "map") { this.tlMapTo(x, cx); return; }
+    d.px = x;
+    if (d.kind === "press") {
+      if (Math.abs(x - d.x) <= 4) return;
+      d.kind = "band";
+      this.tsel = d.before.tsel;
+      this.sel = d.before.sel;
+      this.scrollTo = d.before.scrollTo;
+      this.follow = d.before.follow;
+    }
+    const L = this.tlLayout().L;
+    d.f1 = (Math.max(0, Math.min(L.cw, x)) + L.x0) / L.z;
+    this.tlEdgePan(d, cx);
     cx?.notify?.();
   }
+  // Held at the timeline's edge (10 px) while zoomed: it pans 16 px every 40 ms, from a timer,
+  // and the band's end goes with it.
+  tlEdgePan(d, cx) {
+    if (d.edgeDue || !cx?.timer) return;
+    const dir = () => {
+      const L = this.tlLayout().L;
+      return L.z <= 1 ? 0 : d.px < 10 ? -1 : d.px > L.cw - 10 ? 1 : 0;
+    };
+    if (!dir()) return;
+    d.edgeDue = true;
+    cx.timer.after(40, (cx) => {
+      d.edgeDue = false;
+      const k = this.tlDrag === d ? dir() : 0;
+      if (!k) return;
+      const L = this.tlLayout().L;
+      this.setTlView({ z: L.z, x0: L.x0 + 16 * k });
+      const M = this.tlLayout().L;
+      d.f1 = (Math.max(0, Math.min(M.cw, d.px)) + M.x0) / M.z;
+      this.tlEdgePan(d, cx);
+      cx.notify();
+    });
+  }
+  // The release, caught on the Trajectory's body: a band (or a moved edge) becomes the range,
+  // snapped to the rows whose bars start inside it; the ledger dims now, once. A band where no
+  // bar starts makes none, and the range there was stays.
+  tlDragEnd(_e, cx) {
+    const d = this.tlDrag;
+    if (!d) return;
+    this.tlDrag = null;
+    if (d.kind === "band" || d.kind === "edge") {
+      const L = this.tlLayout().L;
+      const lo = Math.min(d.from, d.f1) * L.z - L.x0;
+      const hi = Math.max(d.from, d.f1) * L.z - L.x0;
+      const got = bandRows(L, this.tlMemo.heads, lo, hi);
+      if (got) this.setRange(got.a, got.b, cx);
+    }
+    cx?.notify?.();
+  }
+  // The band in px of the view while a drag is held, else null.
+  tlBand(L) {
+    const d = this.tlDrag;
+    if (!d || (d.kind !== "band" && d.kind !== "edge")) return null;
+    const a = d.from * L.z - L.x0;
+    const b = d.f1 * L.z - L.x0;
+    return { x0: Math.min(a, b), x1: Math.max(a, b) };
+  }
+  // The range's box in px of the view: from its first row's bar start to its last row's bar
+  // end (a heading: its turn's start; a row with no bar: its turn's edge).
+  tlRangeBox(L) {
+    const R = this.rangeIdx();
+    if (!R || !this.tlMemo) return null;
+    const edge = (key, end) => {
+      const r = this.baseRows[this.baseIndex.get(key)];
+      const ti = L.index.get(r?.kind === "trh" ? r.key : rowTurnKey(r));
+      if (ti == null) return null;
+      const T = tlBox(L, ti);
+      if (r.kind === "trh") return T.x;
+      const h = this.tlMemo.heads[ti];
+      const it = h?.items?.find((x) => x.key === key);
+      const b = it ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+      return b ? (end ? b.x1 : b.x0) : end ? T.x + T.w : T.x;
+    };
+    const x0 = edge(R.a, false);
+    const x1 = edge(R.b, true);
+    return x0 == null || x1 == null ? null : { x0, x1: Math.max(x1, x0 + 2) };
+  }
+
+  // ---- the focus range (round 6, sections 5 to 7) ----
+  // Kept as two row keys, its first and last (trange { a, b }), so it is the same range at any
+  // zoom, on either scale, with the timeline hidden, at any width and after Chat and back. Set
+  // only from handlers: a drag's release, Shift with j, k or an arrow, Shift and a press, Esc,
+  // the close button. Its places in the ledger's rows, in order, or null.
+  rangeIdx() {
+    const R = this.trange;
+    if (!R || !this.baseIndex) return null;
+    const i = this.baseIndex.get(R.a);
+    const j = this.baseIndex.get(R.b);
+    if (i == null || j == null) return null;
+    return i <= j ? { ia: i, ib: j, a: R.a, b: R.b } : { ia: j, ib: i, a: R.b, b: R.a };
+  }
+  // Whether a ledger row is inside: a heading when any row of its turn is.
+  inRange(r, R = this.rangeIdx()) {
+    if (!R) return true;
+    const i = this.baseIndex.get(r.key);
+    if (i == null) return false;
+    if (r.kind === "trh") return i <= R.ib && i + (r.items?.length ?? 0) >= R.ia;
+    return i >= R.ia && i <= R.ib;
+  }
+  // A new range. place: the selection goes to its first row when it was outside, and the list
+  // to that row with one dimmed row above it.
+  setRange(a, b, cx, place = true) {
+    if (this.baseIndex?.get(a) == null || this.baseIndex?.get(b) == null) return false;
+    this.trange = { a, b };
+    const R = this.rangeIdx();
+    if (place) {
+      const si = this.baseIndex.get(this.ledgerSel());
+      if (si == null || si < R.ia || si > R.ib) this.ledgerPick(R.a, false, cx);
+      const li = this.rowIndex(R.a);
+      const above = li > 0 ? this.rowsMemo?.[li - 1] : null;
+      this.scrollTo = { key: above && (above.kind === "tr" || above.kind === "trh") ? above.key : R.a, how: "top" };
+    }
+    cx?.notify?.();
+    return true;
+  }
+  clearRange(cx) {
+    if (!this.trange) return false;
+    this.trange = null;
+    cx?.notify?.();
+    return true;
+  }
+  // A range edge to key, from the row that was selected (from): with no range, from that row to
+  // key; with one, its nearer edge moves to key (a tie goes the way the selection moved, d).
+  rangeTo(key, from, d, cx) {
+    const k = this.baseIndex?.get(key);
+    if (k == null) return false;
+    const R = this.rangeIdx();
+    if (!R) return this.setRange(from ?? key, key, cx, false);
+    const at = this.baseIndex.get(from) ?? k;
+    const da = Math.abs(at - R.ia);
+    const db = Math.abs(at - R.ib);
+    return db < da || (db === da && d > 0) ? this.setRange(R.a, key, cx, false) : this.setRange(key, R.b, cx, false);
+  }
+  // Shift with j, k or an arrow: the selection moves one row and takes the range's nearer edge
+  // with it.
+  rangeStep(d, cx) {
+    const from = this.ledgerSel();
+    this.ledgerStep(d, cx);
+    const to = this.ledgerSel();
+    if (to == null || to === from) return true;
+    this.rangeTo(to, from, d, cx);
+    return true;
+  }
+  // The range's numbers, worked out when it or the session changes, never by walking its rows:
+  // its rows (headings and steps), its failed calls (the session's failures are in row order,
+  // so two halvings), the time from its first row's start to its last row's end, tokens when it
+  // holds whole turns (from the headings' running sums), and its name, "212.3 to 213.2".
+  rangeStats() {
+    const R = this.rangeIdx();
+    if (!R) return null;
+    const s = this.ledgerSums();
+    const k = `${R.a}|${R.b}|${R.ia}|${R.ib}|${s.turns}|${s.failed}|${s.tokens}`;
+    if (this.rangeMemo?.k === k) return this.rangeMemo.v;
+    const rows = this.baseRows;
+    const headAt = (i) => (rows[i].kind === "trh" ? i : this.baseIndex.get(rowTurnKey(rows[i])));
+    const iha = headAt(R.ia);
+    const ihb = headAt(R.ib);
+    const ha = rows[iha];
+    const hb = rows[ihb];
+    const ra = rows[R.ia];
+    const rb = rows[R.ib];
+    const place = (key) => this.baseIndex.get(key) ?? -1;
+    const lower = (list, v) => { let lo = 0; let hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (place(list[m]) < v) lo = m + 1; else hi = m; } return lo; };
+    const failed = lower(s.fails, R.ib + 1) - lower(s.fails, R.ia);
+    const t0 = ha?.t0 != null ? ha.t0 + (ra.kind === "trh" ? 0 : ra.start ?? 0) : null;
+    const t1 = hb?.t0 != null ? hb.t0 + (rb.kind === "trh" ? 0 : (rb.start ?? 0) + (rb.dur ?? 0)) : null;
+    const whole = (R.ia === iha || R.ia === iha + 1) && R.ib === ihb + (hb.items?.length ?? 0);
+    const tokens = whole && ha.cum && hb.cum ? hb.cum.tokens + (hb.tokens ?? 0) - ha.cum.tokens : null;
+    const name = (r, ih, h) => (r.kind === "trh" ? `${h.n}` : `${h.n}.${this.baseIndex.get(r.key) - ih}`);
+    const v = { n: R.ib - R.ia + 1, failed, ms: t0 != null && t1 != null ? Math.max(0, t1 - t0) : null, tokens, whole, name: R.ia === R.ib ? name(ra, iha, ha) : `${name(ra, iha, ha)} to ${name(rb, ihb, hb)}` };
+    this.rangeMemo = { k, v };
+    return v;
+  }
+  // The range's name with its row count, a Zoom button (with the timeline shown) and a close
+  // button: a bar of its own under the timeline, or a chip in the filter bar from TRAJ_SIDE.
+  rangeView(t, chip) {
+    const st = this.rangeStats();
+    if (!st) return null;
+    const close = div().id("th-range-close").flex_none().size(18).flex().items_center().justify_center().rounded(4).cursor_pointer()
+      .text_color(t.dim).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Clear the range (Esc)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.clearRange(cx); cx.notify(); })
+      .child(svg(ICON("x")).size(11));
+    const zoom = this.timelineShown() ? h_flex().id("th-range-zoom").flex_none().h(18).px(6).items_center().rounded(4).cursor_pointer()
+      .text_size(11.5).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Zoom the timeline to the range (z)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.tlZoomTo(cx); cx.notify(); })
+      .child("Zoom") : null;
+    const words = [div().flex_none().text_color(t.dim).child("Range"), div().flex_none().whitespace_nowrap().text_color(t.foreground).child(st.name),
+      div().flex_none().whitespace_nowrap().text_color(t.dim).child(`· ${st.n.toLocaleString()} ${st.n === 1 ? "row" : "rows"}`)];
+    if (chip) {
+      return h_flex().id("th-range").flex_none().h(22).pl(9).pr(2).gap(5).items_center().rounded(11).bg(alpha(t.foreground, 0.08)).text_size(12)
+        .children(words).when(Boolean(zoom), (el) => el.child(zoom)).child(close);
+    }
+    return h_flex().id("th-range").flex_none().w_full().h(TRAJ_RBAR).pl(12).pr(8).gap(5).items_center().overflow_hidden().border_b_1().border_color(t.border).text_size(12)
+      .children(words).child(div().flex_1()).when(Boolean(zoom), (el) => el.child(zoom)).child(close);
+  }
+
   // b, or the heading's timeline button.
   toggleTimeline() { this.tlHidden = !this.tlHidden; return true; }
   // A press on the lanes: the step whose bar is under it (within 4 px), else its turn.
@@ -3923,6 +4171,21 @@ export default class Threads extends View {
     const lane = ly == null ? null : TL_LANES[Math.floor(ly / z / TL_LANE)] ?? null;
     const hit = timelineHit(L, heads, lx / z, lane);
     if (!hit) return;
+    // With a range, a press on no bar clears it outside the band and does nothing inside.
+    const bar = hit.key !== hit.turn;
+    if (this.trange && !bar) {
+      const rb = this.tlRangeBox(L);
+      if (!rb || lx / z < rb.x0 || lx / z > rb.x1) this.clearRange(cx);
+      return;
+    }
+    // Shift and a press on a bar: the range's nearer edge to it (or a range from the selection).
+    if (bar && e?.modifiers?.shift) {
+      const from = this.ledgerSel();
+      this.ledgerPick(hit.key, true, cx, true);
+      this.rangeTo(hit.key, from, 0, cx);
+      cx.notify();
+      return;
+    }
     // A step the filter bar does not list: its turn's heading, if that is listed.
     const key = !this.filtIndex || this.filtIndex.has(hit.key) ? hit.key : this.filtIndex.has(hit.turn) ? hit.turn : null;
     if (key == null) return;
@@ -3997,13 +4260,14 @@ export default class Threads extends View {
     const colour = (k) => (k === "sub" ? alpha(ink.tools, SUB_ALPHA) : ink[k] ?? t.dim);
     const dimmed = (k) => (f.failed && k !== "failed") || (f.user && k !== "user");
     const layers = [...L.spans.entries()].sort(([a], [b]) => (a.endsWith("|1") ? 1 : 0) - (b.endsWith("|1") ? 1 : 0) || (a.includes("|failed|") ? 1 : 0) - (b.includes("|failed|") ? 1 : 0));
+    // Bars outside the focus range ("|o") at 20%, as the filters dim.
     for (const [k, spans] of layers) {
-      const [lane, kind, track] = k.split("|");
+      const [lane, kind, track, out] = k.split("|");
       if (!f[lane]) continue;
       const li = TL_LANES.indexOf(lane);
       const c = colour(kind);
       kids.push(div().id(`th-tl-${k}`).absolute().left(0).w(cw).top(li * TL_LANE + (track === "1" ? 8 : 2)).h(track === "1" ? 6 : 12)
-        .child(this.rectLayer(spans, dimmed(kind) ? alpha(c, 0.2) : c, `th-tlr-${k}`, cw)));
+        .child(this.rectLayer(spans, dimmed(kind) || out ? alpha(c, 0.2) : c, `th-tlr-${k}`, cw)));
     }
     // The selected step's outline.
     const sk = this.ledgerSel();
@@ -4018,8 +4282,16 @@ export default class Threads extends View {
       }
     }
     const lanes = div().id("th-tl-lanes").relative().w(cw).h(H).cursor_pointer().overflow_hidden()
-      .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
+      .on_mouse_down("left", (e, cx) => this.tlDown(e, cx))
       .children(kids);
+    // The band: while a drag is held, where the pointer has been; else the range's. A light
+    // wash of the text colour from the turn labels to the lanes' foot, a 2 px edge each side.
+    const band = this.tlBand(L) ?? this.tlRangeBox(L);
+    const bandEl = band && band.x1 >= 0 && band.x0 <= cw
+      ? div().id("th-tl-band").absolute().top(TL_PT).left(Math.max(0, band.x0)).w(Math.max(2, Math.min(cw, band.x1) - Math.max(0, band.x0))).h(TL_AX + TL_TK + TL_LT + H)
+        .bg(alpha(t.foreground, 0.07))
+        .when(band.x0 >= 0, (el) => el.border_l(2)).when(band.x1 <= cw, (el) => el.border_r(2)).border_color(t.foreground)
+      : null;
     // While zoomed, the bar under the lanes: the whole session, and the part in view.
     const zoomed = L.z > 1;
     const a = zoomed && L.total > 0 ? (L.x0 / L.z / L.total) * cw : 0;
@@ -4041,10 +4313,11 @@ export default class Threads extends View {
       .bg(alpha(t.foreground, 0.025))
       .child(v_flex().flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
         .child(name("input", "Input")).child(name("model", "Model")).child(name("tools", "Tools")))
-      .child(v_flex().id("th-tl-area").flex_none().w(cw).pt(TL_PT)
+      .child(v_flex().id("th-tl-area").relative().flex_none().w(cw).pt(TL_PT)
         .on_scroll_wheel((e, cx) => this.tlWheel(e, cx))
         .on_pinch((e, cx) => this.tlPinch(e, cx))
-        .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map));
+        .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map)
+        .when(Boolean(bandEl), (el) => el.child(bandEl)));
   }
 
   // A turn's heading: its number and clock time (with the day when it is not today) at the
@@ -4078,8 +4351,29 @@ export default class Threads extends View {
           .when(line.model.length > 0, (x) => x.child(this.pathLayer(line.model, ink.model, 3, `th-tlm-${r.key}`)))
           .when(line.tools.length > 0, (x) => x.child(this.pathLayer(line.tools, ink.tools, 3, `th-tlt-${r.key}`)))
           .when(line.sub.length > 0, (x) => x.child(this.pathLayer(line.sub, alpha(ink.sub, SUB_ALPHA), 3, `th-tls-${r.key}`)))
-          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`))));
+          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`))))
+          .when(Boolean(this.trange), (x) => { const g = this.lineRange(r); return g ? x.child(g(t)) : x; });
       });
+  }
+  // The focus range on a heading's thin line: a lighter span over the part of the turn inside
+  // it, with a 1 px edge where the range starts or ends in this turn. null outside it.
+  lineRange(r) {
+    const R = this.rangeIdx();
+    const ih = this.baseIndex?.get(r.key);
+    if (!R || ih == null || !this.inRange(r, R)) return null;
+    const wall = r.total ?? r.span ?? 0;
+    const at = (i, end) => {
+      if (i <= ih) return 0;
+      const it = r.items?.[i - ih - 1];
+      if (!it || it.a == null || !(wall > 0)) return end ? 1 : 0;
+      return Math.min(1, Math.max(0, (end ? it.b ?? it.a : it.a) / wall));
+    };
+    const a = R.ia > ih ? at(R.ia, false) : 0;
+    const b = R.ib < ih + (r.items?.length ?? 0) ? at(R.ib, true) : 1;
+    const startsHere = R.ia >= ih;
+    const endsHere = R.ib <= ih + (r.items?.length ?? 0);
+    return (t) => div().id(`th-tlg-${r.key}`).absolute().top(0).h_full().left(`${(a * 100).toFixed(2)}%`).w(`${(Math.max(0.01, b - a) * 100).toFixed(2)}%`)
+      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1)).when(endsHere, (el) => el.border_r(1));
   }
 
   // The Trajectory's inks for this theme (ledger.js trajInks): the user's colour from one
@@ -4873,7 +5167,13 @@ export default class Threads extends View {
     this.toList();
     // The Trajectory: a press selects the row (a heading or a step) and opens nothing.
     if (this.ledger() && (kind === "tr" || /^\d+$/.test(kind))) {
+      // Shift held at the press (the list's click carries no keys; the body's press does):
+      // the range's nearer edge to this row, or a range from the selected row to it.
+      const from = this.ledgerSel();
+      const shift = this.pressShift;
+      this.pressShift = false;
       this.ledgerPick(key, false, cx);
+      if (shift) this.rangeTo(key, from, 0, cx);
       return cx.notify();
     }
     if (/^\d+$/.test(kind)) {
@@ -5094,7 +5394,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^(tf|scale):/.test(name)) return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^range(Next|Prev)$/.test(name) || /^(tf|scale):/.test(name)) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));
@@ -6854,6 +7154,7 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
+        this.pressShift = Boolean(e.modifiers?.shift);
         // A double or triple press selects a word or a paragraph straight away.
         if (this.pressCount > 1) this.liftFill(this.sel, cx);
         this.notePress(cx);
@@ -7715,8 +8016,11 @@ export default class Threads extends View {
       case "fill": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
-      case "trh": return this.ledgerHead(t, r);
-      case "tr": return this.ledgerItem(t, r);
+      // Outside the focus range: 40%, the selected row 70% so it can be read.
+      case "trh": case "tr": {
+        const el = r.kind === "trh" ? this.ledgerHead(t, r) : this.ledgerItem(t, r);
+        return this.trange && !this.inRange(r) ? el.opacity(this.ledgerSel() === r.key ? 0.7 : 0.4) : el;
+      }
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "wtop": return this.workingTop(t, r, focusedPanel);
       case "afold": return this.foldLine(t, r);
