@@ -10,6 +10,8 @@
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
+// agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
+// false leaves them off it (the running turn keeps its tick).
 // bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
 // "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
@@ -37,6 +39,8 @@
 // at most) and example (text the rule should turn into a link, shown on the Link rules
 // page). The card's Link rules page writes the whole list. A fresh install (no file) has one
 // rule, the pull request rule (DEFAULT_LINKS), switched on; the first write records it.
+// senders: rules that mark a typed prompt as an agent message and name its sender
+// (parseSenders), kept as written. No sender rules ship.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -44,7 +48,7 @@ import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -81,6 +85,7 @@ export function parseSettings(text) {
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
+      agentRail: typeof raw.agentRail === "boolean" ? raw.agentRail : DEFAULTS.agentRail,
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,
@@ -95,7 +100,7 @@ export function parseSettings(text) {
   };
 }
 
-// ---- keys kept apart from the values: quoteKey and links ----
+// ---- keys kept apart from the values: quoteKey, links and senders ----
 // They stay out of the values above, so a save made from the panel (which writes
 // {...file, ...values}) keeps them exactly as they were written, even mid-edit. The card's
 // quote key field writes quoteKey alone, as an extra (settingsText).
@@ -144,6 +149,41 @@ export function templateHost(url) {
   if (!m || /[@${}\\]/.test(m[1]) || !m[2]) return null;
   if (/\{(?!(repo|owner)\})/.test(m[2])) return null;
   return m[1].toLowerCase();
+}
+
+// A rule's pattern compiled with flags, or why it is refused: over 200 characters, a
+// backreference, a nested quantifier or an alternation under a quantifier (riskyShape), not
+// valid, or matching empty text. { re } or { why }.
+function patternShape(pattern, flags) {
+  if (pattern.length > 200) return { why: "pattern over 200 characters" };
+  if (/\\[1-9]|\\k</.test(pattern)) return { why: "backreferences are not allowed" };
+  const risky = riskyShape(pattern);
+  if (risky) return { why: risky };
+  let re;
+  try { re = new RegExp(pattern, flags); } catch { return { why: "pattern not valid" }; }
+  for (const probe of ["", "a", "a b", "#1", " "]) {
+    re.lastIndex = 0;
+    const m = re.exec(probe);
+    if (m && m[0] === "") return { why: "pattern matches empty text" };
+  }
+  return { re };
+}
+
+// Hostile probes of growing length, two characters at a time, stopping at the first one
+// over 5 ms: a pattern whose time grows exponentially is caught at a length where one
+// probe still costs only a few times the last (a long first probe would hang on it).
+// Why the pattern is refused, or null.
+function patternSlow(re, pattern) {
+  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
+  for (let len = 12; len <= 32; len += 2) {
+    for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
+      const t0 = now();
+      re.lastIndex = 0;
+      re.exec(probe);
+      if (now() - t0 > 5) return "too slow on a short test text; disabled";
+    }
+  }
+  return null;
 }
 
 // A rule's type: the icon the Link rules page shows for it, and nothing else.
@@ -257,8 +297,53 @@ function linkFault(r, i) {
 const LONG_PROBE = 2048;
 export const SLOW_LONG = "too slow on long text; disabled";
 
-// quoteKey and links from the file's text, with their notes. Text that does not parse
-// gives the defaults (parseSettings reports that).
+// senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
+// matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
+// prompt's start with at most one {name} in it, the sender: "From {name}:". A pattern is a
+// JavaScript regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
+// A rule is dropped, with a note, when it has both or neither, a prefix is over 100
+// characters, holds {name} twice or has under 2 characters besides it, a pattern has no
+// sender group or fails a check link patterns have (patternShape, patternSlow), or it is
+// past the 20th. Each kept rule: { n, label (its name, else its prefix or pattern), re,
+// named (the match names the sender) }. No rule ships.
+export function parseSenders(raw) {
+  const rules = [];
+  const notes = [];
+  if (raw == null) return { rules, notes };
+  if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
+  raw.forEach((r, i) => {
+    const n = i + 1;
+    const no = (why) => notes.push(`Sender rule ${n}: ${why}`);
+    if (i >= MAX_RULES) return no(`past the ${MAX_RULES}th rule; ignored`);
+    if (!r || typeof r !== "object") return no("not an object");
+    const { prefix, pattern } = r;
+    const hasPrefix = typeof prefix === "string" && prefix !== "";
+    const hasPattern = typeof pattern === "string" && pattern !== "";
+    if (hasPrefix === hasPattern) return no(hasPrefix ? "has both a prefix and a pattern; use one" : "no prefix or pattern");
+    const label = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : (hasPrefix ? prefix : pattern).slice(0, 60);
+    if (hasPrefix) {
+      if (prefix.length > 100) return no("prefix over 100 characters");
+      const parts = prefix.split("{name}");
+      if (parts.length > 2) return no("{name} more than once");
+      if (parts.join("").trim().length < 2) return no("prefix needs 2 characters or more besides {name}");
+      const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // The name runs to the text after it, or to a space or the end when it ends the prefix.
+      const name = parts.length < 2 ? "" : parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
+      rules.push({ n, label, re: new RegExp(`^${esc(parts[0])}${name}${parts.length < 2 ? "" : esc(parts[1])}`), named: parts.length === 2 });
+      return;
+    }
+    if (!/\(\?<sender>/.test(pattern)) return no("pattern has no (?<sender>...) group");
+    const shape = patternShape(pattern, "");
+    if (shape.why) return no(shape.why);
+    const slow = patternSlow(shape.re, pattern);
+    if (slow) return no(slow);
+    rules.push({ n, label, re: shape.re, named: true });
+  });
+  return { rules, notes };
+}
+
+// quoteKey, links and senders from the file's text, with their notes. Text that does not
+// parse gives the defaults (parseSettings reports that).
 export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
@@ -266,7 +351,13 @@ export function parseExtras(text) {
   if (fresh(text)) raw = { links: defaultLinks() };
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
-  return { quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, notes: [...(quote.note ? [quote.note] : []), ...links.notes], linkCount: Array.isArray(raw.links) ? raw.links.length : 0 };
+  const senders = parseSenders(raw.senders);
+  return {
+    quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], senderNotes: senders.notes,
+    linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
+    senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
+  };
 }
 
 // The file's text for a set of values. Keys this version does not know are kept, so a

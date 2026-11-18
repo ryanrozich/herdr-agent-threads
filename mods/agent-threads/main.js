@@ -49,7 +49,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -762,7 +762,9 @@ export default class Threads extends View {
     this.quoteKey = "q"; // settings.json quoteKey
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
-    this.prefsNotes = []; // notes on quoteKey and link rules
+    this.senders = []; // compiled sender rules (settings.js parseSenders)
+    this.sendersVer = 0;
+    this.prefsNotes = []; // notes on quoteKey, link rules and sender rules
     this.lastQuote = null; // the last quote press, for the debug report (never its text)
     this.remote = { key: null, repo: null, owner: null, why: "not looked up" }; // F3.3
     this.pinStore = parsePins(null).store; // pins.json, read below and watched
@@ -874,6 +876,7 @@ export default class Threads extends View {
       quoteKey: this.quoteKey, settingsNotes: this.prefsNotes, lastQuote: this.lastQuote,
       editorFocused: Boolean(this.editorFocused), panelFocused: this.panelFocused(), focusEvents: this.focusEvents ?? null,
       links: { count: this.linkCount ?? 0, valid: this.links.length, ver: this.linksVer, rules: this.links.map((r) => `${r.n} ${r.name}${r.repo ? " {repo}" : ""}`) },
+      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
     };
@@ -896,7 +899,7 @@ export default class Threads extends View {
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
-      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
+      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)}${r.turn.sender.rule != null ? ` rule${r.turn.sender.rule}` : ""} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
       case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
@@ -1005,22 +1008,22 @@ export default class Threads extends View {
       if (this.prefsSaving) return;
       if (text === this.prefsRaw && this.prefsLoaded) return;
       this.prefsLoaded = true;
-      this.applyPrefs(text);
+      this.applyPrefs(text, cx);
       cx.notify();
     });
   }
 
-  applyPrefs(text) {
+  applyPrefs(text, cx = null) {
     const { values, error } = parseSettings(text);
     this.prefsRaw = text;
     this.prefsError = error;
     this.setPrefs(values);
-    this.applyExtras(text);
+    this.applyExtras(text, cx);
   }
 
-  // quoteKey and the link rules, compiled once here (never while drawing). A file that does
-  // not parse keeps the ones last read.
-  applyExtras(text) {
+  // quoteKey, the link rules and the sender rules, compiled once here (never while drawing).
+  // A file that does not parse keeps the ones last read.
+  applyExtras(text, cx = null) {
     if (text != null && String(text).trim() !== "" && parseSettings(text).error) return;
     const x = parseExtras(text);
     const quoteWas = this.quoteKey;
@@ -1031,7 +1034,34 @@ export default class Threads extends View {
     this.prefsNotes = x.notes;
     this.setLinks(x.links, x.linkList, x.linkCount);
     if (this.ruleEdit || this.ruleUndo) this.followRules(this.fileLinks());
+    this.senderCount = x.senderCount;
+    this.senderNotes = x.senderNotes;
+    const ssig = JSON.stringify(x.senders.map((r) => [r.n, r.re.source, r.label]));
+    if (ssig !== (this.sendersSig ?? "[]")) { this.sendersSig = ssig; this.senders = x.senders; this.sendersVer++; this.remark(cx); }
   }
+
+  // New sender rules: every session read so far is marked again (turns.js remarkSenders),
+  // in slices of SLICE_MS with cx (a settings change), all at once without it (tests). A
+  // newer change stops an older pass. Turns read later are marked as they are read.
+  remark(cx) {
+    const gen = (this.remarkGen = (this.remarkGen ?? 0) + 1);
+    const rules = this.senders;
+    const pass = async (cx) => {
+      for (const s of this.sessions.slice()) {
+        let i = 0;
+        do {
+          i = remarkSenders(s, rules, i, cx ? now() + SLICE_MS : Infinity);
+          if (i >= s.turns.length) break;
+          await cx.sleep(0);
+          if (this.remarkGen !== gen) return;
+        } while (i < s.turns.length);
+      }
+      cx?.notify();
+    };
+    if (cx) cx.spawn(pass);
+    else pass(null);
+  }
+
   setLinks(rules, list, count) {
     this.linkCount = count;
     this.linkList = list;
@@ -1191,7 +1221,7 @@ export default class Threads extends View {
   writeLinks(raw, cx) {
     this.linksPending = raw;
     const l = parseLinks(raw);
-    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes, ...(this.senderNotes ?? [])];
     this.setLinks(l.rules, l.list, raw.length);
     this.followRules(raw);
     const chain = this.changePrefs({}, cx, { links: raw });
@@ -1746,6 +1776,7 @@ export default class Threads extends View {
         return;
     }
     const s = newSession(r.id, r.file);
+    s.senders = this.senders;
     if (cur) s.reason = "new";
     // Cursor records no turn times: the pane keeps the ones it watches (turns.js, clockStart).
     if (harnessOfFile(r.file) === "cursor") s.clock = {};
@@ -1886,7 +1917,7 @@ export default class Threads extends View {
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
   restart(s, fresh = false) {
-    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock });
+    Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
 
@@ -2040,8 +2071,8 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
+      this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
@@ -2316,6 +2347,8 @@ export default class Threads extends View {
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
+    // agentRail off: agent messages get no tick (the running turn keeps its own).
+    const agentRail = this.prefs.agentRail !== false;
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -2360,7 +2393,7 @@ export default class Threads extends View {
         const visit = key === this.pinVisit;
         const off = !shown(turn, ti);
         const miss = q && !threadMatches(s.turns, turn, q);
-        if (!off) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
+        if (!off && (agentRail || !turn.agent || ti === liveTi)) rail.push({ key, turn, day: turn.day ?? dayKey(turn.ts), live: ti === liveTi, miss: Boolean(miss) });
         if (off && !visit) continue;
         if (miss && !visit) { unmatched++; continue; }
         const d = turn.day;
@@ -2535,7 +2568,7 @@ export default class Threads extends View {
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
   closedLook() {
     // The pane's width and the rail set how far a wide table may grow (tableExtra).
-    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.repoSig()}`;
+    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.sendersVer}|${this.repoSig()}`;
   }
 
   closedRows(item, out) {
@@ -2573,7 +2606,9 @@ export default class Threads extends View {
   // chevron, quiet; a press shows the message, or folds it again.
   foldLine(t, r) {
     const { turn } = r;
+    const tip = this.ruleTip(turn);
     const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0).cursor_pointer()
+      .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
       .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
         .text_color(t.muted).child(senderLabel(turn.sender, this.width)))
@@ -3025,15 +3060,15 @@ export default class Threads extends View {
     const f = turn.shapeFast;
     this.shapeStale = false;
     if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
-      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0)) return turn.shapeMemo;
+      && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
     if (turn.shapeKey == null && (this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}`;
-    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0 };
+    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
+    const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
@@ -4498,6 +4533,7 @@ export default class Threads extends View {
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       // The settings card's switch: no toast, the card shows the change.
       case "agentsQuiet": this.setAgents(!this.prefs.agentTurns, cx, true); return true;
+      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": return this.setSettings(!this.settingsOpen);
@@ -5976,6 +6012,7 @@ export default class Threads extends View {
     return [
       group("Messages", [
         sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
+        sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail"),
         sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
         sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
@@ -7481,7 +7518,9 @@ export default class Threads extends View {
   // The sender over an agent's message: its icon and name in the agent colour, on the left.
   senderLine(t, turn) {
     const ac = this.agentColor(t);
+    const tip = this.ruleTip(turn);
     return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0)
+      .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(ac))
       .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
         .font_semibold().text_color(ac).child(senderLabel(turn.sender, this.width)));
@@ -8359,7 +8398,16 @@ export default class Threads extends View {
   // The settings panel's line on the keys the file sets by hand.
   settingsLine() {
     const bad = (this.linkCount ?? 0) - this.links.length;
-    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""} · Quote key · ${this.quoteKey}`;
+    const sn = this.senderCount ?? 0;
+    const sbad = sn - this.senders.length;
+    return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
+  }
+
+  // Which sender rule made a typed prompt an agent message, for the tooltip on its sender:
+  // "Marked by sender rule 2 · Hourly report", or null for every other turn.
+  ruleTip(turn) {
+    const r = turn?.sender?.rule;
+    return r != null ? `Marked by sender rule ${r} · ${turn.sender.ruleLabel ?? ""}`.replace(/ · $/, "") : null;
   }
 
   // Key hints that apply now, on one row: [key, label]. The most-used keys (move, open,
