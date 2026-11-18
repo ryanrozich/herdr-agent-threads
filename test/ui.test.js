@@ -9,7 +9,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
 } from "../mods/agent-threads/ui.js";
 
@@ -692,7 +692,7 @@ test("the key sheet lists every key the panel takes, and a pin key gives way to 
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
-  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "View"]);
+  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "Settings card", "View"]);
   expect(shown("p").has("p")).toBe(true); // as the quote key
   expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
   expect(keySheet("u").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "u")).toBe(false);
@@ -1109,4 +1109,30 @@ test("cutPath: a path cut from its start at a slash, so it begins with a whole f
   expect(cutPath(p, 30)).toBe("…/agent-threads/settings.json");
   // The file's name stays whole when it alone is longer.
   expect(cutPath(p, 8)).toBe("…/settings.json");
+});
+
+test("cardKey: the keys that scroll the settings card; cardScroll: where each takes the view, by which mark", () => {
+  const ev = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
+  expect(["down", "j", "up", "k", "pagedown", "space", "pageup", "home", "end"].map((k) => cardKey(ev(k))))
+    .toEqual(["down", "down", "up", "up", "pagedown", "pagedown", "pageup", "home", "end"]);
+  expect(cardKey(ev("escape"))).toBe(null);
+  expect(cardKey(ev(","))).toBe(null);
+  expect(cardKey(ev("j", { platform: true }))).toBe(null);
+  expect(cardKey(ev("space", { shift: true }))).toBe(null);
+  // Rows that fit: nothing to scroll.
+  expect(cardScroll("down", 0, 300, 400)).toBe(null);
+  // 1,000 px of rows in a 400 px view: a line, then the end, and back.
+  const marks = cardMarks(1000);
+  const down = cardScroll("down", 0, 1000, 400);
+  expect(down.y).toBe(marks[down.mark] + 1 - 400);
+  expect(Math.abs(down.y - CARD_LINE)).toBeLessThanOrEqual(CARD_MARK / 2);
+  expect(cardScroll("pagedown", 0, 1000, 400).y).toBeCloseTo(360, -1);
+  expect(cardScroll("end", 0, 1000, 400)).toEqual({ y: 600, mark: marks.length - 1 });
+  expect(cardScroll("end", 600, 1000, 400)).toBe(null);
+  expect(cardScroll("home", 600, 1000, 400)).toEqual({ y: 0, mark: 0 });
+  const up = cardScroll("up", 600, 1000, 400);
+  expect(up.y).toBe(marks[up.mark]);
+  expect(up.y).toBe(560);
+  expect(cardScroll("pageup", 100, 1000, 400)).toEqual({ y: 0, mark: 0 });
+  expect(cardScroll("sideways", 0, 1000, 400)).toBe(null);
 });

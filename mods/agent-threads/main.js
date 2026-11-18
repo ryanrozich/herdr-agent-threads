@@ -60,7 +60,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -182,6 +182,8 @@ const CARD_GAP = 12;
 // where under that the card takes the height. 0 makes the card take the height everywhere.
 const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
+// The strip at the card's right edge that holds its always-drawn scrollbar.
+const CARD_BAR_W = 10;
 // The card's one page: its sections in order, each with its rows in order (settingsRows draws
 // each row from its key). Moving a row or renaming a section is a change to this list alone.
 const CARD_SECTIONS = [
@@ -741,6 +743,16 @@ export default class Threads extends View {
     this.known = new Set();
     this.h = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
+    // The settings card's scroll positions, one per page, which the arrows, j, k, Page Up,
+    // Page Down, Space, Home and End move (cardScroll). Herdr 0.1.15 and newer; before that
+    // the card scrolls with the wheel or trackpad only, and those keys do nothing on it.
+    const scrollHandle = () => gpuiBase.ScrollHandle?.new?.() ?? null;
+    this.cardScrolls = { main: scrollHandle(), links: scrollHandle() };
+    if (!this.cardScrolls.main || !this.cardScrolls.links) this.cardScrolls = null;
+    // The card's scrollbar is drawn all the time, so a card taller than its room shows there is
+    // more below before anything scrolls. That needs Herdr's Scrollbar and its mode; without
+    // them the scroll area's own bar shows while it scrolls.
+    this.cardBar = Boolean(gpuiBase.Scrollbar?.vertical) && "mode" in div();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
     this.quoteInput = InputState.new({ placeholder: "", value: "q" });
@@ -1165,6 +1177,10 @@ export default class Threads extends View {
     this.detailsOpen = false;
     this.quietRail();
     this.cardOpens++;
+    this.cardPlaces = {};
+    // A handle keeps its place from the last opening: its mark at 0 (child 1) takes the view
+    // back to the top, the way a new opening starts.
+    for (const h of Object.values(this.cardScrolls ?? {})) h.scroll_to_item(1);
     this.setPage = "main";
     this.leaveLinks();
     this.quoteDraft = null;
@@ -4498,6 +4514,15 @@ export default class Threads extends View {
       }
       return;
     }
+    // The settings card is open: the arrows, j, k, Page Up, Page Down, Space, Home and End
+    // scroll it, and the list under it stays where it was.
+    const card = this.settingsOpen && !this.keysOpen ? cardKey(e) : null;
+    if (card) {
+      this.action(`settingsScroll:${card}`, cx);
+      cx.stop_propagation();
+      cx.notify();
+      return;
+    }
     const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
@@ -4618,6 +4643,12 @@ export default class Threads extends View {
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      // The card's keys as commands (for key bindings, and for a window no keys reach).
+      case "settingsScroll:down": case "settingsScroll:up": case "settingsScroll:pagedown": case "settingsScroll:pageup":
+      case "settingsScroll:home": case "settingsScroll:end":
+        if (!this.settingsOpen) return false;
+        this.cardScrollBy(name.slice(15));
+        return true;
       case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
@@ -5879,8 +5910,28 @@ export default class Threads extends View {
     const bodyMax = Math.max(60, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
     const key = links ? "links" : "main";
-    const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
+    const rowsH = this.cardBody?.key === key ? this.cardBody.h : null;
+    const bodyH = Math.min(bodyMax, rowsH ?? bodyMax);
     const rows = links ? this.linkRulesRows(t, w) : this.settingsRows(t, w);
+    const place = this.cardPlace(key);
+    place.viewH = bodyH;
+    const handle = this.cardScrolls?.[key] ?? null;
+    const id = `th-set-body-${key}-${this.cardOpens}`;
+    // Child 0 is the rows; the marks after it are what the keys bring into view (cardMarks).
+    const marks = handle && rowsH ? cardMarks(rowsH) : [];
+    const wheel = (from) => (e) => this.cardWheel(e, key, from);
+    const body = v_flex().id(id).flex_none().h(bodyH)
+      .when(this.cardBar, (el) => el.overflow_y_scroll()).when(!this.cardBar, (el) => el.overflow_y_scrollbar())
+      .when(Boolean(handle), (el) => el.track_scroll(handle))
+      .on_scroll_wheel(wheel("area"))
+      .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
+        .on_size_change((size, cx) => {
+          const h = size.height / this.zoom();
+          if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
+        })
+        .on_scroll_wheel(wheel("rows"))
+        .children(rows))
+      .children(marks.map((y) => div().absolute().top(y).left(0).w(1).h(1)));
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
@@ -5890,16 +5941,45 @@ export default class Threads extends View {
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
         .child(this.cardHead(t, links, close, pad))
-        .child(v_flex().id(`th-set-body-${key}-${this.cardOpens}`).flex_none().h(bodyH).overflow_y_scrollbar()
-          .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
-            .on_size_change((size, cx) => {
-              const h = size.height / this.zoom();
-              if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
-            })
-            .children(rows)))
+        // The always-drawn bar sits in a strip at the right edge, so it takes no press meant
+        // for a row.
+        .child(this.cardBar
+          ? div().relative().flex_none().h(bodyH).child(body)
+            .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical(id).mode("always").absolute().top(0).bottom(0).left(0).right(0)))
+          : body)
         .child(this.cardFoot(t, pad)));
   }
   setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 2 * CARD_GAP)); }
+  // Where the card's view is on a page (y, from the top of its rows), as the keys left it and
+  // the wheel moved it since, and the view's height as last drawn. A new opening starts over.
+  cardPlace(key) { return ((this.cardPlaces ??= {})[key] ??= { y: 0, viewH: 0 }); }
+  // A key or a settingsScroll command: the view moves a line, a page, or to the top or end
+  // (cardScroll), by bringing one mark into view. Nothing happens on a Herdr with no
+  // ScrollHandle, or before the rows have been measured.
+  cardScrollBy(kind) {
+    const key = this.setPage === "links" ? "links" : "main";
+    const handle = this.cardScrolls?.[key];
+    const h = this.cardBody?.key === key ? this.cardBody.h : null;
+    const place = this.cardPlace(key);
+    const r = handle && h ? cardScroll(kind, place.y, h, place.viewH) : null;
+    if (!r) return false;
+    place.y = r.y;
+    handle.scroll_to_item(1 + r.mark);
+    return true;
+  }
+  // The wheel or trackpad moved the card: its place follows, so the keys go on from there.
+  // The rows and the area both listen (the area's own scrolling may stop the event before
+  // the area's listener runs); the same event reaching both counts once.
+  cardWheel(e, key, from) {
+    const dy = Number(e?.delta?.y) || 0;
+    if (!dy) return;
+    const place = this.cardPlace(key);
+    const k = `${e?.position?.x},${e?.position?.y},${dy},${e?.touch_phase}`;
+    if (from === "area" && place.wheelKey === k) return;
+    place.wheelKey = from === "rows" ? k : null;
+    const h = this.cardBody?.key === key ? this.cardBody.h : 0;
+    place.y = Math.max(0, Math.min(Math.max(0, h - place.viewH), place.y - dy));
+  }
 
   // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
   // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
