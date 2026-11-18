@@ -146,7 +146,7 @@ execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
-const { ledgerTotals: ledgerTotalsForTest } = await import("../mods/agent-threads/ledger.js");
+const { ledgerTotals: ledgerTotalsForTest, tlBox: tlBoxForTest } = await import("../mods/agent-threads/ledger.js");
 
 function fixture(...flags) {
   const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
@@ -5684,8 +5684,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
+  v.rootH = 1400;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 39 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -8116,6 +8116,128 @@ test("Trajectory timeline over 2,000 turns: laid out once, few spans, a frame wi
   draw(v, cx);
   expect(v.tlMemo).toBe(m);
   console.log(`timeline at ${m.L.turns.length} turns: layout ${m.ms.toFixed(2)} ms, ${spans} spans`);
+  // Zoomed in and panned: the turns are placed once (the geometry is kept), and a pan lays out
+  // only the turns in view.
+  v.ledgerPick(v.ledgerSums().heads[1000].key, false, cx);
+  for (let i = 0; i < 8; i++) v.key(keyEv("="), cx);
+  const geo = v.tlMemo.L.geo;
+  const pans = [];
+  for (let i = 0; i < 20; i++) { v.tlWheel({ delta: { x: -40, y: 0 }, modifiers: {} }, cx); draw(v, cx); pans.push(v.tlMemo.ms); }
+  expect(v.tlMemo.L.geo).toBe(geo);
+  expect(v.tlMemo.L.z).toBe(256);
+  expect(v.tlMemo.L.to - v.tlMemo.L.from + 1).toBeLessThan(40);
+  console.log(`zoomed 256 times: a pan lays out in ${Math.max(...pans).toFixed(2)} ms at most, ${v.tlMemo.L.to - v.tlMemo.L.from + 1} turns drawn`);
+});
+
+// Round 6 section 4 and round 7: zoom and pan. - and = (and the buttons) halve or double the
+// zoom about the selected step when it is in view, else the middle; w fits; z zooms to the
+// selected turn (the range, step 5, comes first); the zoom stops where four steps fill the
+// timeline. A sideways swipe or Shift and the wheel pans, a swipe up or down does nothing, a
+// pinch zooms about the pointer, and the bar under the lanes shows the part in view and pans
+// with a press and a drag. A selection that leaves the zoomed timeline brings it along.
+test("Trajectory timeline zoom and pan: - = w z, the buttons, the limit, wheel, pinch, the bar under it, the selection followed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "20"), { view: "trajectory" });
+  v.paneW = 640; v.rootH = 900; v.listH = 600;
+  settleRows(v, cx);
+  const snap = () => { draw(v, cx); return state.shared["threads.debug"].t4.tlayout.timeline; };
+  const calls = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  const L = () => v.tlLayout().L;
+  const cw = L().cw;
+  expect(snap()).toMatchObject({ z: 1, x0: 0 });
+  let c = calls();
+  expect(c.some(([n, x]) => n === "id" && x === "th-tl-zoom-in")).toBe(true);
+  expect(c.some(([n, x]) => n === "id" && x === "th-tl-map-view")).toBe(false);
+  // Select a step in the middle turn: = puts it in the middle at twice the zoom.
+  const heads = v.ledgerSums().heads;
+  const mid = heads[Math.floor(heads.length / 2)];
+  v.ledgerPick(mid.items[0].key, false, cx);
+  v.key(keyEv("="), cx);
+  expect(snap().z).toBe(2);
+  // (A short bar keeps its 3 px least width at any zoom, so its middle is within a few px.)
+  const b = v.tlSelBox(L());
+  expect(Math.abs((b.x0 + b.x1) / 2 - cw / 2)).toBeLessThan(4);
+  c = calls();
+  expect(c.some(([n, x]) => n === "id" && x === "th-tl-map-view")).toBe(true);
+  // Fewer turns drawn than the session has.
+  expect(snap().drawn).toBeLessThan(heads.length);
+  // - back, then w fits from anywhere.
+  v.key(keyEv("-"), cx);
+  expect(snap().z).toBe(1);
+  v.key(keyEv("="), cx); v.key(keyEv("="), cx);
+  v.key(keyEv("w"), cx);
+  expect(snap()).toMatchObject({ z: 1, x0: 0 });
+  // The buttons do the same.
+  afterId(calls(), "th-tl-zoom-in").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(snap().z).toBe(2);
+  afterId(calls(), "th-tl-fit").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(snap().z).toBe(1);
+  // The limit: four steps fill the timeline.
+  for (let i = 0; i < 20; i++) v.key(keyEv("="), cx);
+  const steps = heads.reduce((a, h) => a + Math.max(1, h.items.length), 0);
+  expect(L().z).toBeCloseTo(steps / 4, 6);
+  expect(L().zmax).toBeCloseTo(steps / 4, 6);
+  // Zoom in takes no press there; zoom out does.
+  c = calls();
+  expect(afterId(c, "th-tl-zoom-in").some((e) => e[0] === "on_click")).toBe(false);
+  expect(afterId(c, "th-tl-zoom-out").some((e) => e[0] === "on_click")).toBe(true);
+  expect(snap().drawn).toBeLessThanOrEqual(3);
+  v.key(keyEv("w"), cx);
+  // Wheel: up and down does nothing; sideways pans while zoomed; Shift and the wheel too.
+  v.key(keyEv("="), cx); v.key(keyEv("="), cx);
+  const x0 = L().x0;
+  v.tlWheel({ delta: { x: 0, y: -40 }, modifiers: {} }, cx);
+  expect(L().x0).toBe(x0);
+  v.tlWheel({ delta: { x: -30, y: 0 }, modifiers: {} }, cx);
+  expect(L().x0).toBeCloseTo(x0 + 30, 6);
+  v.tlWheel({ delta: { x: 0, y: 30 }, modifiers: { shift: true } }, cx);
+  expect(L().x0).toBeCloseTo(x0, 6);
+  // At fit, a sideways swipe does nothing.
+  v.key(keyEv("w"), cx);
+  v.tlWheel({ delta: { x: -30, y: 0 }, modifiers: {} }, cx);
+  expect(L().x0).toBe(0);
+  // A pinch zooms about the pointer: the moment under it stays under it.
+  const f0 = (200 + L().x0) / L().z;
+  v.tlPinch({ delta: 0.5, local_position: { x: 200 }, touch_phase: "moved" }, cx);
+  expect(L().z).toBeCloseTo(1.5, 6);
+  expect((200 + L().x0) / L().z).toBeCloseTo(f0, 6);
+  v.tlPinch({ delta: -0.9, local_position: { x: 200 }, touch_phase: "moved" }, cx);
+  expect(L().z).toBe(1);
+  // The bar under the lanes: a press puts the view's middle there; a drag over the body pans.
+  v.key(keyEv("="), cx); v.key(keyEv("="), cx);
+  v.tlMapPress({ local_position: { x: 100 }, position: { x: 158 } }, cx);
+  expect((L().x0 + cw / 2) / L().z).toBeCloseTo((100 / cw) * L().total, 4);
+  v.tlDragMove({ position: { x: 58 + 300 } }, cx);
+  expect((L().x0 + cw / 2) / L().z).toBeCloseTo((300 / cw) * L().total, 4);
+  v.tlDragEnd({}, cx);
+  v.tlDragMove({ position: { x: 58 + 50 } }, cx);
+  expect((L().x0 + cw / 2) / L().z).toBeCloseTo((300 / cw) * L().total, 4);
+  // z: the selected turn fills most of the timeline.
+  v.key(keyEv("w"), cx);
+  v.ledgerPick(mid.key, false, cx);
+  v.key(keyEv("z"), cx);
+  const T = tlBoxForTest(L(), L().index.get(mid.key));
+  expect(T.w).toBeCloseTo(0.8 * cw, 0);
+  expect(T.x + T.w / 2).toBeCloseTo(cw / 2, 0);
+  // j past the end of the view: the timeline follows the selection.
+  for (let i = 0; i < 40; i++) {
+    v.key(keyEv("j"), cx);
+    const s = v.tlSelBox(L());
+    expect(s.x0).toBeGreaterThanOrEqual(-0.5);
+    expect(s.x1).toBeLessThanOrEqual(cw + 0.5);
+  }
+  expect(L().x0).toBeGreaterThan(0);
+  // Hidden, the keys are the chat's again: z does nothing, - and = are not the timeline's.
+  v.key(keyEv("b"), cx);
+  const z = L().z;
+  expect(v.action("zoomRange", cx)).toBe(false);
+  v.key(keyEv("="), cx);
+  expect(L().z).toBe(z);
+  // A width change keeps the same part in view.
+  v.key(keyEv("b"), cx);
+  const fmid = (L().x0 + L().cw / 2) / L().z / L().total;
+  v.paneW = 900;
+  draw(v, cx);
+  expect((L().x0 + L().cw / 2) / L().z / L().total).toBeCloseTo(fmid, 2);
 });
 
 // Found on the rig with a real three-turn session: the pane draws before it has read the

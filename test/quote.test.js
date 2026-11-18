@@ -268,7 +268,7 @@ test("the quote key: q by default, configurable, never a key already taken", () 
   expect(keyAction(k("q", { platform: true }))).toBe(null);
   expect(keyAction(k("q", { shift: true }))).toBe(null);
   expect(keyAction(k("j"), false, "j")).toBe("next"); // a taken key keeps its action
-  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "b", "c", "d", "f", "g", "i", "j", "k", "m", "o", "s", "t", "v", "w", "y"]);
+  expect([...TAKEN_LETTERS].sort()).toEqual(["a", "b", "c", "d", "f", "g", "i", "j", "k", "m", "o", "s", "t", "v", "w", "y", "z"]);
   // Round 3 (C2): i explains the stat chips, so it cannot be the quote key.
   expect(keyAction(k("i"))).toBe("legend");
   expect(keyAction(k("i"), false, "i")).toBe("legend");
@@ -277,6 +277,8 @@ test("the quote key: q by default, configurable, never a key already taken", () 
   expect([keyAction(k("y"), true), keyAction(k("f"), true), keyAction(k("F"), true)]).toEqual([null, null, null]);
   // m and Shift m (or M): the user's message before and after.
   expect([keyAction(k("m")), keyAction(k("m", { shift: true })), keyAction(k("M")), keyAction(k("m"), true)]).toEqual(["prevUser", "nextUser", "nextUser", null]);
+  // The timeline's zoom: - and = (or + and Shift =), w, and z.
+  expect([keyAction(k("-")), keyAction(k("=")), keyAction(k("+")), keyAction(k("=", { shift: true })), keyAction(k("w")), keyAction(k("z")), keyAction(k("z"), true)]).toEqual(["narrower", "wider", "wider", "wider", "fit", "zoomRange", null]);
 });
 
 test("commandColor: muted where it reads at 4.5:1 on the row's background, else foreground", () => {

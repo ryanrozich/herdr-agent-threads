@@ -65,7 +65,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineLayout, timelineHit, itemBox, TL_LANES } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, TL_LANES } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -850,7 +850,7 @@ export default class Threads extends View {
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       tfoot: this.ledger() ? this.trajFoot().map(([n, w]) => `${n} ${w}`).join(" · ") : null,
-      tlayout: this.ledger() ? { timeline: this.timelineShown() ? { scale: this.tlScale(), turns: this.tlMemo?.L.turns.length ?? 0, spans: [...(this.tlMemo?.L.spans.values() ?? [])].reduce((a, x) => a + x.length, 0), ms: Math.round((this.tlMemo?.ms ?? 0) * 100) / 100 } : null, bar: this.trajTop(), detail: this.detailShown() ? (this.detailSide() ? "right" : "below") : null, filter: filterOn(this.tf) ? this.tf : null, listed: this.filtShown } : null,
+      tlayout: this.ledger() ? { timeline: this.timelineShown() ? { scale: this.tlScale(), z: Math.round((this.tlMemo?.L.z ?? 1) * 100) / 100, x0: Math.round(this.tlMemo?.L.x0 ?? 0), drawn: (this.tlMemo?.L.to ?? -1) - (this.tlMemo?.L.from ?? 0) + 1, turns: this.tlMemo?.L.turns.length ?? 0, spans: [...(this.tlMemo?.L.spans.values() ?? [])].reduce((a, x) => a + x.length, 0), ms: Math.round((this.tlMemo?.ms ?? 0) * 100) / 100 } : null, bar: this.trajTop(), detail: this.detailShown() ? (this.detailSide() ? "right" : "below") : null, filter: filterOn(this.tf) ? this.tf : null, listed: this.filtShown } : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -3404,6 +3404,7 @@ export default class Threads extends View {
     this.tsel = key;
     this.sel = rowTurnKey(r);
     this.follow = i === this.baseRows.length - 1;
+    this.tlFollow();
     if (!scroll) return true;
     const at = this.rowIndex(key);
     const [a, b] = this.viewRange ?? [0, 0];
@@ -3488,6 +3489,11 @@ export default class Threads extends View {
       // Enter and d show or hide the detail.
       case "open": case "detail": this.detailWant = !this.detailShown(); return true;
       case "timeline": return this.toggleTimeline();
+      // With the timeline shown, - and = zoom it, w fits the session, z zooms to the range.
+      case "narrower": return this.timelineShown() ? this.tlZoom(0.5, cx) : undefined;
+      case "wider": return this.timelineShown() ? this.tlZoom(2, cx) : undefined;
+      case "fit": return this.timelineShown() ? this.tlFit(cx) : undefined;
+      case "zoomRange": return this.timelineShown() ? this.tlZoomTo(cx) : false;
       case "scale:clock": case "scale:steps": this.tlScaleWant = name.slice(6); return true;
       case "tf:input": case "tf:model": case "tf:tools": case "tf:failed": case "tf:user": return this.setFilter(name.slice(3), cx);
       case "nextUser": return this.stepUser(1, cx);
@@ -3602,6 +3608,8 @@ export default class Threads extends View {
   // top's band), and the detail below it or to its right.
   trajBody(t, focusedPanel, cx, banners) {
     const top = this.trajTop();
+    // The timeline's layout for this frame, before the filter bar's zoom buttons read it.
+    if (this.timelineShown()) this.tlLayout(cx);
     const pad = top && this.floating() && !this.topBlock(banners);
     const list = this.body(t, focusedPanel, cx);
     const side = this.detailSide();
@@ -3609,6 +3617,10 @@ export default class Threads extends View {
       : side ? h_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(v_flex().flex_1().min_w(0).h_full().child(list)).child(this.detailView(t, true))
         : v_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(list).child(this.detailView(t, false));
     return v_flex().id("th-traj").flex_1().min_h(0).w_full()
+      // A drag that began on the timeline (the bar under it) follows the pointer over the whole
+      // body and ends on its release here.
+      .on_mouse_move((e, cx) => this.tlDragMove(e, cx))
+      .on_mouse_up("left", (e, cx) => this.tlDragEnd(e, cx))
       .when(pad, (el) => el.pt(TOP_BAND))
       .when(top, (el) => el.child(this.trajBar(t)))
       .when(this.timelineShown(), (el) => el.child(this.timelineView(t, cx)))
@@ -3647,7 +3659,21 @@ export default class Threads extends View {
       .child(chip("tools", sw(ink.tools), "Tools", s.tools.toLocaleString(), "Tools: each call"))
       .child(chip("failed", div().size(6).rounded(3).bg(ink.failed), wide ? "Failed only" : "Failed", `${s.failed.toLocaleString()}${partial}`, "Only the failed calls (f goes to the next)"))
       .child(chip("user", svg(ICON("user")).size(12).text_color(ink.user), wide ? "User only" : "User", s.user.toLocaleString(), "Only the user's messages (m goes to the user's message before)"))
-      .when(this.timelineShown(), (el) => el.child(div().flex_1()).child(this.scaleSwitch(t, wide)));
+      .when(this.timelineShown(), (el) => el.child(div().flex_1()).child(this.zoomButtons(t)).child(this.scaleSwitch(t, wide)));
+  }
+  // The timeline's zoom: minus, Fit and plus (- w =), each dim where it can go no further.
+  zoomButtons(t) {
+    // The layout trajBody made for this frame.
+    const L = this.tlMemo?.L ?? { z: 1, zmax: 1 };
+    const btn = (id, child, tip, on, fn) => h_flex().id(id).flex_none().h(20).px(5).items_center().justify_center().rounded(4)
+      .text_size(11.5).text_color(on ? t.muted : alpha(t.dim, 0.5))
+      .when(on, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); }))
+      .tooltip(tip)
+      .child(child);
+    return h_flex().id("th-tl-zoom").flex_none().h(24).p(1).gap(1).items_center().rounded(5).border_1().border_color(t.border)
+      .child(btn("th-tl-zoom-out", svg(ICON("minus")).size(12), "Zoom out (-)", L.z > 1, (cx) => this.tlZoom(0.5, cx)))
+      .child(btn("th-tl-fit", "Fit", "Fit the whole session (w)", L.z > 1, (cx) => this.tlFit(cx)))
+      .child(btn("th-tl-zoom-in", svg(ICON("plus")).size(12), "Zoom in (=)", L.z < L.zmax, (cx) => this.tlZoom(2, cx)));
   }
   // What the timeline's width means: Clock (a turn as wide as it took) or Steps (every step the
   // same width); "By the clock" and "Step by step" from 900 px.
@@ -3748,31 +3774,142 @@ export default class Threads extends View {
   timelineShown() { return this.ledger() && this.pw() >= TRAJ_BAR && !this.tlHidden; }
   tlScale() { return this.tlScaleWant ?? "clock"; }
   tlWidth() { return Math.max(40, Math.floor(this.pw() - TL_GUT - 12)); }
-  // The layout (ledger.js timelineLayout), again only when the session's numbers, the width or
-  // the scale change, and once a second while a turn runs (its bars run to now). It walks the
-  // turns, not the rows. A build that changes nothing (the debug pane's timing rebuilds) keeps it.
+  // The layout (ledger.js timelineLayout): the turns placed (timelineGeo) again only when the
+  // session's numbers, the width or the scale change, and once a second while a turn runs (its
+  // bars run to now); the view of them (the steps of the turns in view) again when the zoom or
+  // the pan changes too. Each walks the turns, not the rows. A build that changes nothing (the
+  // debug pane's timing rebuilds) keeps both.
   tlLayout(cx = null) {
     const s = this.ledgerSums();
     const heads = s.heads ?? [];
     const last = heads.at(-1);
     const live = Boolean(last?.going);
-    const k = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
+    const g = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
+    const tv = this.tlView ?? { z: 1, x0: 0 };
+    const k = `${g}|${tv.z}|${tv.x0}`;
     // Not in the frame that finished a build (its slowest): the last layout stays for that
-    // frame, and the next one lays out.
-    // Never two frames in a row: a debug pane (measure) and a session that grows every frame
-    // finish a build in every frame, and the layout would stay the first one, made before the
-    // session was read (no turns).
-    if (this.tlMemo && this.tlMemo.k !== k && cx && this.renderOpen && this.builtFrame === this.renders && this.tlKept !== this.renders - 1) {
+    // frame, and the next one lays out. Never two frames in a row: a debug pane (measure) and
+    // a session that grows every frame finish a build in every frame, and the layout would
+    // stay the first one, made before the session was read (no turns).
+    if (this.tlMemo && this.tlMemo.g !== g && cx && this.renderOpen && this.builtFrame === this.renders && this.tlKept !== this.renders - 1) {
       this.tlKept = this.renders;
       if (!this.tlNext) { this.tlNext = true; cx.timer.after(0, (cx) => { this.tlNext = false; cx.notify(); }); }
       return this.tlMemo;
     }
     if (this.tlMemo?.k !== k) {
       const t0 = now();
-      this.tlMemo = { s, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), Date.now()) };
+      const nowMs = Date.now();
+      const geo = this.tlMemo?.g === g ? this.tlMemo.L.geo : timelineGeo(heads, this.tlWidth(), this.tlScale(), nowMs);
+      // The view was set against a strip and a session total; a new width, scale or session
+      // keeps the same moment in the middle.
+      const v = tv.total && geo.total && (tv.total !== geo.total || tv.cw !== geo.cw)
+        ? { z: tv.z, x0: ((tv.x0 + tv.cw / 2) / tv.total) * geo.total - geo.cw / 2 } : tv;
+      this.tlMemo = { s, g, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), nowMs, v, geo) };
       this.tlMemo.ms = now() - t0;
     }
     return this.tlMemo;
+  }
+  // The zoom and pan, kept inside the session (ledger.js tlClamp). Only handlers set them.
+  setTlView(v, cx) {
+    const geo = this.tlLayout().L.geo;
+    this.tlView = { ...tlClamp(geo, v), total: geo.total, cw: geo.cw };
+    cx?.notify?.();
+    return true;
+  }
+  // Where the buttons and keys zoom about: the focus range, else the selected step (or turn)
+  // when it is in view, else the middle of what is in view. In px of the strip.
+  tlAnchor() {
+    const L = this.tlLayout().L;
+    const cw = L.cw;
+    const r = this.tlRangeBox?.(L);
+    if (r) return (r.x0 + r.x1) / 2;
+    const b = this.tlSelBox(L);
+    if (b && b.x1 >= 0 && b.x0 <= cw) return (b.x0 + b.x1) / 2;
+    return cw / 2;
+  }
+  // The selected step's bar in the view ({ x0, x1 }), or its turn's when it has no bar.
+  tlSelBox(L) {
+    const ti = L.index.get(this.sel);
+    if (ti == null) return null;
+    const T = tlBox(L, ti);
+    const h = this.tlMemo?.heads?.[ti];
+    const sk = this.ledgerSel();
+    const it = sk !== this.sel ? h?.items?.find((x) => x.key === sk) : null;
+    const b = it?.lane ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+    return b ? { x0: b.x0, x1: b.x1 } : { x0: T.x, x1: T.x + T.w };
+  }
+  // - and = (or the buttons): half or twice the zoom, the anchor put in the middle. w: the whole
+  // session. z: the focus range (step 5), else the selected turn, fills most of the strip.
+  tlZoom(f, cx) {
+    const L = this.tlLayout().L;
+    const at = this.tlAnchor();
+    return this.setTlView(tlZoomAt(L.geo, L, L.z * f, at, L.cw / 2), cx);
+  }
+  tlFit(cx) { return this.setTlView({ z: 1, x0: 0 }, cx); }
+  tlZoomTo(cx) {
+    const L = this.tlLayout().L;
+    const r = this.tlRangeBox?.(L);
+    const ti = L.index.get(this.sel);
+    const T = r ? null : ti != null ? tlBox(L, ti) : null;
+    const [a, b] = r ? [r.x0, r.x1] : T ? [T.x, T.x + T.w] : [0, L.cw];
+    const z = L.z * ((0.8 * L.cw) / Math.max(1, b - a));
+    return this.setTlView(tlZoomAt(L.geo, L, z, (a + b) / 2, L.cw / 2), cx);
+  }
+  // A selection that moved off the zoomed strip (j, k, f, m) brings it into the middle.
+  tlFollow() {
+    if (!this.timelineShown() || !this.tlView || this.tlView.z <= 1) return;
+    const L = this.tlLayout().L;
+    const b = this.tlSelBox(L);
+    if (!b || (b.x0 >= 0 && b.x1 <= L.cw)) return;
+    this.tlView = { ...tlClamp(L.geo, { z: L.z, x0: L.x0 + (b.x0 + b.x1) / 2 - L.cw / 2 }), total: L.total, cw: L.cw };
+  }
+  // A sideways swipe, or Shift and the wheel, pans; a swipe up or down does nothing, and does
+  // not reach the ledger.
+  tlWheel(e, cx) {
+    cx?.stop_propagation?.();
+    let dx = Number(e?.delta?.x) || 0;
+    if (!dx && e?.modifiers?.shift) dx = Number(e?.delta?.y) || 0;
+    if (!dx) return;
+    const L = this.tlLayout().L;
+    if (L.z <= 1) return;
+    this.setTlView({ z: L.z, x0: L.x0 - dx / this.zoom() }, cx);
+  }
+  // A pinch zooms about the moment under the pointer.
+  tlPinch(e, cx) {
+    cx?.stop_propagation?.();
+    const d = Number(e?.delta) || 0;
+    const lx = e?.local_position?.x;
+    if (!d || lx == null) return;
+    const L = this.tlLayout().L;
+    const at = lx / this.zoom();
+    this.setTlView(tlZoomAt(L.geo, L, L.z * (1 + d), at), cx);
+  }
+  // The bar under the lanes, while zoomed: a press puts the view's middle there, and a drag
+  // from it pans (the moves and the release are caught on the Trajectory's body).
+  tlMapPress(e, cx) {
+    cx?.stop_propagation?.();
+    const lx = e?.local_position?.x;
+    if (lx == null) return;
+    const zf = this.zoom();
+    this.tlDrag = { kind: "map", left: (Number(e.position?.x) || 0) - lx };
+    this.tlMapTo(lx / zf, cx);
+  }
+  tlMapTo(x, cx) {
+    const L = this.tlLayout().L;
+    const f = (x / L.cw) * L.total;
+    this.setTlView({ z: L.z, x0: f * L.z - L.cw / 2 }, cx);
+  }
+  // A move over the Trajectory's body while a drag on the timeline is held.
+  tlDragMove(e, cx) {
+    const d = this.tlDrag;
+    if (!d || e?.position?.x == null) return;
+    const x = (e.position.x - d.left) / this.zoom();
+    if (d.kind === "map") this.tlMapTo(x, cx);
+  }
+  tlDragEnd(_e, cx) {
+    if (!this.tlDrag) return;
+    this.tlDrag = null;
+    cx?.notify?.();
   }
   // b, or the heading's timeline button.
   toggleTimeline() { this.tlHidden = !this.tlHidden; return true; }
@@ -3801,19 +3938,20 @@ export default class Threads extends View {
     if (PAINT && typeof win?.paint_path === "function" && spans.length) {
       try {
         let b = PAINT.PathBuilder.fill();
-        for (const [a, z] of spans) b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+        for (const [a, z] of spans) if (z > 0 && a < cw) b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
         const fill = typeof PAINT.Background?.solid === "function" ? PAINT.Background.solid(color) : color;
         return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
       } catch { /* the divs below */ }
     }
-    const few = spans.length > 60 ? coarse(spans.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : spans;
+    const shown = spans.filter(([a, z]) => z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const few = shown.length > 60 ? coarse(shown.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : shown;
     return div().id(id).absolute().top(0).left(0).size_full()
-      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(Math.max(0, a)).w(Math.max(1, z - a)).rounded(1).bg(color)));
+      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)));
   }
   // The breaks between turns, hatched: 45 degree lines 5 px apart inside each break 4 px or
   // wider, one stroked path; a faint fill where Herdr has no stroked path.
   hatchLayer(gaps, color, cw, h) {
-    const wide = gaps.filter(([a, z]) => z - a >= 4);
+    const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
     if (!wide.length) return null;
     const win = globalThis.window;
     if (STROKE && typeof win?.paint_path === "function") {
@@ -3852,8 +3990,8 @@ export default class Threads extends View {
     const H = 3 * TL_LANE;
     const kids = [];
     const ti = L.index.get(this.sel);
-    const T = ti != null ? L.turns[ti] : null;
-    if (T) kids.push(div().absolute().top(0).h_full().left(T.x).w(Math.max(1, T.w)).bg(t.hover));
+    const T = ti != null ? tlBox(L, ti) : null;
+    if (T && T.x + T.w >= 0 && T.x <= cw) kids.push(div().absolute().top(0).h_full().left(Math.max(0, T.x)).w(Math.max(1, Math.min(cw, T.x + T.w) - Math.max(0, T.x))).bg(t.hover));
     const hatch = this.hatchLayer(L.gaps, t.border, cw, H);
     if (hatch) kids.push(hatch);
     const colour = (k) => (k === "sub" ? alpha(ink.tools, SUB_ALPHA) : ink[k] ?? t.dim);
@@ -3872,17 +4010,24 @@ export default class Threads extends View {
     if (T && sk !== this.sel) {
       const h = heads[ti];
       const it = h?.items?.find((x) => x.key === sk);
-      const wall = h?.going && h.t0 != null ? Math.max(h.span ?? 0, Date.now() - h.t0) : (h?.total ?? h?.span ?? 0);
-      const b = it?.lane ? itemBox(it, T.x, T.w, wall, L.scale, h.items.length) : null;
-      if (b) {
+      const b = it?.lane ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+      if (b && b.x1 >= 0 && b.x0 <= cw) {
         const li = TL_LANES.indexOf(it.lane);
         const top = li * TL_LANE + (b.track ? 8 : 2) - 2;
         kids.push(div().absolute().left(b.x0 - 2).w(b.x1 - b.x0 + 4).top(top).h((b.track ? 6 : 12) + 4).rounded(2).border_1().border_color(t.foreground));
       }
     }
-    const lanes = div().id("th-tl-lanes").relative().w(cw).h(H).cursor_pointer()
+    const lanes = div().id("th-tl-lanes").relative().w(cw).h(H).cursor_pointer().overflow_hidden()
       .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
       .children(kids);
+    // While zoomed, the bar under the lanes: the whole session, and the part in view.
+    const zoomed = L.z > 1;
+    const a = zoomed && L.total > 0 ? (L.x0 / L.z / L.total) * cw : 0;
+    const mw = zoomed && L.total > 0 ? Math.max(6, (cw / L.z / L.total) * cw) : cw;
+    const map = div().id("th-tl-map").relative().w(cw).h(TL_PB).when(zoomed, (el) => el.cursor_pointer()
+      .on_mouse_down("left", (e, cx) => this.tlMapPress(e, cx))
+      .child(div().absolute().top(2).left(0).w(cw).h(3).rounded(2).bg(alpha(t.foreground, 0.07)))
+      .child(div().id("th-tl-map-view").absolute().top(1).left(Math.min(cw - mw, a)).w(mw).h(5).rounded(2).bg(alpha(t.foreground, 0.32))));
     const labels = div().relative().w(cw).h(TL_AX).overflow_hidden()
       .children(L.labels.slice(0, 80).map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center().border_l(1).border_color(t.border)
         .text_size(10.5).child(div().flex_none().text_color(t.foreground).child(l.text))
@@ -3896,7 +4041,10 @@ export default class Threads extends View {
       .bg(alpha(t.foreground, 0.025))
       .child(v_flex().flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
         .child(name("input", "Input")).child(name("model", "Model")).child(name("tools", "Tools")))
-      .child(v_flex().flex_none().w(cw).pt(TL_PT).child(labels).child(ticks).child(div().h(TL_LT)).child(lanes));
+      .child(v_flex().id("th-tl-area").flex_none().w(cw).pt(TL_PT)
+        .on_scroll_wheel((e, cx) => this.tlWheel(e, cx))
+        .on_pinch((e, cx) => this.tlPinch(e, cx))
+        .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map));
   }
 
   // A turn's heading: its number and clock time (with the day when it is not today) at the
@@ -4946,7 +5094,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || /^(tf|scale):/.test(name)) return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^(tf|scale):/.test(name)) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));

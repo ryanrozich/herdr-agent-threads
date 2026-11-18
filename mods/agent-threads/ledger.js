@@ -415,30 +415,34 @@ export function detailOf(r) {
 // scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
 // time between turns is folded into a fixed break, hatched; "steps", where every step gets
 // the same width. heads are the ledger's headings in order (each carries its turn's steps,
-// items, from ledgerTurn), so the layout walks the turns, and the steps only of a turn wide
-// enough to draw them: a turn under 2 px is one span per lane it has. Bars that touch are
-// joined, so what is drawn is bounded by the strip's width, not the session's length.
+// items, from ledgerTurn).
+// It is made in two parts. timelineGeo places the turns with the whole session fitted to the
+// strip (it walks the turns, not the steps). timelineLayout draws a view of that: zoomed z
+// times and x0 px in (in zoomed px), the steps only of the turns in view, and of those only a
+// turn wide enough to draw them (a turn under 2 px is one span per lane it has). Bars that
+// touch are joined, so what is drawn is bounded by the strip's width, not the session's
+// length, at any zoom.
 // A call with no result yet is a plain flat bar to the turn's end (to now while the turn
-// runs; the torn end is a later round). nowMs: the clock, for a running turn.
+// runs). nowMs: the clock, for a running turn.
 export const TL_LANES = Object.freeze(["input", "model", "tools"]);
-export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now()) {
+const wallOf = (h, nowMs) => {
+  const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+  return Number.isFinite(w) && w > 0 ? w : 0;
+};
+export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   const n = heads.length;
-  const out = { cw, scale, turns: [], gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], index: new Map() };
-  if (!n || !(cw > 0)) return out;
+  const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0 };
+  if (!n || !(cw > 0)) return geo;
   const GAP = cw < 700 ? 14 : 30;
   const MIN = cw < 700 ? 30 : 48;
   const gap = n > 1 ? Math.min(GAP, (0.15 * cw) / (n - 1)) : 0;
   const min = Math.min(MIN, (0.3 * cw) / n);
   const target = Math.max(1, cw - gap * (n - 1));
-  const wallOf = (h) => {
-    const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
-    return Number.isFinite(w) && w > 0 ? w : 0;
-  };
-  const walls = heads.map(wallOf);
+  const walls = heads.map((h) => wallOf(h, nowMs));
+  for (const h of heads) geo.steps += Math.max(1, h.items?.length ?? 1);
   let widths;
   if (scale === "steps") {
-    const total = heads.reduce((a, h) => a + Math.max(1, h.items?.length ?? 1), 0);
-    const sw = target / total;
+    const sw = target / geo.steps;
     widths = heads.map((h) => Math.max(1, h.items?.length ?? 1) * sw);
   } else {
     // The px per ms that fills the strip, each turn at least min wide: the turns held at min
@@ -462,24 +466,75 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now()) {
     // No turn has a length: each gets an even share.
     if (!(all > 0)) widths = walls.map(() => target / n);
   }
+  let x = 0;
+  heads.forEach((h, ti) => {
+    geo.turns.push({ x, w: widths[ti], key: h.key, n: h.n });
+    geo.index.set(h.key, ti);
+    x += widths[ti] + (ti < n - 1 ? gap : 0);
+  });
+  geo.walls = walls;
+  geo.gap = gap;
+  geo.total = x;
+  return geo;
+}
+// How far the timeline zooms: until four steps fill it (the reference's limit), so it grows
+// with the session.
+export function tlMaxZoom(geo) { return Math.max(1, (geo?.steps ?? 0) / 4); }
+// A view kept inside the session: z from 1 to the limit, x0 from 0 to the zoomed end.
+export function tlClamp(geo, view) {
+  const z = Math.min(tlMaxZoom(geo), Math.max(1, Number(view?.z) || 1));
+  const room = Math.max(0, (geo?.total ?? 0) * z - (geo?.cw ?? 0));
+  return { z, x0: Math.min(room, Math.max(0, Number(view?.x0) || 0)) };
+}
+// The view zoomed to z about a point px from the strip's left: the moment under it stays under
+// it (a pinch), or with put, moves to put px (the buttons and keys put it in the middle).
+export function tlZoomAt(geo, view, z, at, put = at) {
+  const v = tlClamp(geo, view);
+  const f = (at + v.x0) / v.z;
+  const nz = tlClamp(geo, { z, x0: 0 }).z;
+  return tlClamp(geo, { z: nz, x0: f * nz - put });
+}
+// A turn's box in the view: { x, w } in px of the strip.
+export function tlBox(L, ti) {
+  const t = L.turns[ti];
+  return t ? { x: t.x * L.z - L.x0, w: t.w * L.z } : null;
+}
+export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null) {
+  const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
+  const { z, x0 } = tlClamp(G, view);
+  const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], from: 0, to: -1 };
+  const n = G.turns.length;
+  if (!n) return out;
+  const walls = G.walls;
   // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch.
-  const add = (k, x0, x1) => {
+  const add = (k, a, b) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
     const last = list[list.length - 1];
-    if (last && x0 <= last[1] + 0.5) { if (x1 > last[1]) last[1] = x1; return; }
-    list.push([x0, x1]);
+    if (last && a <= last[1] + 0.5) { if (b > last[1]) last[1] = b; return; }
+    list.push([a, b]);
   };
-  let x = 0;
+  // The turns in view, and a margin: the first found by halving, since turns are in order.
+  const M = 40;
+  const left = (x0 - M) / z;
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; const t = G.turns[m]; if (t.x + t.w + G.gap < left) lo = m + 1; else hi = m; }
+  out.from = lo;
   let labelEnd = -Infinity;
   let failEnd = -Infinity;
-  heads.forEach((h, ti) => {
-    const w = widths[ti];
-    out.turns.push({ x, w, key: h.key, n: h.n });
-    out.index.set(h.key, ti);
-    if (w >= 24 && x >= labelEnd) {
-      out.labels.push({ x, w, text: `${h.n}`, total: w >= 120 ? (h.going ? "running" : durText(walls[ti]) || null) : null });
-      labelEnd = x + Math.max(24, Math.min(w, 120));
+  for (let ti = lo; ti < n; ti++) {
+    const t = G.turns[ti];
+    const x = t.x * z - x0;
+    if (x > cw + M) break;
+    out.to = ti;
+    const h = heads[ti];
+    const w = t.w * z;
+    // The number at the turn's start, or at the strip's left edge while the turn runs past it.
+    const lx = Math.max(x, Math.min(0, x + w - 24));
+    if (x + w - lx >= 24 && lx >= labelEnd) {
+      out.labels.push({ x: lx, w: x + w - lx, text: `${h.n}`, total: x + w - lx >= 120 ? (h.going ? "running" : durText(walls[ti]) || null) : null });
+      labelEnd = lx + Math.max(24, Math.min(x + w - lx, 120));
     }
     if (w < 2) {
       const c = h.cnt ?? {};
@@ -491,31 +546,35 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now()) {
     } else {
       for (const it of h.items ?? []) {
         const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
-        if (!b || !it.sk) continue;
+        if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
         add(it.sk[b.track ? 1 : 0], b.x0, b.x1);
         if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step
-      // numbers.
+      // numbers. Only those in view.
       if (w >= 120) {
         if (scale === "steps") {
           const len = h.items.length;
           const every = Math.max(1, Math.ceil(36 / (w / len)));
-          for (let i = 0; i < len; i += every) out.ticks.push({ x: x + ((i + 0.5) * w) / len, text: `${i + 1}`, step: true });
+          for (let i = 0; i < len; i += every) { const tx = x + ((i + 0.5) * w) / len; if (tx >= -M && tx <= cw) out.ticks.push({ x: tx, text: `${i + 1}`, step: true }); }
         } else if (walls[ti] > 0) {
           const pps = w / walls[ti];
           const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000).find((v) => v * pps >= 62);
-          for (let k = 1; step && k * step < walls[ti] && k * step * pps < w - 34; k++) out.ticks.push({ x: x + k * step * pps, text: startText(k * step) });
+          // From the first tick in view.
+          const k0 = step ? Math.max(1, Math.floor(-x / (step * pps))) : 1;
+          for (let k = k0; step && k * step < walls[ti] && k * step * pps < w - 34; k++) {
+            const tx = x + k * step * pps;
+            if (tx > cw) break;
+            if (tx >= -M) out.ticks.push({ x: tx, text: startText(k * step) });
+          }
         }
       }
     }
-    x += w;
     if (ti < n - 1) {
-      out.gaps.push([x, x + gap, heads[ti + 1].t0 != null && h.t0 != null ? heads[ti + 1].t0 - (h.t0 + walls[ti]) : null]);
-      x += gap;
+      const next = heads[ti + 1];
+      out.gaps.push([x + w, x + w + G.gap * z, next.t0 != null && h.t0 != null ? next.t0 - (h.t0 + walls[ti]) : null]);
     }
-  });
-  out.total = x;
+  }
   return out;
 }
 // One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
@@ -532,24 +591,30 @@ export function itemBox(it, tx, w, wall, scale, len) {
   return { x0, x1: Math.max(x0 + 3, Math.min(end, tx + w)), track: it.track };
 }
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
-// or the turn's heading when no step's bar is within 4 px). heads in the layout's order.
+// or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in
+// px of the view (zoomed and panned).
 export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const T = L.turns;
   if (!T.length) return null;
+  const z = L.z ?? 1;
+  const x0 = L.x0 ?? 0;
+  const fx = (x + x0) / z;
   let lo = 0;
   let hi = T.length - 1;
-  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= x) lo = m; else hi = m - 1; }
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= fx) lo = m; else hi = m - 1; }
   const t = T[lo];
   const h = heads[lo];
   if (!h || h.key !== t.key) return null;
   // Past the turn into its break: the nearer turn.
-  if (x > t.x + t.w && T[lo + 1] && T[lo + 1].x - x < x - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x, lane, nowMs);
-  const wall = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+  if (fx > t.x + t.w && T[lo + 1] && T[lo + 1].x - fx < fx - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x * z - x0, lane, nowMs);
+  const wall = wallOf(h, nowMs);
+  const tx = t.x * z - x0;
+  const tw = t.w * z;
   let best = null;
   let bestD = 4;
   for (const it of h.items ?? []) {
     if (lane && it.lane !== lane) continue;
-    const b = itemBox(it, t.x, t.w, wall, L.scale, h.items.length);
+    const b = itemBox(it, tx, tw, wall, L.scale, h.items.length);
     if (!b) continue;
     const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
     if (d < bestD || (d === 0 && bestD === 0 && it.track === 1)) { best = it; bestD = d; }
