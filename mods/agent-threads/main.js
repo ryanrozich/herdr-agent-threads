@@ -6635,17 +6635,18 @@ export default class Threads extends View {
     const d = e.draft;
     const { note } = this.cardKit(t);
     const label = (text) => this.ruleLabel(t, text);
-    const firstLine = note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
+    // A function: an element is used once, and both hints below hold this line.
+    const firstLine = () => note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
     const hints = {
       name: note("It shows in the list, and in the tooltip on a message it matched."),
-      prefix: v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine),
+      prefix: v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine()),
       pattern: v_flex().gap(2)
         .child(h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
           .child(div().flex_none().child("A JavaScript regular expression with a group named sender. Capitals count."))
           .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
             .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
             .child("Reference")))
-        .child(firstLine),
+        .child(firstLine()),
       example: note("A prompt this rule should match. Type any prompt here to try the rule."),
     };
     const field = (k) => this.ruleField(t, e, k, SENDER_FIELDS.find((x) => x[0] === k)[1], hints[k]);
