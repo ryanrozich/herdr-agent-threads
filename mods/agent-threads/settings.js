@@ -126,7 +126,8 @@ function riskyShape(p) {
   for (let i = 0; i < p.length; i++) {
     const c = p[i];
     if (c === "\\") { i++; if (stack.length && /[dDwWsS]/.test(p[i] ?? "") && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
-    if (c === "[") { let j = i + 1; if (p[j] === "^") j++; if (p[j] === "]") j++; while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; } i = j; if (stack.length && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
+    // In JavaScript "[]" and "[^]" are whole classes: a "]" right after "[" or "[^" ends it.
+    if (c === "[") { let j = i + 1; if (p[j] === "^") j++; while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; } i = j; if (stack.length && /[+*{]/.test(p[i + 1] ?? "")) stack[stack.length - 1].q = true; continue; }
     if (c === "(") { stack.push({ q: false, alt: false }); continue; }
     if (c === "|") { if (stack.length) stack[stack.length - 1].alt = true; continue; }
     if (c === ")") {
@@ -215,9 +216,9 @@ export function senderCost(pattern, room = RULE_TEXT, stop = Infinity) {
       return { kind: look ? "look" : "group", alt, min: 1, max: 1 };
     }
     if (c === "[") {
+      // "[]" (nothing) and "[^]" (any character) are whole classes in JavaScript.
       let j = i + 1;
       if (p[j] === "^") j++;
-      if (p[j] === "]") j++;
       while (j < p.length && p[j] !== "]") { if (p[j] === "\\") j++; j++; }
       i = j + 1;
       return { kind: "char", min: 1, max: 1 };
@@ -438,15 +439,26 @@ export const SLOW_LONG = "too slow on long text; disabled";
 // prompt (senderCost), or it is past the 20th. Each kept rule: { n, label (its name, else
 // its prefix or pattern), re, named (true: the match names the sender) }. No clock is read,
 // so the same file always gives the same rules. No rule ships.
-export function parseSenders(raw) {
+export function parseSenders(raw, cost = senderCost) {
   const rules = [];
   const notes = [];
   if (raw == null) return { rules, notes };
   if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
   let spent = 0;
-  const keep = (rule, cost) => {
-    if (spent + cost > SENDER_TOTAL) return notes.push(`Sender rule ${rule.n}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
-    spent += cost;
+  // The step count, or why it could not be had: an error in the counter refuses this one
+  // rule and leaves the others alone.
+  const counted = (source) => {
+    try {
+      const c = cost(source, RULE_TEXT, SENDER_STEPS);
+      if (!Number.isFinite(c?.open) || !(c?.steps >= 0)) throw new Error("no count");
+      return c;
+    } catch {
+      return { why: "could not be checked; ignored" };
+    }
+  };
+  const keep = (rule, steps) => {
+    if (spent + steps > SENDER_TOTAL) return notes.push(`Sender rule ${rule.n}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
+    spent += steps;
     rules.push(rule);
   };
   raw.forEach((r, i) => {
@@ -469,16 +481,19 @@ export function parseSenders(raw) {
       // The name runs to the text after it, or to a space or the end when it ends the prefix.
       const name = parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
       const source = `^${esc(parts[0])}${name}${esc(parts[1])}`;
-      keep({ n, label, re: new RegExp(source), named: true }, senderCost(source).steps);
+      const c = counted(source);
+      if (c.why) return no(c.why);
+      keep({ n, label, re: new RegExp(source), named: true }, c.steps);
       return;
     }
     const shape = patternShape(pattern, "");
     if (shape.why) return no(shape.why);
     if (!senderGroup(pattern)) return no("pattern has no (?<sender>...) group");
-    const cost = senderCost(pattern, RULE_TEXT, SENDER_STEPS);
-    if (cost.open > SENDER_OPEN) return no(`${cost.open} open-ended repeats (*, + or {n,}); ${SENDER_OPEN} at most`);
-    if (cost.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
-    keep({ n, label, re: shape.re, named: true }, cost.steps);
+    const c = counted(pattern);
+    if (c.why) return no(c.why);
+    if (c.open > SENDER_OPEN) return no(`${c.open} open-ended repeats (*, + or {n,}); ${SENDER_OPEN} at most`);
+    if (c.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
+    keep({ n, label, re: shape.re, named: true }, c.steps);
   });
   return { rules, notes };
 }
