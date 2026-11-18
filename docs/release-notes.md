@@ -1,4 +1,4 @@
-# Agent Threads 1.0 (draft)
+# Agent Threads 1.0.0
 
 The first release of Agent Threads, a [Herdr](https://herdr.dev) mod. It opens a pane beside a coding agent's terminal and shows the session as a chat, so you can find an earlier answer without scrolling back through the terminal. It reads the session on your computer and sends nothing over the network.
 
@@ -14,7 +14,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 - The Turn card (`i`, or rest the pointer on the info icon) shows a turn's model and effort, tokens, tool calls and cache hit.
 - Drag across any turn's text, open or closed, to highlight it. `s` shows the reply's Markdown source for selecting.
 - The top left of the pane shows whether the agent is working, needs you, is done or has exited, and a click there goes to the terminal. Search, Pinned and Settings sit at the top right while the pointer is in the pane.
-- At the bottom the list follows new turns. Scroll up and it stays still; a Jump to latest pill brings you back.
+- At the bottom the list follows new turns. Scroll up and it stays still; a Jump to latest pill brings you back. Highlighting text also stops following, so a reply coming in does not move the text from under the pointer.
 
 ## The rail
 
@@ -63,7 +63,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 - `,` opens the settings card, one page that scrolls, with a strip of the list left in view under it. A change shows in the list behind the card. The arrows, `j` and `k`, `Page Up`, `Page Down`, `Space`, `Home` and `End` scroll the card (Herdr 0.1.15 or newer), and its scrollbar shows all the time when there is more below.
 - Messages: text size, the user message colour, Shorten long messages and how many lines it shows, and always show time.
 - Agent messages: show agent messages, agent messages on the rail, and the agent message colour.
-- Layout: the reading width and whether the pane keeps it, rail side, and key hints at the bottom.
+- Layout: the reading width and whether the pane keeps it, rail side, and key hints at the bottom (off by default).
 - Links and keys: link rules and the quote key. File: the settings file's path. Then Reset to defaults.
 - User messages are blue by default and agent messages amber. A colour you already chose is kept.
 - `Shift-W` steps the reading width through Comfortable, Wide and Full.
