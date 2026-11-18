@@ -921,6 +921,7 @@ export function rowHeight(p, r, more = 0, line = readType().line, agent = false)
 
 // A command row's chip and its argument lines: the chip takes at most 45% of the line
 // and the arguments wrap in the space to its right.
+// hard: rowLines' hard breaks in the arguments, for the selectable HTML.
 export function commandLayout(name, args, width, limit, agent = false, size = TEXT_SIZE, chars = MEASURE) {
   const rt = readType(size);
   const tw = rowTextWidth(width, agent, size, chars);
@@ -930,7 +931,7 @@ export function commandLayout(name, args, width, limit, agent = false, size = TE
   const chipW = Math.min(maxChip, Math.ceil([...label].length * ROW.CHIP_CHAR + 12));
   const per = Math.floor((tw - chipW - 6) / rt.prompt);
   const a = args ? rowLines(args, limit, per) : { lines: [], cut: false };
-  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length) };
+  return { label, chipW, lines: a.lines, cut: a.cut, rows: Math.max(1, a.lines.length), hard: a.hard };
 }
 
 // The lines a collapsed row shows: { p, r, prompt, reply, chip?, kinds?, q }. kinds, when
@@ -944,7 +945,7 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   let chip = null;
   if (cmd) {
     chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size, chars);
-    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut };
+    pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut, hard: chip.hard };
   } else {
     pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {

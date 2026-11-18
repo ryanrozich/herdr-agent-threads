@@ -494,6 +494,19 @@ test("a closed bubble's wrapped lines keep their spaces in the selectable HTML",
     .replace(/<br>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   expect(drawn("th-sp-p-0:1")).toBe(prompt);
   expect(drawn("th-sp-p-0:2")).toBe(`Open ${path} next`);
+  // A slash command's arguments, beside its chip: the token cut across lines joins back whole
+  // ("medi an-of-three.js" in review).
+  const { v: w, cx: wx } = await scripted([
+    { k: "p", o: "human", cmd: true, t: `/review-pr ${path} now`, ts: at(0) }, { k: "t", t: "Reviewed." }, { k: "d", ms: 1000, ts: at(1) },
+  ]);
+  w.width = 380;
+  settleRows(w, wx);
+  const cs = w.rows().find((r) => r.key === "0:1").shape;
+  expect(cs.chip?.label).toBe("/review-pr");
+  expect(cs.prompt.some((l) => l.length > 0 && !l.includes(" ") && path.includes(l) && l !== path)).toBe(true);
+  views.length = 0;
+  draw(w, wx);
+  expect(drawn("th-sp-p-0:1")).toBe(`${path} now`);
 });
 
 test("a prompt answered together with a hidden agent message borrows its reply (F2)", async () => {
