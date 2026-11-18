@@ -4,7 +4,7 @@
 import { test, expect, mock } from "bun:test";
 
 mock.module("herdr", () => ({ writeTextFile: async () => null }));
-const { parseSenders, parseExtras, senderCost, SENDER_OPEN, SENDER_STEPS } = await import("../mods/agent-threads/settings.js");
+const { parseSenders, parseExtras, senderCost, SENDER_OPEN, SENDER_STEPS, SENDER_TOTAL } = await import("../mods/agent-threads/settings.js");
 const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT } = await import("../mods/agent-threads/core/turns.js");
 
 const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
@@ -145,6 +145,22 @@ test("the step count is an upper bound on the prompt's head, from the pattern al
   expect(senderCost(`^(?<sender>\\w)${"\\s?".repeat(19)}Z`).steps).toBeGreaterThan(SENDER_STEPS);
   // Open-ended repeats are counted inside groups and lookarounds too.
   expect(senderCost("^(?=a*)(?:b+|c*)(?<sender>d{2,})").open).toBe(4);
+});
+
+test("the rules together have a step budget, so one prompt costs a bounded time whatever the rules", () => {
+  expect(SENDER_TOTAL).toBe(2e6);
+  // Each of these is kept alone (under a million steps), but not twenty of them.
+  const near = `^(?<sender>\\s)${"\\s?".repeat(18)}Z`;
+  const one = senderCost(near).steps;
+  expect(one).toBeLessThan(SENDER_STEPS);
+  const { rules, notes } = parseSenders(Array.from({ length: 5 }, () => ({ pattern: near })));
+  const fit = Math.floor(SENDER_TOTAL / one);
+  expect(rules.map((r) => r.n)).toEqual(Array.from({ length: fit }, (_, k) => k + 1));
+  expect(notes[0]).toBe(`Sender rule ${fit + 1}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
+  // Plain rules use little of it: twenty seat-shaped rules all fit.
+  const seats = parseSenders(Array.from({ length: 20 }, (_, k) => ({ pattern: `^From (?<sender>seat${k}|[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]):` })));
+  expect(seats.notes).toEqual([]);
+  expect(seats.rules.length).toBe(20);
 });
 
 test("a rule sees the first RULE_TEXT characters of the prompt's first line, in one try a rule", () => {
@@ -311,12 +327,12 @@ test("new rules mark a session already read again, and each changed turn takes a
   // A prompt read after the change is marked as it is read.
   apply(s, { k: "p", o: "human", t: "night-owl hourly 2026-11-18T02:00:00Z: quiet", ts: at(30) });
   expect(s.turns[3]).toMatchObject({ agent: true, sender: { name: "night-owl", rule: 1 } });
-  // In slices: a deadline already past stops after 64 turns, and the next call goes on.
+  // In slices: a deadline already past stops after each turn, and the next call goes on.
   const big = session(Array.from({ length: 150 }, (_, i) => (i % 2 ? FROM : `Question ${i}`)));
   const i1 = remarkSenders(big, rules, 0, 0);
-  expect(i1).toBe(64);
+  expect(i1).toBe(1);
   const i2 = remarkSenders(big, rules, i1, 0);
-  expect(i2).toBe(128);
+  expect(i2).toBe(2);
   expect(remarkSenders(big, rules, i2)).toBe(150);
   expect(big.turns.filter((t) => t.agent).length).toBe(75);
 });

@@ -196,7 +196,8 @@ export function markTurn(turn, rules) {
 }
 
 // New sender rules for a session already read: its typed turns are marked again from
-// turns[from], until the clock (performance.now) passes until, checked every 64 turns.
+// turns[from], until the clock (performance.now) passes until, checked after each turn (a
+// turn costs at most the rules' step budget, settings.js SENDER_TOTAL).
 // Each turn whose sender changed takes the session's next version (turn.v), so a view's
 // rows for it are built again. Returns where it stopped (turns.length when done).
 export function remarkSenders(s, rules, from = 0, until = Infinity) {
@@ -207,7 +208,7 @@ export function remarkSenders(s, rules, from = 0, until = Infinity) {
   while (i < s.turns.length) {
     if (markTurn(s.turns[i], rules)) { s.turns[i].v = v; changed = true; }
     i++;
-    if (until !== Infinity && (i & 63) === 0 && (globalThis.performance?.now?.() ?? Date.now()) > until) break;
+    if (until !== Infinity && (globalThis.performance?.now?.() ?? Date.now()) > until) break;
   }
   if (changed) s.version = v;
   return i;

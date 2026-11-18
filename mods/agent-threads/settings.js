@@ -310,6 +310,8 @@ export function senderCost(pattern, room = RULE_TEXT, stop = Infinity) {
 // The most open-ended repeats a sender pattern may have, and the most steps (senderCost).
 export const SENDER_OPEN = 3;
 export const SENDER_STEPS = 1e6;
+// The most steps all sender rules together may take on one prompt: rules past it are dropped.
+export const SENDER_TOTAL = 2e6;
 
 // A rule's type: the icon the Link rules page shows for it, and nothing else.
 export const LINK_TYPES = Object.freeze(["custom", "ticket", "pull-request"]);
@@ -431,6 +433,8 @@ export const SLOW_LONG = "too slow on long text; disabled";
 // "ab", with no sender), holds {name} twice or has under 2 characters besides it, a pattern
 // is not valid, has no sender group, fails a check link patterns have (patternShape), has
 // more than SENDER_OPEN open-ended repeats, or could take more than SENDER_STEPS steps on a
+// prompt, or would take the rules so far past SENDER_TOTAL steps between them (senderCost;
+// a prefix rule counts too), so one prompt costs a bounded time whatever the rules
 // prompt (senderCost), or it is past the 20th. Each kept rule: { n, label (its name, else
 // its prefix or pattern), re, named (true: the match names the sender) }. No clock is read,
 // so the same file always gives the same rules. No rule ships.
@@ -439,6 +443,12 @@ export function parseSenders(raw) {
   const notes = [];
   if (raw == null) return { rules, notes };
   if (!Array.isArray(raw)) return { rules, notes: ["senders is not a list; no sender rules"] };
+  let spent = 0;
+  const keep = (rule, cost) => {
+    if (spent + cost > SENDER_TOTAL) return notes.push(`Sender rule ${rule.n}: the rules before it and this one could take over 2 million steps between them on a prompt; ignored`);
+    spent += cost;
+    rules.push(rule);
+  };
   raw.forEach((r, i) => {
     const n = i + 1;
     const no = (why) => notes.push(`Sender rule ${n}: ${why}`);
@@ -458,7 +468,8 @@ export function parseSenders(raw) {
       const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // The name runs to the text after it, or to a space or the end when it ends the prefix.
       const name = parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
-      rules.push({ n, label, re: new RegExp(`^${esc(parts[0])}${name}${esc(parts[1])}`), named: true });
+      const source = `^${esc(parts[0])}${name}${esc(parts[1])}`;
+      keep({ n, label, re: new RegExp(source), named: true }, senderCost(source).steps);
       return;
     }
     const shape = patternShape(pattern, "");
@@ -467,7 +478,7 @@ export function parseSenders(raw) {
     const cost = senderCost(pattern, RULE_TEXT, SENDER_STEPS);
     if (cost.open > SENDER_OPEN) return no(`${cost.open} open-ended repeats (*, + or {n,}); ${SENDER_OPEN} at most`);
     if (cost.steps > SENDER_STEPS) return no(`could take too long on a prompt (over a million steps on its first ${RULE_TEXT} characters): start it with ^, or use fewer repeats`);
-    rules.push({ n, label, re: shape.re, named: true });
+    keep({ n, label, re: shape.re, named: true }, cost.steps);
   });
   return { rules, notes };
 }
