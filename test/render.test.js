@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -8114,8 +8114,13 @@ test("the preview follows text size, both colors, the time, hidden agent message
   // The short words always, at the real text size, each bubble at most 45% of the band.
   expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent · hidden in the list", "From an agent", "From the user", "9:12 AM"]));
   expect(strsOf(c)).not.toContain("9:10 AM");
-  expect(c).toContainEqual(["opacity", 0.45]);
+  // Hidden shows in the label only: nothing in the preview is faded, so the agent's words
+  // keep their ink on the amber fill (white, 5.37:1), on light and dark themes alike.
+  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
   expect(c).toContainEqual(["bg", "#87643A"]); // amber
+  const at = c.findIndex((e) => e[0] === "bg" && e[1] === "#87643A");
+  const ink = c.slice(at).find((e) => e[0] === "text_color")[1];
+  expect(contrast(ink, "#87643A")).toBeGreaterThanOrEqual(4.5);
   expect(c).toContainEqual(["text_size", 14]);
   expect(c.filter((e) => e[0] === "max_w")).toEqual([["max_w", 198], ["max_w", 198]]);
   // 10 px above and below: the line height plus 68.
@@ -8128,7 +8133,7 @@ test("the preview follows text size, both colors, the time, hidden agent message
   v.prefs = { ...v.prefs, agentTurns: true, alwaysShowTime: true, textSize: 16, railSide: "left", agentBubbleColor: "teal" };
   c = pv();
   expect(strsOf(c)).toEqual(expect.arrayContaining(["Agent", "9:10 AM"]));
-  expect(c).not.toContainEqual(["opacity", 0.45]);
+  expect(c.filter((e) => e[0] === "opacity")).toEqual([]);
   expect(c).toContainEqual(["bg", "#36706D"]);
   expect(c).toContainEqual(["text_size", 16]);
   expect(c).toContainEqual(["left", 16]);
@@ -8472,6 +8477,31 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, 36 p
   const narrow = strsOf(own(c, "th-set-path")).at(-1);
   expect(narrow.startsWith("…/")).toBe(true);
   expect(narrow.length).toBeLessThan(full.length);
+});
+
+test("the width line under Width ends on the controls' right edge: it fills its row, the column centered in the row's width", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.width = 545; v.paneW = 573; v.rootH = 700;
+  v.action("settings", cx);
+  v.setTab = "chat";
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  for (const [paneW, pad] of [[573, 16], [330, 12]]) {
+    v.paneW = paneW;
+    const w = v.setCardW();
+    const c = cardOf(v);
+    expect(own(c, `th-set-rows-chat`)).toContainEqual(["px", pad]);
+    const ruler = own(c, "th-set-ruler");
+    // The line takes its row's width, as the chooser's row and the switch rows do, so no fixed
+    // width can run past them (it was 2 px over: the card's border).
+    expect(ruler).toContainEqual(["w_full"]);
+    expect(ruler[0]).toEqual(["id", "th-set-ruler"]);
+    const ws = ruler.filter((e) => e[0] === "w").map((e) => e[1]);
+    expect(ws.length).toBe(1); // the column's only
+    const row = w - 2 - 2 * pad;
+    const left = ruler.find((e) => e[0] === "left")[1];
+    expect(Math.abs(left * 2 + ws[0] - row)).toBeLessThanOrEqual(1);
+    expect(left + ws[0]).toBeLessThanOrEqual(row);
+  }
 });
 
 test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {
