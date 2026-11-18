@@ -547,6 +547,45 @@ test("under a search, a reply listed for the prompt it answered together with dr
   expect(sh.rMore).toBe(false);
 });
 
+// Review of PR 101: a search's hit is the filter's own (the reply as written, all of it), not a
+// word in the flattened text. "[code]" and " · " are the flattening's, and a hit past the first
+// 2,400 characters, in a code fence or in a link's address is still a hit, shown and marked.
+test("under a search, the reply's own text decides flat or Markdown, and a hit anywhere shows marked", async () => {
+  const fence = "Here is the fix:\n\n```js\nconst total = items.reduce((a, b) => a + b, 0);\n```\n\n- one\n- two";
+  const far = `${"plain words here ".repeat(180)}\n\nAt the end the needle shows up.`;
+  const inCode = `${"plain words here ".repeat(180)}\n\n\`\`\`js\nconst haystack = findThimble(pins);\n\`\`\``;
+  const inLink = `${"plain words here ".repeat(180)}\n\nSee [the guide](https://example.com/docs/bobbin-guide) for more.`;
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "fix the code", ts: at(0) }, { k: "t", t: fence }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "Count the items", ts: at(2) }, { k: "t", t: far }, { k: "d", ms: 1000, ts: at(3) },
+    { k: "p", o: "human", t: "Count them again", ts: at(4) }, { k: "t", t: inCode }, { k: "d", ms: 1000, ts: at(5) },
+    { k: "p", o: "human", t: "Where is it written", ts: at(6) }, { k: "t", t: inLink }, { k: "d", ms: 1000, ts: at(7) },
+  ]);
+  v.width = 400;
+  const row = (k) => v.rows().find((r) => r.key === k);
+  // M1: listed for its prompt; "code" is only in the flattening's "[code]".
+  v.setQuery("code", cx);
+  settleRows(v, cx);
+  expect(row("0:1").shape.md).toBe(fence);
+  v.setQuery("·", cx);
+  settleRows(v, cx);
+  expect(row("0:1")).toBeUndefined();
+  // M2: a hit past the first 2,400 characters, in a fence and in a link's address: flat around
+  // it, and drawn marked (the hit is a span of its own).
+  for (const [q, k] of [["needle", "0:2"], ["Thimble", "0:3"], ["bobbin", "0:4"]]) {
+    v.setQuery(q, cx);
+    settleRows(v, cx);
+    const sh = row(k).shape;
+    expect(sh.md).toBeUndefined();
+    expect(sh.reply.join(" ").toLowerCase()).toContain(q.toLowerCase());
+    rec = [];
+    draw(v, cx);
+    const drawn = rec;
+    rec = null;
+    expect(drawn.some(([n, x]) => n === "child" && x === q)).toBe(true);
+  }
+});
+
 test("a prompt answered together with a hidden agent message borrows its reply (F2)", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Summarise the failing test", ts: at(0) },
