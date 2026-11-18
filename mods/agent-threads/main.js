@@ -9,7 +9,9 @@
 // it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
 // Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
-// is its own settings file (settings.js).
+// is its own settings file (settings.js). The Link rules page hands two kinds of web address
+// to Herdr's cx.open_url (http and https only): a rule's address (Open) and MDN's regular
+// expression cheat sheet (Reference).
 //
 // Two roles, one mod:
 // - Opened with mod.open (keys.json "mod.open:agent-threads"), it is a launcher: it
@@ -56,12 +58,12 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
-  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
+  quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
@@ -168,6 +170,46 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
 const TOP_BAND = 32;
+// The settings card: at most this wide, and the heights of its fixed parts (the title, the
+// tab row and the foot), so its rows get the rest of the room.
+const CARD_W = 440;
+const CARD_HEAD = 40;
+const CARD_TABS = 36;
+const CARD_FOOT = 40;
+// Its gap to the pane's sides and bottom.
+const CARD_GAP = 12;
+// Its bands' side inset: 16 px, or 12 under a 320 px card.
+const cardPad = (w) => (w < 320 ? 12 : 16);
+// A color dot on the card, across (settings-spacing 2).
+const SWATCH = 24;
+// A text button's size: the usual, and the card's, which is the height of its rows' controls.
+const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
+const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
+// Its tabs. The Trajectory tab joins them with the Trajectory (draft PR 94).
+const SETTING_TABS = [["general", "General"], ["chat", "Chat"]];
+const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
+// The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
+// image viewer's own switch (i), and quoteKey and links are never reset.
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+// A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
+const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
+// The preview's times: 9:12 AM for yours, two minutes before for an agent's.
+const PREVIEW_AT = new Date(2000, 0, 1, 9, 12).getTime();
+// The rule editor's fields: key, label, placeholder, the most it takes.
+const RULE_FIELDS = [
+  ["name", "Name", "Ticket", 40],
+  ["description", "Description", "Optional", DESCRIPTION_MAX],
+  ["pattern", "Finds", "A pattern, such as \\bACME-(\\d+)\\b", 200],
+  ["url", "Opens", "An address, such as https://tracker.example.com/ACME-$1", 2000],
+  ["example", "Example", "Text this rule should link, such as Fixed in ACME-412.", 200],
+];
+// How long typing may stop before a rule's fault is shown (chat-look round 10).
+const REASON_PAUSE = 1500;
+// Why a change to the link rules was not written, on the card's File line.
+const RULES_NOT_JSON = "settings.json is not valid JSON, so the rule change was not saved. Fix the file first.";
+const RULES_NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const RULES_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+const REGEX_REFERENCE = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet";
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
 const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 1200 };
@@ -687,10 +729,39 @@ export default class Threads extends View {
     this.scroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
+    this.quoteInput = InputState.new({ placeholder: "", value: "q" });
+    this.quoteInput.on("change", (_e, cx) => { this.quoteTyped(cx); cx.notify(); });
+    this.quoteInput.on("focus", (_e, cx) => { this.fieldFocused = "quote"; cx.notify(); });
+    this.quoteInput.on("blur", (_e, cx) => { if (this.fieldFocused === "quote") this.fieldFocused = null; cx.notify(); });
+    this.ruleInputs = {};
+    for (const [k, , hint] of RULE_FIELDS) {
+      const inp = InputState.new({ placeholder: hint, value: "" });
+      inp.on("change", (_e, cx) => { this.ruleTyped(k, cx); cx.notify(); });
+      inp.on("focus", (_e, cx) => { this.fieldFocused = `rule-${k}`; cx.notify(); });
+      inp.on("blur", (_e, cx) => { if (this.fieldFocused === `rule-${k}`) this.fieldFocused = null; this.ruleShow(k); cx.notify(); });
+      inp.on("submit", (_e, cx) => { this.keepRule(cx); cx.notify(); });
+      this.ruleInputs[k] = inp;
+    }
     this.prefs = { ...DEFAULTS }; // settings.json, read below and watched
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
     this.settingsOpen = false;
+    // The settings card's tab ("general" or "chat") and page ("main" or "links"), and its
+    // rows' height as last drawn ({ key, h }). Not saved: it opens on Chat.
+    this.setTab = "chat";
+    this.setPage = "main";
+    this.cardBody = null;
+    // The card's quote key field: what was typed (null: nothing since it opened), and which
+    // field has the keyboard ("quote" or null), so its letters are not the panel's keys.
+    this.quoteDraft = null;
+    this.fieldFocused = null;
+    this.quoteFileNote = null;
+    this.linkList = [];
+    // The Link rules page: the rule open in the editor (null: none), the rule just deleted
+    // (for Undo), and the list just written (until the file shows it).
+    this.ruleEdit = null;
+    this.ruleUndo = null;
+    this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
     this.links = []; // compiled link rules (settings.js parseLinks)
@@ -792,7 +863,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { tab: this.setTab, page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
@@ -817,7 +888,7 @@ export default class Threads extends View {
   }
 
   // One row or card part as text for the debug report: "turn#3 p2/r3 h89 cmd:/review-pr",
-  // "turn#5 agent:hc:t7 review", "you#3 YOU · COMMAND", "stats#3 … | cache read …".
+  // "turn#5 agent:hc:t7 review", "you#3 USER · COMMAND", "stats#3 … | cache read …".
   rowDetail(r) {
     const n = r.turn ? `#${r.turn.n}` : "";
     const who = r.turn?.agent ? ` agent:${r.turn.sender.kind}:${r.turn.sender.name ?? ""} lw${this.labelRoom(r.turn, rowTextWidth(this.width, true, this.prefs.textSize, this.chars()))}` : "";
@@ -956,11 +1027,21 @@ export default class Threads extends View {
   applyExtras(text) {
     if (text != null && String(text).trim() !== "" && parseSettings(text).error) return;
     const x = parseExtras(text);
+    const quoteWas = this.quoteKey;
     this.quoteKey = x.quoteKey;
+    this.quoteFileNote = x.quoteNote;
+    // The card's field shows the key the file now holds, unless it is being typed in.
+    if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
-    this.linkCount = x.linkCount;
-    const sig = JSON.stringify(x.links.map((r) => [r.re.source, r.url]));
-    if (sig !== this.linksSig) { this.linksSig = sig; this.links = x.links; this.linksVer++; }
+    this.setLinks(x.links, x.linkList, x.linkCount);
+    if (this.ruleEdit || this.ruleUndo) this.followRules(this.fileLinks());
+  }
+  setLinks(rules, list, count) {
+    this.linkCount = count;
+    this.linkList = list;
+    this.linkListVer = (this.linkListVer ?? 0) + 1;
+    const sig = JSON.stringify(rules.map((r) => [r.re.source, r.url]));
+    if (sig !== this.linksSig) { this.linksSig = sig; this.links = rules; this.linksVer++; }
   }
 
   setPrefs(values) {
@@ -972,25 +1053,34 @@ export default class Threads extends View {
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
   // that finds the file changed meanwhile reads it again and applies the change on top.
-  changePrefs(patch, cx) {
+  // extra: keys written as they are (the card's quote key, the link rules). fits: given the
+  // file's text, why extra may not be written over it, or null; asked before the save and
+  // again on the text read after a stale one (writeLinks). Returns the save.
+  changePrefs(patch, cx, extra = null, fits = null) {
     // The current mark, so a slate chosen here is kept (settings.js LOOK).
     const next = parseSettings(JSON.stringify({ ...this.prefs, ...patch, look: LOOK })).values;
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
+    // Not written: the pane shows the file as it is, and the card says why.
+    const refuse = (text, why) => { this.linksPending = null; this.applyPrefs(text); this.prefsError = why; };
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
+      const why = writable(this.prefsRaw) ? fits?.(this.prefsRaw) : null;
+      if (why) { refuse(this.prefsRaw, why); return; }
       try {
-        await saveSettings(appHome(), next, this.prefsRaw);
-        this.prefsRaw = settingsText(next, this.prefsRaw);
+        await saveSettings(appHome(), next, this.prefsRaw, extra);
+        this.prefsRaw = settingsText(next, this.prefsRaw, extra);
         this.prefsError = null;
       } catch {
         const text = await readTextFile(this.prefsPath()).catch(() => null);
         // The file holds a hand edit that does not parse: leave it, keep the change in the
         // pane only, and say so.
         if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; return; }
+        const late = fits?.(text);
+        if (late) { refuse(text, late); return; }
         const merged = { ...parseSettings(text).values, ...patch };
         try {
-          await saveSettings(appHome(), merged, text);
-          this.prefsRaw = settingsText(merged, text);
+          await saveSettings(appHome(), merged, text, extra);
+          this.prefsRaw = settingsText(merged, text, extra);
           this.prefsError = null;
           this.setPrefs(parseSettings(this.prefsRaw).values);
         } catch (e) {
@@ -1007,13 +1097,360 @@ export default class Threads extends View {
       if (!this.prefsSaving) this.readPrefs(cx);
       cx.notify();
     });
+    return chain;
   }
 
-  // Shows or hides agent turns, with a toast that says which.
-  setAgents(on, cx) {
+  // Shows or hides agent turns, with a toast that says which; quiet from the settings card,
+  // which shows the change itself.
+  setAgents(on, cx, quiet = false) {
     if (Boolean(this.prefs.agentTurns) === on) return;
     this.changePrefs({ agentTurns: on }, cx);
-    this.say(on ? "Agent messages shown" : "Agent messages hidden", "bot", cx);
+    if (!quiet) this.say(on ? "Agent messages shown" : "Agent messages hidden", "bot", cx);
+  }
+
+  // ---- the settings card's state ----
+
+  // Opens the card on the tab of the pane it is opened from (Chat) and gives the pane the
+  // keyboard, so one Esc closes it; or closes it.
+  setSettings(open) {
+    if (!open) { this.closeSettings(); return true; }
+    this.settingsOpen = true;
+    this.filtering = false;
+    this.keysOpen = false;
+    this.detailsOpen = false;
+    this.quietRail();
+    this.setTab = "chat";
+    this.setPage = "main";
+    this.leaveLinks();
+    this.quoteDraft = null;
+    this.setQuoteField(this.quoteKey);
+    this.h.focus();
+    return true;
+  }
+  // Closes the card. A field in it that had the keyboard hands it back to the pane.
+  closeSettings() {
+    this.settingsOpen = false;
+    this.leaveLinks();
+    this.dropField();
+  }
+  // Leaving the Link rules page: a rule open in the editor is dropped unkept, and Undo goes.
+  leaveLinks() {
+    this.ruleEdit = null;
+    this.ruleUndo = null;
+  }
+  // While the settings card or the keys sheet is open, it and its clear layer are all that
+  // react: nothing under them takes a hover, a press or the wheel (settings-spacing 7). The
+  // kit has no call that keeps a hover from reaching what lies under a layer, so each part
+  // under it asks: the rail, its ticks and their cards, the list's presses, pointer and
+  // wheel, and the rows' hover fills, reveals and info cards.
+  covered() { return Boolean(this.settingsOpen || this.keysOpen); }
+  // A card or sheet opening drops the rail's hover, so no tick card waits under it to come
+  // back when it closes.
+  quietRail() {
+    this.railHover = null;
+    this.railCardOn = false;
+    this.railLeave = null;
+    this.railQuiet = null;
+  }
+  setQuoteField(v) {
+    this.quoteSetting = true;
+    try { this.quoteInput?.set_value(v); } finally { this.quoteSetting = false; }
+  }
+  // A letter typed in the quote key field: the field holds one letter (the newest typed), and
+  // a free letter a to z becomes the quote key at once and is written to the file. Any other
+  // leaves the key as it was, and the note under the field says why.
+  quoteTyped(cx) {
+    if (this.quoteSetting) return;
+    let v = String(this.quoteInput.value() ?? "");
+    if (v.length > 1) {
+      const old = this.quoteDraft ?? this.quoteKey;
+      const i = v.indexOf(old);
+      v = (i >= 0 ? v.slice(0, i) + v.slice(i + old.length) : v).slice(-1);
+      this.setQuoteField(v);
+    }
+    this.quoteDraft = v;
+    if (v && v !== this.quoteKey && parseQuoteKey(v).note == null) {
+      this.quoteKey = v;
+      this.changePrefs({}, cx, { quoteKey: v });
+    }
+  }
+  // A field in the card that leaves the screen (another tab, another page, the card closed)
+  // hands the keyboard back to the pane, so the panel's keys work again.
+  dropField() {
+    if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
+  }
+
+  // ---- link rules changed on the card (chat-look round 10) ----
+
+  // Whether the card may change rules: not while the file holds text that is not settings
+  // (a hand edit in progress) or a "links" that is not a list, which a write would replace.
+  linksEditable() {
+    return writable(this.prefsRaw) && this.linksOf(this.prefsRaw) != null;
+  }
+  // A change to the rules (Delete, Undo, the switch, Keep rule, Move up) while the card may
+  // not change them: refused, and the card's File line says why. Returns true when refused.
+  linksRefused() {
+    if (this.linksEditable()) return false;
+    this.prefsError = writable(this.prefsRaw) ? RULES_NOT_LIST : RULES_NOT_JSON;
+    return true;
+  }
+  // The rules a settings text holds, as copies to change: the fresh install's rule for no
+  // file or an empty one, none for a file without "links" (or one that does not parse), and
+  // null when "links" is not a list.
+  linksOf(text) {
+    if (text == null || String(text).trim() === "") return defaultLinks();
+    let raw = null;
+    try { raw = JSON.parse(text); } catch { return []; }
+    if (raw?.links == null) return [];
+    return Array.isArray(raw.links) ? raw.links.map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : null;
+  }
+  // The rules as the file holds them, as copies to change: the list just written while its
+  // save runs, or the fresh install's rule while there is no file.
+  fileLinks() {
+    if (this.linksPending) return this.linksPending.map((r) => (r && typeof r === "object" ? { ...r } : r));
+    return this.linksOf(this.prefsRaw) ?? [];
+  }
+  // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
+  // The save writes it only over the list it was made from: when the file's "links" changed
+  // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
+  // pane shows the file again and the card says why.
+  writeLinks(raw, cx) {
+    const from = JSON.stringify(this.fileLinks());
+    this.linksPending = raw;
+    const l = parseLinks(raw);
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
+    this.setLinks(l.rules, l.list, raw.length);
+    this.followRules(raw);
+    const fits = (text) => {
+      const now = this.linksOf(text);
+      return now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+    };
+    const chain = this.changePrefs({}, cx, { links: raw }, fits);
+    chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
+    return chain;
+  }
+  // The list changed, here or in the file: the open rule and the Undo line follow their
+  // rules by what they hold, not by place (the nearest same rule, for twins). An open rule
+  // that is gone from the list (changed in the file, or removed) becomes a new, unkept rule
+  // where it was, with what was typed in it.
+  followRules(raw) {
+    const keys = raw.map((r) => JSON.stringify(r));
+    const near = (key, at) => {
+      let best = -1;
+      keys.forEach((k, i) => { if (k === key && (best < 0 || Math.abs(i - at) < Math.abs(best - at))) best = i; });
+      return best;
+    };
+    const e = this.ruleEdit;
+    if (e && e.at != null) {
+      const i = near(e.key, e.at);
+      if (i >= 0) e.at = i;
+      else Object.assign(e, { insertAt: Math.min(e.at, raw.length), at: null, key: null, lost: true, touched: true, typeOpen: false });
+    }
+    const u = this.ruleUndo;
+    if (u) {
+      const before = u.prev != null ? near(u.prev, u.at - 1) : -1;
+      const after = u.next != null ? near(u.next, u.at) : -1;
+      u.at = before >= 0 ? before + 1 : after >= 0 ? after : Math.min(u.at, raw.length);
+    }
+  }
+  // A draft as the file's rule: the keys in a fixed order, the optional ones only when set,
+  // and any key this version does not know kept from the rule it replaces.
+  ruleObject(d, base) {
+    const o = {};
+    if (d.name.trim()) o.name = d.name.trim();
+    if (d.type !== "custom") o.type = d.type;
+    const desc = d.description.replace(/\s+/g, " ").trim();
+    if (desc) o.description = desc;
+    o.pattern = d.pattern;
+    o.url = d.url.trim();
+    if (d.example) o.example = d.example;
+    if (!d.on) o.on = false;
+    const known = new Set(["name", "type", "description", "pattern", "url", "example", "on"]);
+    for (const [k, v] of Object.entries(base && typeof base === "object" ? base : {})) if (!known.has(k)) o[k] = v;
+    return o;
+  }
+  setRuleField(k, v) {
+    this.ruleSetting = true;
+    try { this.ruleInputs[k]?.set_value(v ?? ""); } finally { this.ruleSetting = false; }
+  }
+  // Opens rule `at` (its index in the file) in place, or a new rule (at null) placed at
+  // insertAt, blank or filled from `from` (Duplicate). One rule is open at a time.
+  openRule(at, from = null, insertAt = null) {
+    if (!this.linksEditable()) return;
+    const raw = this.fileLinks();
+    let d;
+    let base = null;
+    if (at != null) {
+      const r = this.linkList[at];
+      if (!r) return;
+      base = raw[at];
+      d = { name: typeof base?.name === "string" ? base.name : "", description: r.description, pattern: r.pattern, url: r.url, example: r.example, type: r.type, on: r.on };
+    } else if (from) d = { ...from, name: from.name ? `${from.name} copy`.slice(0, 40) : "" };
+    else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
+    if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+    const e = { at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
+      shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
+    this.ruleEdit = e;
+    for (const [k] of RULE_FIELDS) this.setRuleField(k, d[k]);
+    this.ruleCheck();
+    // A kept rule that is not working says why at once.
+    if (at != null) for (const f of ["pattern", "url"]) e.shown[f] = e.faults[f];
+  }
+  closeRule() {
+    this.ruleEdit = null;
+    if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+  }
+  // A type pressed: in a new rule whose Finds, Opens and Example are untouched it fills them
+  // (and the name, unless one was typed); otherwise it is only the label.
+  chooseType(k) {
+    const e = this.ruleEdit;
+    if (!e || !LINK_TYPES.includes(k)) return;
+    e.draft.type = k;
+    if (e.at == null && !e.touched) {
+      const tpl = LINK_TEMPLATES[k].rule;
+      const names = Object.values(LINK_TEMPLATES).map((x) => x.rule?.name).filter(Boolean);
+      for (const f of ["pattern", "url", "example"]) e.draft[f] = tpl?.[f] ?? "";
+      if (!e.draft.name || names.includes(e.draft.name)) e.draft.name = tpl?.name ?? "";
+      for (const [f] of RULE_FIELDS) this.setRuleField(f, e.draft[f]);
+      this.ruleCheck();
+    } else e.typeOpen = false;
+  }
+  // A key in one of the rule's fields. Good news at every key; a fault shows when typing
+  // stops for REASON_PAUSE, when the field is left or on Keep rule, and once shown it follows
+  // the field and goes the moment the rule runs.
+  ruleTyped(k, cx) {
+    if (this.ruleSetting) return;
+    const e = this.ruleEdit;
+    if (!e) return;
+    const max = RULE_FIELDS.find((f) => f[0] === k)?.[3] ?? 200;
+    let v = String(this.ruleInputs[k].value() ?? "");
+    if (v.length > max) { v = v.slice(0, max); this.setRuleField(k, v); }
+    e.draft[k] = v;
+    if (k === "pattern" || k === "url" || k === "example") { e.touched = true; e.typeOpen = false; }
+    this.ruleCheck();
+    const gen = ++e.gen;
+    cx.timer.after(REASON_PAUSE, (cx) => { if (this.ruleEdit === e && e.gen === gen) { this.ruleShow(k); cx.notify(); } });
+  }
+  // Shows the fault of Finds or Opens, if it has one; an empty field waits for Keep rule.
+  ruleShow(k) {
+    const e = this.ruleEdit;
+    if (!e || (k !== "pattern" && k !== "url") || !e.draft[k]) return;
+    e.shown[k] = e.faults[k];
+  }
+  // The open rule's faults, one per field, and what it does to its example. A pattern that
+  // does not run keeps the last result that did, dimmed.
+  ruleCheck() {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const url = d.url.trim();
+    const pf = d.pattern ? ruleFault({ pattern: d.pattern, url: "https://example.com/$1" }) : "no pattern";
+    const uf = url ? ruleFault({ pattern: "x(\\d)", url }) : "no url";
+    e.faults = { pattern: pf ?? (uf ? null : ruleFault({ pattern: d.pattern, url })), url: uf };
+    for (const f of ["pattern", "url"]) if (e.shown[f] != null) e.shown[f] = e.faults[f];
+    e.repo = this.repoSig();
+    if (e.faults.pattern || e.faults.url) { e.stale = true; return; }
+    e.result = this.ruleResult(e);
+    e.lastGood = e.result;
+    e.stale = false;
+  }
+  // The session's repository changed (another session, another folder) under the open
+  // rule: its example's result is worked out again for the new one.
+  ruleRepoCheck() {
+    const e = this.ruleEdit;
+    if (!e || e.repo === this.repoSig()) return;
+    e.repo = this.repoSig();
+    if (!e.stale) e.result = e.lastGood = this.ruleResult(e);
+  }
+  ruleResult(e) {
+    const d = e.draft;
+    const url = d.url.trim();
+    const rule = { n: 0, name: d.name || "This rule", re: new RegExp(d.pattern, "g"), url, host: templateHost(url), repo: /\{(repo|owner)\}/.test(url) };
+    if (!d.example) return { line: "Type an example to see what this rule links." };
+    const away = this.repoAway(rule);
+    if (away) return { pieces: [{ t: d.example }], under: away };
+    const ctx = this.linkCtx();
+    const pieces = linkPieces(d.example, [rule], ctx);
+    const hit = pieces.find((p) => p.url)?.url ?? null;
+    if (!hit) return { pieces, under: "Finds nothing in its example" };
+    // A rule higher in the list that takes the same text first.
+    const pos = e.at ?? e.insertAt;
+    const above = (this.links ?? []).filter((r) => r.n - 1 < pos);
+    let beaten = null;
+    if (above.length && !linkPieces(d.example, [...above, rule], ctx).some((p) => p.url === hit)) {
+      beaten = above.find((r) => linkPieces(d.example, [r], ctx).some((p) => p.url))?.name ?? "A rule above";
+    }
+    return { pieces, under: hit, url: hit, beaten };
+  }
+  // Keep rule (or Enter in a field): a rule that would not run stays open with its reasons,
+  // and the first faulty field takes the keys.
+  keepRule(cx) {
+    const e = this.ruleEdit;
+    if (!e) return false;
+    this.ruleCheck();
+    const bad = ["pattern", "url"].filter((f) => e.faults[f]);
+    if (bad.length) {
+      for (const f of bad) e.shown[f] = e.faults[f];
+      this.ruleInputs[bad[0]].focus();
+      return false;
+    }
+    if (this.linksRefused()) return false;
+    const raw = this.fileLinks();
+    this.followRules(raw);
+    const o = this.ruleObject(e.draft, e.base);
+    if (e.at != null) raw[e.at] = o;
+    else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
+    this.closeRule();
+    this.writeLinks(raw, cx);
+    return true;
+  }
+  // The switch on a row: off keeps the rule and links nothing with it.
+  toggleRule(at, cx) {
+    if (this.linksRefused()) return;
+    const raw = this.fileLinks();
+    const o = raw[at];
+    if (!o || typeof o !== "object") return;
+    if (o.on === false) delete o.on;
+    else o.on = false;
+    this.writeLinks(raw, cx);
+  }
+  // Remove: gone at once, with Undo in its place until the page is left or another goes.
+  removeRule(at, cx) {
+    if (this.linksRefused()) return;
+    const raw = this.fileLinks();
+    if (at < 0 || at >= raw.length) return;
+    const key = (r) => (r === undefined ? null : JSON.stringify(r));
+    const prev = at > 0 ? key(raw[at - 1]) : null;
+    const next = key(raw[at + 1]);
+    const [rule] = raw.splice(at, 1);
+    // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
+    this.ruleUndo = { at, rule, prev, next, name: this.linkList[at]?.name ?? `Rule ${at + 1}` };
+    if (this.ruleEdit?.at === at) this.closeRule();
+    this.writeLinks(raw, cx);
+  }
+  undoRemove(cx) {
+    const u = this.ruleUndo;
+    if (!u || this.linksRefused()) return;
+    const raw = this.fileLinks();
+    this.followRules(raw);
+    raw.splice(Math.min(u.at, raw.length), 0, u.rule);
+    this.ruleUndo = null;
+    this.writeLinks(raw, cx);
+  }
+  // Move up: the open rule one place higher, so it takes text before the rule it passes.
+  moveRuleUp(cx) {
+    const e = this.ruleEdit;
+    if (!e || e.at == null || e.at < 1 || this.linksRefused()) return;
+    const raw = this.fileLinks();
+    [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
+    e.at -= 1; // so the twin nearest the new place is the one followed
+    this.writeLinks(raw, cx);
+    this.ruleCheck();
+  }
+  // Duplicate: a new rule under this one, filled from it, not kept until Keep rule.
+  duplicateRule() {
+    const e = this.ruleEdit;
+    if (!e) return;
+    this.openRule(null, { ...e.draft }, (e.at ?? e.insertAt) + 1);
   }
 
   // ---- pins (pins.js has the file's format) ----
@@ -1604,6 +2041,7 @@ export default class Threads extends View {
     this.settleSplit();
     this.autoPinned(cx);
     this.lookRepo(cx);
+    this.ruleRepoCheck();
     const t = this.term();
     const now = { turn: t?.turn ?? null, status: t?.status ?? null, there: Boolean(t), fg: this.pane()?.program?.key ?? null };
     const was = this.seen;
@@ -1647,7 +2085,7 @@ export default class Threads extends View {
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
       `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}`, this.selecting ?? "",
-      this.linksVer, this.remote.repo ?? "", this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
+      this.linksVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
     const rest = `${this.turnSets().map((x) => [...x].join(",")).join("|")}|${this.callVer ?? 0}|${other}`;
@@ -2141,7 +2579,7 @@ export default class Threads extends View {
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
   closedLook() {
     // The pane's width and the rail set how far a wide table may grow (tableExtra).
-    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`;
+    return `${this.shapeLook()}|${this.sigBase()}|${this.imgVer ?? 0}|${this.measEpoch ?? 0}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.linksVer}|${this.repoSig()}`;
   }
 
   closedRows(item, out) {
@@ -3381,8 +3819,8 @@ export default class Threads extends View {
   }
 
   // Copy reply, a code block's Copy, Copy path. A clipboard write that throws says so and
-  // marks nothing copied.
-  copy(text, id, label, cx) {
+  // marks nothing copied. quiet: no toast; the button says "Copied" in its own place.
+  copy(text, id, label, cx, quiet = false) {
     try {
       cx.write_to_clipboard(text);
     } catch (e) {
@@ -3392,8 +3830,9 @@ export default class Threads extends View {
       return false;
     }
     this.clipAtPress = null;
-    const at = this.say(label, "check", cx);
+    const at = quiet ? Date.now() + Math.random() : this.say(label, "check", cx);
     this.copied = { id, at };
+    if (quiet) cx.timer.after(2000, (cx) => { if (this.copied?.at === at) { this.copied = null; cx.notify(); } });
     return true;
   }
 
@@ -3598,7 +4037,7 @@ export default class Threads extends View {
         else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
         else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
         else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
-        else if (q.source === "selection") text = `Quoted your selection into ${t4}`;
+        else if (q.source === "selection") text = `Quoted the selection into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
         // Claude Code folds a long paste, and a second paste opens it.
         if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";
@@ -3634,9 +4073,10 @@ export default class Threads extends View {
   // ---- link rules ----
 
   // The repo link rules may use ({repo}, {owner}): the terminal's git remote origin, looked
-  // up once per terminal and folder, outside the draw, and only when a rule uses it.
+  // up once per terminal and folder, outside the draw, and only when a rule (or the one open
+  // on the card) uses it.
   lookRepo(cx) {
-    if (!this.links.some((r) => r.repo)) return;
+    if (!this.links.some((r) => r.repo) && !/\{(repo|owner)\}/.test(this.ruleEdit?.draft.url ?? "")) return;
     const cwd = this.res.cwd ?? this.pane()?.cwd ?? this.term()?.cwd ?? null;
     const key = `${this.terminal}|${cwd}`;
     if (this.remote.key === key || this.repoLooking) return;
@@ -3647,7 +4087,7 @@ export default class Threads extends View {
       const r = await exec("git", ["-C", cwd, "remote", "get-url", "origin"]).catch(() => null);
       this.repoLooking = false;
       const p = r && r.code === 0 ? parseRemote(r.stdout) : null;
-      this.remote = { key, repo: p?.repo ?? null, owner: p?.owner ?? null, why: p ? `origin on ${p.host}` : r?.code === 0 ? "origin is not a repo URL" : "no git remote origin" };
+      this.remote = { key, repo: p?.repo ?? null, owner: p?.owner ?? null, host: p?.host ?? null, why: p ? `origin on ${p.host}` : r?.code === 0 ? "origin is not a repo URL" : "no git remote origin" };
       cx.notify();
     });
   }
@@ -3656,11 +4096,11 @@ export default class Threads extends View {
   // repo change. The caps (20,000 characters, 25 links) are for the whole reply.
   linkedSegs(key, segs) {
     if (!this.links.length) return null;
-    const sig = `${this.linksVer}|${this.remote.repo ?? ""}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
+    const sig = `${this.linksVer}|${this.repoSig()}|${segs.map((x) => `${x.kind}${x.text.length}`).join(",")}`;
     const memo = (this.linkMemo ??= new Map());
     const m = memo.get(key);
     if (m?.sig === sig) return m.out;
-    const ctx = { repo: this.remote.repo, owner: this.remote.owner };
+    const ctx = this.linkCtx();
     let chars = 20000;
     let matches = 25;
     const out = segs.map((seg) => {
@@ -3682,7 +4122,7 @@ export default class Threads extends View {
   // Link rules lengthen the text; past 4,000 characters it stays as written, since Herdr
   // draws nothing for Markdown over 4,096.
   stepLinks(st) {
-    const ver = `${this.linksVer}|${this.links.length}|${this.remote.repo ?? ""}|${this.remote.owner ?? ""}`;
+    const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
     this.stepLinked ??= new WeakMap();
     const known = this.stepLinked.get(st);
     if (known?.ver === ver) return known.lk;
@@ -3698,7 +4138,10 @@ export default class Threads extends View {
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return lk;
   }
-  linkOne(md) { return this.links.length ? linkify(md, this.links, { repo: this.remote.repo, owner: this.remote.owner }) : { md, links: 0 }; }
+  // What link rules fill {repo} and {owner} from: the terminal's origin, with its host.
+  linkCtx() { return { repo: this.remote.repo, owner: this.remote.owner, host: this.remote.host ?? null }; }
+  repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
+  linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
 
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
   // first layout block that shows the terminal, which can be another pane than the one
@@ -3971,6 +4414,16 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
+    // A field in the settings card has the keyboard: its letters are its own, and one Esc
+    // closes the card.
+    if (this.fieldFocused) {
+      if (e?.key === "escape") {
+        if (this.fieldFocused.startsWith("rule-")) this.closeRule();
+        else this.closeSettings();
+        cx.stop_propagation(); cx.notify();
+      }
+      return;
+    }
     const name = keyAction(e, this.filtering, this.quoteKey);
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
@@ -4048,6 +4501,8 @@ export default class Threads extends View {
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
       case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "fit": return this.fitToReading(cx);
+      case "widthStep": return this.stepWidth(cx);
+      case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
@@ -4078,17 +4533,23 @@ export default class Threads extends View {
       }
       case "deeper": return this.deeper(cx);
       case "shallower": return this.shallower(cx);
-      case "filter": this.filtering = true; this.settingsOpen = false; this.input.focus(); return true;
+      case "filter": this.filtering = true; this.settingsOpen = false; this.fieldFocused = null; this.input.focus(); return true;
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
+      // The settings card's switch: no toast, the card shows the change.
+      case "agentsQuiet": this.setAgents(!this.prefs.agentTurns, cx, true); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
-      case "settings": this.settingsOpen = !this.settingsOpen; if (this.settingsOpen) { this.filtering = false; this.keysOpen = false; } return true;
-      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.settingsOpen = false; this.detailsOpen = false; } return true;
-      case "resetSettings": this.changePrefs({ textSize: DEFAULTS.textSize, width: DEFAULTS.width, promptLines: DEFAULTS.promptLines, replyLines: DEFAULTS.replyLines, bubbleColor: DEFAULTS.bubbleColor, agentBubbleColor: DEFAULTS.agentBubbleColor, alwaysShowTime: DEFAULTS.alwaysShowTime, truncate: DEFAULTS.truncate, railSide: DEFAULTS.railSide }, cx); return true;
+      case "settings": return this.setSettings(!this.settingsOpen);
+      case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
+      // Every control on the settings card back to its default; link rules and the quote key stay.
+      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
+      case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
-        if (this.settingsOpen) { this.settingsOpen = false; return true; }
+        if (this.settingsOpen && this.ruleEdit) { this.closeRule(); return true; }
+        if (this.settingsOpen) { this.closeSettings(); return true; }
         if (this.choosing) { this.choosing = false; return true; }
         if (this.selecting) { this.endSelect(); return true; }
         if (this.filtering || this.query) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
@@ -4253,7 +4714,7 @@ export default class Threads extends View {
     const md = text.length > FULL_REPLY_CHARS ? cutMd(text, FULL_REPLY_CHARS) : text;
     const prompt = String(this.youSource(turn) ?? "").replace(/\s+$/, "");
     return {
-      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "You",
+      n: turn.n, agent: Boolean(turn.agent), who: turn.agent ? senderLabel(turn.sender, 400) : "User",
       when: [turn.ts ? when(turn.ts) : null, fmtDuration(turn.durationMs)].filter(Boolean).join(" · "),
       running: !turn.done, asOf: fmtTime(Date.now()),
       cmd: commandParts(turn)?.name ?? null,
@@ -4816,10 +5277,11 @@ export default class Threads extends View {
       .when(floating && this.topBlock(banners), (el) => el.child(this.topPanels(t, banners)))
       .child(this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
-      .child(this.footer(t))
+      .when(Boolean(this.prefs.keyHints), (el) => el.child(this.footer(t)))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
+      .when(this.settingsOpen, (el) => el.child(this.settingsCard(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
@@ -4893,18 +5355,35 @@ export default class Threads extends View {
   }
   // Choosing a width: with "Keep the pane at this width" on, the pane grows or shrinks to the
   // new column and the terminal gives or takes the room. Full has no column, so it leaves the
-  // pane as it is and turns that switch off.
+  // pane as it is; the switch stays as the person set it, so Comfortable after Full resizes again.
   chooseWidth(w, cx) {
     if (!WIDTH_NAMES.includes(w)) return false;
-    const full = w === "full";
-    this.changePrefs(full ? { width: w, readingWidth: false } : { width: w }, cx);
+    this.changePrefs({ width: w }, cx);
+    this.sizeToWidth();
+    return true;
+  }
+  // The pane to the chosen width's column, when the switch keeps it there (Full has none).
+  sizeToWidth() {
     this.fitColumn();
     this.capAsked = null;
     const me = this.me();
-    if (!full && this.prefs.readingWidth && !this.pinnedPane && me && !me.zoomed && this.paneW != null) {
+    if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.pinnedPane && me && !me.zoomed && this.paneW != null) {
       const px = this.readingPx();
-      if (Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
+      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
     }
+  }
+  // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
+  // names all three, the one now on in the full text color. A second press inside its two
+  // seconds changes the words in place. In a pane too narrow for the list to change, and
+  // with the pane not kept at the width, it adds that it is too narrow here to show.
+  stepWidth(cx) {
+    const next = WIDTH_NAMES[(WIDTH_NAMES.indexOf(this.prefs.width) + 1) % WIDTH_NAMES.length];
+    this.chooseWidth(next, cx);
+    const pw = this.pw();
+    const sz = this.prefs.textSize;
+    const same = Math.abs(columnWidth(pw, sz, widthChars("comfortable")) - columnWidth(pw, sz, Infinity)) < 1;
+    this.say(`Width: ${WIDTH_WORDS[next]}`, `width-${next}`, cx);
+    this.toast.widths = { cur: next, tight: same && !this.prefs.readingWidth };
     return true;
   }
   // w, or the header's fit button: Threads to the reading width, and an open Pinned column to
@@ -5157,12 +5636,11 @@ export default class Threads extends View {
   // keeps its own tinted line.
   floating() { return this.view !== "pinned" && !this.pinnedPane; }
 
-  // Settings, the search field and the banners sit in the flow under the band, so the state
-  // and the icons float over empty room and never over a control.
-  topBlock(banners) { return this.settingsOpen || this.filtering || Boolean(this.query) || banners.length > 0; }
+  // The search field and the banners sit in the flow under the band, so the state and the
+  // icons float over empty room and never over a control. Settings is a card over the list.
+  topBlock(banners) { return this.filtering || Boolean(this.query) || banners.length > 0; }
   topPanels(t, banners) {
     return v_flex().id("th-top").flex_none().pt(TOP_BAND)
-      .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(this.searchField(t)))
       .children(banners);
   }
@@ -5253,7 +5731,6 @@ export default class Threads extends View {
           const click = this.headerClick(act);
           return label ? this.labelButton(t, id, label, tip, click, on) : this.iconButton(t, id, icon, tip, click, on, count, dot);
         })))
-      .when(this.settingsOpen, (el) => el.child(this.settingsPanel(t)))
       .when(this.filtering || Boolean(this.query), (el) => el.child(this.searchField(t)));
   }
 
@@ -5303,13 +5780,157 @@ export default class Threads extends View {
     return `${hit} of ${shown}${hiddenHit ? ` · ${hiddenHit} hidden` : ""}`;
   }
 
-  // Settings, under the header in the filter field's place: agent messages, the collapsed
-  // rows' line limits, and where the file is.
-  settingsPanel(t) {
+  // ---- the settings card (, or the sliders icon) ----
+  // A card over the list, under the icons at the top right, CARD_W wide at most (the pane
+  // less 12 px each side when narrower). The keys sheet's two pieces: a clear layer over the
+  // pane closes it on a press anywhere else in the pane, and the card stops the press. A press
+  // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. The title, the
+  // tabs and the preview stay put while the rows scroll under them; the session's line and
+  // "? keys" sit at the foot. Two tabs, General and Chat, and it opens on Chat, the tab of the
+  // pane it was opened from. The Trajectory tab comes with the Trajectory (draft PR 94).
+  // Spacing (settings-spacing): every band has the same side inset (cardPad), so the title,
+  // the tabs, the labels and the foot share one left edge and the controls one right edge.
+  // While it is open nothing under it reacts (covered()), and the wheel moves only the card:
+  // the clear layer keeps the wheel from the list. No scrim, so the colors and the text size
+  // are chosen against the real list; the border and a deep shadow mark the layer.
+  settingsCard(t) {
+    const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
+    const links = this.setPage === "links";
+    const top = this.floating() ? TOP_BAND : 46;
+    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - CARD_GAP);
+    const w = this.setCardW();
+    const pad = cardPad(w);
+    const fixed = CARD_HEAD + (links ? 0 : CARD_TABS + this.previewH(w)) + CARD_FOOT + 2;
+    const bodyMax = Math.max(60, room - fixed);
+    // The rows' own height, as last drawn on this page and tab, up to the room left.
+    const key = links ? "links" : this.setTab;
+    const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
+    const rows = links ? this.linkRulesRows(t, w) : this.setTab === "general" ? this.generalRows(t, w) : this.chatRows(t, w);
+    return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
+      .on_click(close)
+      // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+      .child(v_flex().id("th-set-card").absolute().top(top).right(CARD_GAP).w(w)
+        .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_2xl()
+        .on_click((_e, cx) => cx.stop_propagation())
+        .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
+        .child(this.cardHead(t, links, close, pad))
+        .when(!links, (el) => el.child(this.cardTabs(t, pad)).child(this.cardPreview(t, w)))
+        .child(v_flex().id(`th-set-body-${key}`).flex_none().h(bodyH).overflow_y_scrollbar()
+          .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
+            .on_size_change((size, cx) => {
+              const h = size.height / this.zoom();
+              if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
+            })
+            .children(rows)))
+        .child(this.cardFoot(t, pad)));
+  }
+  setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 2 * CARD_GAP)); }
+
+  // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
+  // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
+  cardHead(t, links, close, pad) {
+    return h_flex().flex_none().h(CARD_HEAD).px(pad).gap(8).items_center().border_b(1).border_color(t.border)
+      .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
+      .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
+      .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
+  }
+
+  // Each tab has 10 px each side, so the first tab's word starts on the inset.
+  cardTabs(t, pad) {
+    return h_flex().flex_none().h(CARD_TABS).px(pad - 10).gap(2).border_b(1).border_color(t.border)
+      .children(SETTING_TABS.map(([k, word]) => {
+        const on = k === this.setTab;
+        return div().id(`th-set-tab-${k}`).flex_none().h_full().px(10).flex().items_center().cursor_pointer()
+          .border_b(2).border_color(on ? t.accent : CLEAR)
+          .text_size(13).font_medium().text_color(on ? t.foreground : t.muted)
+          .hover((s) => s.text_color(t.foreground))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setTab = k; cx.notify(); })
+          .child(word);
+      }));
+  }
+
+  // The preview, pinned under the tabs: an agent's bubble and yours, drawn from the settings
+  // the list uses. Text size, both colors, the time (an agent's only with Always show time;
+  // yours stands for the selected turn), agent messages hidden (the agent's bubble fades and
+  // says so) and the rail's side (four ticks on that side, inside the inset). The text is at
+  // the real size, never scaled, since text size is one of the things it shows: the sample is
+  // short instead ("From an agent", "From the user"), each bubble at most 45% of the band and
+  // cut past that, with 10 px above and below. Bubbles are padded and rounded as in the list.
+  previewH() { return this.rt().line + 2 * ROW.BUBBLE_PY + 2 * 16 + 2 * 2 + 2 * 10; }
+  cardPreview(t, w) {
     const P = this.prefs;
-    const mono = this.mono();
-    const label = (text) => div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(text);
-    const step = (id, icon, act, ok) => div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5)
+    const rt = this.rt();
+    const pad = cardPad(w);
+    // The rail's side: the ticks on the inset, 8 px wide, then 12 px to the bubbles.
+    const railPad = pad + 8 + 12;
+    const most = Math.floor(w * 0.45);
+    const bubble = (agent, text) => {
+      const look = this.bubbleLook(t, agent);
+      return this.readFont(div()).flex_none().max_w(most).min_w(0).truncate().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY)
+        .bg(look.style.fill).text_color(look.theme.foreground).text_size(rt.size).line_height(`${rt.line}px`)
+        .when(look.style.outline, (el) => el.border_1().border_color(t.border))
+        .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
+        .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
+        .child(text);
+    };
+    const line = (text, color) => div().flex_none().h(16).max_w_full().truncate().text_size(11.5).text_color(color).child(text);
+    const hidden = !P.agentTurns;
+    const half = (w - pad - railPad - 12) / 2;
+    const label = hidden ? ("Agent · hidden in the list".length * 11.5 * PROSE_EM <= half ? "Agent · hidden in the list" : "Agent · hidden") : "Agent";
+    const left = this.railLeft();
+    const ticks = v_flex().absolute().top(14).gap(9).when(left, (el) => el.left(pad)).when(!left, (el) => el.right(pad))
+      .children([0, 1, 2, 3].map((i) => div().w(8).h(i === 2 ? 3 : 2).rounded(1).bg(i === 2 ? t.accent : alpha(t.muted, 0.5))));
+    return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? railPad : pad).pr(left ? pad : railPad).py(10).gap(12).items_center()
+      .border_b(1).border_color(t.border).bg(t.background)
+      // Hidden agent messages show only in the label over the bubble ("Agent · hidden in the
+      // list"). The bubble keeps full strength, so its words read as in the list (a faded bubble
+      // was 1.9:1 on a light theme).
+      .child(v_flex().flex_1().min_w(0).gap(2).items_start()
+        .child(line(label, this.agentColor(t)))
+        .child(bubble(true, "From an agent"))
+        .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
+      .child(v_flex().flex_1().min_w(0).gap(2).items_end()
+        .child(line("", t.dim))
+        .child(bubble(false, "From the user"))
+        .child(line(fmtTime(PREVIEW_AT), t.dim)))
+      .child(ticks);
+  }
+
+  // The card's foot, under the scroll: the agent, the turn count and the session's title (the
+  // floating top has no header to hold them), and "? keys", the way to every key while the key
+  // hints are off.
+  cardFoot(t, pad) {
+    return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
+      .child(this.floating() ? this.aboutRow(t) : div().flex_1())
+      .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
+        .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
+  }
+
+  // The pieces every row of the card is made of. A row is 28 px high at least, 4 px from the
+  // next in its group; a group's label is 6 px over its first row, and groups are 20 px apart
+  // (the rows' gap). Text a person reads is muted at the faintest; dim is for decoration.
+  cardKit(t) {
+    const label = (text) => div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child(text);
+    const note = (text, color = t.muted) => div().text_size(12).line_height("16px").text_color(color).child(text);
+    const group = (title, kids) => v_flex().gap(4)
+      .child(div().mb(2).text_size(11).font_semibold().text_color(t.muted).child(title))
+      .children(kids.filter(Boolean));
+    // 32 by 18 with a 14 px knob. Off, the track has a `muted` outline, since the track alone
+    // barely shows on the card (full `muted`, so the edge reaches 3:1 on light themes too); the
+    // outline takes a px of the padding so the knob stays put.
+    const toggle = (on) => div().flex_none().w(32).h(18).rounded(9).flex().items_center()
+      .when(on, (el) => el.p(2).justify_end().bg(t.ansi5))
+      .when(!on, (el) => el.p(1).bg(t.border).border_1().border_color(t.muted))
+      .child(div().size(14).rounded(7).bg(on ? t.background : t.muted));
+    // A switch row: the whole row flips it.
+    const sw = (id, text, on, act, value = null) => h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer()
+      .on_click((_e, cx) => { cx.stop_propagation(); this.action(act, cx); cx.notify(); })
+      .child(label(text))
+      .when(Boolean(value), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(value)))
+      .child(toggle(on));
+    const step = (id, icon, act, ok) => div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(6)
       .border_1().border_color(t.border).bg(t.background).cursor_pointer()
       .when(!ok, (el) => el.opacity(0.4))
       .hover((s) => s.bg(t.hover))
@@ -5317,135 +5938,414 @@ export default class Threads extends View {
       .child(svg(ICON(icon)).size(12).text_color(t.muted));
     const stepper = (key, name) => {
       const [lo, hi] = RANGES[key];
-      return h_flex().gap(6).items_center()
+      const v = this.prefs[key];
+      return h_flex().min_h(28).gap(6).items_center()
         .child(label(name))
-        .child(step(`th-${key}-minus`, "minus", `${key}:-`, P[key] > lo))
-        .child(div().flex_none().w(18).text_center().text_size(12.5).font_family(mono).text_color(t.foreground).child(String(P[key])))
-        .child(step(`th-${key}-plus`, "plus", `${key}:+`, P[key] < hi));
+        .child(step(`th-${key}-minus`, "minus", `${key}:-`, v > lo))
+        .child(div().flex_none().w(20).text_center().text_size(13).font_family(this.mono()).text_color(t.foreground).child(String(v)))
+        .child(step(`th-${key}-plus`, "plus", `${key}:+`, v < hi));
     };
-    const toggle = (on) => div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center()
-      .when(on, (el) => el.justify_end()).bg(on ? t.ansi5 : t.border)
-      .child(div().size(12).rounded(6).bg(on ? t.background : t.muted));
-    const sw = toggle(Boolean(P.agentTurns));
-    const path = tilde(this.prefsPath());
-    return v_flex().mx(10).mb(8).p(10).gap(8).rounded(7).border_1().border_color(t.border).bg(t.chrome)
-      .child(h_flex().id("th-set-agents").gap(6).items_center().cursor_pointer()
-        .on_click((_e, cx) => { cx.stop_propagation(); this.action("agents", cx); cx.notify(); })
-        .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
-        .child(label(!P.agentTurns && this.agentCountText(this.counts()) ? `Agent messages · ${this.agentCountText(this.counts()).replace(", ", " · ")}` : "Agent messages"))
-        .child(sw))
-      .child(v_flex().gap(2)
-        .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.action("alwaysTime", cx); cx.notify(); })
-          .child(svg(ICON("clock")).size(13).flex_none().text_color(t.muted))
-          .child(label("Always show time"))
-          .child(toggle(Boolean(P.alwaysShowTime))))
-        .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.alwaysShowTime ? "Each message's time shows under its bubble." : "A message's time shows when its turn is selected.")))
-      .child(this.widthRow(t, label))
-      .child(this.railSideRow(t, label))
-      .child(h_flex().id("th-set-width").gap(6).items_center().cursor_pointer()
-        .on_click((_e, cx) => { cx.stop_propagation(); this.action("keepWidth", cx); cx.notify(); })
-        .child(svg(ICON("fold-horizontal")).size(13).flex_none().text_color(t.muted))
-        .child(label("Keep the pane at this width"))
-        .child(toggle(P.readingWidth !== false)))
-      .child(v_flex().gap(2)
-        .child(h_flex().id("th-set-truncate").gap(6).items_center().cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.action("truncate", cx); cx.notify(); })
-          .child(svg(ICON("scissors")).size(13).flex_none().text_color(t.muted))
-          .child(label("Shorten long messages"))
-          .child(toggle(Boolean(P.truncate))))
-        .child(div().pl(19).text_size(11.5).text_color(t.dim).child(P.truncate ? "A closed turn shows the first lines of each message, with Show more." : "Every message and reply shows in full.")))
-      .when(Boolean(P.truncate), (el) => el
-        .child(stepper("promptLines", "Prompt lines"))
-        .child(stepper("replyLines", "Reply lines")))
-      .child(stepper("textSize", "Text size"))
-      .child(this.swatches(t, "bubbleColor", "Your messages"))
-      .child(this.swatches(t, "agentBubbleColor", "Agent messages"))
-      .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
-      // quoteKey and links are edited in the file; the panel says what it read.
-      .child(div().text_size(11.5).text_color(t.muted).child(this.settingsLine()))
-      .children(this.prefsNotes.slice(0, 4).map((n) => div().text_size(11.5).text_color(t.blocked).child(n)))
-      .when(this.prefsNotes.length > 4, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`and ${this.prefsNotes.length - 4} more notes`)))
-      .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(mono).text_color(t.dim).child(path))
-        .child(this.button(t, "th-set-copy", this.narrow() ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", "Settings path copied", cx); }, "copy")))
-      .child(h_flex().gap(6)
-        .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { this.action("resetSettings", cx); cx.notify(); }, "refresh")))
-      .when(this.floating(), (el) => el.child(this.aboutRow(t)));
+    // A chooser: each choice its icon and its word, the chosen one filled. 28 px high, as a row.
+    const choose = (id, cur, opts, act) => h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
+      .children(opts.map(([v, word, icon]) => h_flex().id(`${id}-${v}`).flex_none().h(22).px(8).gap(5).items_center().rounded(4).cursor_pointer()
+        .text_size(12).bg(v === cur ? t.hover : alpha(t.hover, 0)).text_color(v === cur ? t.foreground : t.muted)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${act}:${v}`, cx); cx.notify(); })
+        .child(svg(ICON(icon)).size(13).flex_none())
+        .child(word)));
+    const row = (text, ctl) => h_flex().min_h(28).gap(8).items_center().flex_wrap().child(label(text)).child(ctl);
+    return { label, note, group, sw, stepper, choose, row, toggle };
   }
 
-  // Settings' last row with the floating top: the agent, the turn and hidden counts and the
-  // session's title, which the header row showed. Its tooltip names the terminal and session.
+  // Reset to defaults, at the end of each tab's rows: every control on the card, faded when
+  // every one is at its default. Link rules and the quote key are never touched, which the
+  // line under the button says.
+  resetRow(t) {
+    const differ = this.prefsDiffer();
+    const { note } = this.cardKit(t);
+    return v_flex().gap(6).items_start()
+      .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); }, "refresh", CARD_BUTTON)
+        .when(!differ, (el) => el.opacity(0.45)))
+      .child(note("Link rules and the quote key stay."));
+  }
+  prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
+
+  // General: what every view shares. Text, the rail's side and the key hints, the two message
+  // colors, link rules and the quote key, and the file.
+  generalRows(t, w) {
+    const P = this.prefs;
+    const { note, group, sw, stepper, choose, row } = this.cardKit(t);
+    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+    const n = this.linkCount ?? 0;
+    const qn = this.quoteNote();
+    return [
+      group("Text", [stepper("textSize", "Text size")]),
+      group("Layout", [
+        row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide")),
+        sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
+      ]),
+      group("Colors", [
+        this.colorRow(t, "bubbleColor", "User messages", w),
+        this.colorRow(t, "agentBubbleColor", "Agent messages", w),
+      ]),
+      group("Links and keys", [
+        h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+          .hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
+          .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
+          .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+          .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
+          .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)),
+        v_flex().gap(4)
+          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
+            .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
+            .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked))),
+      ]),
+      group("File", [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null]),
+      this.resetRow(t),
+    ];
+  }
+
+  // Chat: what shapes a bubble or the reading column.
+  chatRows(t, w) {
+    const P = this.prefs;
+    const { group, sw, stepper, choose, row, note } = this.cardKit(t);
+    const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
+    return [
+      group("Messages", [
+        sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
+        sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
+        P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
+        sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
+      ]),
+      group("Layout", [
+        row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
+        this.widthRuler(t, w),
+        note(this.widthNote()),
+        sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth"),
+      ]),
+      this.resetRow(t),
+    ];
+  }
+
+  // Under Width: the pane as a thin line and the reading column as its dark part, at their
+  // real proportions in this pane.
+  widthRuler(t, w) {
+    const pw = this.pw();
+    const room = Math.max(1, pw - 2 * gutter(pw));
+    const want = this.prefs.width === "full" ? room : readType(this.prefs.textSize, this.chars()).measure;
+    // The line fills its row, so it ends on the controls' right edge; the column is placed in
+    // the row's width, the card less its 1 px border and the inset on each side.
+    const inner = w - 2 - 2 * cardPad(w);
+    const col = Math.max(4, Math.round((Math.min(want, room) / Math.max(1, pw)) * inner));
+    return div().id("th-set-ruler").relative().w_full().h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
+      .child(div().absolute().top(0).h(4).rounded(2).left(Math.round((inner - col) / 2)).w(col).bg(t.muted));
+  }
+  widthNote() {
+    const w = this.prefs.width;
+    if (w === "full") return "Text runs the whole pane.";
+    const pw = this.pw();
+    const tight = readType(this.prefs.textSize, this.chars()).measure > pw - 2 * gutter(pw);
+    return `Up to ${widthChars(w)} characters a line.${tight ? " This pane has room for less, so it looks like Full here." : ""}`;
+  }
+
+  // A message color: its name, then a dot for each preset (ui.js BUBBLES) and, when the file
+  // holds one, its own #rrggbb. The color's name is the dot's tooltip; the chosen one has a
+  // ring. Each dot is 24 px across (a 16 px color in a 2 px ring and 2 px of air), 2 px apart.
+  // On one line with the name when they fit beside its 96 px; else the name above and the dots
+  // 6 px under it, from the left edge. Plain, and a color drawn as an outline, get a muted
+  // edge, since their fill alone barely shows on the card.
+  colorRow(t, key, name, w) {
+    const cur = this.prefs[key];
+    const agent = key === "agentBubbleColor";
+    const names = Object.keys(BUBBLES);
+    const list = cur.startsWith("#") ? [...names, cur] : names;
+    const word = (v) => (v.startsWith("#") ? v : `${v[0].toUpperCase()}${v.slice(1)}`);
+    const dotsW = list.length * SWATCH + (list.length - 1) * 2;
+    const oneLine = 96 + 8 + dotsW <= w - 2 * cardPad(w);
+    const dots = h_flex().flex_none().gap(2).flex_wrap().children(list.map((v) => {
+      const st = bubbleStyle(v, t, agent);
+      const on = v === cur;
+      return div().id(`th-${key}-${v}`).flex_none().size(SWATCH).rounded(SWATCH / 2).p(2).cursor_pointer()
+        .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
+        .tooltip(`${word(v)}${v === DEFAULTS[key] ? " · default" : ""}`)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
+        .child(div().size_full().rounded(8).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.muted : st.fill));
+    }));
+    const title = div().text_size(13).text_color(t.foreground).child(name);
+    return oneLine
+      ? h_flex().id(`th-${key}-row`).min_h(28).gap(8).items_center().child(title.flex_1().min_w(96)).child(dots)
+      : v_flex().id(`th-${key}-row`).gap(6).child(title).child(dots);
+  }
+
+  // The settings file: its path, cut at a slash from its start so it begins with a whole
+  // folder (cutPath), with the whole path in its tooltip, and Copy path, which says "Copied"
+  // in its own place. Under a 320 px card the button says Copy.
+  fileRow(t, w) {
+    const copied = this.copied?.id === "settings-path";
+    const word = copied ? "Copied" : w < 320 ? "Copy" : "Copy path";
+    const path = tilde(this.prefsPath());
+    // The button: its padding and border, the icon and its gap, and the word.
+    const button = 2 * CARD_BUTTON.px + 2 + CARD_BUTTON.icon + CARD_BUTTON.gap + Math.ceil(word.length * 12 * 0.55);
+    const room = w - 2 * cardPad(w) - 6 - button;
+    return h_flex().gap(6).items_center()
+      .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
+        .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
+      .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
+  }
+
+  // The quote key field's note: a letter that cannot be the quote key, and why it stays.
+  quoteNote() {
+    const d = this.quoteDraft;
+    const q = this.quoteKey;
+    if (d == null || d === q) return this.quoteFileNote ?? null;
+    if (d === "") return `Type one letter. The quote key stays ${q}.`;
+    if (/^[a-z]$/.test(d)) return `${d} is a Threads key already. The quote key stays ${q}.`;
+    return `One letter, a to z. The quote key stays ${q}.`;
+  }
+
+  // The Link rules page: what a link rule is, then each rule in the file with its type's
+  // icon, its name, its description, its example with the linked part marked and the address
+  // that opens, and its switch (or why the mod will not run it). A press on a row opens the
+  // rule in place, as Edit does; Delete takes it at once, with Undo. The rules change on the
+  // card and in the file alike. Rule cards are 8 px apart (boxes with borders).
+  linkRulesRows(t, w) {
+    const { note, group } = this.cardKit(t);
+    const list = this.linkList ?? [];
+    const e = this.ruleEdit;
+    const edit = this.linksEditable();
+    const other = (this.prefsNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n) && !n.startsWith("quoteKey"));
+    const rows = list.map((r, i) => (e?.at === i ? this.ruleEditor(t) : this.ruleRow(t, r, i, edit)));
+    if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.ruleEditor(t));
+    if (this.ruleUndo) rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
+    return [
+      note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
+      group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
+      !list.length && !e && edit ? this.ruleExamples(t) : null,
+      ...other.map((n) => note(n, t.blocked)),
+      list.length >= 2 ? note("When two rules match the same text, the higher one wins.") : null,
+      edit && !e && list.length < MAX_RULES
+        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus", CARD_BUTTON)) : null,
+      group("File", [
+        note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
+          : writable(this.prefsRaw) ? "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed."
+            : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
+        this.fileRow(t, w),
+        this.prefsError ? note(this.prefsError, t.blocked) : null,
+      ]),
+    ].filter(Boolean);
+  }
+
+  // A rule's card (settings-spacing 6): 12 px in, its lines 4 px apart. The type's icon, 8 px,
+  // the name, then Edit and Delete, always shown (a button that shows only under the pointer
+  // cannot be found and pushes the name aside), 4 px apart, then 12 px and the switch in a 36
+  // by 24 hit area, at the far right so the switches line up down the list. A rule Threads
+  // will not run has its warning mark in the switch's place.
+  ruleRow(t, r, i, edit = false) {
+    const { toggle } = this.cardKit(t);
+    const why = r.why ?? r.rule?.slow ?? null;
+    const bad = why != null;
+    const ex = this.ruleExample(r);
+    const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i); cx.notify(); };
+    const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
+    return v_flex().id(`th-rule-${r.n}`).p(12).gap(4).rounded(6).border_1()
+      .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
+      .when(edit, (el) => el.cursor_pointer().on_click(open))
+      .child(h_flex().gap(8).items_center()
+        .child(svg(ICON(LINK_ICON[r.type] ?? "regex")).size(14).flex_none().text_color(t.dim).when(!bad && !r.on, (el) => el.opacity(0.55)))
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(!bad && !r.on ? t.muted : t.foreground).child(r.name))
+        .when(!bad && !r.on, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
+        .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
+          .child(this.ruleIcon(t, `th-rule-edit-btn-${r.n}`, "pencil", "Edit rule", open))
+          .child(this.ruleIcon(t, `th-rule-delete-btn-${r.n}`, "trash", "Delete rule", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); }, true))))
+        .child(bad ? end(null).child(svg(ICON("alert")).size(14).text_color(t.blocked))
+          : edit ? end(`th-rule-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx); cx.notify(); })
+            .child(toggle(r.on))
+            : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
+      .child(v_flex().gap(4).when(!bad && !r.on, (el) => el.opacity(0.55))
+        .when(Boolean(r.description), (el) => el.child(div().text_size(12).text_color(t.muted).child(r.description)))
+        .child(this.examplePieces(t, ex))
+        .when(Boolean(ex.under), (el) => el.child(div().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(ex.under))))
+      .when(bad, (el) => el.child(div().text_size(12).text_color(t.blocked).child(`Not working: ${why}`)));
+  }
+
+  // Edit and Delete on a rule's card: a 24 px icon button, the icon dim with no fill at rest;
+  // under the pointer the hover fill and the foreground, or for Delete the blocked color on a
+  // 12% tint of it. Its tooltip is also what a screen reader says.
+  ruleIcon(t, id, icon, tip, onClick, danger = false) {
+    // `muted` at rest, not `dim`: a control a person has to find needs 3:1 on light themes too.
+    return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(5).cursor_pointer()
+      .text_color(t.muted)
+      .hover((s) => (danger ? s.bg(alpha(t.blocked, 0.12)).text_color(t.blocked) : s.bg(t.hover).text_color(t.foreground)))
+      .tooltip(tip).accessibility_label(tip).role("button")
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(svg(ICON(icon)).size(14));
+  }
+
+  // An example as a reply would show it, the part a rule links underlined in the accent.
+  examplePieces(t, ex) {
+    return ex.pieces
+      ? h_flex().flex_wrap().text_size(12).text_color(t.muted).children(ex.pieces.map((p) => (p.url
+        ? div().flex_none().underline().text_color(t.accent).child(p.t)
+        : div().flex_none().whitespace_nowrap().child(p.t))))
+      : div().text_size(12).text_color(t.muted).child(ex.line);
+  }
+
+  // A small bordered button inside a rule (Use, Open, the type's Change): 24 px high, the
+  // least anything pressed is.
+  miniButton(t, id, label, onClick) {
+    return div().id(id).flex_none().h(24).px(8).flex().items_center().rounded(6).cursor_pointer()
+      .border_1().border_color(t.border).bg(t.background).text_size(12).text_color(t.muted)
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
+      .child(label);
+  }
+
+  // Where a deleted rule was: a quiet dashed line, 32 px high, with Undo as a 24 px text button.
+  // No confirm step: Undo is the way back.
+  undoLine(t) {
+    return h_flex().id("th-rule-undo-line").min_h(32).pl(12).pr(4).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(`Deleted ${this.ruleUndo.name}.`))
+      .child(div().id("th-rule-undo").flex_none().h(24).px(8).flex().items_center().rounded(5).cursor_pointer()
+        .text_size(12).font_medium().text_color(t.foreground).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.undoRemove(cx); cx.notify(); })
+        .child("Undo"));
+  }
+
+  // No rules: the two types that fill a rule, in dashed boxes. Use opens a new rule with that
+  // type pressed.
+  ruleExamples(t) {
+    return v_flex().gap(6)
+      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
+      .children(["ticket", "pull-request"].map((k) => {
+        const tpl = LINK_TEMPLATES[k];
+        return h_flex().id(`th-rule-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+          .child(svg(ICON(LINK_ICON[k])).size(14).flex_none().text_color(t.dim))
+          .child(v_flex().flex_1().min_w(0).gap(4)
+            .child(div().text_size(13).font_semibold().text_color(t.foreground).child(tpl.word))
+            .child(div().text_size(12).text_color(t.muted).child(tpl.line)))
+          .child(this.miniButton(t, `th-rule-use-${k}`, "Use", (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); }));
+      }));
+  }
+
+  // The open rule: Type, then Name, Description, Finds, Opens and Example, the line that says
+  // what the rule does to its example, and Keep rule with the rest.
+  ruleEditor(t) {
+    const e = this.ruleEdit;
+    const d = e.draft;
+    const { note } = this.cardKit(t);
+    const isNew = e.at == null;
+    const label = (text) => div().text_size(11.5).font_medium().text_color(t.muted).child(text);
+    const hints = {
+      description: note("It shows under the name in the list."),
+      pattern: h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
+        .child(div().flex_none().child("A JavaScript regular expression. Capitals count."))
+        .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
+          .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
+          .child("Reference")),
+      url: note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
+    };
+    const field = ([k, name]) => {
+      const shown = e.shown[k] ?? null;
+      const focused = this.fieldFocused === `rule-${k}`;
+      return v_flex().gap(3)
+        .child(label(name))
+        .child(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
+          .border_color(shown ? t.blocked : focused ? t.accent : t.border).bg(t.background)
+          .child(Input.new(this.ruleInputs[k]).w_full().h_full().text_size(12.5).text_color(t.foreground)
+            .when(k === "pattern" || k === "url", (el) => el.font_family(this.mono()))))
+        .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))
+        .when(Boolean(hints[k]), (el) => el.child(hints[k]));
+    };
+    const typeRows = (isNew && !e.touched) || e.typeOpen;
+    const tpl = LINK_TEMPLATES[d.type] ?? LINK_TEMPLATES.custom;
+    const typeBlock = typeRows
+      ? v_flex().gap(4).child(label("Type"))
+        .children(LINK_TYPES.map((k) => {
+          const on = d.type === k;
+          const x = LINK_TEMPLATES[k];
+          return h_flex().id(`th-rule-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+            .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
+            .hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); })
+            .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(on ? t.foreground : t.dim))
+            .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(x.word))
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(x.line));
+        }))
+        .when(!isNew || e.touched, (el) => el.child(note("The label changes; the fields stay.")))
+      : h_flex().gap(6).items_center()
+        .child(label("Type"))
+        .child(svg(ICON(LINK_ICON[d.type] ?? "regex")).size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(tpl.word))
+        .child(this.miniButton(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+    const r = e.stale ? e.lastGood : e.result;
+    const result = r
+      ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
+        .child(this.examplePieces(t, r))
+        .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(r.under))
+          .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniButton(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); })))))
+        .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(`${r.beaten} is higher in the list and takes this text first. ${!isNew && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`, t.muted)))
+      : null;
+    const buttons = h_flex().gap(6).flex_wrap()
+      .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check", CARD_BUTTON))
+      .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }, null, CARD_BUTTON))
+      .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up", CARD_BUTTON)))
+      .when(!isNew, (el) => el
+        .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy", CARD_BUTTON))
+        .child(this.button(t, "th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx); cx.notify(); }, "trash", CARD_BUTTON)));
+    return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
+      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
+        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")))
+      .child(typeBlock)
+      .children(RULE_FIELDS.map(field))
+      .when(Boolean(result), (el) => el.child(result))
+      .child(buttons);
+  }
+
+  // Why a rule that needs the session's repository links nothing here, or null.
+  repoAway(rule) {
+    if (!rule?.repo) return null;
+    if (!this.remote.repo) return "This session has no repository, so this rule links nothing here.";
+    if (!repoFits(rule, this.linkCtx())) return `This repository is on ${this.remote.host}, not GitHub, so this rule links nothing here.`;
+    return null;
+  }
+
+  // What a rule does to its own example, kept until the rules or the repository change:
+  // { pieces, under } when it makes a link (the address under), or { line, under }.
+  ruleExample(r) {
+    const k = `${this.linksVer}|${this.linkListVer ?? 0}|${this.repoSig()}`;
+    if (this.ruleExKey !== k) { this.ruleExKey = k; this.ruleExMemo = new Map(); }
+    if (r.rule?.slow) return r.example ? { pieces: [{ t: r.example }], under: null } : { line: "No example yet", under: r.pattern || null };
+    const hit = this.ruleExMemo.get(r);
+    if (hit) return hit;
+    let out;
+    if (!r.example) out = { line: "No example yet", under: r.pattern || null };
+    else if (!r.rule) out = { pieces: [{ t: r.example }], under: null };
+    else if (this.repoAway(r.rule)) out = { pieces: [{ t: r.example }], under: this.repoAway(r.rule) };
+    else {
+      const pieces = linkPieces(r.example, [r.rule], this.linkCtx());
+      const url = pieces.find((p) => p.url)?.url ?? null;
+      out = url ? { pieces, under: url } : { pieces, under: "Finds nothing in its example" };
+    }
+    this.ruleExMemo.set(r, out);
+    return out;
+  }
+
+  // The settings card's foot with the floating top: the agent, the turn and hidden counts and
+  // the session's title, which the header row showed. Its tooltip names the terminal and session.
   aboutRow(t) {
     const agent = this.agent();
     const s = this.current();
     const c = s?.loaded ? this.counts() : null;
     const text = [c ? plural(c.shownCur, "turn") : this.headerText(), c?.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null, s?.title].filter(Boolean).join(" · ");
-    return h_flex().id("th-about").gap(6).items_center().pt(8).border_t_1().border_color(t.border).tooltip(this.bindingTip())
+    return h_flex().id("th-about").flex_1().min_w(0).gap(6).items_center().tooltip(this.bindingTip())
       .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted))
       .child(div().flex_none().text_size(12).text_color(t.foreground).child(agent.name))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(text))
       .when(this.debug && Boolean(this.timing), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)));
-  }
-
-  // Width: Comfortable, Wide and Full side by side, the chosen one filled. In a pane narrower
-  // than Comfortable's column all three look the same, and a line under the row says so.
-  widthRow(t, label) {
-    const cur = this.prefs.width;
-    const names = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
-    const narrowPx = fitWidth(this.prefs.textSize);
-    const same = this.paneW != null && this.paneW < narrowPx - 2;
-    return v_flex().gap(4)
-      .child(h_flex().gap(6).items_center()
-        .child(svg(ICON("move-horizontal")).size(13).flex_none().text_color(t.muted))
-        .child(label("Width"))
-        .child(h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
-          .children(WIDTH_NAMES.map((w) => div().id(`th-width-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
-            .flex().items_center().cursor_pointer().text_size(12)
-            .bg(w === cur ? t.hover : alpha(t.hover, 0)).text_color(w === cur ? t.foreground : t.muted)
-            .hover((st) => st.bg(t.hover))
-            .on_click((_e, cx) => { cx.stop_propagation(); this.action(`width:${w}`, cx); cx.notify(); })
-            .child(names[w])))))
-      .when(same, (el) => el.child(div().pl(19).text_size(11.5).text_color(t.dim)
-        .child(`This pane is narrower than Comfortable (${narrowPx} px), so all three look the same here.`)));
-  }
-
-  // Rail side: Left or Right (the default), in that order, as the Width row's segments.
-  railSideRow(t, label) {
-    const cur = this.railLeft() ? "left" : "right";
-    return h_flex().gap(6).items_center()
-      .child(svg(ICON("panel-right")).size(13).flex_none().text_color(t.muted))
-      .child(label("Rail side"))
-      .child(h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
-        .children(["left", "right"].map((w) => div().id(`th-rail-${w}`).flex_none().h(20).px(this.narrow() ? 5 : 8).rounded(4)
-          .flex().items_center().cursor_pointer().text_size(12)
-          .bg(w === cur ? t.hover : alpha(t.hover, 0)).text_color(w === cur ? t.foreground : t.muted)
-          .hover((st) => st.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`railSide:${w}`, cx); cx.notify(); })
-          .child(w === "right" ? "Right" : "Left"))));
-  }
-
-  // A bubble colour setting: its name and the colour's name, then a swatch for each preset
-  // (ui.js BUBBLES) and, when the file holds one, its own #rrggbb. The chosen one has a ring.
-  swatches(t, key, name) {
-    const cur = this.prefs[key];
-    const agent = key === "agentBubbleColor";
-    const names = Object.keys(BUBBLES);
-    const list = cur.startsWith("#") ? [...names, cur] : names;
-    const dflt = DEFAULTS[key];
-    const shown = cur.startsWith("#") ? cur : `${cur[0].toUpperCase()}${cur.slice(1)}`;
-    return v_flex().gap(6)
-      .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(name))
-        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(cur === dflt ? `${shown} · default` : shown)))
-      .child(h_flex().gap(6).flex_wrap().children(list.map((v) => {
-        const st = bubbleStyle(v, t, agent);
-        const on = v === cur;
-        return div().id(`th-${key}-${v}`).flex_none().size(22).rounded(11).p(2).cursor_pointer()
-          .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
-          .child(div().size_full().rounded(9).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.border : st.fill));
-      })));
   }
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
@@ -5503,11 +6403,11 @@ export default class Threads extends View {
       .when(buttons.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(buttons)));
   }
 
-  button(t, id, label, onClick, icon) {
-    return h_flex().id(id).h(26).px(9).gap(5).items_center().rounded(6).cursor_pointer().bg(t.raised).border_1().border_color(t.border)
+  button(t, id, label, onClick, icon, size = BUTTON) {
+    return h_flex().id(id).h(size.h).px(size.px).gap(size.gap).items_center().rounded(6).cursor_pointer().bg(t.raised).border_1().border_color(t.border)
       .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
       .on_click((e, cx) => { cx.stop_propagation(); onClick(e, cx); })
-      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(13).text_color(t.muted)))
+      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(size.icon).text_color(t.muted)))
       .child(label);
   }
 
@@ -5589,8 +6489,8 @@ export default class Threads extends View {
     if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
       const n = this.counts().hiddenAll;
-      return this.empty(t, "bot", "Nothing you typed yet",
-        `Nothing you typed in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,
+      return this.empty(t, "bot", "No user messages yet",
+        `No user messages in this session yet. ${plural(n, "agent message")} ${n === 1 ? "is" : "are"} hidden.`, null,
         [this.button(t, "th-show-agents", "Show them", (_e, cx) => { this.setAgents(true, cx); cx.notify(); }, "bot")]);
     }
     const slots = this.slotsMemo;
@@ -5723,6 +6623,7 @@ export default class Threads extends View {
     const strip = !this.floating() && this.hasDayStrip(rows);
     return v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e, cx) => {
+        if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
         this.notePointer(e.position, cx);
@@ -5730,6 +6631,7 @@ export default class Threads extends View {
       // Where the press landed, for the action bar (a list item takes one click handler,
       // so its parts are told apart by position), in design px.
       .on_mouse_down("left", (e, cx) => {
+        if (this.covered()) return;
         const x = e.local_position?.x;
         const w = e.bounds?.width;
         // In the column's own px: a centred column starts colLeft() in.
@@ -5747,7 +6649,7 @@ export default class Threads extends View {
         .when(Boolean(sticky), (el) => el.child(div().id("th-sticky-day").child(this.dayPill(t, sticky))))))
       .child(div().id("threads-listbox").flex_1().min_h(0).w_full().relative()
         .on_size_change((size, cx) => { const h = size.height / this.zoom(); if (Math.abs(h - this.listH) > 1) { this.listH = h; cx.notify(); } })
-        .on_scroll_wheel((e) => this.listWheel(e))
+        .on_scroll_wheel((e) => { if (!this.covered()) this.listWheel(e); })
         .child(h_flex().size_full().justify_center().child(div().h_full().w_full()
           .child(v_virtual_list(this.listGen ? `threads-list-${this.listGen}` : "threads-list", rows.length, slots, (i) => rows[i]?.key ?? `gone:${i}`,
             (range) => this.listItems(t, rows, slots, range, focusedPanel, dim))
@@ -6145,10 +7047,10 @@ export default class Threads extends View {
   }
   youText(r) { return this.youClip(r.turn, r.full); }
 
-  // "YOU", "YOU · COMMAND" or "FROM T7 REVIEW".
+  // "USER", "USER · COMMAND" or "FROM T7 REVIEW".
   youLabel(turn) {
     if (turn.agent) return turn.sender?.name ? `FROM ${turn.sender.name.toUpperCase()}` : kindWords(turn.sender).toUpperCase();
-    return turn.cmd ? "YOU · COMMAND" : "YOU";
+    return turn.cmd ? "USER · COMMAND" : "USER";
   }
 
   // The YOU block as TextView Markdown (ui.js promptMd: quotes as blockquotes, code kept,
@@ -6162,14 +7064,14 @@ export default class Threads extends View {
     // does not read on a coloured bubble. There the message is plain text in the bubble's
     // ink, quotes behind their bar, as for a filter match.
     const plain = hl || (r.turn.agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor) !== "plain";
-    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.remote.repo ?? ""}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
+    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
     const max = r.full ? FULL_PROMPT_CHARS / 8 : 4000;
     const parts = plain ? promptParts(c.text, max) : null;
     const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
-      : promptMd(c.text, { links: this.links, repo: this.remote.repo, owner: this.remote.owner, max });
+      : promptMd(c.text, { links: this.links, ...this.linkCtx(), max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
     const bmax = bubbleMax(this.width, this.prefs.textSize, this.chars());
@@ -6318,10 +7220,10 @@ export default class Threads extends View {
   partSig(r, base = this.sigBase()) {
     const head = `${base}|${r.kind}`;
     switch (r.kind) {
-      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.remote.repo ?? ""}`; }
+      case "you": { const y = this.youMd(r); return `${head}|${y.text.length}|${y.more}|${r.full ? 1 : 0}|${y.hl ? this.filterText() : ""}|${y.plain ? 1 : 0}|${y.capped ? 1 : 0}|${this.linksVer}|${this.repoSig()}`; }
       case "rhead": return `${head}|${this.captionParts(r.turn).map((x) => x[1]).join("|")}`;
       case "itext": return `${head}|${r.md.length}|${this.linksVer}`;
-      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.remote.repo ?? ""}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
+      case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
       case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
@@ -6635,7 +7537,7 @@ export default class Threads extends View {
   // Hover reveal: an element whose text and icons are clear at rest and dim while the
   // pointer is on it. Children that set no colour of their own take it. gpui restyles only
   // the hovered element itself, so the strip a hover reveals must sit inside that element.
-  reveal(t, el) { return el.text_color(CLEAR).hover((s) => s.text_color(t.dim)); }
+  reveal(t, el) { return el.text_color(CLEAR).when(!this.covered(), (x) => x.hover((s) => s.text_color(t.dim))); }
 
   // The strip under a bubble (ui.js stripLayout): on the selected turn, copy the prompt, the
   // pin (in the accent colour when the turn is pinned) and "#7 · 9:12 AM", at the bubble's
@@ -6699,7 +7601,7 @@ export default class Threads extends View {
   // which would draw a second card.
   lineIcon(t, itemKey, key, probe) {
     const state = this.infoState(key);
-    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard))) return { state };
+    if (probe || !Popup || (state !== "on" && (this.detailsOpen || !HoverCard || this.covered()))) return { state };
     const turn = this.findTurn(key);
     if (!turn || this.detailsAnchor(key) !== itemKey) return { state };
     const up = this.detailsDir(itemKey, turn) === "up";
@@ -6931,7 +7833,7 @@ export default class Threads extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(size).text_color(c).child(text));
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
       .child(v_flex().flex_1().min_w(0).gap(P.GAP)
@@ -6969,7 +7871,7 @@ export default class Threads extends View {
       : turn.interrupted || this.failed(turn) ? this.statusIcon(t, turn) : null;
     return h_flex().w_full().h(outlineHeight(this.prefs.textSize)).relative().px(ROW.PAD_X).gap(8).items_center().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
       .child(div().flex_none().w(r.numW).text_size(11.5).font_family(this.mono()).text_color(sel ? t.muted : t.dim).child(`#${turn.n}`))
       .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
       .when(Boolean(icon), (el) => el.child(icon))
@@ -7520,6 +8422,9 @@ export default class Threads extends View {
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
+  // The room the key hints take at the pane's foot: none while they are off (settings keyHints).
+  footSpace() { return this.prefs.keyHints ? (this.footerH ?? 38) : 0; }
+
   footer(t) {
     const hint = (k, label) => (k === "?"
       ? h_flex().id("th-keys-hint").cursor_pointer().tooltip("Every key (?)")
@@ -7540,7 +8445,7 @@ export default class Threads extends View {
   keySheetH(groups) {
     const rows = groups.reduce((n, [, items]) => n + items.length, 0);
     const want = 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
-    const room = (this.rootH || 600) - 46 - (this.footerH ?? 38) - 6;
+    const room = (this.rootH || 600) - 46 - this.footSpace() - 6;
     return Math.max(120, Math.min(want, room));
   }
 
@@ -7554,6 +8459,8 @@ export default class Threads extends View {
     const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
+      // Nothing under the sheet takes the wheel (covered()).
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
@@ -7632,7 +8539,7 @@ export default class Threads extends View {
   detailsView(t) {
     const turn = this.detailsTurn();
     if (!turn) return div();
-    return h_flex().absolute().bottom((this.footerH ?? 38) + 8).left(0).right(0).px(8).justify_center()
+    return h_flex().absolute().bottom(this.footSpace() + 8).left(0).right(0).px(8).justify_center()
       .on_click((_e, cx) => { cx.stop_propagation(); this.detailsOpen = false; cx.notify(); })
       .child(this.detailsCard(t, turn).mt(0));
   }
@@ -7798,7 +8705,9 @@ export default class Threads extends View {
     const left = this.railLeft();
     // The peak: each tick's width from its distance in px to the hovered tick, set in the draw
     // that opens the card. Distances count the day gaps.
-    const hi = this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
+    // Under the settings card or the keys sheet the rail takes no hover, press or wheel.
+    const quiet = this.covered();
+    const hi = quiet || this.railHover == null ? -1 : ticks.findIndex((k) => k.key === this.railHover);
     let ys = null;
     if (hi >= 0) {
       ys = [];
@@ -7807,8 +8716,9 @@ export default class Threads extends View {
     }
     // The pointer on the rail holds its window (railTicks).
     const rail = v_flex().id("th-rail").absolute().top(RAIL.PAD).bottom(RAIL.PAD).w(look.lane).justify_center()
-      .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
-      .on_scroll_wheel((e, cx) => this.railWheel(e, cx));
+      .when(!quiet, (el) => el
+        .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.railOn)) { this.railOn = Boolean(on); if (!on) cx.notify(); } })
+        .on_scroll_wheel((e, cx) => this.railWheel(e, cx)));
     // A cut end has a 9 px row past it, holding a dot for a pin or the running turn that lies
     // that way; a press brings it into the window.
     const endRow = (id, d, above) => {
@@ -7817,9 +8727,11 @@ export default class Threads extends View {
       const turn = this.railMemo.all[d.i].turns[0].turn;
       const dot = div().absolute().top((L.pitch - RAIL.DOT) / 2).size(RAIL.DOT).rounded(RAIL.DOT / 2).bg(d.live ? busy : t.accent)
         .when(d.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
+      const place = left ? dot.left(look.right + 3) : dot.right(look.right + 3);
+      if (quiet) return row.child(place);
       return row.cursor_pointer().tooltip(`${d.live ? "Working" : "Pinned"} #${turn.n} ${above ? "above" : "below"}`)
         .on_click((_e, cx) => { cx.stop_propagation(); this.railReveal(d.i, cx); })
-        .child(left ? dot.left(look.right + 3) : dot.right(look.right + 3));
+        .child(place);
     };
     return (left ? rail.left(0).items_start() : rail.right(0).items_end())
       .when(cut, (el) => el.child(endRow("th-rail-up", dotTop, true)))
@@ -7840,10 +8752,11 @@ export default class Threads extends View {
         const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
           .transition("width", { duration: grow && !grow.on ? FLASH.FADE : RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
-        const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
-          .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.railClick(k.key, cx); })
+        const still = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
+          .when(k.dayStart, (el) => el.mt(RAIL.DAY))
           .child(left ? mark.left(look.right) : mark.right(look.right));
+        if (quiet) return still;
+        const tick = still.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); this.railClick(k.key, cx); });
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
@@ -7990,7 +8903,7 @@ export default class Threads extends View {
   }
   pillView(t) {
     const dot = this.unseen === true;
-    return h_flex().absolute().bottom((this.footerH ?? 38) + PILL_GAP).left(0).right(0).justify_center()
+    return h_flex().absolute().bottom(this.footSpace() + PILL_GAP).left(0).right(0).justify_center()
       .child(h_flex().id("th-latest-pill").flex_none().h(PILL_H).px(12).gap(6).items_center().rounded(PILL_H / 2)
         .bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md().cursor_pointer()
         .text_size(12).text_color(t.foreground).hover((s) => s.bg(this.solidFill(t, t.hover)))
@@ -8004,10 +8917,17 @@ export default class Threads extends View {
   toastView(t) {
     // Just above the footer, whose hints can wrap to two lines, and above the pill.
     const pill = this.pillShown() ? PILL_H + PILL_GAP : 0;
-    return h_flex().absolute().bottom((this.footerH ?? 38) + 6 + pill).left(0).right(0).justify_center()
+    return h_flex().absolute().bottom(this.footSpace() + 6 + pill).left(0).right(0).justify_center()
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
-        .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
+        .when(!this.toast.widths, (el) => el.child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)))
+        // Shift w: the three widths, the one now on strong.
+        .when(Boolean(this.toast.widths), (el) => el
+          .child(h_flex().id("th-toast-widths").flex_none().gap(10).items_center().children(WIDTH_NAMES.map((k) => {
+            const on = k === this.toast.widths.cur;
+            return div().flex_none().whitespace_nowrap().text_color(on ? t.foreground : t.dim).when(on, (x) => x.font_semibold()).child(WIDTH_WORDS[k]);
+          })))
+          .when(this.toast.widths.tight && this.pw() >= 420, (x) => x.child(div().flex_none().whitespace_nowrap().text_size(11.5).text_color(t.dim).child("too narrow here to show")))));
   }
 }
