@@ -5,8 +5,8 @@
 # pins, the outline, its footer hint, the header with no pin button and no agent name over a
 # reply, approved with the merge of PR 24; viewer and keys retaken 2026-11-12 with the image
 # viewer's reading panel, approved with the owner's go on the viewer design).
-# All 17 were retaken 2026-11-18 for 1.0 (from rc-1, Herdr 0.1.16) and still need the owner's
-# approval. All show the staged acme-web session (test/make-hero.js, test/make-agents.js), and
+# All 17 were retaken 2026-11-18 for 1.0 (from rc-1, Herdr 0.1.16) and approved with the merge
+# of PR 134 the same day. All show the staged acme-web session (test/make-hero.js, test/make-agents.js), and
 # each passed the PNG check before it was pinned. The check skips a pinned file only while its
 # sha256 matches, so a changed image is scanned again.
 # Format: <sha256> <path>
