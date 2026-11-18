@@ -51,6 +51,10 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["←", "→", "h", "l"], "Previous or next image"], [["j", "k", "Space"], "Scroll the reply"], [["i"], "Show or hide the prompt and reply"],
       [["c"], "Copy the reply"], [["1-9"], "Go to that image"], [["Esc", "q"], "Close"],
     ]],
+    ["Settings card", [
+      [["↑", "↓", "j", "k"], "Scroll the card"], [["Page Up", "Page Down", "Space"], "Scroll it a page"], [["Home", "End"], "Its top or its end"],
+      [["Esc", ","], "Close it"],
+    ]],
     ["View", [
       [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
@@ -431,6 +435,54 @@ export function viewerKey(e, panel = true) {
   if (k === "escape" || k === "q" || k === "enter") return "close";
   if (/^[1-9]$/.test(k)) return `go:${Number(k) - 1}`;
   return null;
+}
+// Keys while the settings card is open and none of its fields has the keyboard: the card
+// scrolls, and the list under it stays where it was. Esc and the comma close it (keyAction).
+export function cardKey(e) {
+  const m = e?.modifiers ?? {};
+  if (m.platform || m.control || m.alt || m.function || m.shift) return null;
+  const k = e?.key ?? "";
+  if (k === "down" || k === "j") return "down";
+  if (k === "up" || k === "k") return "up";
+  if (k === "pagedown" || k === "space") return "pagedown";
+  if (k === "pageup") return "pageup";
+  if (k === "home") return "home";
+  if (k === "end") return "end";
+  return null;
+}
+// The settings card's scroll by keys. Herdr can only bring one of a scroll area's direct
+// children into view, with the smallest scroll, so the card's scroll area holds a 1 px mark
+// every CARD_MARK px down its rows (and one on the last pixel). cardMarks gives their places.
+// cardScroll: where a key takes the view from y (rows h tall, a view of viewH), and the mark
+// that gets it there: going down, a mark viewH - 1 under the new top, brought up to the
+// bottom edge; going up, the mark at the new top, brought down to the top edge. A line is
+// CARD_LINE px; a page is the view less a line, so a line of the last page stays in sight.
+export const CARD_MARK = 8;
+export const CARD_LINE = 40;
+export function cardMarks(h) {
+  const last = Math.max(0, Math.floor(h) - 1);
+  const out = [];
+  for (let y = 0; y < last; y += CARD_MARK) out.push(y);
+  out.push(last);
+  return out;
+}
+export function cardScroll(kind, y, h, viewH) {
+  if (!(h > 0) || !(viewH > 0)) return null;
+  const maxY = Math.max(0, h - viewH);
+  if (maxY < 1) return null;
+  const page = Math.max(CARD_LINE, viewH - CARD_LINE);
+  const want = { down: y + CARD_LINE, up: y - CARD_LINE, pagedown: y + page, pageup: y - page, home: 0, end: maxY }[kind];
+  if (want == null) return null;
+  const to = Math.max(0, Math.min(maxY, want));
+  if (Math.abs(to - y) < 1) return null;
+  const marks = cardMarks(h);
+  const near = (at) => marks.reduce((best, m, i) => (Math.abs(m - at) < Math.abs(marks[best] - at) ? i : best), 0);
+  if (to > y) {
+    const i = near(to + viewH - 1);
+    return { y: Math.max(0, Math.min(maxY, marks[i] + 1 - viewH)), mark: i };
+  }
+  const i = near(to);
+  return { y: marks[i], mark: i };
 }
 // One line of a prompt as pieces: plain text, and each pasted-image label ([Image #3]) with
 // its number. A label inside an inline code span stays text.
