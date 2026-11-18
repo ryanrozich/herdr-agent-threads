@@ -11,6 +11,8 @@
 //   --usage      add /usage command lines (with and without origin, both tag orders)
 //   --skill      add a custom command (/review-pr 12) that Claude answers
 //   --subagents  add a turn with three Agent calls (launch results only) between two commands
+//   --three      with --only 0: a short session of three turns, as one real one: a failing
+//                test fixed, a test run started in the background, a subagent's review
 //   --peer       add a peer prompt that lands mid-turn and shares one turn_duration
 //   --notify     add a task notification that lands before its turn's turn_duration
 //   --agents     add turns other senders gave: an hc report <hc from="t7 review">, a peer
@@ -78,6 +80,7 @@ const hostile = bool("--hostile");
 const edge = bool("--edge");
 const blocks = bool("--blocks");
 const imagesFx = bool("--images");
+const three = bool("--three");
 const extra = Number(flag("--extra") ?? 0);
 const only = flag("--only");
 const busy = Number(flag("--busy") ?? 0);
@@ -251,6 +254,27 @@ tool("Edit", { file_path: "README.md" }, "ok", null);
 assistant([{ type: "text", text: "Documented the retry flag under **Testing**." }], { out: 40 });
 end(19000);
 
+}
+
+// A short session, three turns a few seconds apart: a failing test run, an edit and a run
+// that passes; a test run started in the background ("sleep 8 && bun test"); a review by a
+// subagent that answers in the call.
+if (three) {
+  let p = prompt("The date test fails, fix it", "human", 20);
+  tool("Bash", { command: "bun test date" }, "1 fail", p, null, true);
+  tool("Edit", { file_path: "src/date.ts", old_string: "new Date()", new_string: "clock()" }, "ok", p);
+  tool("Bash", { command: "bun test date" }, "3 pass", p);
+  assistant([{ type: "text", text: "Fixed: the test now reads a fixed clock." }], { out: 40, secs: 2 });
+  end(5000);
+  p = prompt("Run the whole suite in the background", "human", 6);
+  tool("Bash", { command: "sleep 8 && bun test", run_in_background: true }, "Command running in background with ID: bg1", p, { backgroundTaskId: "bg1" });
+  assistant([{ type: "text", text: "Started; it reports when it ends." }], { out: 20, secs: 2 });
+  end(15000);
+  p = prompt("Have a subagent review the fix", "human", 8);
+  tool("Agent", { description: "Review the date fix", prompt: "Review the change to src/date.ts.", subagent_type: "general-purpose" },
+    "The fix is right; one test name is out of date.", p, { status: "completed", agentId: "a0000000000000001", totalDurationMs: 11000, totalTokens: 9000 });
+  assistant([{ type: "text", text: "The review agrees with the fix." }], { out: 30, secs: 2 });
+  end(19000);
 }
 
 if (usage) {

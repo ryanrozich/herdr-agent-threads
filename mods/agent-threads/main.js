@@ -1776,11 +1776,12 @@ export default class Threads extends View {
       }
       if (this.view !== "pinned" && !this.outlined() && rows.length) { rows = [...rows, { kind: "tail", key: "tail", h: TAIL }]; sizes = [...sizes, TAIL]; }
       // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
-      // reads from the top: pin 1 first.
+      // and the Trajectory's ledger read from the top: pin 1 first, turn 1 first.
       // The floating top: a list that fills the pane starts TOP_BAND down, so its first row is
       // not under the state; a short one's spacer is at least that tall.
       const total = sizes.reduce((x, y) => x + y, 0);
-      if (this.view !== "pinned" && this.listH > 0 && rows.length && total + gap < this.listH - 1) {
+      this.listFits = this.listH > 0 && rows.length > 0 && total + gap < this.listH - 1;
+      if (this.view !== "pinned" && !this.ledger() && this.listFits) {
         rows = [{ kind: "spacer", key: "spacer", h: this.listH - total }, ...rows];
         sizes = [this.listH - total, ...sizes];
       } else if (gap && rows.length) {
@@ -3158,8 +3159,8 @@ export default class Threads extends View {
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
     if (!dy || this.view === "pinned") return;
-    // A list that fits the pane (the spacer above it) does not scroll at all.
-    if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    // A list that fits the pane (the spacer above it, or a short ledger) does not scroll at all.
+    if (this.rowsMemo?.[0]?.kind === "spacer" || (this.ledger() && this.listFits)) return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
@@ -3758,7 +3759,11 @@ export default class Threads extends View {
     const k = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
     // Not in the frame that finished a build (its slowest): the last layout stays for that
     // frame, and the next one lays out.
-    if (this.tlMemo && this.tlMemo.k !== k && cx && this.renderOpen && this.builtFrame === this.renders) {
+    // Never two frames in a row: a debug pane (measure) and a session that grows every frame
+    // finish a build in every frame, and the layout would stay the first one, made before the
+    // session was read (no turns).
+    if (this.tlMemo && this.tlMemo.k !== k && cx && this.renderOpen && this.builtFrame === this.renders && this.tlKept !== this.renders - 1) {
+      this.tlKept = this.renders;
       if (!this.tlNext) { this.tlNext = true; cx.timer.after(0, (cx) => { this.tlNext = false; cx.notify(); }); }
       return this.tlMemo;
     }

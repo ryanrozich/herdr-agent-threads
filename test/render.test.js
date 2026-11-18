@@ -8118,6 +8118,64 @@ test("Trajectory timeline over 2,000 turns: laid out once, few spans, a frame wi
   console.log(`timeline at ${m.L.turns.length} turns: layout ${m.ms.toFixed(2)} ms, ${spans} spans`);
 });
 
+// Found on the rig with a real three-turn session: the pane draws before it has read the
+// session, so the timeline's first layout has no turns; a debug pane finishes a rows build in
+// every frame (its timing), and the layout was kept in every such frame, so it stayed empty.
+// It now waits one frame at most. And a short ledger starts at the top, not at the bottom like
+// the chat; a long one still opens at its end.
+test("Trajectory timeline in a debug pane drawn before the session is read: bars for all three turns; a short ledger starts at the top, a long one opens at its end", async () => {
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: fixture("--only", "0", "--three"), debug: true, view: "trajectory" }, shared: {},
+  };
+  const v = new Threads();
+  const cx = makeCx();
+  v.init(state.props, cx);
+  v.paneW = 1100; v.rootH = 900; v.listH = 790;
+  const snap = () => state.shared["threads.debug"].t4;
+  draw(v, cx);
+  expect(snap().tlayout.timeline.turns).toBe(0);
+  await settle(v);
+  settleRows(v, cx);
+  rec = [];
+  draw(v, cx);
+  draw(v, cx);
+  const c = rec;
+  rec = null;
+  expect(v.ledgerSums().turns).toBe(3);
+  expect(snap().tlayout.timeline.turns).toBe(3);
+  expect(snap().tlayout.timeline.spans).toBeGreaterThan(3);
+  for (const id of ["th-tl-input|user|0", "th-tl-model|model|0", "th-tl-tools|tools|0", "th-tl-tools|failed|0", "th-tl-tools|sub|0"]) expect(c.some(([n, x]) => n === "id" && x === id)).toBe(true);
+  for (const n of ["1", "2", "3"]) expect(c.some(([m, x]) => m === "child" && x === n)).toBe(true);
+  // Moves keep it.
+  v.key(keyEv("k"), cx);
+  v.key(keyEv("k"), cx);
+  draw(v, cx);
+  expect(snap().tlayout.timeline.turns).toBe(3);
+  // The ledger's first row is turn 1's heading: no spacer above it.
+  const rows = v.rows();
+  expect(rows[0].kind).not.toBe("spacer");
+  expect(rows.find((r) => r.kind !== "gap")).toMatchObject({ kind: "trh", n: 1 });
+  // A wheel over a list that fits does not stop following.
+  v.follow = true;
+  v.listWheel({ delta: { y: 40 } });
+  expect(v.follow).toBe(true);
+
+  // A long one: no spacer either, and it opens at its end, as before.
+  const long = await pane(fixture("--extra", "80"), { view: "trajectory" });
+  const w = long.v;
+  w.paneW = 1100; w.rootH = 900; w.listH = 790;
+  let toEnd = 0;
+  w.scroll = { scroll_to_bottom() { toEnd++; }, scroll_to_item() {} };
+  settleRows(w, long.cx);
+  long.cx.flush(16);
+  expect(w.rows()[0].kind).not.toBe("spacer");
+  expect(w.follow).toBe(true);
+  expect(toEnd).toBeGreaterThan(0);
+  expect(w.tsel ?? w.sel).toBe(w.ledgerSums().heads.at(-1).key);
+});
+
 test("Trajectory failures: a failed call and a failed subagent run; the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
   const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
@@ -8531,17 +8589,18 @@ test("a 2,000-turn Trajectory (over 10,000 rows) gives the list one size and dra
   console.log(`chat ${c.rows().length} rows for ${c.current().turns.length} turns`);
 });
 
-test("a short Trajectory sits at the bottom on 24 px fillers that fit the pane, and the array of sizes is never given", async () => {
+// Every round drew the ledger from the top: a short one has no spacer above it (the chat's
+// short list sits at the bottom, by the newest turn).
+test("a short Trajectory starts at the top, with no spacer, and the array of sizes is never given", async () => {
   const { evenRows } = await import("../mods/agent-threads/ledger.js");
   const { v, cx } = await pane(fixture("--only", "2"), { view: "trajectory" });
   v.listH = 1000;
   settleRows(v, cx);
   draw(v, cx);
   const rows = v.rows();
-  const pad = rows.filter((r) => r.kind === "spacer");
-  const built = rows.length - pad.length;
-  expect(pad.length).toBe(Math.floor((1000 - (built - 1) * 24 - 24) / 24));
-  expect(pad.length * 24 + built * 24).toBeLessThanOrEqual(1000);
+  expect(rows.filter((r) => r.kind === "spacer").length).toBe(0);
+  expect(rows.find((r) => r.kind !== "gap")).toMatchObject({ kind: "trh", n: 1 });
+  expect(rows.length * 24).toBeLessThanOrEqual(1000);
   expect(lastList.as).toBe(24);
   // evenRows: a taller row keeps a first slot and is followed by fillers; all 24 px rows are left as they are.
   const r = evenRows([{ kind: "divider", key: "div:1" }, { kind: "trh", key: "1:1" }], [36, 24]);
