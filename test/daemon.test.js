@@ -35,14 +35,15 @@ function holder(files, argv0, cwd) {
 }
 
 // A process whose name is codex (pgrep -x codex): a copy of bash with that name, waiting on
-// a sleep (the trailing ":" keeps bash from exec'ing sleep, which would rename it). A copy
-// of sleep will not do: on Linux it can be coreutils' one binary for every tool, which
-// goes by its name and fails as "codex".
+// a sleep in the background (so bash does not exec sleep, which would rename it). A copy of
+// sleep will not do: on Linux it can be coreutils' one binary for every tool, which goes by
+// its name and fails as "codex". The trap ends the sleep with bash: kill() reaches bash only,
+// and a bare "sleep 30; :" left the sleep running for its 30 s after the test.
 function namedCodex(cwd) {
   const bin = join(tmp("threads-codex-bin-"), "codex");
   copyFileSync(execFileSync("sh", ["-c", "command -v bash"], { encoding: "utf8" }).trim(), bin);
   chmodSync(bin, 0o755);
-  return spawn(bin, ["-c", "sleep 30; :"], { cwd, stdio: "ignore" });
+  return spawn(bin, ["-c", "trap 'kill $! 2>/dev/null; exit 0' TERM INT HUP; sleep 30 & wait"], { cwd, stdio: "ignore" });
 }
 
 test("pickCodexDaemon: the folder's terminal session that began after the process, newest written", () => {

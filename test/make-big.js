@@ -6,10 +6,10 @@
 //          file-history-snapshot lines, roughly the mix of a long real session
 //   noisy  about 85% of the bytes in bookkeeping lines
 //   dense  conversation lines only: the worst case for the extractor (most bytes parsed)
-import { createWriteStream, readFileSync, mkdtempSync } from "node:fs";
+import { createWriteStream, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const [out, mb, mode = "real"] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
 if (!out || !mb) { console.error("usage: bun test/make-big.js <out.jsonl> <megabytes> [real|noisy|dense]"); process.exit(2); }
@@ -17,6 +17,7 @@ const target = mb * 1024 * 1024;
 const tmp = join(mkdtempSync(join(tmpdir(), "threads-big-")), "base.jsonl");
 execFileSync("bun", [join(import.meta.dir, "make-fixture.js"), tmp, "00000000-0000-4000-8000-000000000001", "/tmp/threads-demo", "--extra", "400"], { stdio: "ignore" });
 const base = readFileSync(tmp, "utf8").trimEnd().split("\n").filter((l) => !l.includes('"custom-title"') && !l.includes('"last-prompt"'));
+rmSync(dirname(tmp), { recursive: true, force: true });
 const sid = "00000000-0000-4000-8000-000000000001";
 const filler = (n) => "x".repeat(n);
 const w = createWriteStream(out);

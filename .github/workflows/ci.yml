@@ -30,10 +30,12 @@ jobs:
       - name: Extractor syntax (jq)
         run: for f in mods/*/core/extract*.jq; do echo '"x"' | jq -R -f "$f" > /dev/null; done
 
-      - name: Tests
+      # bun test through the leftover check: it fails when the run leaves a file in its temp
+      # folder or a process running.
+      - name: Tests, leaving nothing behind
         run: |
           command -v sqlite3 || { sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3; }
-          bun test
+          sh test/leftover-check.sh
 
       # The commits this push or pull request adds. A full-history scan is a one-time manual pass.
       - name: Secrets in new commits (gitleaks)

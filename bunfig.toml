@@ -1,0 +1,3 @@
+[test]
+# One temp folder per run, removed with the processes the run started when it ends.
+preload = ["./test/preload.js"]
