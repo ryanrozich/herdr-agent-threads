@@ -5,7 +5,7 @@
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
 // layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
-// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
+// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, the Pinned column once its Threads pane is gone, and for a dock move (e) the old Trajectory pane, Pinned and the chat, which it opens again; never a terminal). The only programs
 // it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
 // Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
@@ -72,7 +72,7 @@ import {
   keySheet, fitHints, agentState, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, parseTrajectory, saveTrajectory, TRAJ_MIN_H } from "./settings.js";
 import { MOD } from "./name.js";
 import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, bandRows, TL_LANES, tornPoints, slantPoints, polyRows } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
@@ -181,6 +181,27 @@ const SEL_KEY = "threads.turnSel";
 // pane itself), and given this px width, room for its start column and bars (ledger.js).
 const TRAJ_SPLIT_MIN = 480;
 const TRAJ_COL = 560;
+// The Trajectory's two docks (e moves it): on the right of the chat, or across the bottom
+// (moveDock). shared("threads.dockSwap"): terminal -> the move under way, { id, to, mode,
+// phase, at, from, chat, pin, term, chatPx, pinPx, before }, written by the key that asked
+// for it and carried out by the new Trajectory pane, whose props carry the id (swapStep).
+// mode "tab": under the whole tab, terminal included, so the chat (and Pinned) close and
+// open again beside the terminal; "chat": under the chat and Pinned (more than one terminal
+// in the tab: no terminal is ever closed). A move older than DOCK_HOLD is dropped, and only
+// while one is fresh does a side pane stay open with its chat gone (autoPinned).
+const DOCK_KEY = "threads.dockSwap";
+const DOCK_HOLD = 15000;
+// The chat waits this long at most for the chat to save its place before it is closed.
+const DOCK_SAVE_WAIT = 3000;
+// shared("threads.chatKeep"): terminal -> the chat's place as it closed for a move (keepState),
+// which the chat opened in its stead takes once, when it is at most KEEP_FRESH old.
+const KEEP_KEY = "threads.chatKeep";
+const KEEP_FRESH = 30000;
+// The bottom dock's share of the tab when the owner has not dragged it (round 7 decisions:
+// 45%), given to Herdr as a weight beside the top row's 1. Herdr's px height for a pane is the
+// mod's own height and its title bar with the frame, about TRAJ_HEAD px.
+const TRAJ_SHARE = 0.45;
+const TRAJ_HEAD = 32;
 // The Trajectory by its pane's width (round 6, section 3): the filter bar from TRAJ_BAR, its
 // counts from TRAJ_NUMS; the kind's word tag and the detail to the right of the ledger from
 // TRAJ_SIDE (below it under that). In a pane under TRAJ_SHORT tall the detail starts closed.
@@ -701,6 +722,11 @@ export default class Threads extends View {
     // pane. It shows the ledger only, with its own scroll, and selects the turn the chat
     // selects (syncSel).
     this.trajPane = p?.view === "trajectory";
+    // Its dock (props().dock "bottom", or the right), and the move that made it, if any.
+    this.dock = this.trajPane && p?.dock === "bottom" ? "bottom" : "right";
+    this.swapId = this.trajPane && typeof p?.swap === "string" ? p.swap : null;
+    // settings.json "trajectory": where y opens it and the height he dragged it to.
+    this.trajPrefs = { dock: "right", height: null };
     // Tests only, with debug: a pane width to lay out for when the window does not draw
     // (a window behind another never reports its size). Never set by the launcher.
     this.forcedWidth = this.debug && Number(p?.width) > 0 ? Number(p.width) : null;
@@ -791,6 +817,10 @@ export default class Threads extends View {
     this.loadPrefs(cx);
     this.readPins(cx);
     this.resolve(cx);
+    // A chat opened in place of one a dock move closed takes its place back (restoreKeep);
+    // the Trajectory pane a move opened carries the move out (swapStep).
+    if (!this.sideKey()) this.restoreKeep();
+    if (this.swapId) cx.timer.every(150, (cx) => this.swapStep(cx));
     // While the agent works, re-read every few seconds in case a folder event is missed.
     // While a session id has no transcript yet, look for it. Idle panes do nothing here.
     cx.timer.every(5000, (cx) => {
@@ -802,6 +832,7 @@ export default class Threads extends View {
     // The sticky day: redraw once the top of the pane moved into another day.
     cx.timer.every(120, (cx) => {
       this.syncSel(cx);
+      if (this.trajOpen) this.dockWatch();
       // A render Herdr stopped left renderOpen set (no timer runs during a render), and
       // Herdr asks for no render after it: ask for one. This timer was set up here, outside
       // any render, since a timer asked for inside a stopped render may never run.
@@ -1029,6 +1060,7 @@ export default class Threads extends View {
   applyExtras(text) {
     if (text != null && String(text).trim() !== "" && parseSettings(text).error) return;
     const x = parseExtras(text);
+    this.trajPrefs = parseTrajectory(text);
     this.quoteKey = x.quoteKey;
     this.prefsNotes = x.notes;
     this.linkCount = x.linkCount;
@@ -1323,6 +1355,11 @@ export default class Threads extends View {
   me() {
     const own = props()?.pane ?? this.myPane;
     if (own) return panes().find((p) => p.pane === own) ?? null;
+    // A Trajectory pane a dock move opened: the Threads pane the move did not see before.
+    if (this.swapId) {
+      const plan = shared(DOCK_KEY)?.[this.terminal];
+      if (plan?.id === this.swapId && Array.isArray(plan.before)) return panes().find((p) => p.mod === MOD && !plan.before.includes(p.pane)) ?? null;
+    }
     if (this.sideKey()) return this.sideSelf(this.sideKey());
     const known = shared(MAP_KEY)?.[this.terminal];
     const mine = known ? panes().find((p) => p.pane === known.pane) : null;
@@ -1566,6 +1603,8 @@ export default class Threads extends View {
           if ((s.turns.length !== count || !this.sel) && this.follow) this.jumpLatest(true);
           else if (this.follow && wasLoaded && grew && this.view !== "pinned" && !this.outlined()) this.toBottom = true;
           else if (wasLoaded) this.noteNew(before);
+          // A chat that took a closed chat's place: back to the item that was at its top.
+          if (this.keepScroll && this.sessions.every((x) => x.loaded)) { this.scrollTo = this.keepScroll; this.keepScroll = null; }
         } while (this.readAgain && live());
       } catch (e) {
         if (this.readGen === gen) {
@@ -2703,7 +2742,8 @@ export default class Threads extends View {
       // closes the column, so opening Threads again brings both back together.
       const main = this.mainPane();
       if (main) this.mainSeen = true;
-      else if (this.mainSeen && !this.closing) {
+      // Not while a dock move is under way: it closes the chat and opens it again (swapStep).
+      else if (this.mainSeen && !this.closing && !this.dockMoving()) {
         const me = this.me();
         if (me) { this.closing = true; run("pane.close", { pane: me.pane }); }
       }
@@ -3296,6 +3336,8 @@ export default class Threads extends View {
     const open = this.trajPaneOpen();
     if (open) { this.trajOpen = true; this.postSel(); run("pane.focus", { pane: open.pane }); return true; }
     const me = this.me();
+    // Last moved to the bottom (e): it opens there, in every session, until e moves it back.
+    if (me && this.trajPrefs.dock === "bottom" && !this.splitAsk && this.openBottom(null)) return true;
     if (!me || !(this.pw() >= TRAJ_SPLIT_MIN)) {
       this.setTraj(true, cx);
       if (me) this.say(`The Trajectory shows here: its own pane needs Threads ${TRAJ_SPLIT_MIN} px wide`, "list", cx, 3500);
@@ -3378,6 +3420,247 @@ export default class Threads extends View {
     map[this.terminal] = { key: this.sel, by: this.selId, at };
     setShared(SEL_KEY, map);
   }
+  // ---- the Trajectory's docks (e) ----
+  // e in the Trajectory pane moves it: from the right of the chat to across the bottom, or
+  // back. The dock is written to settings.json from the key (saveTraj), so y opens it there
+  // from then on, in every session. Under the whole tab the chat has to close and open again
+  // beside the terminal (Herdr splits only one pane at a time), so its place is kept for the
+  // new chat (keepState, restoreKeep), and Pinned comes back too when it was open.
+  moveDock() {
+    if (!this.trajPane || this.dockMoving()) return true;
+    const me = this.me();
+    if (!me) return false;
+    return this.dock === "bottom" ? this.openRight() : this.openBottom(me.pane);
+  }
+  // A move for this terminal under way (younger than DOCK_HOLD).
+  dockMoving() {
+    const plan = this.terminal ? shared(DOCK_KEY)?.[this.terminal] : null;
+    return Boolean(plan && Date.now() - (plan.at ?? 0) < DOCK_HOLD);
+  }
+  // The props a pane split for this terminal takes: this pane's, less what says which pane.
+  baseProps(view, more = {}) {
+    const { view: _v, dock: _d, swap: _s, pane: _p, ...rest } = props() ?? {};
+    return { ...rest, ...(view ? { view } : {}), ...more };
+  }
+  // Writes the move, dropping those of other terminals that are stale.
+  putPlan(plan) {
+    const map = {};
+    for (const [k, v] of Object.entries(shared(DOCK_KEY) ?? {})) if (k !== this.terminal && Date.now() - (v?.at ?? 0) < DOCK_HOLD) map[k] = v;
+    if (plan) map[this.terminal] = plan;
+    setShared(DOCK_KEY, map);
+  }
+  // The bottom dock: a new Trajectory pane split down from the terminal's pane (mode "tab"),
+  // or from the chat's when the tab holds more than one terminal (mode "chat"). from: the
+  // Trajectory pane on the right that e was pressed in (it closes once the new one is up), or
+  // null from the chat (y). Returns false when there is no chat to dock beside.
+  openBottom(from) {
+    const chat = this.trajPane ? this.mainPane() : this.me();
+    if (!chat) return false;
+    const all = panes();
+    const term = all.find((p) => p.terminal === this.terminal && !p.mod && p.tab === chat.tab) ?? null;
+    const terms = all.filter((p) => p.tab === chat.tab && p.terminal && !p.mod).length;
+    const mode = term && terms === 1 ? "tab" : "chat";
+    const pin = this.pinnedPaneOpen();
+    const w = shared(WIDTH_KEY) ?? {};
+    const id = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+    // From the chat its place is kept at once; from the Trajectory the chat keeps it on its
+    // own timer when it sees the move (dockWatch), before it is closed.
+    const fromChat = !this.trajPane;
+    if (fromChat && mode === "tab") this.putKeep();
+    this.postSel();
+    this.putPlan({
+      id, to: "bottom", mode, phase: mode === "tab" && !fromChat ? "save" : "saved", at: Date.now(), from, chat: chat.pane, pin: pin?.pane ?? null,
+      term: term?.pane ?? null, chatPx: Number.isFinite(w[chat.pane]) ? w[chat.pane] + PANE_FRAME : null,
+      pinPx: pin && Number.isFinite(w[pin.pane]) ? w[pin.pane] + PANE_FRAME : this.keptPinWidth(), before: all.map((p) => p.pane),
+    });
+    // Under the chat and Pinned: Pinned closes first, so the split down spans both once it is
+    // back (a split down beside an open Pinned would run under the chat alone).
+    if (mode === "chat" && pin) run("pane.close", { pane: pin.pane });
+    run("pane.split", { pane: mode === "tab" ? term.pane : chat.pane, direction: "down", mod: MOD, props: this.baseProps("trajectory", { dock: "bottom", swap: id }) });
+    this.saveTraj({ dock: "bottom" });
+    return true;
+  }
+  // Back to the right: the chat split right for a new Trajectory pane, which closes this one.
+  openRight() {
+    const chat = this.mainPane();
+    if (!chat) return false;
+    const id = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+    this.postSel();
+    this.putPlan({ id, to: "right", mode: "chat", phase: "saved", at: Date.now(), from: this.me()?.pane ?? null, chat: chat.pane, before: panes().map((p) => p.pane) });
+    run("pane.split", { pane: chat.pane, direction: "right", mod: MOD, props: this.baseProps("trajectory", { dock: "right", swap: id }) });
+    this.saveTraj({ dock: "right" });
+    return true;
+  }
+  // settings.json's trajectory object, patched, from a key. Applied here at once; a save that
+  // finds the file changed meanwhile tries once more on the text it reads then.
+  saveTraj(patch) {
+    this.trajPrefs = { ...this.trajPrefs, ...patch };
+    const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
+      try { this.prefsRaw = await saveTrajectory(appHome(), patch, this.prefsRaw); } catch {
+        const text = await readTextFile(this.prefsPath()).catch(() => null);
+        try { this.prefsRaw = await saveTrajectory(appHome(), patch, text); } catch (e) { this.prefsError = `Could not save settings.json: ${clean(String(e?.message ?? e))}`; }
+      }
+    });
+    this.prefsChain = chain;
+    return chain;
+  }
+
+  // The chat's place, for the chat opened in its stead: the selected turn, what is open in
+  // it, the outline, the search, the item at the top, whether it followed the newest turn,
+  // and whether Pinned was open. Its width goes with the move (chatPx).
+  keepState() {
+    return {
+      at: Date.now(), sel: this.sel, open: [...this.open], full: [...this.full], lineOpen: [...this.lineOpen], lineTouched: [...this.lineTouched],
+      groupOpen: [...this.groupOpen], groupTouched: [...this.groupTouched], callOpen: [...this.callOpen], callAll: [...this.callAll],
+      outline: Boolean(this.outline), outlineBack: this.outlineBack ?? null, query: this.query ?? "", view: this.view, topKey: this.topKey ?? null,
+      follow: Boolean(this.follow), pinOpen: Boolean(this.pinnedPaneOpen()), pinColClosed: Boolean(this.pinColClosed),
+    };
+  }
+  putKeep() {
+    const map = {};
+    for (const [k, v] of Object.entries(shared(KEEP_KEY) ?? {})) if (Date.now() - (v?.at ?? 0) < KEEP_FRESH) map[k] = v;
+    map[this.terminal] = this.keepState();
+    setShared(KEEP_KEY, map);
+  }
+  // The chat, while its Trajectory pane is open (the 120 ms timer): a move from that pane under
+  // the whole tab asks it for its place before it is closed.
+  dockWatch() {
+    const plan = shared(DOCK_KEY)?.[this.terminal];
+    if (plan?.phase !== "save" || plan.chat !== this.me()?.pane) return;
+    this.putKeep();
+    this.putPlan({ ...plan, phase: "saved" });
+  }
+  // A new chat for a terminal whose chat a move just closed: its place back, once.
+  restoreKeep() {
+    const k = shared(KEEP_KEY)?.[this.terminal];
+    if (!k || Date.now() - (k.at ?? 0) > KEEP_FRESH) return;
+    this.sel = k.sel ?? null;
+    for (const [name, list] of [["open", k.open], ["full", k.full], ["lineOpen", k.lineOpen], ["lineTouched", k.lineTouched], ["groupOpen", k.groupOpen], ["groupTouched", k.groupTouched], ["callOpen", k.callOpen], ["callAll", k.callAll]]) {
+      if (Array.isArray(list)) this[name] = new Set(list);
+    }
+    this.outline = Boolean(k.outline);
+    this.outlineBack = k.outlineBack ?? null;
+    if (typeof k.query === "string" && k.query) { this.query = k.query; this.input.set_value(k.query); }
+    if (k.view === "pinned" || k.view === "all") this.view = k.view;
+    this.follow = Boolean(k.follow);
+    // Pinned comes back by the move (or stays closed as he left it), not by the chat's own
+    // first opening with pins.
+    this.pinAutoDone = true;
+    this.pinColClosed = Boolean(k.pinColClosed) && !k.pinOpen;
+    this.keepScroll = !k.follow && (k.topKey || k.sel) ? { key: k.topKey ?? k.sel, how: "land", or: k.sel ? [k.sel] : [] } : null;
+  }
+
+  // The Trajectory pane a move opened, every 150 ms until the move is done: it finds itself
+  // (the one Threads pane the move did not see before), then for the bottom dock under the
+  // whole tab closes the right Trajectory pane, Pinned and the chat, and once they are gone
+  // splits the terminal right for a chat and that chat right for Pinned, at their widths; under
+  // the chat and Pinned it closes the right pane and splits the chat right for Pinned. Then it
+  // takes its height. For the right dock it closes the bottom pane and takes TRAJ_COL.
+  swapStep(cx) {
+    if (this.swapDone) return;
+    const plan = shared(DOCK_KEY)?.[this.terminal];
+    if (!plan || plan.id !== this.swapId || Date.now() - (plan.at ?? 0) > DOCK_HOLD) { this.endSwap(plan?.id === this.swapId); return; }
+    const all = panes();
+    const alive = (id) => Boolean(id) && all.some((p) => p.pane === id);
+    const made = (before) => all.find((p) => p.mod === MOD && p.pane !== this.myPane && !before.includes(p.pane)) ?? null;
+    if (!this.swapSt) {
+      const mine = this.me();
+      if (!mine) return;
+      this.myPane = mine.pane;
+      remember(this.terminal, mine.pane, TRAJ_MAP_KEY);
+      this.swapSt = { stage: "close" };
+    }
+    const st = this.swapSt;
+    if (plan.to === "right") {
+      if (alive(plan.from)) run("pane.close", { pane: plan.from });
+      run("layout.resize", { id: this.myPane, px: TRAJ_COL });
+      this.endSwap(true);
+      return;
+    }
+    const pinNext = () => (plan.pin ? "pin" : "size");
+    switch (st.stage) {
+      case "close":
+        if (plan.mode === "tab") {
+          if (plan.phase !== "saved" && Date.now() - plan.at < DOCK_SAVE_WAIT) return;
+          for (const id of [plan.from, plan.pin, plan.chat]) if (alive(id)) run("pane.close", { pane: id });
+          st.stage = "gone";
+        } else {
+          if (alive(plan.from)) run("pane.close", { pane: plan.from });
+          st.chat = plan.chat;
+          st.stage = pinNext();
+        }
+        return;
+      case "gone":
+        if ([plan.from, plan.pin, plan.chat].some(alive)) return;
+        st.before = all.map((p) => p.pane);
+        run("pane.split", { pane: plan.term, direction: "right", mod: MOD, props: this.baseProps(null) });
+        st.stage = "chatWait";
+        return;
+      case "chatWait": {
+        const c = made(st.before);
+        if (!c) return;
+        st.chat = c.pane;
+        remember(this.terminal, c.pane, MAP_KEY);
+        if (plan.chatPx) run("layout.resize", { id: c.pane, px: plan.chatPx });
+        st.stage = pinNext();
+        return;
+      }
+      case "pin":
+        st.before = all.map((p) => p.pane);
+        run("pane.split", { pane: st.chat, direction: "right", mod: MOD, props: this.baseProps("pinned") });
+        st.stage = "pinWait";
+        return;
+      case "pinWait": {
+        const c = made(st.before);
+        if (!c) return;
+        remember(this.terminal, c.pane, PIN_MAP_KEY);
+        const px = plan.pinPx ?? PIN_COL[0];
+        run("layout.resize", { id: c.pane, px });
+        st.stage = "size";
+        return;
+      }
+      case "size":
+        this.dockHeight(cx);
+        if (plan.mode === "tab" && st.chat) run("pane.focus", { pane: this.myPane });
+        this.endSwap(true);
+        return;
+    }
+  }
+  // The move is done (or dropped): it leaves the shared state, and a height change from here on,
+  // once the dock's own resize has landed, is the owner's (noteDockH).
+  endSwap(drop) {
+    this.swapDone = true;
+    this.dockSetAt = Date.now();
+    if (drop) {
+      const plan = shared(DOCK_KEY)?.[this.terminal];
+      if (plan?.id === this.swapId) this.putPlan(null);
+    }
+  }
+  // The bottom dock's height: the one he last dragged it to, or 45% of the tab (a weight
+  // beside the top row's), never under TRAJ_MIN_H (checked once it has drawn at its size).
+  dockHeight(cx) {
+    const h = this.trajPrefs.height;
+    if (h) run("layout.resize", { id: this.myPane, px: Math.max(TRAJ_MIN_H, h) });
+    else run("layout.resize", { id: this.myPane, weight: Math.round((TRAJ_SHARE / (1 - TRAJ_SHARE)) * 1000) / 1000 });
+    cx.timer.after(1200, () => {
+      if (this.rootH > 0 && this.rootH + TRAJ_HEAD < TRAJ_MIN_H && this.myPane) run("layout.resize", { id: this.myPane, px: TRAJ_MIN_H });
+    });
+  }
+  // The bottom dock's height as it draws: once the move's own resize has landed (1.5 s), a new
+  // height is his drag. Kept here only; his next key writes it (keepDragH), since nothing is
+  // written while Herdr lays out or draws.
+  noteDockH(h) {
+    if (!this.trajPane || this.dock !== "bottom" || !this.swapDone && this.swapId) return;
+    if (Date.now() - (this.dockSetAt ?? 0) < 1500) return;
+    const px = Math.round(h + TRAJ_HEAD);
+    if (px !== this.trajPrefs.height) this.dragH = px;
+  }
+  keepDragH() {
+    const px = this.dragH;
+    this.dragH = null;
+    if (px != null && px !== this.trajPrefs.height) this.saveTraj({ height: Math.max(TRAJ_MIN_H, px) });
+  }
+
   // The other pane's turn, selected here: in the ledger its heading (unless a row of that
   // turn is selected already), in the chat the turn, brought on screen when it is not.
   adoptSel(key, cx) {
@@ -3545,6 +3828,7 @@ export default class Threads extends View {
         if (this.detailShown()) { this.detailWant = false; return true; }
         return false;
       case "copyRef": return this.copyRef(cx);
+      case "dock": return this.trajPane ? this.moveDock() : false;
       case "rangeNext": return this.rangeStep(1, cx);
       case "rangePrev": return this.rangeStep(-1, cx);
       default: return undefined;
@@ -5497,6 +5781,8 @@ export default class Threads extends View {
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
+    // A height the owner dragged the bottom dock to is written with his next key (keepDragH).
+    if (this.dragH != null) this.keepDragH();
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     if (name === "view") return this.openTraj(cx);
@@ -6323,7 +6609,7 @@ export default class Threads extends View {
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
-        if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
+        if (Math.abs(h - this.rootH) > 1) { this.rootH = h; if (this.trajPane && this.dock === "bottom") this.noteDockH(h); cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
         if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); this.shareWidth(); cx.notify(); }

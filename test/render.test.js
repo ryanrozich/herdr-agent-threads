@@ -5715,7 +5715,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1500;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 42 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 43 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -9125,6 +9125,243 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
 // on the rig's Herdr 0.1.15 at bedbd88, with the status's errors empty. The stub's elements
 // have only the methods each Herdr has (HERDR_015, HERDR_016), so every method a view calls
 // is one 0.1.15 has, or goes through main.js's guard, which asks the element first.
+// ---- the Trajectory's docks (e) ---------------------------------------------------------
+
+// A tab with the terminal (p1), the chat (p2), the Trajectory on the right (p3) and Pinned
+// (p4), each in its map, and more panes when given. The chat has a turn open, the outline on,
+// a search, and has scrolled away from the newest turn. Returns the chat and the right pane.
+async function dockTab(more = []) {
+  const { v, cx } = await pane(twoFails());
+  settleRows(v, cx);
+  v.splitAsk = null;
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" }, { pane: "p4", tab: "A", terminal: null, mod: "agent-threads" }, ...more);
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p3" } };
+  state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p4" } };
+  state.shared["threads.width"] = { p2: 571, p4: 298 };
+  const base = { ...state.props };
+  const turns = v.turnKeys(v.rows());
+  v.sel = turns[1];
+  v.open.add(turns[1]);
+  v.lineOpen.add(turns[1]);
+  v.follow = false;
+  v.topKey = turns[1];
+  v.outline = true;
+  v.query = "fix";
+  v.watchTraj();
+  state.props = { ...base, view: "trajectory" };
+  const w = new Threads();
+  const wx = makeCx();
+  w.init(state.props, wx);
+  await settle(w);
+  expect(w.me().pane).toBe("p3");
+  return { v, cx, w, wx, base, turns };
+}
+// A pane made from these props, as Herdr makes one for a split.
+function paneFrom(p) {
+  state.props = p;
+  const n = new Threads();
+  const nx = makeCx();
+  n.init(p, nx);
+  return { n, nx };
+}
+const runs = (name) => log.filter(([, n]) => n === name).map((x) => x[2]);
+const gone = (...ids) => { state.panes = state.panes.filter((p) => !ids.includes(p.pane)); };
+
+test("e: the Trajectory moves under the whole tab; the chat and Pinned close and come back beside the terminal, the chat in its place", async () => {
+  settingsWrites.length = 0;
+  const { v, w, wx, base, turns } = await dockTab();
+  log = [];
+  w.key(keyEv("e"), wx);
+  // The terminal is split down for the new pane; nothing closes yet.
+  const [split] = runs("pane.split");
+  expect(split).toMatchObject({ pane: "p1", direction: "down", mod: "agent-threads", props: { ...base, view: "trajectory", dock: "bottom" } });
+  expect(runs("pane.close")).toEqual([]);
+  const plan = state.shared["threads.dockSwap"].t4;
+  expect(plan).toMatchObject({ to: "bottom", mode: "tab", phase: "save", from: "p3", chat: "p2", pin: "p4", term: "p1", chatPx: 573, pinPx: 300, id: split.props.swap });
+  // The dock is written to settings.json from the key.
+  await w.prefsChain;
+  expect(JSON.parse(settingsWrites.at(-1)).trajectory).toEqual({ dock: "bottom" });
+  // The chat sees the move on its timer and keeps its place.
+  v.dockWatch();
+  expect(state.shared["threads.dockSwap"].t4.phase).toBe("saved");
+  expect(state.shared["threads.chatKeep"].t4).toMatchObject({ sel: turns[1], open: [turns[1]], lineOpen: [turns[1]], outline: true, query: "fix", topKey: turns[1], follow: false, pinOpen: true });
+  // The new pane: it finds itself, then closes the right pane, Pinned and the chat.
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const { n, nx } = paneFrom(split.props);
+  await settle(n);
+  expect([n.trajPane, n.dock, n.me().pane]).toEqual([true, "bottom", "p5"]);
+  log = [];
+  n.swapStep(nx);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+  n.swapStep(nx);
+  expect(runs("pane.close")).toEqual([{ pane: "p3" }, { pane: "p4" }, { pane: "p2" }]);
+  // While they go, the rule that closes a pane split off a chat whose chat is gone waits.
+  gone("p2", "p3", "p4");
+  n.poll(nx);
+  n.poll(nx);
+  expect(runs("pane.close").some((x) => x.pane === "p5")).toBe(false);
+  // Gone: the terminal is split right for the chat, at its old width.
+  log = [];
+  n.swapStep(nx);
+  expect(runs("pane.split")).toEqual([{ pane: "p1", direction: "right", mod: "agent-threads", props: base }]);
+  state.panes.push({ pane: "p6", tab: "A", terminal: null, mod: "agent-threads" });
+  n.swapStep(nx);
+  expect(state.shared["threads.byTerminal"]).toEqual({ t4: { pane: "p6" } });
+  expect(runs("layout.resize")).toEqual([{ id: "p6", px: 573 }]);
+  // Then Pinned beside the chat, at its width.
+  log = [];
+  n.swapStep(nx);
+  expect(runs("pane.split")).toEqual([{ pane: "p6", direction: "right", mod: "agent-threads", props: { ...base, view: "pinned" } }]);
+  state.panes.push({ pane: "p7", tab: "A", terminal: null, mod: "agent-threads" });
+  n.swapStep(nx);
+  expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p7" } });
+  expect(runs("layout.resize")).toEqual([{ id: "p7", px: 300 }]);
+  // Last its own height: 45% of the tab, a weight of 0.818 beside the top row's 1. The move is
+  // done and leaves the shared state. No terminal was ever closed.
+  log = [];
+  n.swapStep(nx);
+  expect(runs("layout.resize")).toEqual([{ id: "p5", weight: 0.818 }]);
+  expect(state.shared["threads.dockSwap"].t4).toBeUndefined();
+  expect(n.swapDone).toBe(true);
+  n.swapStep(nx);
+  expect(log.filter(([, x]) => x === "pane.close")).toEqual([]);
+  // The chat Herdr opens: its place is back, Pinned comes back by the move and not by itself.
+  const { n: c, nx: ccx } = paneFrom(base);
+  expect([c.sel, [...c.open], [...c.lineOpen], c.outline, c.query, c.follow, c.pinAutoDone]).toEqual([turns[1], [turns[1]], [turns[1]], true, "fix", false, true]);
+  await settle(c);
+  expect(c.me().pane).toBe("p6");
+  expect(c.sel).toBe(turns[1]);
+  expect(c.scrollTo).toMatchObject({ key: turns[1], how: "land" });
+  expect(c.keepScroll).toBe(null);
+  // Drawing either pane writes nothing to shared state, with a move under way or not.
+  state.shared["threads.dockSwap"] = { t4: { ...plan, at: Date.now(), phase: "save" } };
+  // (draw() here also runs the test's debug report, which writes threads.debug: left out.)
+  const shown = () => JSON.stringify({ ...state.shared, "threads.debug": null });
+  const before = shown();
+  log = [];
+  c.render(ccx);
+  n.render(nx);
+  expect(shown()).toBe(before);
+  expect(log.filter(([, x]) => x === "pane.close" || x === "pane.split")).toEqual([]);
+  delete state.shared["threads.dockSwap"];
+  state.props = base;
+});
+
+test("e in a tab with two terminals: the Trajectory goes under the chat and Pinned, and no terminal closes", async () => {
+  const { w, wx, base } = await dockTab([{ pane: "p8", tab: "A", terminal: "t5" }]);
+  log = [];
+  w.key(keyEv("e"), wx);
+  // Pinned closes first, then the chat is split down, so the bottom pane spans both once
+  // Pinned is back. The chat stays open.
+  expect(log.filter(([, x]) => x === "pane.close" || x === "pane.split").map((x) => [x[1], x[2].pane, x[2].direction ?? null])).toEqual([["pane.close", "p4", null], ["pane.split", "p2", "down"]]);
+  const plan = state.shared["threads.dockSwap"].t4;
+  expect(plan).toMatchObject({ mode: "chat", phase: "saved", pin: "p4" });
+  gone("p4");
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const { n, nx } = paneFrom({ ...base, view: "trajectory", dock: "bottom", swap: plan.id });
+  await settle(n);
+  log = [];
+  n.swapStep(nx);
+  n.swapStep(nx);
+  expect(runs("pane.close")).toEqual([{ pane: "p3" }]);
+  gone("p3");
+  n.swapStep(nx);
+  expect(runs("pane.split")).toEqual([{ pane: "p2", direction: "right", mod: "agent-threads", props: { ...base, view: "pinned" } }]);
+  state.panes.push({ pane: "p7", tab: "A", terminal: null, mod: "agent-threads" });
+  n.swapStep(nx);
+  n.swapStep(nx);
+  for (let i = 0; i < 5; i++) n.swapStep(nx);
+  expect(n.swapDone).toBe(true);
+  const closed = runs("pane.close").map((x) => x.pane);
+  expect(closed.filter((p) => ["p1", "p8", "p2"].includes(p))).toEqual([]);
+  expect(state.shared["threads.byTerminal"]).toEqual({ t4: { pane: "p2" } });
+  expect(state.shared["threads.pinnedByTerminal"]).toEqual({ t4: { pane: "p7" } });
+  state.props = base;
+});
+
+test("e from the bottom goes back to the right; y opens where e left it, in a later session too; a dragged height is kept and wins", async () => {
+  settingsWrites.length = 0;
+  const { v, cx, base } = await dockTab();
+  gone("p3", "p4");
+  delete state.shared["threads.trajByTerminal"];
+  delete state.shared["threads.pinnedByTerminal"];
+  // The bottom pane, its move done.
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5" } };
+  const { n, nx } = paneFrom({ ...base, view: "trajectory", dock: "bottom" });
+  await settle(n);
+  expect(n.me().pane).toBe("p5");
+  // His drag: a height change after the move's own resize, written with his next key, not before.
+  n.dockSetAt = Date.now();
+  n.noteDockH(300);
+  expect(n.dragH).toBe(undefined);
+  n.dockSetAt = Date.now() - 2000;
+  n.noteDockH(380);
+  expect(n.dragH).toBe(412);
+  expect(settingsWrites.length).toBe(0);
+  n.key(keyEv("j"), nx);
+  await n.prefsChain;
+  expect(JSON.parse(settingsWrites.at(-1)).trajectory).toEqual({ height: 412 });
+  // e: the chat is split right for a new pane, which closes this one and takes 560 px.
+  log = [];
+  n.key(keyEv("e"), nx);
+  const [split] = runs("pane.split");
+  expect(split).toMatchObject({ pane: "p2", direction: "right", props: { ...base, view: "trajectory", dock: "right" } });
+  await n.prefsChain;
+  expect(JSON.parse(settingsWrites.at(-1)).trajectory).toEqual({ height: 412, dock: "right" });
+  state.panes.push({ pane: "p9", tab: "A", terminal: null, mod: "agent-threads" });
+  const { n: r, nx: rx } = paneFrom(split.props);
+  await settle(r);
+  log = [];
+  r.swapStep(rx);
+  expect(runs("pane.close")).toEqual([{ pane: "p5" }]);
+  expect(runs("layout.resize")).toEqual([{ id: "p9", px: 560 }]);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p9" } });
+  expect(state.shared["threads.dockSwap"].t4).toBeUndefined();
+  // y in the chat opens on the right by default ...
+  gone("p5", "p9");
+  delete state.shared["threads.trajByTerminal"];
+  state.props = base;
+  v.paneW = 573;
+  v.applyExtras('{"trajectory": {"dock": "right"}}');
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(runs("pane.split")[0]).toMatchObject({ pane: "p2", direction: "right", props: { view: "trajectory" } });
+  v.splitAsk = null;
+  // ... and at the bottom once e left it there, from the settings file a new session reads,
+  // under the whole tab, with the chat's place kept at once (the chat itself asked).
+  const { settingsPath } = await import("../mods/agent-threads/settings.js");
+  recordFiles[settingsPath(app)] = '{"trajectory": {"dock": "bottom", "height": 412}}\n';
+  try {
+    const { n: c, nx: ccx } = paneFrom(base);
+    await settle(c);
+    expect(c.trajPrefs).toEqual({ dock: "bottom", height: 412 });
+    c.paneW = 573;
+    log = [];
+    c.key(keyEv("y"), ccx);
+    expect(runs("pane.split")[0]).toMatchObject({ pane: "p1", direction: "down", props: { view: "trajectory", dock: "bottom" } });
+    expect(state.shared["threads.dockSwap"].t4).toMatchObject({ mode: "tab", phase: "saved", from: null, chat: "p2", pin: null });
+    expect(state.shared["threads.chatKeep"].t4.at).toBeGreaterThan(Date.now() - 1000);
+    // The pane it opens takes the height he dragged, not 45%.
+    const plan = state.shared["threads.dockSwap"].t4;
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    const { n: b, nx: bx } = paneFrom({ ...base, view: "trajectory", dock: "bottom", swap: plan.id });
+    await settle(b);
+    b.swapStep(bx);
+    b.swapStep(bx);
+    gone("p2");
+    b.swapStep(bx);
+    state.panes.push({ pane: "p6", tab: "A", terminal: null, mod: "agent-threads" });
+    b.swapStep(bx);
+    log = [];
+    b.swapStep(bx);
+    expect(runs("layout.resize")).toEqual([{ id: "p5", px: 412 }]);
+  } finally { delete recordFiles[settingsPath(app)]; }
+  delete state.shared["threads.dockSwap"];
+  state.props = base;
+});
+
 test("element methods: on Herdr 0.1.15 the views call only what its elements have, and the timeline zooms without a pinch; on 0.1.16 it hears one", async () => {
   // The Trajectory at its widest: the timeline zoomed (the map bar), a focus range (the band
   // and the Range bar), a running call (the torn end), the detail; the heading's line with the

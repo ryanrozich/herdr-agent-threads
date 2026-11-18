@@ -4,7 +4,7 @@ import { test, expect, mock } from "bun:test";
 
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
-const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings } = await import("../mods/agent-threads/settings.js");
+const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, parseTrajectory, trajectoryText, saveTrajectory, TRAJ_MIN_H } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
 const CHAT = { textSize: 14, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" };
 
@@ -38,6 +38,30 @@ test("the Trajectory's own key, trajectory, is no chat setting and a chat save k
   const text = '{"agentTurns": false, "trajectory": {"by": "clock"}}';
   expect(parseSettings(text).values.trajectory).toBeUndefined();
   expect(JSON.parse(settingsText({ agentTurns: true }, text)).trajectory).toEqual({ by: "clock" });
+});
+
+test("the trajectory key: where y docks it and the height he dragged, read with defaults and written with every other key kept", async () => {
+  expect(parseTrajectory(null)).toEqual({ dock: "right", height: null });
+  expect(parseTrajectory("not json")).toEqual({ dock: "right", height: null });
+  expect(parseTrajectory('{"trajectory": {"dock": "left", "height": "big"}}')).toEqual({ dock: "right", height: null });
+  expect(parseTrajectory('{"trajectory": {"dock": "bottom", "height": 412.4}}')).toEqual({ dock: "bottom", height: 412 });
+  // Never under the minimum, 270 px.
+  expect(TRAJ_MIN_H).toBe(270);
+  expect(parseTrajectory('{"trajectory": {"dock": "bottom", "height": 120}}').height).toBe(270);
+  // A write patches the object: the chat's values, keys this version does not know, inside
+  // the object too, stay as written.
+  const file = '{"textSize": 16, "quoteKey": "x", "trajectory": {"by": "clock", "dock": "right"}}';
+  const out = JSON.parse(trajectoryText({ dock: "bottom" }, file));
+  expect(out).toMatchObject({ textSize: 16, quoteKey: "x", trajectory: { by: "clock", dock: "bottom" } });
+  expect(JSON.parse(trajectoryText({ height: 400 }, JSON.stringify(out))).trajectory).toEqual({ by: "clock", dock: "bottom", height: 400 });
+  expect(JSON.parse(trajectoryText({ dock: "bottom" }, null)).trajectory).toEqual({ dock: "bottom" });
+  // A hand edit that does not parse is left alone.
+  expect(trajectoryText({ dock: "bottom" }, "{ half")).toBe(null);
+  await expect(saveTrajectory("/app", { dock: "bottom" }, "{ half")).rejects.toThrow(/not valid JSON/);
+  writes.length = 0;
+  const text = await saveTrajectory("/app", { dock: "bottom" }, file);
+  expect(writes).toEqual([{ path: settingsPath("/app"), text, expected: file }]);
+  writes.length = 0;
 });
 
 test("the file text keeps unknown keys and clamps what it writes", () => {

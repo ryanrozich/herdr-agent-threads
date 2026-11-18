@@ -30,9 +30,12 @@
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
 // Every key above is the chat's. The Trajectory (y) reads none of them: it always shows agent
-// messages, marked apart, whatever agentTurns says. Its own settings, when it has some, go
-// under one key of their own, "trajectory" (an object); it has none yet, and a save from the
-// chat keeps the object as written, like any key this version does not know.
+// messages, marked apart, whatever agentTurns says. Its own settings go under one key of
+// their own, "trajectory" (an object): "dock", where y opens it ("right", the default, or
+// "bottom", the last place e moved it to), and "height", the px height the owner last
+// dragged the bottom dock to (none until he drags it). The mod writes them from a key, never
+// from a draw (saveTrajectory). A save from the chat keeps the object as written, and a save
+// of the object keeps the keys in it this version does not know.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -202,11 +205,41 @@ export function parseExtras(text) {
 
 // The file's text for a set of values. Keys this version does not know are kept, so a
 // newer version's settings survive a change made here.
-export function settingsText(values, previous) {
+export function settingsText(values, previous, extra = {}) {
   let keep = {};
   try { const p = JSON.parse(previous ?? ""); if (p && typeof p === "object" && !Array.isArray(p)) keep = p; } catch { /* replaced */ }
   const { values: v } = parseSettings(JSON.stringify({ ...keep, ...values, look: LOOK }));
-  return `${JSON.stringify({ ...keep, ...v, look: LOOK }, null, 2)}\n`;
+  return `${JSON.stringify({ ...keep, ...v, ...extra, look: LOOK }, null, 2)}\n`;
+}
+
+// ---- the Trajectory's own key: where it docks, and the height he dragged it to ----
+export const DOCKS = Object.freeze(["right", "bottom"]);
+// The bottom dock is never made shorter than this (round 7 decisions: the heading, the filter
+// bar, the timeline and four rows).
+export const TRAJ_MIN_H = 270;
+// { dock, height }: dock "right" or "bottom" (right when missing or not one of them); height
+// a whole number of px from TRAJ_MIN_H up, or null (not dragged, or not a number).
+export function parseTrajectory(text) {
+  let raw = null;
+  try { raw = JSON.parse(text ?? ""); } catch { /* the defaults */ }
+  const t = raw && typeof raw === "object" && !Array.isArray(raw) && raw.trajectory && typeof raw.trajectory === "object" && !Array.isArray(raw.trajectory) ? raw.trajectory : {};
+  const h = typeof t.height === "number" && Number.isFinite(t.height) ? Math.round(t.height) : null;
+  return { dock: DOCKS.includes(t.dock) ? t.dock : "right", height: h != null && h > 0 ? Math.max(TRAJ_MIN_H, h) : null };
+}
+// The file's text with the trajectory object patched ({ dock } or { height }), every other
+// key as the file has it. null: the file's text does not parse, so it is left alone.
+export function trajectoryText(patch, previous) {
+  if (!writable(previous)) return null;
+  let keep = {};
+  try { const p = JSON.parse(previous ?? ""); if (p && typeof p === "object" && !Array.isArray(p)) keep = p; } catch { /* replaced */ }
+  const was = keep.trajectory && typeof keep.trajectory === "object" && !Array.isArray(keep.trajectory) ? keep.trajectory : {};
+  return settingsText(parseSettings(previous).values, previous, { trajectory: { ...was, ...patch } });
+}
+// Writes it, with the text last read as the snapshot (a stale one is rejected, as for any save).
+export function saveTrajectory(appHome, patch, expected) {
+  const text = trajectoryText(patch, expected);
+  if (text == null) return Promise.reject(new Error(NOT_SAVED));
+  return writeTextFile(settingsPath(appHome), text, expected ?? null).then(() => text);
 }
 
 // Whether a save may replace the file: not while it holds text that is not a settings
