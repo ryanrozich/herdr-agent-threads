@@ -349,7 +349,9 @@ const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.
 // then given that height (measured()).
 const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
-const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
+// Where hlBlock cuts a line into words: after white space or a HYPHEN_BREAK.
+const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
+const YOU_CHAR = 6.2;// the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
@@ -7559,13 +7561,15 @@ export default class Threads extends View {
 
   // Wrapped text with the filter's matches marked, word by word. rows: each line's spans
   // worked out already (an open message's, ui.js breakSpans), or null to find them here.
+  // A word is one element that does not wrap inside, so a long hyphenated token is cut into
+  // words after each HYPHEN_BREAK too, where the row can wrap.
   hlBlock(t, under, text, color, rows = null) {
     const q = this.filterText();
     if (!rows && (!q || !text.toLowerCase().includes(q.toLowerCase()))) return div().text_color(color).child(text);
     return v_flex().children((rows ?? text.split("\n").map((line) => spans(line, q))).map((row) => h_flex().flex_wrap().min_h(LINE).children(
       row.flatMap((p) => p.hit
         ? [div().rounded(3).bg(this.hlFill(t, under)).text_color(t.foreground).child(p.t)]
-        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
+        : p.t.split(WORD_END).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
   }
 
   // ---- heights ----

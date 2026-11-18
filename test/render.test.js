@@ -11969,7 +11969,14 @@ test("an open bubble draws a long hyphenated token with breaks; copy, quote, sea
   expect(y.hl).toBe(true);
   const hits = y.parts[0].rows.flat().filter((p) => p.hit);
   expect(hits.map((p) => p.t.replaceAll(B, ""))).toEqual(["merge-check"]);
+  // Each word is an element that does not wrap inside: the long token is cut after its breaks.
+  rec = [];
   draw(v, cx);
+  const words = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  rec = null;
+  expect(words).toContain(`nightly-${B}`);
+  expect(words).toContain(`totals-${B}`);
+  expect(words.filter((w) => w.includes(B)).every((w) => w.endsWith(B) || w === `merge-${B}check`)).toBe(true);
   v.setQuery("", cx);
   // Plain bubble: Markdown with the breaks; the message is unchanged.
   v.action("bubbleColor:plain", cx);
