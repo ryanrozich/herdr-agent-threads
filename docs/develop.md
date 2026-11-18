@@ -48,6 +48,18 @@ printf '{"pid":%s,"sessionId":"<idA>","cwd":"/private/tmp/threads-demo"}\n' <dec
 
 To act out `/clear`, write a second fixture made with `--clear` into the same project folder and point the record at its id. Kill the decoy to see "claude exited". With no record and two transcripts in the folder, the pane guesses and offers "Choose from 2…".
 
+## Merging
+
+Pull requests merge to main through Mergify's merge queue (`.mergify.yml`). A pull request enters it when it gets the `queue` label or a `@mergifyio queue` comment, and only once it is out of draft, has no conflict, has a passing `check` and has no unresolved review thread. Mergify batches up to 10 queued pull requests in one draft pull request on top of main, runs `check` on that, and merges each one with a merge commit.
+
+When one pull request has to land after another, put a `Depends-On:` line in the later one's description, with the reference alone on the line:
+
+```text
+Depends-On: #136
+```
+
+Mergify then holds that pull request until #136 has merged, and its Merge Protections check reads pending meanwhile. So a whole set can be labeled at once and still land in order. A line that holds anything besides the reference is ignored. A dependency closed without merging never clears, and neither does a loop. For a stack, where each branch is based on the one below and each pull request above the bottom carries a `Depends-On:` line for the one below it, Mergify queues every member against main and keeps them in order in the same batch. See Mergify's [built-in merge protections](https://docs.mergify.com/merge-protections/builtin/) and [stacked pull requests](https://docs.mergify.com/merge-queue/stacks/).
+
 ## Regenerating the screenshots
 
 `preview.png` and `docs/screenshots/` show a staged session on a made-up project, with no retouching. `test/make-hero.js` writes the transcript, `test/hero/screen.c` is a stand-in for Claude Code in the left terminal (it builds on macOS), and `test/hero/render.py` draws what that terminal shows. A quote really pastes: the stand-in turns on bracketed paste and logs what it receives, and the renderer redraws the prompt from that log.
