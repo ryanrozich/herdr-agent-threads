@@ -12191,7 +12191,10 @@ test("card keys: Enter and Space press the control with the ring, as a click doe
   expect(v.prefs.textSize).toBe(size + 1);
   v.cardRing = "th-bubbleColor-teal"; stopsOf(v); pressKey(v, cx, "enter");
   expect(v.prefs.bubbleColor).toBe("teal");
-  expect(ringed(cardOf(v))).toEqual(["th-bubbleColor-teal"]);
+  const sw = cardOf(v);
+  expect(ringed(sw)).toEqual(["th-bubbleColor-teal"]);
+  // Round a dot the ring is a rounded square, so it does not read as the chosen color's ring.
+  expect(ownOf(sw, "th-bubbleColor-teal")).toContainEqual(["rounded", 8]);
   // The same press through the command the key runs (how the rig drives it).
   v.cardRing = "th-bubbleColor-rose"; stopsOf(v);
   expect(v.action("ring:press", cx)).toBe(true);

@@ -6667,7 +6667,8 @@ export default class Threads extends View {
         .tooltip(`${word(v)}${v === DEFAULTS[key] ? " · default" : ""}`)
         .on_click(press)
         .child(div().size_full().rounded(8).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.muted : st.fill)),
-      t, `th-${key}-${v}`, press, { radius: SWATCH / 2, role: "radio_button", label: `${name}: ${word(v)}` });
+      // A rounded square, not a circle, so it is not taken for the chosen color's ring.
+      t, `th-${key}-${v}`, press, { radius: 5, role: "radio_button", label: `${name}: ${word(v)}` });
     }));
     const title = div().text_size(13).text_color(t.foreground).child(name);
     return oneLine
