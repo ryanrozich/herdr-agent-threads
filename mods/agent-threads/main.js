@@ -60,7 +60,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -170,14 +170,27 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
 const TOP_BAND = 32;
-// The settings card: at most this wide, and the heights of its fixed parts (the title, the
-// tab row and the foot), so its rows get the rest of the room.
+// The settings card: at most this wide, and the heights of its fixed parts (the title and the
+// foot), so its rows get the rest of the room.
 const CARD_W = 440;
 const CARD_HEAD = 40;
-const CARD_TABS = 36;
 const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
+// How far above the pane's bottom the card ends at the least, so a strip of the list stays
+// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
+// where under that the card takes the height. 0 makes the card take the height everywhere.
+const CARD_STRIP = 160;
+const CARD_STRIP_MIN = 514;
+// The card's one page: its sections in order, each with its rows in order (settingsRows draws
+// each row from its key). Moving a row or renaming a section is a change to this list alone.
+const CARD_SECTIONS = [
+  ["Messages", ["textSize", "userColor", "truncate", "time"]],
+  ["Agent messages", ["agents", "agentRail", "agentColor"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Links and keys", ["linkRules", "quoteKey"]],
+  ["File", ["file"]],
+];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
@@ -185,16 +198,13 @@ const SWATCH = 24;
 // A text button's size: the usual, and the card's, which is the height of its rows' controls.
 const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
 const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
-// Its tabs. The Trajectory tab joins them with the Trajectory (draft PR 94).
-const SETTING_TABS = [["general", "General"], ["chat", "Chat"]];
+// The Width chooser's words.
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey and links are never reset.
 const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
-// The preview's times: 9:12 AM for yours, two minutes before for an agent's.
-const PREVIEW_AT = new Date(2000, 0, 1, 9, 12).getTime();
 // The rule editor's fields: key, label, placeholder, the most it takes.
 const RULE_FIELDS = [
   ["name", "Name", "Ticket", 40],
@@ -750,9 +760,10 @@ export default class Threads extends View {
     this.prefsRaw = null; // the file's text as last read or written (null: no file)
     this.prefsError = null;
     this.settingsOpen = false;
-    // The settings card's tab ("general" or "chat") and page ("main" or "links"), and its
-    // rows' height as last drawn ({ key, h }). Not saved: it opens on Chat.
-    this.setTab = "chat";
+    // The settings card's page ("main" or "links") and its rows' height as last drawn
+    // ({ key, h }). Not saved. Each opening counts (cardOpens), so its scroll area is a new
+    // one and it opens at the top.
+    this.cardOpens = 0;
     this.setPage = "main";
     this.cardBody = null;
     // The card's quote key field: what was typed (null: nothing since it opened), and which
@@ -869,7 +880,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { tab: this.setTab, page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
@@ -1144,8 +1155,8 @@ export default class Threads extends View {
 
   // ---- the settings card's state ----
 
-  // Opens the card on the tab of the pane it is opened from (Chat) and gives the pane the
-  // keyboard, so one Esc closes it; or closes it.
+  // Opens the card at the top of its one page and gives the pane the keyboard, so one Esc
+  // closes it; or closes it.
   setSettings(open) {
     if (!open) { this.closeSettings(); return true; }
     this.settingsOpen = true;
@@ -1153,7 +1164,7 @@ export default class Threads extends View {
     this.keysOpen = false;
     this.detailsOpen = false;
     this.quietRail();
-    this.setTab = "chat";
+    this.cardOpens++;
     this.setPage = "main";
     this.leaveLinks();
     this.quoteDraft = null;
@@ -1208,7 +1219,7 @@ export default class Threads extends View {
       this.changePrefs({}, cx, { quoteKey: v });
     }
   }
-  // A field in the card that leaves the screen (another tab, another page, the card closed)
+  // A field in the card that leaves the screen (another page, the card closed)
   // hands the keyboard back to the pane, so the panel's keys work again.
   dropField() {
     if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
@@ -4607,7 +4618,6 @@ export default class Threads extends View {
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
-      case "settingsTab:general": case "settingsTab:chat": if (!this.settingsOpen) return false; this.dropField(); this.setTab = name.slice(12); this.setPage = "main"; return true;
       case "settingsPage:links": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
@@ -5848,12 +5858,11 @@ export default class Threads extends View {
   // A card over the list, under the icons at the top right, CARD_W wide at most (the pane
   // less 12 px each side when narrower). The keys sheet's two pieces: a clear layer over the
   // pane closes it on a press anywhere else in the pane, and the card stops the press. A press
-  // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. The title, the
-  // tabs and the preview stay put while the rows scroll under them; the session's line and
-  // "? keys" sit at the foot. Two tabs, General and Chat, and it opens on Chat, the tab of the
-  // pane it was opened from. The Trajectory tab comes with the Trajectory (draft PR 94).
+  // in another pane closes it too (on_mouse_down_out), if Herdr delivers it. One page: the
+  // title stays put while the rows scroll under it, and the session's line and "? keys" sit
+  // at the foot. It opens at the top. No preview: a change shows in the list behind the card.
   // Spacing (settings-spacing): every band has the same side inset (cardPad), so the title,
-  // the tabs, the labels and the foot share one left edge and the controls one right edge.
+  // the labels and the foot share one left edge and the controls one right edge.
   // While it is open nothing under it reacts (covered()), and the wheel moves only the card:
   // the clear layer keeps the wheel from the list. No scrim, so the colors and the text size
   // are chosen against the real list; the border and a deep shadow mark the layer.
@@ -5861,15 +5870,17 @@ export default class Threads extends View {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
     const top = this.floating() ? TOP_BAND : 46;
-    const room = Math.max(180, (this.rootH || 600) - top - this.footSpace() - CARD_GAP);
+    const h = this.rootH || 600;
+    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
+    const room = Math.max(180, h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
-    const fixed = CARD_HEAD + (links ? 0 : CARD_TABS + this.previewH(w)) + CARD_FOOT + 2;
+    const fixed = CARD_HEAD + CARD_FOOT + 2;
     const bodyMax = Math.max(60, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
-    const key = links ? "links" : this.setTab;
+    const key = links ? "links" : "main";
     const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
-    const rows = links ? this.linkRulesRows(t, w) : this.setTab === "general" ? this.generalRows(t, w) : this.chatRows(t, w);
+    const rows = links ? this.linkRulesRows(t, w) : this.settingsRows(t, w);
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
@@ -5879,8 +5890,7 @@ export default class Threads extends View {
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
         .child(this.cardHead(t, links, close, pad))
-        .when(!links, (el) => el.child(this.cardTabs(t, pad)).child(this.cardPreview(t, w)))
-        .child(v_flex().id(`th-set-body-${key}`).flex_none().h(bodyH).overflow_y_scrollbar()
+        .child(v_flex().id(`th-set-body-${key}-${this.cardOpens}`).flex_none().h(bodyH).overflow_y_scrollbar()
           .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
             .on_size_change((size, cx) => {
               const h = size.height / this.zoom();
@@ -5898,67 +5908,6 @@ export default class Threads extends View {
       .when(links, (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
       .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(links ? "Link rules" : "Settings"))
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
-  }
-
-  // Each tab has 10 px each side, so the first tab's word starts on the inset.
-  cardTabs(t, pad) {
-    return h_flex().flex_none().h(CARD_TABS).px(pad - 10).gap(2).border_b(1).border_color(t.border)
-      .children(SETTING_TABS.map(([k, word]) => {
-        const on = k === this.setTab;
-        return div().id(`th-set-tab-${k}`).flex_none().h_full().px(10).flex().items_center().cursor_pointer()
-          .border_b(2).border_color(on ? t.accent : CLEAR)
-          .text_size(13).font_medium().text_color(on ? t.foreground : t.muted)
-          .hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setTab = k; cx.notify(); })
-          .child(word);
-      }));
-  }
-
-  // The preview, pinned under the tabs: an agent's bubble and yours, drawn from the settings
-  // the list uses. Text size, both colors, the time (an agent's only with Always show time;
-  // yours stands for the selected turn), agent messages hidden (the agent's bubble fades and
-  // says so) and the rail's side (four ticks on that side, inside the inset). The text is at
-  // the real size, never scaled, since text size is one of the things it shows: the sample is
-  // short instead ("From an agent", "From the user"), each bubble at most 45% of the band and
-  // cut past that, with 10 px above and below. Bubbles are padded and rounded as in the list.
-  previewH() { return this.rt().line + 2 * ROW.BUBBLE_PY + 2 * 16 + 2 * 2 + 2 * 10; }
-  cardPreview(t, w) {
-    const P = this.prefs;
-    const rt = this.rt();
-    const pad = cardPad(w);
-    // The rail's side: the ticks on the inset, 8 px wide, then 12 px to the bubbles.
-    const railPad = pad + 8 + 12;
-    const most = Math.floor(w * 0.45);
-    const bubble = (agent, text) => {
-      const look = this.bubbleLook(t, agent);
-      return this.readFont(div()).flex_none().max_w(most).min_w(0).truncate().px(ROW.BUBBLE_PX).py(ROW.BUBBLE_PY)
-        .bg(look.style.fill).text_color(look.theme.foreground).text_size(rt.size).line_height(`${rt.line}px`)
-        .when(look.style.outline, (el) => el.border_1().border_color(t.border))
-        .when(!agent, (el) => el.rounded_tl(14).rounded_tr(14).rounded_bl(14).rounded_br(4))
-        .when(agent, (el) => el.rounded_tl(4).rounded_tr(14).rounded_bl(14).rounded_br(14))
-        .child(text);
-    };
-    const line = (text, color) => div().flex_none().h(16).max_w_full().truncate().text_size(11.5).text_color(color).child(text);
-    const hidden = !P.agentTurns;
-    const half = (w - pad - railPad - 12) / 2;
-    const label = hidden ? ("Agent · hidden in the list".length * 11.5 * PROSE_EM <= half ? "Agent · hidden in the list" : "Agent · hidden") : "Agent";
-    const left = this.railLeft();
-    const ticks = v_flex().absolute().top(14).gap(9).when(left, (el) => el.left(pad)).when(!left, (el) => el.right(pad))
-      .children([0, 1, 2, 3].map((i) => div().w(8).h(i === 2 ? 3 : 2).rounded(1).bg(i === 2 ? t.accent : alpha(t.muted, 0.5))));
-    return h_flex().id("th-set-preview").flex_none().relative().h(this.previewH(w)).pl(left ? railPad : pad).pr(left ? pad : railPad).py(10).gap(12).items_center()
-      .border_b(1).border_color(t.border).bg(t.background)
-      // Hidden agent messages show only in the label over the bubble ("Agent · hidden in the
-      // list"). The bubble keeps full strength, so its words read as in the list (a faded bubble
-      // was 1.9:1 on a light theme).
-      .child(v_flex().flex_1().min_w(0).gap(2).items_start()
-        .child(line(label, this.agentColor(t)))
-        .child(bubble(true, "From an agent"))
-        .child(line(P.alwaysShowTime ? fmtTime(PREVIEW_AT - 2 * 60000) : "", t.dim)))
-      .child(v_flex().flex_1().min_w(0).gap(2).items_end()
-        .child(line("", t.dim))
-        .child(bubble(false, "From the user"))
-        .child(line(fmtTime(PREVIEW_AT), t.dim)))
-      .child(ticks);
   }
 
   // The card's foot, under the scroll: the agent, the turn count and the session's title (the
@@ -6021,7 +5970,7 @@ export default class Threads extends View {
     return { label, note, group, sw, stepper, choose, row, toggle };
   }
 
-  // Reset to defaults, at the end of each tab's rows: every control on the card, faded when
+  // Reset to defaults, once, at the end of the page: every control on the card, faded when
   // every one is at its default. Link rules and the quote key are never touched, which the
   // line under the button says.
   resetRow(t) {
@@ -6034,64 +5983,56 @@ export default class Threads extends View {
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
 
-  // General: what every view shares. Text, the rail's side and the key hints, the two message
-  // colors, link rules and the quote key, and the file.
-  generalRows(t, w) {
+  // The card is one page (settings-structure-review, order B): Messages, Agent messages,
+  // Layout, Links and keys and File, in that order (CARD_SECTIONS), then Reset once. No tabs, no preview: a change
+  // shows in the list behind the card as it is made.
+  settingsRows(t, w) {
     const P = this.prefs;
     const { note, group, sw, stepper, choose, row } = this.cardKit(t);
-    const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
-    const n = this.linkCount ?? 0;
     const qn = this.quoteNote();
-    return [
-      group("Text", [stepper("textSize", "Text size")]),
-      group("Layout", [
-        row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide")),
-        sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints"),
-      ]),
-      group("Colors", [
-        this.colorRow(t, "bubbleColor", "User messages", w),
-        this.colorRow(t, "agentBubbleColor", "Agent messages", w),
-      ]),
-      group("Links and keys", [
-        h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
-          .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
-          .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
-          .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
-          .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
-          .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)),
-        v_flex().gap(4)
-          .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
-            .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-            .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
-          .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked))),
-      ]),
-      group("File", [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null]),
-      this.resetRow(t),
-    ];
-  }
-
-  // Chat: what shapes a bubble or the reading column.
-  chatRows(t, w) {
-    const P = this.prefs;
-    const { group, sw, stepper, choose, row, note } = this.cardKit(t);
-    const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
-    return [
-      group("Messages", [
-        sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null),
-        sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail"),
+    const linkRules = () => {
+      const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
+      const n = this.linkCount ?? 0;
+      return h_flex().id("th-set-links").min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+        .hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.setPage = "links"; cx.notify(); })
+        .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child("Link rules"))
+        .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
+        .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
+        .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
+    };
+    // Each row by its key in CARD_SECTIONS; a row may be more than one element.
+    const rows = {
+      textSize: () => [stepper("textSize", "Text size")],
+      userColor: () => [this.colorRow(t, "bubbleColor", "User message color", w)],
+      agentColor: () => [this.colorRow(t, "agentBubbleColor", "Agent message color", w)],
+      agents: () => {
+        const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
+        return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
+      },
+      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
+      truncate: () => [
         sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
-        sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime"),
-      ]),
-      group("Layout", [
+      ],
+      time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
+      width: () => [
         row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
         this.widthRuler(t, w),
         note(this.widthNote()),
-        sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth"),
-      ]),
-      this.resetRow(t),
-    ];
+      ],
+      keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
+      railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
+      keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      linkRules: () => [linkRules()],
+      quoteKey: () => [v_flex().gap(4)
+        .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
+          .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
+          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+        .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
+      file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
+    };
+    return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
   }
 
   // Under Width: the pane as a thin line and the reading column as its dark part, at their
