@@ -41,7 +41,9 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000002",
+  "afterLine": "00000000-0000-4000-9000-000000000003"
  },
  {
   "n": 2,
@@ -70,7 +72,8 @@
     "k": "text",
     "t": "Let me look at the test first.",
     "cut": false,
-    "at": 1793524388000
+    "at": 1793524388000,
+    "l": "00000000-0000-4000-9000-000000000008"
    },
    {
     "k": "group",
@@ -162,7 +165,9 @@
    "The background build finished cleanly."
   ],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000007",
+  "afterLine": "00000000-0000-4000-9000-000000000018"
  },
  {
   "n": 3,
@@ -225,7 +230,8 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000027"
  },
  {
   "n": 4,
@@ -311,7 +317,9 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000035",
+  "afterLine": "00000000-0000-4000-9000-000000000042"
  },
  {
   "n": 5,
@@ -384,7 +392,9 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000046",
+  "afterLine": "00000000-0000-4000-9000-000000000051"
  },
  {
   "n": 6,
@@ -533,6 +543,8 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "lineId": "00000000-0000-4000-9000-000000000055",
+  "afterLine": "00000000-0000-4000-9000-000000000074"
  }
 ]

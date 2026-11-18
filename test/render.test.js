@@ -5686,7 +5686,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1500;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 41 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 42 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -8387,6 +8387,43 @@ test("Trajectory focus range: a drag on the timeline, its edges, Shift keys and 
   expect(L().x0).toBeGreaterThan(x0);
   up();
   expect(v.trange).not.toBe(null);
+});
+
+// Round 6 section 9: r copies a reference to the selected row in two lines, through the
+// mod's copy path (the test's clipboard stub, never the system's): the turn and step numbers
+// and what the step was, then the transcript's own id and the file.
+test("Trajectory r: a two-line reference, call id or line id and the transcript, through the copy path", async () => {
+  const file = twoFails();
+  const { v, cx } = await pane(file, { view: "trajectory" });
+  v.paneW = 640; v.rootH = 900; v.listH = 600;
+  settleRows(v, cx);
+  const rows = ledgerOnly(v);
+  const bad = rows.find((r) => r.failed && r.tool === "Bash");
+  const head = rows.find((r) => r.kind === "trh" && r.key === `${bad.si}:${bad.turn.n}`);
+  const step = v.baseIndex.get(bad.key) - v.baseIndex.get(head.key);
+  v.ledgerPick(bad.key, false, cx);
+  log = [];
+  v.key(keyEv("r"), cx);
+  expect(cx.clip).toBe(`turn ${bad.turn.n} step ${step}: Bash ${bad.text} (failed)\n${bad.ref} in ${file}`);
+  expect(bad.ref).toMatch(/^call toolu_\S+$/);
+  expect(log.filter((x) => x[0] === "clipboard").length).toBe(1);
+  expect(toastText(v)).toBe("Reference copied");
+  // A text step: its line id. A heading: the turn and its prompt's line.
+  const text = rows.find((r) => r.lk === "text" && r.ref);
+  v.ledgerPick(text.key, false, cx);
+  v.key(keyEv("r"), cx);
+  expect(cx.clip.split("\n")[1]).toBe(`${text.ref} in ${file}`);
+  expect(cx.clip.split("\n")[0]).toMatch(/^turn \d+ step \d+: Text: Let me look/);
+  v.ledgerPick(head.key, false, cx);
+  v.key(keyEv("r"), cx);
+  expect(cx.clip).toBe(`turn ${head.n}: ${head.turn.prompt.split("\n")[0].slice(0, 79)}${head.turn.prompt.length > 79 ? "…" : ""}\nline ${head.turn.lineId} in ${file}`);
+  // No line id (Codex): the turn's id and the step.
+  const codexLike = { ...text, ref: null, turn: { ...text.turn, lineId: undefined, turnId: "019a-turn-7" } };
+  const k = v.baseIndex.get(text.key) - v.baseIndex.get(`${text.si}:${text.turn.n}`);
+  expect(v.refText(codexLike).split("\n")[1]).toBe(`turn 019a-turn-7 step ${k} in ${file}`);
+  // In the chat r does nothing.
+  const chat = await pane(file);
+  expect(chat.v.action("copyRef", chat.cx)).toBe(false);
 });
 
 // Found on the rig with a real three-turn session: the pane draws before it has read the

@@ -9,7 +9,7 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
-  y: "view", f: "nextFail", m: "prevUser", d: "detail", b: "timeline", z: "zoomRange", "+": "wider",
+  y: "view", f: "nextFail", m: "prevUser", d: "detail", b: "timeline", z: "zoomRange", "+": "wider", r: "copyRef",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -57,6 +57,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["d", "↵"], "Show or hide the detail of the selected row"], [["b"], "Show or hide the timeline"],
       [["-", "="], "Zoom the timeline out or in"], [["w"], "Fit the whole session in the timeline"], [["z"], "Zoom the timeline to the range, or the selected turn"],
       [["Shift j", "Shift k"], "Make or move the focus range a row (Shift ↑ ↓ too; or drag on the timeline)"], [["Esc"], "Clear the range, then hide the detail"],
+      [["r"], "Copy a reference to the selected step, for another agent"],
     ]]] : []),
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],

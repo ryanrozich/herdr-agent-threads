@@ -3518,6 +3518,7 @@ export default class Threads extends View {
         if (this.trange) return this.clearRange(cx);
         if (this.detailShown()) { this.detailWant = false; return true; }
         return false;
+      case "copyRef": return this.copyRef(cx);
       case "rangeNext": return this.rangeStep(1, cx);
       case "rangePrev": return this.rangeStep(-1, cx);
       default: return undefined;
@@ -4039,6 +4040,39 @@ export default class Threads extends View {
     const x0 = edge(R.a, false);
     const x1 = edge(R.b, true);
     return x0 == null || x1 == null ? null : { x0, x1: Math.max(x1, x0 + 2) };
+  }
+
+  // ---- the copied reference (round 6, section 9) ----
+  // r: the selected row as two lines, the first for the person pasting and the second for an
+  // agent to search: "turn 212 step 3: Bash bun test export (failed)", then "call <id> in
+  // <transcript>" for a call, "line <id> in ..." for another step (Claude Code's line ids),
+  // or, where the transcript has no id for the step, the turn's id and the step (Codex), else
+  // the file alone. A heading names its turn and its prompt's line. Through the mod's copy
+  // path (copy), with its toast.
+  copyRef(cx) {
+    const k = this.ledgerSel();
+    const i = k != null ? this.baseIndex?.get(k) : undefined;
+    const r = i != null ? this.baseRows?.[i] : null;
+    const text = r ? this.refText(r) : null;
+    if (!text) return false;
+    this.copy(text, `ref:${k}`, "Reference copied", cx);
+    return true;
+  }
+  refText(r) {
+    if (r.kind !== "tr" && r.kind !== "trh") return null;
+    const hi = r.kind === "trh" ? this.baseIndex.get(r.key) : this.baseIndex.get(rowTurnKey(r));
+    const turn = r.turn;
+    const step = r.kind === "trh" || hi == null ? null : this.baseIndex.get(r.key) - hi;
+    const one = (x, n) => { const v = String(x ?? "").replace(/\s+/g, " ").trim(); return v.length > n ? `${v.slice(0, n - 1)}…` : v; };
+    const kind = LEDGER_KINDS[r.lk];
+    const what = r.kind === "trh" ? one(turn?.prompt, 80) : r.tool ? one(`${r.tool} ${r.text ?? ""}`, 90) : `${kind?.label ?? "Step"}: ${one(r.text, 70)}`;
+    const state = r.failed ? " (failed)" : r.lk === "running" ? " (running)" : r.lk === "noresult" ? " (no result)" : "";
+    const first = `turn ${turn?.n}${step != null ? ` step ${step}` : ""}: ${what}${state}`;
+    const file = this.sessions?.[r.si]?.file ?? null;
+    const own = r.kind === "trh" ? (turn?.lineId ? `line ${turn.lineId}` : null) : r.ref;
+    const back = turn?.turnId ? `turn ${turn.turnId}${step != null ? ` step ${step}` : ""}` : null;
+    const second = [own ?? back, file ? `in ${tilde(file)}` : null].filter(Boolean).join(" ");
+    return second ? `${first}\n${second}` : first;
   }
 
   // ---- the focus range (round 6, sections 5 to 7) ----
@@ -5394,7 +5428,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^range(Next|Prev)$/.test(name) || /^(tf|scale):/.test(name)) return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^range(Next|Prev)$/.test(name) || name === "copyRef" || /^(tf|scale):/.test(name)) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));

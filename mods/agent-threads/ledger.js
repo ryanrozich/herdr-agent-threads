@@ -182,7 +182,10 @@ export function ledgerTurn(s, turn, si, live = false) {
   const red = [];
   const openAt = [];
   cells.forEach((c, i) => {
-    const r = { kind: "tr", key: `tr:${key}:${i}`, turn, si, lk: "text", text: "", tool: null, status: null, start: null, dur: null, startQ: false, durQ: false, failed: false };
+    // ref: the transcript's own id for the step, for the copied reference: a call's id, or
+    // the line's (Claude Code), or null.
+    const ref = c.kind === "tool" ? (c.call ? `call ${c.call}` : null) : c.line ? `line ${c.line}` : null;
+    const r = { kind: "tr", key: `tr:${key}:${i}`, turn, si, lk: "text", text: "", tool: null, status: null, start: null, dur: null, startQ: false, durQ: false, failed: false, ref };
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
     if (c.end != null) lastEnd = Math.max(lastEnd ?? c.end, c.end);
     if (c.kind === "user") {

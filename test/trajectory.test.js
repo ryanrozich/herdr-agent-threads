@@ -150,3 +150,28 @@ test("stable ids: a session read again from the top, or whose tail is rewritten,
   for (const e of events.slice(6)) apply(s, e);
   expect(ids(s)).toEqual(first);
 });
+
+// The ids the Trajectory's copied reference (r) carries: Claude Code gives every call its id
+// and every prompt and text its line's id; Codex gives calls their id and each prompt its
+// turn's id, and no id to a text, so the reference falls back to the turn's id there.
+test("trajectory: line ids for Claude Code's prompts and texts, turn ids for Codex, call ids for both, as the ledger's refs", async () => {
+  const { ledgerTurn } = await import("../mods/agent-threads/ledger.js");
+  const c = readFile(claude, "claude");
+  const t = c.turns.find((x) => x.tools > 0 && x.prompt.startsWith("Fix the flaky"));
+  expect(t.lineId).toMatch(/^[0-9a-f-]{36}$/);
+  const cells = trajectory(c, t).groups.flatMap((g) => g.cells);
+  expect(cells[0].line).toBe(t.lineId);
+  for (const x of cells.filter((y) => y.kind === "message")) expect(x.line).toMatch(/^[0-9a-f-]{36}$/);
+  const rows = ledgerTurn(c, t, 0).rows.filter((r) => r.kind === "tr");
+  expect(rows.filter((r) => r.tool).every((r) => /^call toolu_/.test(r.ref))).toBe(true);
+  // The prompt, the text along the way and the reply; a background update (context) has none.
+  expect(rows.filter((r) => !r.tool && r.lk !== "context").map((r) => r.lk)).toEqual(["you", "text", "reply"]);
+  expect(rows.filter((r) => !r.tool && r.lk !== "context").every((r) => /^line [0-9a-f-]{36}$/.test(r.ref))).toBe(true);
+  const x = readFile(codex, "codex");
+  const ct = x.turns.find((y) => y.tools > 0);
+  expect(typeof ct.turnId).toBe("string");
+  expect(ct.lineId).toBe(undefined);
+  const crows = ledgerTurn(x, ct, 0).rows.filter((r) => r.kind === "tr");
+  expect(crows.filter((r) => r.tool).every((r) => /^call \S+$/.test(r.ref))).toBe(true);
+  expect(crows.filter((r) => !r.tool).every((r) => r.ref === null)).toBe(true);
+});

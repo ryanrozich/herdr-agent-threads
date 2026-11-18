@@ -1,7 +1,7 @@
 # agent-threads extractor for Codex rollout files: lines in (jq -R, whole lines only), the same
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model and effort of the turn about to start  {m, e}
-#   p      a prompt   {o: "human", ts, t}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
+#   p      a prompt   {o: "human", ts, t, tid: its turn id}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
 #                     a subagent's message  {o: "peer", ts, t, n: its name}
 #   t      assistant text (commentary and the final answer)  {t, ts}
 #   u      tool call  {n: tool name, id: call id, ts, in: its input in up to 120 characters}
@@ -45,6 +45,7 @@ def prompt($l; $p):
   | [ $c[]? | select(type == "object") | image_type ] as $m
   | if ($t | length) == 0 and ($m | length) == 0 then empty
     else {k: "p", o: "human", ts: $l.timestamp, t: ($t | cap)}
+      + (if ($p.turn_id | type) == "string" then {tid: $p.turn_id} else {} end)
       + (if ($m | length) > 0 and $l.ordinal != null and $p.turn_id != null
          then {img: $m, u: "\($p.turn_id)_\($l.ordinal)"} else {} end)
     end;
