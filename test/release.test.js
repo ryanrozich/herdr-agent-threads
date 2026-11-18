@@ -34,16 +34,17 @@ test("tags read v1.0.1, and the first run starts after the commit v1.0.0 tags", 
 });
 
 test("the release pull request gets its check: release.yml starts ci.yml on its branch, and ci.yml takes that", () => {
-  // A pull request opened with the Actions token starts no workflow run, but a dispatch
-  // with it does, so the workflow runs ci.yml itself on the release branch's head.
+  // A pull request the Actions token opens gets its pull_request runs only once someone
+  // approves them, but a dispatch with that token runs at once, so the workflow runs ci.yml
+  // itself on the release branch's head.
   expect(ci.split("\npermissions:")[0]).toMatch(/^ {2}workflow_dispatch:$/m);
   expect(release).toMatch(/uses: googleapis\/release-please-action@v4\n/);
   expect(release).toMatch(/if: \$\{\{ steps\.release\.outputs\.prs_created == 'true' \}\}/);
   expect(release).toMatch(/BRANCH: \$\{\{ fromJSON\(steps\.release\.outputs\.pr\)\.headBranchName \}\}/);
   expect(release).toMatch(/gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref "\$BRANCH"/);
-  // Only what it needs: write the release commit, tag and release, open the pull request,
-  // and start a workflow run.
-  expect(release).toMatch(/permissions:\n {2}contents: write\n {2}pull-requests: write\n {2}actions: write\n/);
+  // Only what it needs: the action README's three (write the release commit, tag and
+  // release; label; open the pull request), and starting a workflow run.
+  expect(release).toMatch(/\npermissions:\n {2}contents: write\n {2}issues: write\n {2}pull-requests: write\n {2}actions: write\n\n/);
   // Values reach the script through env, never pasted into it.
   expect(release.split("run: |")).toHaveLength(2);
   expect(release.split("run: |")[1]).not.toContain("${{");

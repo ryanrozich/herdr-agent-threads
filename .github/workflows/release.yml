@@ -10,8 +10,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# contents, issues and pull-requests are the three the action's README asks for (it labels
+# its pull request "autorelease: pending"); actions lets the step below start ci.yml.
 permissions:
   contents: write
+  issues: write
   pull-requests: write
   actions: write
 
@@ -27,10 +30,11 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@v4
 
-      # A pull request opened with the Actions token starts no workflow run, so the release
-      # pull request would never get the `check` the queue waits for. A dispatch with that
-      # token does start one, so this runs ci.yml on the release branch, and its `check` lands
-      # on the branch's head, which is the release pull request's head.
+      # A pull request the Actions token opens or updates gets its pull_request runs only in
+      # an approval-required state: they wait until someone with write access approves them,
+      # so the queue's `check` would wait too. A dispatch with that token runs at once, so this
+      # runs ci.yml on the release branch, and its `check` lands on the branch's head, which is
+      # the release pull request's head.
       - name: Run CI on the release pull request
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         env:
