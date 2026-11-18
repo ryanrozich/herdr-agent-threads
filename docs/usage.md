@@ -76,7 +76,7 @@ OpenCode folds a paste of three lines or more, or over 150 characters, into "[Pa
 
 ## Settings in detail
 
-`,` (or the sliders button) opens the settings card over the list, under the icons; the list stays where it was. A press anywhere else in the pane, `Esc`, its close button, `,` or the sliders button closes it. A preview at the top, an agent's bubble and yours, shows the text size, both colors, the time, whether agent messages are hidden and the rail's side as you change them. It has two tabs and opens on Chat:
+`,` (or the sliders button) opens the settings card over the list, under the icons; the list stays where it was. A press anywhere else in the pane, `Esc`, its close button, `,` or the sliders button closes it. While it is open, nothing under it reacts to the pointer or the wheel: the rail and the list wait until it closes. A preview at the top, an agent's bubble and yours, shows the text size, both colors, the time, whether agent messages are hidden and the rail's side as you change them. It has two tabs and opens on Chat:
 
 - **General**: Text size; Rail side (Left or Right) and Key hints at the bottom; the two message colors, User messages and Agent messages (a dot's tooltip names its color); Link rules, which opens a page where you change your rules; the Quote key, a one-letter field (a letter Threads already uses leaves the key as it was, and the line under the field says so); and the settings file's path, with Copy path.
 - **Chat**: Show agent messages, Shorten long messages (with Prompt lines and Reply lines under it while it is on) and Always show time; Width (Comfortable, Wide or Full, with a line under it that shows the reading column in this pane and how many characters a line holds) and Keep the pane at this width.

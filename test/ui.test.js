@@ -7,7 +7,7 @@ import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
-  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT,
+  readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
@@ -1043,4 +1043,14 @@ test("htmlLine: escaped, with tabs and runs of spaces kept; htmlChunks: whole li
   expect(c.reduce((n, x) => n + x.n, 0)).toBe(400);
   for (const x of c) expect(new TextEncoder().encode(x.html).length).toBeLessThanOrEqual(MD_MAX);
   expect(c.map((x) => x.html).join("<br>")).toBe(lines.map(htmlLine).join("<br>"));
+});
+
+test("cutPath: a path cut from its start at a slash, so it begins with a whole folder", () => {
+  const p = "~/.config/herdr-app/data/agent-threads/settings.json";
+  expect(cutPath(p, 80)).toBe(p);
+  expect(cutPath(p, p.length)).toBe(p);
+  expect(cutPath(p, 40)).toBe("…/data/agent-threads/settings.json");
+  expect(cutPath(p, 30)).toBe("…/agent-threads/settings.json");
+  // The file's name stays whole when it alone is longer.
+  expect(cutPath(p, 8)).toBe("…/settings.json");
 });
