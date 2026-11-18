@@ -94,9 +94,10 @@ mock.module("gpui-base", () => ({
   TextView: { html: (id, html) => { const calls = []; views.push({ id, html, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); }, markdown: (id, md) => { mdSources.push([id, md]); const calls = []; views.push({ id, md, calls }); if (rec) rec.push(["TextView", id]); return viewEl(calls); } }, Editor: { new: () => el }, EditorState: { new: (opts) => { const st = { opts, handlers: {}, release() {}, on(ev, f) { st.handlers[ev] = f; return true; } }; editors.push(st); return st; } },
 }));
 // With marks set, exec records when the script hands off ("out") and gets its answer back
-// ("in"), so a test can time the synchronous stretches between awaits.
+// ("in"), with the time and the work counted so far, so a test can measure the synchronous
+// stretches between awaits.
 let marks = null;
-const stamp = (what) => { if (marks) marks.push([what, performance.now()]); };
+const stamp = (what) => { if (marks) marks.push([what, performance.now(), { ...work }]); };
 mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
@@ -165,6 +166,22 @@ function herdrRest() { return {
 // main.js finds its scripts under appHome()/mods/agent-threads.
 execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
+// The read's work, counted for the S1 child: lines parsed and events applied (through a
+// counting stand-in for core/turns.js, in the child only), turns reshaped, and turns whose
+// rows were built.
+const work = { lines: 0, events: 0, reshapes: 0, built: 0 };
+// What each costs in ms in bun with the JIT off, the interpreter's speed, on a developer
+// machine: 0.7 to 1.4 µs a line, 1.25 to 1.4 µs an event, 0.21 to 0.27 ms a reshape, and
+// 4.7 to 4.8 µs a turn's rows without its reshape.
+const PRICE = { lines: 0.001, events: 0.0013, reshapes: 0.22, built: 0.005 };
+// The S1 child's clock: the work done so far, at those prices.
+const worked = () => work.lines * PRICE.lines + work.events * PRICE.events + work.reshapes * PRICE.reshapes + work.built * PRICE.built;
+if (process.env.THREADS_CHILD === "read-timing") {
+  const turnsPath = join(modDir, "core/turns.js");
+  const real = await import(turnsPath);
+  const { parseLine, apply } = real;
+  mock.module(turnsPath, () => ({ ...real, parseLine: (c, line) => { work.lines++; return parseLine(c, line); }, apply: (s, e) => { work.events++; return apply(s, e); } }));
+}
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
 
@@ -1565,9 +1582,20 @@ async function until(f, what, n = 400) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-// Runs in a child bun with BUN_JSC_useJIT=0 (the interpreter's speed); the parent test below
-// starts it and checks what it wrote.
+// Runs in a child bun; the parent test below starts it and checks what it wrote.
+// The child's clock (performance.now, which the read's budgets read too: SLICE_MS, BUILD_MS,
+// SHAPE_MS) moves only by the work counted, at the interpreter's prices (PRICE). On the wall
+// clock the read's last stretch came to 26 to 31 ms against a 30 ms bound, and 40 to 70 ms on
+// a busy machine: time spent waiting for a CPU counted as the read's. On this clock each run
+// does the same work in the same stretches on any machine, however busy, and more work in a
+// stretch still costs more.
 test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fixture and time each synchronous stretch", async () => {
+  for (const [name, n] of [["reshape", "reshapes"], ["turnRows", "built"]]) {
+    const f = Threads.prototype[name];
+    Threads.prototype[name] = function (...a) { work[n]++; return f.apply(this, a); };
+  }
+  const realPerf = performance.now.bind(performance);
+  performance.now = worked;
   const pcts = [];
   let v;
   const r = await paneWith(busy(), (cx, view) => {
@@ -1586,11 +1614,26 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   marks = null;
   // The longest stretch from a resume ("in") to the next hand-off ("out"), or to the end of
   // the read for the last one.
+  // most: the most work of each kind in one stretch.
   let longest = 0;
-  for (let i = 1; i < m.length; i++) if (m[i][0] === "out" && m[i - 1][0] === "in") longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+  const most = { lines: 0, events: 0, reshapes: 0, built: 0 };
+  for (let i = 1; i < m.length; i++) {
+    if (m[i][0] !== "out" || m[i - 1][0] !== "in") continue;
+    longest = Math.max(longest, m[i][1] - m[i - 1][1]);
+    for (const k in most) most[k] = Math.max(most[k], m[i][2][k] - m[i - 1][2][k]);
+  }
+  const read = { ...work };
   // B1: the agent toggle rebuilds the rows, and an open card draws with its probe.
   const view = r.v;
-  const time = (f) => { const a = performance.now(); f(); return performance.now() - a; };
+  // The time a step takes (for the log) and the work it did.
+  const time = (f) => {
+    const w = { ...work };
+    const a = performance.now();
+    f();
+    const out = { ms: performance.now() - a };
+    for (const k in work) out[k] = work[k] - w[k];
+    return out;
+  };
   view.rows();
   const toggleOn = time(() => { view.setPrefs({ ...view.prefs, agentTurns: true }); view.rows(); });
   const toggleOff = time(() => { view.setPrefs({ ...view.prefs, agentTurns: false }); view.rows(); });
@@ -1608,16 +1651,17 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   listWindow = null;
   view.toggle(keys.at(-3), r.cx);
   const allFrame = time(() => view.render(r.cx));
-  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
+  performance.now = realPerf;
+  require("node:fs").writeFileSync(process.env.THREADS_OUT, JSON.stringify({ longest, most, read, pcts, turns: view.current().turns.length, loaded: view.current().loaded, awaits: m.length / 2, toggleOn, toggleOff, openFrame, nextFrame, allFrame }));
 }, 120000);
 
-test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, and the percentage rises chunk by chunk", async () => {
+test("S1: the read's longest synchronous stretch is at most 30 ms of work at the interpreter's speed, and the percentage rises chunk by chunk", async () => {
   const out = join(mkdtempSync(join(tmpdir(), "threads-timing-")), "out.json");
   // Not execFileSync: while the child runs, this process stays free to take a signal, so a
   // stopped run ends the child too (test/preload.js) instead of leaving it reading.
   await new Promise((resolve, reject) => {
     const child = spawn("bun", ["test", join(root, "test/render.test.js"), "-t", "S1 child"], {
-      env: { ...process.env, BUN_JSC_useJIT: "0", THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
+      env: { ...process.env, THREADS_CHILD: "read-timing", THREADS_OUT: out }, stdio: "ignore",
     });
     const timer = setTimeout(() => child.kill(), 120000);
     child.on("error", reject);
@@ -1626,25 +1670,25 @@ test("S1: with JIT off the read's longest synchronous stretch is at most 25 ms, 
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);
   expect(r.turns).toBe(1305);
-  // The bounds below are for a developer machine. GitHub's shared runners measured about 1.3x
-  // slower (32 ms, 207 ms), so CI allows twice each: the regressions they guard against (a
-  // whole read parsed in one go, rows rebuilt per frame) cost several times more.
-  const slow = process.env.CI ? 2 : 1;
-  // 30 ms, not 25: 1,170 of this fixture's 1,305 turns are agent messages with a reply, which
-  // show folded while agent messages are hidden, and the last stretch shapes the turns in view
-  // from them (20 to 23 ms before they showed, 26 to 28 ms after).
-  expect(r.longest).toBeLessThanOrEqual(30 * slow);
+  // The bounds are in ms of work at the interpreter's prices (PRICE, the child's clock), so
+  // they are the same in CI, on any machine and under load. The longest stretch is the last:
+  // it builds the rows (BUILD_MS) and shapes the turns in view (SHAPE_MS), 18.6 ms here.
+  expect(r.longest).toBeLessThanOrEqual(30);
+  // The read yields after each chunk at least: no stretch parses or applies half the session.
+  // A whole read parsed in one go puts every line in one.
+  expect(r.most.lines).toBeLessThan(r.read.lines / 2);
+  expect(r.most.events).toBeLessThan(r.read.events / 2);
   expect(r.pcts.length).toBeGreaterThanOrEqual(4);
   for (let i = 1; i < r.pcts.length; i++) expect(r.pcts[i]).toBeGreaterThan(r.pcts[i - 1]);
   expect(r.pcts.at(-1)).toBe(100);
-  // Showing agent messages shapes about 1,170 rows for the first time: 112 to 133 ms in this
-  // harness, the same as on a build checked in a drawn window, so the bound is loose. Hiding them and
-  // drawing an open card with its probe stay small.
-  expect(r.toggleOn).toBeLessThan(200 * slow);
-  expect(r.toggleOff).toBeLessThan(25 * slow);
-  expect(r.openFrame).toBeLessThan(50 * slow);
-  const f = (x) => x.toFixed(1);
-  console.log(`S1 timing, JIT off: longest stretch ${f(r.longest)} ms over ${r.awaits} awaits; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)} ms, off ${f(r.toggleOff)} ms; open-card frame ${f(r.openFrame)} ms, next ${f(r.nextFrame)} ms; with every row drawn ${f(r.allFrame)} ms`);
+  // Showing agent messages shapes about 1,170 rows for the first time, within the draw's
+  // shaping time, so the bound is loose. Hiding them and drawing an open card with its probe
+  // stay small.
+  expect(r.toggleOn.ms).toBeLessThan(200);
+  expect(r.toggleOff.ms).toBeLessThan(25);
+  expect(r.openFrame.ms).toBeLessThan(50);
+  const f = (x) => `${x.ms.toFixed(1)} ms (${x.reshapes} reshaped, ${x.built} built)`;
+  console.log(`S1 work, at the interpreter's prices: longest stretch ${r.longest.toFixed(1)} ms over ${r.awaits} awaits, at most ${r.most.lines} lines and ${r.most.events} events in one; percent ${r.pcts.join(", ")}; agents on ${f(r.toggleOn)}, off ${f(r.toggleOff)}; open-card frame ${f(r.openFrame)}, next ${f(r.nextFrame)}; with every row drawn ${f(r.allFrame)}`);
 }, 130000);
 
 test("S1: before the first chunk the header says Reading… with no percentage, and the bar is indeterminate", async () => {
