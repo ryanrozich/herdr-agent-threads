@@ -132,7 +132,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `t` | Go to the terminal |
 | `a` | Show or hide agent messages |
 | `w` | Fit the pane to the reading width |
-| `,` | Settings |
+| `,` | Settings; while the card is open, `↑` `↓` `j` `k`, `Page Up` `Page Down` `Space`, `Home` and `End` scroll it |
 | `Shift w` | Step the reading width |
 | `?` | Every key |
 | `Esc` | Back out |

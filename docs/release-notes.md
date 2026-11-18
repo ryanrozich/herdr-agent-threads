@@ -60,7 +60,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 
 ## Settings
 
-- `,` opens the settings card, one page that scrolls, with a strip of the list left in view under it. A change shows in the list behind the card.
+- `,` opens the settings card, one page that scrolls, with a strip of the list left in view under it. A change shows in the list behind the card. The arrows, `j` and `k`, `Page Up`, `Page Down`, `Space`, `Home` and `End` scroll the card (Herdr 0.1.15 or newer), and its scrollbar shows all the time when there is more below.
 - Messages: text size, the user message colour, Shorten long messages and how many lines it shows, and always show time.
 - Agent messages: show agent messages, agent messages on the rail, and the agent message colour.
 - Layout: the reading width and whether the pane keeps it, rail side, and key hints at the bottom.

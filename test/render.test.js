@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -18,7 +18,10 @@ const app = mkdtempSync(join(tmpdir(), "threads-render-"));
 let calls = 0;
 // With rec set, every element method call is recorded as [name, ...args].
 let rec = null;
+// Element methods a test says the running Herdr has, for code that asks with "name in el".
+const stubHas = new Set();
 const el = new Proxy(() => {}, {
+  has(_t, name) { return stubHas.has(String(name)); },
   get(_t, name) {
     if (name === "then") return undefined;
     if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
@@ -6205,8 +6208,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 31 * 25 + 4 * 12 + 8);
+  // Six groups (the settings card's keys among them), 35 rows.
+  v.rootH = 1300;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -8859,6 +8863,135 @@ test("the card's rows scroll inside it: as tall as they are, up to the room abov
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   expect(bodyH()).toBe(room - 38);
+});
+
+// The outside review of PR 128: the card is one long page, and it scrolled only with a wheel
+// or trackpad. The arrows, j, k, Page Up, Page Down, Space, Home and End now scroll it, through
+// a ScrollHandle and the 1 px marks after its rows (cardMarks): Herdr can only bring a direct
+// child into view, with the smallest scroll.
+test("the settings card scrolls by keys: a line, a page, the top or the end; the list under it stays put, and each opening starts at the top", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 800;
+  v.key(keyEv(","), cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 758, width: 440 }, cx);
+  const c = cardOf(v);
+  const viewH = 800 - 32 - 160 - 82;
+  const maxY = 758 - viewH;
+  expect(v.cardPlace("main").viewH).toBe(viewH);
+  // The marks: 1 px boxes down the rows, after them in the scroll area.
+  const marks = cardMarks(758);
+  expect(marks[0]).toBe(0);
+  expect(marks.at(-1)).toBe(757);
+  expect(c.filter((e) => e[0] === "top").map((e) => e[1]).filter((y) => y >= 0 && marks.includes(y)).length).toBeGreaterThanOrEqual(marks.length);
+  const h = v.cardScrolls.main;
+  const y = () => v.cardPlace("main").y;
+  // Where the asked mark puts the view's top: brought up to the bottom edge going down, down
+  // to the top edge going up.
+  const topBy = (down) => { const m = marks[h.asked.at(-1) - 1]; return down ? m + 1 - viewH : m; };
+  const sel = v.sel;
+  const asks = () => h.asked.length;
+  const press = (k) => { const n = asks(); v.key(keyEv(k), cx); return asks() > n; };
+  expect(press("j")).toBe(true);
+  expect(Math.abs(y() - 40)).toBeLessThanOrEqual(4);
+  expect(topBy(true)).toBe(y());
+  expect(press("down")).toBe(true);
+  expect(Math.abs(y() - 80)).toBeLessThanOrEqual(8);
+  expect(press("k")).toBe(true);
+  expect(topBy(false)).toBe(y());
+  expect(Math.abs(y() - 40)).toBeLessThanOrEqual(8);
+  expect(press("up")).toBe(true);
+  expect(y()).toBe(0);
+  expect(press("up")).toBe(false); // at the top already
+  // A page is the view less a line; here the rows end first.
+  expect(press("pagedown")).toBe(true);
+  expect(Math.abs(y() - maxY)).toBeLessThanOrEqual(1);
+  expect(press("pagedown")).toBe(false);
+  expect(press("home")).toBe(true);
+  expect(y()).toBe(0);
+  expect(h.asked.at(-1)).toBe(1);
+  expect(press("space")).toBe(true);
+  expect(press("pageup")).toBe(true);
+  expect(y()).toBe(0);
+  expect(press("end")).toBe(true);
+  expect(Math.abs(y() - maxY)).toBeLessThanOrEqual(1);
+  // The list under the card did not move, and the card is still open.
+  expect(v.sel).toBe(sel);
+  expect(v.settingsOpen).toBe(true);
+  // The same as commands, for key bindings and for a window no keys reach.
+  expect(v.action("settingsScroll:home", cx)).toBe(true);
+  expect(y()).toBe(0);
+  // The wheel moves the card's place, and the keys go on from there. The rows and the area
+  // both hear one wheel event; it counts once.
+  const wheel = { delta: { x: 0, y: -100 }, position: { x: 300, y: 300 }, touch_phase: "moved" };
+  const c2 = cardOf(v);
+  onOf(c2, "th-set-rows-main", "on_scroll_wheel")(wheel, cx);
+  onOf(c2, `th-set-body-main-${v.cardOpens}`, "on_scroll_wheel")(wheel, cx);
+  expect(y()).toBe(100);
+  press("j");
+  expect(Math.abs(y() - 140)).toBeLessThanOrEqual(4);
+  // Esc still closes; each opening starts at the top on both pages.
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  expect(v.action("settingsScroll:down", cx)).toBe(false);
+  v.key(keyEv(","), cx);
+  expect(y()).toBe(0);
+  expect(h.asked.at(-1)).toBe(1);
+  expect(v.cardScrolls.links.asked.at(-1)).toBe(1);
+  // A field with the keyboard keeps its letters: j goes to the field, not the scroll.
+  v.fieldFocused = "quote";
+  expect(press("j")).toBe(false);
+  v.fieldFocused = null;
+  // The Link rules page has its own place and handle.
+  v.action("settingsPage:links", cx);
+  onOf(cardOf(v), "th-set-rows-links", "on_size_change")({ height: 1400, width: 440 }, cx);
+  cardOf(v);
+  const lh = v.cardScrolls.links;
+  const n = lh.asked.length;
+  v.key(keyEv("end"), cx);
+  expect(lh.asked.length).toBe(n + 1);
+  expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
+  expect(y()).toBe(0);
+});
+
+test("on a Herdr with no ScrollHandle the card's keys do nothing to it or to the list, and it has no marks", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 800;
+  v.cardScrolls = null;
+  frame(v, cx);
+  v.key(keyEv(","), cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 758, width: 440 }, cx);
+  const c = cardOf(v);
+  const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+  expect(c.slice(at).some((e) => e[0] === "track_scroll")).toBe(false);
+  expect(c.filter((e) => e[0] === "w" && e[1] === 1).length).toBe(0);
+  const sel = v.sel;
+  expect(sel).toBeTruthy();
+  // The selection is on the newest turn: k and Home would move it, were they the list's.
+  for (const k of ["k", "up", "home", "j", "pagedown", "end"]) { v.key(keyEv(k), cx); expect(v.sel).toBe(sel); }
+  expect(v.cardPlace("main").y).toBe(0);
+  expect(v.settingsOpen).toBe(true);
+});
+
+test("the card's scrollbar is drawn all the time where Herdr has Scrollbar and its mode, in a strip at the right edge; otherwise the scroll area's own bar", async () => {
+  const shown = async () => {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.width = 545; v.paneW = 573; v.rootH = 800;
+    v.key(keyEv(","), cx);
+    return cardOf(v);
+  };
+  let c = await shown();
+  expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  expect(c.some((e) => e[0] === "mode")).toBe(false);
+  stubHas.add("mode");
+  try {
+    c = await shown();
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scroll")).toBe(true);
+    expect(c).toContainEqual(["mode", "always"]);
+    expect(c).toContainEqual(["w", 10]);
+  } finally {
+    stubHas.delete("mode");
+  }
 });
 
 // The owner, 17 Nov: pointing at the settings card near the rail set the rail off under it.
