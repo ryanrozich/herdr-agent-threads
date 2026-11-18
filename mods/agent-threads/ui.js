@@ -9,7 +9,7 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
-  y: "view", f: "nextFail", m: "prevUser", d: "detail", b: "timeline", z: "zoomRange", "+": "wider", r: "copyRef",
+  y: "view", f: "nextFail", m: "prevUser", d: "detail", b: "timeline", z: "zoomRange", "+": "wider", r: "copyRef", e: "dock",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -52,7 +52,8 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ...(outline ? [["Trajectory", [
-      [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
+      [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["e"], "Move the Trajectory pane to the bottom of the tab, or back to the right"],
+      [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
       [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "The user's message before, or after"],
       [["d", "↵"], "Show or hide the detail of the selected row"], [["b"], "Show or hide the timeline"],
       [["-", "="], "Zoom the timeline out or in"], [["w"], "Fit the whole session in the timeline"], [["z"], "Zoom the timeline to the range, or the selected turn"],
