@@ -43,6 +43,15 @@ import * as gpuiKit from "gpui-kit";
 import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
 // A stroked path (the Trajectory's bars and each turn's line), where Herdr has one; divs without.
+// An element method this Herdr may not have (on_pinch is new in 0.1.16): called only when
+// the element has it, else the element as it was. Every element shares one prototype that
+// holds each method the runtime has (gpui-kit's prelude, globalThis.__gpui), so `name in el`
+// answers truly on 0.1.15 and 0.1.16 alike, and on the diagnostic Proxy prototype too, which
+// traps only get. A missing method is undefined there: calling it throws "not a function",
+// and Herdr shows the view's last good version under "unknown element method", from a
+// re-run on that diagnostic prototype. typeof would not do on that re-run (its get returns
+// a function for any name).
+const maybe = (el, name, ...args) => (name in el ? el[name](...args) : el);
 const STROKE = PAINT && typeof gpuiKit.PathBuilder?.stroke === "function" ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
@@ -56,7 +65,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
-  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, countLabel,
+  rowLines, flattenMd, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptParts, linkify,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
@@ -65,9 +74,12 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse, evenRows } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, bandRows, TL_LANES, tornPoints, slantPoints, polyRows } from "./ledger.js";
+import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
+// The Trajectory's numbers before a turn (ledger.js addTotals), kept on its heading.
+const sumsBefore = (t) => ({ turns: t.turns, steps: t.steps, calls: t.calls, failed: t.failed, partialN: t.partial.length, input: t.input, model: t.model, tools: t.tools, user: t.user, agent: t.agent, tokens: t.tokens, worked: t.worked });
 // The rows that stand for a turn, keyed by the turn's own key: the chat's, the outline's and
 // the Trajectory's heading.
 const TURN_ROWS = new Set(["turn", "head", "working", "wrow", "line", "trh"]);
@@ -169,6 +181,27 @@ const SEL_KEY = "threads.turnSel";
 // pane itself), and given this px width, room for its start column and bars (ledger.js).
 const TRAJ_SPLIT_MIN = 480;
 const TRAJ_COL = 560;
+// The Trajectory by its pane's width (round 6, section 3): the filter bar from TRAJ_BAR, its
+// counts from TRAJ_NUMS; the kind's word tag and the detail to the right of the ledger from
+// TRAJ_SIDE (below it under that). In a pane under TRAJ_SHORT tall the detail starts closed.
+const TRAJ_BAR = 540;
+const TRAJ_NUMS = 640;
+const TRAJ_SIDE = 900;
+const TRAJ_SHORT = 560;
+const TRAJ_FBAR = 34;
+// The Range bar under the timeline (a chip in the filter bar from TRAJ_SIDE).
+const TRAJ_RBAR = 28;
+// The timeline at the top of the Trajectory (from TRAJ_BAR wide): a 58 px gutter of lane
+// names, then the turn labels (TL_AX), the ticks (TL_TK) and three 16 px lanes (TL_LANE), with
+// TL_PT above and TL_PB below; 98 px with its line.
+const TL_GUT = 58;
+const TL_AX = 18;
+const TL_TK = 15;
+const TL_LANE = 16;
+const TL_PT = 4;
+const TL_PB = 7;
+const TL_LT = 3;
+const TL_H = TL_PT + TL_AX + TL_TK + TL_LT + 3 * TL_LANE + 2 + TL_PB;
 // syncSel: how long a loaded pane waits for a turn the other pane selected and it has not read
 // or built yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
@@ -188,7 +221,7 @@ const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the d
 const TOP_BAND = 32;
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
-const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 600 };
+const FLASH = { ALPHA: 0.14, AFTER: 140, FADE: 1200 };
 // The day pill over the list shows while you scroll, and goes this long after you stop.
 const DAY_PILL_MS = 1500;
 const PDAY_H = 30; // a day header in the Pinned view
@@ -787,7 +820,9 @@ export default class Threads extends View {
       this.poll(cx);
       this.flushCode(cx);
       if (this.pinDueAt != null && Date.now() >= this.pinDueAt) this.savePins(cx);
-      if (this.liveShown && ["working", "blocked"].includes(this.status())) cx.notify();
+      // In the Trajectory, a running turn's bars run to now: the layout takes the second
+      // (tlLayout), so this tick is what moves a running call's torn end, once a second.
+      if ((this.liveShown || this.trajGoing()) && ["working", "blocked"].includes(this.status())) cx.notify();
       // Past midnight, Today becomes Yesterday in the day bands and the Pinned view's headers.
       const today = dayKey(Date.now());
       if (this.today !== today) { const was = this.today; this.today = today; if (was) cx.notify(); }
@@ -827,6 +862,8 @@ export default class Threads extends View {
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
+      tfoot: this.ledger() ? this.trajFoot().map(([n, w]) => `${n} ${w}`).join(" · ") : null,
+      tlayout: this.ledger() ? { timeline: this.timelineShown() ? { scale: this.tlScale(), z: Math.round((this.tlMemo?.L.z ?? 1) * 100) / 100, x0: Math.round(this.tlMemo?.L.x0 ?? 0), drawn: (this.tlMemo?.L.to ?? -1) - (this.tlMemo?.L.from ?? 0) + 1, turns: this.tlMemo?.L.turns.length ?? 0, spans: [...(this.tlMemo?.L.spans.values() ?? [])].reduce((a, x) => a + x.length, 0), ms: Math.round((this.tlMemo?.ms ?? 0) * 100) / 100 } : null, bar: this.trajTop(), detail: this.detailShown() ? (this.detailSide() ? "right" : "below") : null, filter: filterOn(this.tf) ? this.tf : null, listed: this.filtShown } : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -863,8 +900,9 @@ export default class Threads extends View {
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
       // The Trajectory: "trh#4 4 calls · 1 failed · 12.2k tok · 52s" and
       // "tr#4 failed 0:14 Bash | bun test login | failed 2s".
-      case "trh": return `trh${n} ${Object.values(headParts(r, this.pw())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.gray.length}/${r.line.red.length}` : ""}`;
+      case "trh": return `trh${n} ${Object.values(headParts(r, this.ledgerW())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.tools.length}/${r.line.sub.length}/${r.line.model.length}/${r.line.red.length}` : ""}`;
       case "tr": return `tr${n} ${r.lk} ${r.start != null ? startText(r.start) : r.startQ ? "?" : "-"} ${r.tool ?? ""} | ${r.text} | ${r.status ?? ""} ${r.dur != null ? durText(r.dur) : r.durQ ? "?" : "-"}`;
+      case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
       case "ustrip": { const on = this.sel === `${r.si}:${r.turn.n}`; return `ustrip${n} ${on ? this.stripText(r.turn, true) : `${this.stripText(r.turn, false) || "(empty)"} hover:${this.stripText(r.turn, true)}`}`; }
       case "you": {
@@ -1249,7 +1287,7 @@ export default class Threads extends View {
     this.follow = false;
     this.toBottom = false; // a jump to the newest turn still waiting would take this frame
     const q = this.filterText();
-    const hidden = (q && !threadMatches(s.turns, turn, q)) || !isShown(turn, { agentTurns: this.prefs.agentTurns, live: p.state === "live" });
+    const hidden = (q && !threadMatches(s.turns, turn, q)) || !isShown(turn, { agentTurns: this.prefs.agentTurns, live: p.state === "live", turns: s.turns });
     this.pinVisit = hidden ? key : null;
     // The note above the turn can be out of view when the place is further down.
     if (hidden) this.say(visitNote(Boolean(q && !threadMatches(s.turns, turn, q))), "pin", cx, 3000);
@@ -1731,20 +1769,32 @@ export default class Threads extends View {
       if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
     }
     const z = this.zoom();
-    const gap = this.floating() ? TOP_BAND : 0;
+    const gap = this.floating() && !this.trajTop() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}`;
+    const tf = this.ledger() && filterOn(this.tf) ? this.tf : null;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${tf ? JSON.stringify(tf) : ""}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
+      // The Trajectory's filter bar: the rows it lists, found once a build (filterRows), with
+      // their own index (rowIndex). Nothing listed: a note says so.
+      this.filtIndex = null;
+      this.filtShown = null;
+      if (tf) {
+        const f = filterRows(rows, sizes, tf);
+        ({ rows, sizes } = f);
+        this.filtShown = f.n;
+        if (!f.n) { rows = [...rows, { kind: "note", key: "tf-none", text: "Nothing matches. Turn a filter back on." }]; sizes = [...sizes, LEDGER_ROW]; }
+      }
       if (this.view !== "pinned" && !this.outlined() && rows.length) { rows = [...rows, { kind: "tail", key: "tail", h: TAIL }]; sizes = [...sizes, TAIL]; }
       // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
-      // reads from the top: pin 1 first.
+      // and the Trajectory's ledger read from the top: pin 1 first, turn 1 first.
       // The floating top: a list that fills the pane starts TOP_BAND down, so its first row is
       // not under the state; a short one's spacer is at least that tall.
       const total = sizes.reduce((x, y) => x + y, 0);
-      if (this.view !== "pinned" && this.listH > 0 && rows.length && total + gap < this.listH - 1) {
+      this.listFits = this.listH > 0 && rows.length > 0 && total + gap < this.listH - 1;
+      if (this.view !== "pinned" && !this.ledger() && this.listFits) {
         rows = [{ kind: "spacer", key: "spacer", h: this.listH - total }, ...rows];
         sizes = [this.listH - total, ...sizes];
       } else if (gap && rows.length) {
@@ -1760,6 +1810,7 @@ export default class Threads extends View {
       }
       this.rowsMemo = rows;
       this.indexedRows = rows;
+      if (tf) this.filtIndex = new Map(rows.map((r, i) => [r.key, i]));
       this.sizesMemo = sizes;
       // What the list is given: whole design px. v_virtual_list scales item sizes by zoom
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
@@ -1823,8 +1874,12 @@ export default class Threads extends View {
     for (let i = job.sizes.length; i < out.length; i++) {
       job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
       job.index.set(out[i].key, i);
-      if (job.sums && out[i].failed) job.sums.fails.push(out[i].key);
-      if (job.sums && out[i].partial) job.sums.partial.push(out[i].key);
+      // Each heading brings its turn's numbers, and keeps the session's before its turn, so a
+      // build that keeps the rows before it keeps their numbers too (keptSums).
+      if (job.sums && out[i].kind === "trh") {
+        out[i].cum = sumsBefore(job.sums);
+        addTotals(job.sums, out[i]);
+      }
     }
     for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
     const res = this.buildInfo.resume;
@@ -1837,6 +1892,7 @@ export default class Threads extends View {
       return;
     }
     this.rowJob = null;
+    this.builtFrame = this.renders;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -1851,6 +1907,7 @@ export default class Threads extends View {
     // The selection is on a turn the list no longer shows: agent turns were hidden, or a
     // hidden agent turn that showed while it was live has finished.
     if (this.reselect || this.selHidden()) this.reselectVisible();
+    this.latestAfterBuild();
   }
 
   // Whether a build stopped between slices can go on: the same sessions, earlier ones as they
@@ -1963,6 +2020,7 @@ export default class Threads extends View {
   // first): a search over every row for each one drawn took 1 ms a row in a long session.
   rowIndex(key) {
     const rows = this.rowsMemo ?? [];
+    if (this.filtIndex) return this.filtIndex.get(key) ?? -1;
     // The rows before the built ones: a spacer or a gap (several in the Trajectory, evenRows).
     let off = 0;
     while (rows[off]?.kind === "spacer" || rows[off]?.kind === "gap") off++;
@@ -2017,7 +2075,7 @@ export default class Threads extends View {
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       // The live newest turn (isLive), found once for the session.
       const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
-      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi });
+      const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
       // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
       for (let ti = t0; ti < s.turns.length; ti++) {
@@ -2193,6 +2251,7 @@ export default class Threads extends View {
     this.fitKey = null;
     this.probeList();
     if (this.reselect || this.selHidden()) this.reselectVisible();
+    this.latestAfterBuild();
     return true;
   }
 
@@ -2221,7 +2280,7 @@ export default class Threads extends View {
     tc.set(key, e);
     this.cacheNew.push(e);
   }
-  closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.turnMeas?.get(key) ?? 0}`; }
+  closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.turnMeas?.get(key) ?? 0}|${turn.agent ? (this.foldState({ key, turn, si }) ?? "") : ""}`; }
   // Whether the rows as built can be kept per turn: not while a search, the outline or the
   // Pinned view shapes them.
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.ledger() || this.filterText() ? null : this.closedLook(); }
@@ -2232,10 +2291,46 @@ export default class Threads extends View {
 
   closedRows(item, out) {
     const shape = this.shape(item.turn);
-    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (shape.thumbs ? 1 : 0));
+    const fold = this.foldState(item);
+    if (this.shapeStale) (this.buildStale ??= []).push(out.length + (fold || shape.thumbs ? 1 : 0));
+    // An agent turn with a reply while agent messages are hidden: its one line, then the row
+    // without the sender and, while folded, without the message.
+    if (fold) { out.push({ ...item, kind: "afold", key: `af:${item.key}`, turnKey: item.key, live: false, fold }); out.push({ ...item, shape, fold }); return; }
     if (!shape.thumbs) { out.push({ ...item, shape }); return; }
     out.push({ ...item, kind: "wtop", key: `imgs:${item.key}`, turnKey: item.key, live: false });
     out.push({ ...item, shape, split: true });
+  }
+
+  // An agent turn shown, while agent messages are hidden, for its reply (ui.js agentReplied):
+  // "folded" (its message is one line over the reply) or "shown" (a press on that line drew
+  // the message under it: `full` holds "<turn key>:am"); null for every other turn. While a
+  // search is on, the message is drawn whole, so its matches can be seen.
+  foldState(item) {
+    if (this.prefs.agentTurns || !item.turn?.agent || item.live || this.filterText()) return null;
+    const s = this.sessions[item.si];
+    if (!s || !agentReplied(item.turn, s.turns)) return null;
+    return this.full.has(`${item.key}:am`) ? "shown" : "folded";
+  }
+  // What a fold leaves out of the closed row: its sender line and, folded, the message and
+  // the strip under it (ui.js rowHeight). The row then starts a gap above the line.
+  foldCut(r) {
+    if (!r.fold || r.kind !== "turn") return 0;
+    if (r.fold === "shown") return ROW.PAD_T + ROW.META;
+    const sh = r.shape;
+    return ROW.PAD_T + ROW.META + ROW.GAP + (sh.thumbs ? thumbSize(this.width, this.prefs.textSize, this.chars()) + ROW.GAP : 0)
+      + 2 * ROW.BUBBLE_PY + this.rt().line * sh.p + (sh.pMore ? ROW.MORE : 0) + ROW.GAP + ROW.META;
+  }
+  // The folded message's one line: the sender's icon, "helper-a · agent message" and a
+  // chevron, quiet; a press shows the message, or folds it again.
+  foldLine(t, r) {
+    const { turn } = r;
+    const line = h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0).cursor_pointer()
+      .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
+      .child(div().flex_none().max_w(this.labelRoom(turn, replyWidth(this.width))).overflow_hidden().whitespace_nowrap().text_ellipsis_middle()
+        .text_color(t.muted).child(senderLabel(turn.sender, this.width)))
+      .child(svg(ICON(r.fold === "shown" ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
+    if (r.open) return h_flex().px(ROW.PAD_X).min_w(0).child(line);
+    return this.rowFrame(t, false, false, false, [line], ROW.PAD_T, 0);
   }
 
   // The running turn. With pasted images its meta line and tiles are an item of their own
@@ -2629,13 +2724,16 @@ export default class Threads extends View {
     const agents = this.agentsShown();
     const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}`).join(",")}|${status}|${agents ? 1 : 0}`;
     if (this.countsKey === key) return this.countsMemo;
-    const c = { agentAll: 0, hiddenAll: 0, shownAll: 0, agentCur: 0, hiddenCur: 0, shownCur: 0 };
+    // folded: agent turns shown for their reply, their message one line (foldState).
+    const c = { agentAll: 0, hiddenAll: 0, shownAll: 0, foldedAll: 0, agentCur: 0, hiddenCur: 0, shownCur: 0 };
     const lastSi = this.sessions.length - 1;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
+      const live = this.isLive(s, si, ti, status);
+      const on = isShown(t, { agentTurns: agents, live, turns: s.turns });
       c.agentAll += t.agent ? 1 : 0;
       c.hiddenAll += on ? 0 : 1;
       c.shownAll += on ? 1 : 0;
+      c.foldedAll += on && t.agent && !agents && !live ? 1 : 0;
       if (si === lastSi) { c.agentCur += t.agent ? 1 : 0; c.hiddenCur += on ? 0 : 1; c.shownCur += on ? 1 : 0; }
     }));
     this.countsKey = key;
@@ -2646,6 +2744,12 @@ export default class Threads extends View {
   // Whether agent messages show: the chat's setting (agentTurns, a), and always in the
   // Trajectory, which marks them apart and reads none of the chat's settings for it.
   agentsShown() { return this.ledger() || Boolean(this.prefs.agentTurns); }
+
+  // The agent messages not shown whole while they are hidden: "40 folded, 1 hidden" (folded:
+  // shown for their reply, the message one line; hidden: no reply of their own).
+  agentCountText(c) {
+    return [c.foldedAll ? `${c.foldedAll.toLocaleString()} folded` : null, c.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null].filter(Boolean).join(", ");
+  }
 
   // Whether the selection is on a hidden agent turn.
   selHidden() {
@@ -2745,7 +2849,7 @@ export default class Threads extends View {
     const agents = Boolean(this.prefs.agentTurns);
     const shows = (ti) => {
       const live = this.isLive(s, si, ti, status);
-      return !live && isShown(s.turns[ti], { agentTurns: agents, live }) && !this.open.has(`${si}:${s.turns[ti].n}`);
+      return !live && isShown(s.turns[ti], { agentTurns: agents, live, turns: s.turns }) && !this.open.has(`${si}:${s.turns[ti].n}`);
     };
     if (from < 0) { from = s.turns.length; for (let k = 0; from > 0 && k < SHAPE_FIRST;) if (shows(--from)) k++; }
     for (let ti = from, k = 0; ti < s.turns.length && k < SHAPE_FIRST; ti++) {
@@ -2854,12 +2958,17 @@ export default class Threads extends View {
     const resume = this.resumeAt();
     const push = (row) => { if (row.key === resume) out.push({ ...item, kind: "resume", key: `resume:${key}` }); out.push(row); };
     out.push({ ...item, kind: "head", part: "top" });
-    // Pasted images: their tiles over the message. A tile opens the review.
-    if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
-    // full: the whole message, by the reader's Show all or because long messages are not
-    // shortened; less: Show less, only after a Show all.
-    out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) || !this.prefs.truncate, less: this.full.has(key) && Boolean(this.prefs.truncate), all: this.full.has(`ya:${key}`) });
-    out.push({ ...item, kind: "ustrip", key: `us:${key}` });
+    // An agent turn shown for its reply: its message folded to one line (foldState).
+    const fold = this.foldState(item);
+    if (fold) out.push({ ...item, kind: "afold", key: `af:${key}`, turnKey: key, fold, open: true });
+    if (fold !== "folded") {
+      // Pasted images: their tiles over the message. A tile opens the review.
+      if (turn.images?.length) out.push({ ...item, kind: "imgs", key: `imgs:${key}` });
+      // full: the whole message, by the reader's Show all or because long messages are not
+      // shortened; less: Show less, only after a Show all.
+      out.push({ ...item, kind: "you", key: `you:${key}`, full: this.full.has(key) || !this.prefs.truncate, less: this.full.has(key) && Boolean(this.prefs.truncate), all: this.full.has(`ya:${key}`) });
+      out.push({ ...item, kind: "ustrip", key: `us:${key}` });
+    }
     const text = this.replyText(turn);
     out.push({ ...item, kind: "rhead", key: `rhead:${key}` });
     // Level 1, under the line when it is open: the steps, then straight into the reply. The
@@ -2910,6 +3019,8 @@ export default class Threads extends View {
         const cs = this.codeShape(seg.text, this.full.has(`c:${key}:${i}`));
         out.push({ ...item, kind: "code", key: `code:${key}:${i}`, seg, i, ...cs });
         if (cs.more) out.push({ ...item, kind: "codeall", key: `ca:${key}:${i}`, i, all: cs.all, left: cs.rows - CODE_LINES });
+        // A Mermaid block: View diagram, which opens it drawn as text in the output viewer.
+        if (isDiagram(seg.lang)) out.push({ ...item, kind: "mview", key: `mv:${key}:${i}`, i, seg });
       }
     });
     // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
@@ -3015,7 +3126,7 @@ export default class Threads extends View {
     const agentTurns = this.agentsShown();
     for (let ti = s.turns.length - 1; ti >= 0; ti--) {
       const turn = s.turns[ti];
-      if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti) })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
+      if (isShown(turn, { agentTurns, live: this.isLive(s, si, ti), turns: s.turns })) return `${si}:${turn.n}:${turn.done ? 1 : 0}`;
     }
     return null;
   }
@@ -3063,8 +3174,8 @@ export default class Threads extends View {
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
     if (!dy || this.view === "pinned") return;
-    // A list that fits the pane (the spacer above it) does not scroll at all.
-    if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    // A list that fits the pane (the spacer above it, or a short ledger) does not scroll at all.
+    if (this.rowsMemo?.[0]?.kind === "spacer" || (this.ledger() && this.listFits)) return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
@@ -3097,7 +3208,20 @@ export default class Threads extends View {
     this.unseen = false;
     const last = this.lastTurnKey(this.rows());
     if ((select || !this.sel) && last) this.sel = last;
+    // The first rows build is still going over several frames (a long session, a slow
+    // machine), so there is no turn to select yet: its end selects the newest (latestAfterBuild).
+    else if ((select || !this.sel) && this.rowJob) this.latestDue = { sel: this.sel };
     this.toBottom = true;
+  }
+  // Selects the newest turn when the build that jumpLatest waited for is done, if the pane is
+  // still following and nothing moved the selection meanwhile.
+  latestAfterBuild() {
+    const due = this.latestDue;
+    if (!due) return;
+    this.latestDue = null;
+    if (!this.follow || this.sel !== due.sel) return;
+    const last = this.lastTurnKey(this.baseRows);
+    if (last) { this.sel = last; this.toBottom = true; }
   }
 
   // ---- the outline (o) ----
@@ -3308,6 +3432,7 @@ export default class Threads extends View {
     this.tsel = key;
     this.sel = rowTurnKey(r);
     this.follow = i === this.baseRows.length - 1;
+    this.tlFollow();
     if (!scroll) return true;
     const at = this.rowIndex(key);
     const [a, b] = this.viewRange ?? [0, 0];
@@ -3320,9 +3445,10 @@ export default class Threads extends View {
   // The next ledger row d rows on (heading or step), or the first or last with d = -Infinity
   // or Infinity.
   ledgerStep(d, cx) {
-    const rows = this.baseRows ?? [];
+    // With the filter bar narrowing the list, through the rows it lists.
+    const rows = (this.filtIndex ? this.rowsMemo : this.baseRows) ?? [];
     const own = (r) => r && (r.kind === "tr" || r.kind === "trh");
-    let i = this.baseIndex?.get(this.ledgerSel());
+    let i = (this.filtIndex ?? this.baseIndex)?.get(this.ledgerSel());
     if (d === Infinity || d === -Infinity || i == null) {
       i = d < 0 ? 0 : rows.length - 1;
       while (i >= 0 && i < rows.length && !own(rows[i])) i += d < 0 ? 1 : -1;
@@ -3348,21 +3474,39 @@ export default class Threads extends View {
   }
   // What a build keeps of the last one's sums: those of the rows before from.row.
   keptSums(from) {
-    if (!from) return { fails: [], partial: [] };
-    const b = this.baseSums?.rows === this.baseRows ? this.baseSums : ledgerTotals(this.baseRows.slice(0, from.row));
-    const before = (k) => (this.baseIndex.get(k) ?? Infinity) < from.row;
-    return { fails: b.fails.filter(before), partial: b.partial.filter(before) };
+    if (!from) return newTotals();
+    const rows = this.baseRows;
+    if (this.baseSums?.rows !== rows) return ledgerTotals(rows.slice(0, from.row));
+    const b = this.baseSums;
+    let i = from.row;
+    while (i < rows.length && rows[i].kind !== "trh") i++;
+    const c = i < rows.length ? rows[i].cum : null;
+    if (!c) return ledgerTotals(rows.slice(0, from.row));
+    return { ...c, fails: b.fails.slice(0, c.failed), partial: b.partial.slice(0, c.partialN), users: b.users.slice(0, c.user), heads: b.heads.slice(0, c.turns) };
   }
 
+  // m and Shift m: the user's message before the selection, or after it. At the first or
+  // last one it stops, as f does.
+  stepUser(d, cx) { return this.stepIn(this.ledgerSums().users, d, cx, "user message"); }
   // f and Shift f: the next or previous failed call from the selection. At the last one it
   // stops; nothing pops up.
-  stepFail(d, cx) {
-    const fails = this.ledgerSums().fails;
+  stepFail(d, cx) { return this.stepIn(this.ledgerSums().fails, d, cx, "failed call"); }
+  // With a focus range, only those inside it, and it wraps: past the last, the first. None
+  // inside: the pane says so (what), and the selection stays.
+  stepIn(all, d, cx, what = "row") {
+    // Only the rows the filter bar lists (Failed only lists every failure).
+    let fails = this.filtIndex ? all.filter((k) => this.filtIndex.has(k)) : all;
+    const R = this.rangeIdx();
+    if (R) {
+      fails = fails.filter((k) => { const i = this.baseIndex.get(k); return i != null && i >= R.ia && i <= R.ib; });
+      if (!fails.length) { this.say(`No ${what} in the range`, "alert", cx); return true; }
+    }
     if (!fails.length) return false;
     const at = this.baseIndex?.get(this.ledgerSel()) ?? (d > 0 ? -1 : Infinity);
     let to = null;
     if (d > 0) to = fails.find((k) => (this.baseIndex.get(k) ?? -1) > at) ?? null;
     else for (let k = fails.length - 1; k >= 0 && to == null; k--) if ((this.baseIndex.get(fails[k]) ?? Infinity) < at) to = fails[k];
+    if (to == null && R) to = d > 0 ? fails[0] : fails[fails.length - 1];
     if (to == null) return true;
     return this.ledgerPick(to, true, cx, true);
   }
@@ -3377,13 +3521,32 @@ export default class Threads extends View {
       case "latest": this.jumpLatest(true); this.tsel = null; return true;
       case "nextFail": return this.stepFail(1, cx);
       case "prevFail": return this.stepFail(-1, cx);
+      case "prevUser": return this.stepUser(-1, cx);
+      // Enter and d show or hide the detail.
+      case "open": case "detail": this.detailWant = !this.detailShown(); return true;
+      case "timeline": return this.toggleTimeline();
+      // With the timeline shown, - and = zoom it, w fits the session, z zooms to the range.
+      case "narrower": return this.timelineShown() ? this.tlZoom(0.5, cx) : undefined;
+      case "wider": return this.timelineShown() ? this.tlZoom(2, cx) : undefined;
+      case "fit": return this.timelineShown() ? this.tlFit(cx) : undefined;
+      case "zoomRange": return this.timelineShown() ? this.tlZoomTo(cx) : false;
+      case "scale:clock": case "scale:steps": this.tlScaleWant = name.slice(6); return true;
+      case "tf:input": case "tf:model": case "tf:tools": case "tf:failed": case "tf:user": return this.setFilter(name.slice(3), cx);
+      case "nextUser": return this.stepUser(1, cx);
       // Opening a row, the outline, a turn's work, Select view and the Turn card belong to
       // the chat (opening a row here is a later round).
-      case "open": case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
+      case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
       case "prevDay": case "nextDay": return false;
       case "outline:off": return true;
+      // Esc: an open menu first (the chat's own handling), then the range, then the detail.
       case "escape":
-        return this.detailsOpen || this.keysOpen || this.settingsOpen || this.choosing || this.selecting || this.filtering || this.query ? undefined : false;
+        if (this.detailsOpen || this.keysOpen || this.settingsOpen || this.choosing || this.selecting || this.filtering || this.query) return undefined;
+        if (this.trange) return this.clearRange(cx);
+        if (this.detailShown()) { this.detailWant = false; return true; }
+        return false;
+      case "copyRef": return this.copyRef(cx);
+      case "rangeNext": return this.rangeStep(1, cx);
+      case "rangePrev": return this.rangeStep(-1, cx);
       default: return undefined;
     }
   }
@@ -3447,9 +3610,204 @@ export default class Threads extends View {
       .child(svg(ICON(icon)).size(13));
     return h_flex().id("th-fails").flex_none().h(24).pl(6).pr(1).gap(4).items_center().rounded(5).bg(t.background)
       .child(div().flex_none().size(6).rounded(3).bg(t.blocked))
-      .child(div().flex_none().text_size(12).text_color(t.muted).child(k >= 0 ? `${k + 1} of ${fails.length}${partial.length ? "+" : ""}` : `${fails.length}${partial.length ? "+" : ""} failed`))
+      .child(div().flex_none().text_size(12).text_color(t.muted).child(this.trange && this.rangeStats()
+        ? `${this.rangeStats().failed} of ${fails.length}${partial.length ? "+" : ""} failed`
+        : k >= 0 ? `${k + 1} of ${fails.length}${partial.length ? "+" : ""}` : `${fails.length}${partial.length ? "+" : ""} failed`))
       .child(arrow("th-fail-prev", "chevron-up", "Previous failure (Shift f)", -1))
       .child(arrow("th-fail-next", "chevron-down", "Next failure (f)", 1));
+  }
+
+  // ---- the Trajectory's layout by width (round 6, section 3) ----
+  // The filter bar above the list, from TRAJ_BAR wide.
+  trajTop() { return this.ledger() && this.pw() >= TRAJ_BAR; }
+  // The detail: shown unless hidden with d or Enter, and closed to start with in a pane under
+  // TRAJ_SHORT tall. From TRAJ_SIDE wide it sits to the right of the ledger: the ledger stops
+  // growing at 1,100 px and the detail takes the rest, never under 360 px. Under that it sits
+  // below the ledger, 40% of the pane's height.
+  detailShown() { return this.detailWant ?? !(this.rootH > 0 && this.rootH < TRAJ_SHORT); }
+  detailSide() { return this.detailShown() && this.pw() >= TRAJ_SIDE; }
+  detailW() { return Math.max(360, this.pw() - 1100); }
+  detailH() { return Math.max(120, Math.round((this.rootH || 600) * 0.4)); }
+  // The ledger's own width: the pane less a detail at its right.
+  ledgerW() { return this.pw() - (this.ledger() && this.detailSide() ? this.detailW() : 0); }
+
+  // A chip of the filter bar, or the filter's key: Input, Model and Tools take their lane's
+  // rows out when off; Failed only and User only list one kind, one at a time. The selection
+  // stays when it is still listed, else the first listed row.
+  setFilter(k, cx) {
+    const f = { ...(this.tf ?? ALL_ROWS) };
+    f[k] = !f[k];
+    if (k === "failed" && f.failed) f.user = false;
+    if (k === "user" && f.user) f.failed = false;
+    this.tf = f;
+    this.rows();
+    if (this.filtIndex && !this.filtIndex.has(this.ledgerSel())) {
+      const r = this.rowsMemo.find((x) => x.kind === "tr");
+      if (r) this.ledgerPick(r.key, true, cx);
+    }
+    cx?.notify?.();
+    return true;
+  }
+
+  // The list with what the width puts around it: the filter bar over it (under the floating
+  // top's band), and the detail below it or to its right.
+  trajBody(t, focusedPanel, cx, banners) {
+    const top = this.trajTop();
+    // The timeline's layout for this frame, before the filter bar's zoom buttons read it.
+    if (this.timelineShown()) this.tlLayout(cx);
+    const pad = top && this.floating() && !this.topBlock(banners);
+    const list = this.body(t, focusedPanel, cx);
+    const side = this.detailSide();
+    const main = !this.detailShown() ? list
+      : side ? h_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(v_flex().flex_1().min_w(0).h_full().child(list)).child(this.detailView(t, true))
+        : v_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(list).child(this.detailView(t, false));
+    return v_flex().id("th-traj").flex_1().min_h(0).w_full()
+      // A drag that began on the timeline (the bar under it) follows the pointer over the whole
+      // body and ends on its release here.
+      .when(true, (el) => maybe(el, "on_mouse_move", (e, cx) => this.tlDragMove(e, cx)))
+      .when(true, (el) => maybe(el, "on_mouse_up", "left", (e, cx) => this.tlDragEnd(e, cx)))
+      .when(pad, (el) => el.pt(TOP_BAND))
+      .when(top, (el) => el.child(this.trajBar(t)))
+      .when(this.timelineShown(), (el) => el.child(this.timelineView(t, cx)))
+      .when(Boolean(this.trange) && !(top && this.pw() >= TRAJ_SIDE), (el) => el.child(this.rangeView(t, false) ?? div()))
+      .child(main);
+  }
+
+  // The filter bar, 34 px: the Input, Model and Tools chips, each with its swatch, then Failed
+  // and User ("Failed only" and "User only" from 900 px, after "Show"). Counts from 640 px,
+  // always the whole session's.
+  trajBar(t) {
+    const W = this.pw();
+    const wide = W >= TRAJ_SIDE;
+    const nums = W >= TRAJ_NUMS;
+    const s = this.ledgerSums();
+    const f = this.tf ?? ALL_ROWS;
+    const ink = this.inks(t);
+    const chip = (k, mark, word, n, tip) => {
+      const on = Boolean(f[k]);
+      return h_flex().id(`th-tf-${k}`).flex_none().h(22).pl(7).pr(8).gap(5).items_center().rounded(11).cursor_pointer()
+        .text_size(12).text_color(on ? t.foreground : t.dim)
+        .when(on, (el) => el.bg(t.selected))
+        .when(!on, (el) => el.hover((x) => x.bg(t.hover).text_color(t.foreground)))
+        .tooltip(tip)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.setFilter(k, cx); cx.notify(); })
+        .child(div().flex_none().flex().items_center().opacity(on ? 1 : 0.45).child(mark))
+        .child(div().flex_none().whitespace_nowrap().child(word))
+        .when(nums && n != null, (el) => el.child(div().flex_none().text_color(t.dim).child(n)));
+    };
+    const sw = (c) => div().size(7).rounded(2).bg(c);
+    const input = h_flex().gap(1).child(div().w(4).h(7).rounded(1).bg(ink.user)).child(div().w(4).h(7).rounded(1).bg(ink.agent)).child(div().w(4).h(7).rounded(1).bg(ink.context));
+    const partial = s.partial?.length ? "+" : "";
+    return h_flex().id("th-fbar").flex_none().w_full().h(TRAJ_FBAR).pl(10).pr(8).gap(4).items_center().overflow_hidden().border_b_1().border_color(t.border)
+      .when(wide, (el) => el.child(div().flex_none().pr(2).text_size(11.5).text_color(t.dim).child("Show")))
+      .child(chip("input", input, "Input", s.input.toLocaleString(), "Input: the user's and agents' messages and context"))
+      .child(chip("model", sw(ink.model), "Model", s.model.toLocaleString(), "Model: the text the agent wrote and its reply"))
+      .child(chip("tools", sw(ink.tools), "Tools", s.tools.toLocaleString(), "Tools: each call"))
+      .child(chip("failed", div().size(6).rounded(3).bg(ink.failed), wide ? "Failed only" : "Failed", `${s.failed.toLocaleString()}${partial}`, "Only the failed calls (f goes to the next)"))
+      .child(chip("user", svg(ICON("user")).size(12).text_color(ink.user), wide ? "User only" : "User", s.user.toLocaleString(), "Only the user's messages (m goes to the user's message before)"))
+      .when(wide && Boolean(this.trange), (el) => el.child(div().w(4)).child(this.rangeView(t, true) ?? div()))
+      .when(this.timelineShown(), (el) => el.child(div().flex_1()).child(this.zoomButtons(t)).child(this.scaleSwitch(t, wide)));
+  }
+  // The timeline's zoom: minus, Fit and plus (- w =), each dim where it can go no further.
+  zoomButtons(t) {
+    // The layout trajBody made for this frame.
+    const L = this.tlMemo?.L ?? { z: 1, zmax: 1 };
+    const btn = (id, child, tip, on, fn) => h_flex().id(id).flex_none().h(20).px(5).items_center().justify_center().rounded(4)
+      .text_size(11.5).text_color(on ? t.muted : alpha(t.dim, 0.5))
+      .when(on, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); fn(cx); cx.notify(); }))
+      .tooltip(tip)
+      .child(child);
+    return h_flex().id("th-tl-zoom").flex_none().h(24).p(1).gap(1).items_center().rounded(5).border_1().border_color(t.border)
+      .child(btn("th-tl-zoom-out", svg(ICON("minus")).size(12), "Zoom out (-)", L.z > 1, (cx) => this.tlZoom(0.5, cx)))
+      .child(btn("th-tl-fit", "Fit", "Fit the whole session (w)", L.z > 1, (cx) => this.tlFit(cx)))
+      .child(btn("th-tl-zoom-in", svg(ICON("plus")).size(12), "Zoom in (=)", L.z < L.zmax, (cx) => this.tlZoom(2, cx)));
+  }
+  // What the timeline's width means: Clock (a turn as wide as it took) or Steps (every step the
+  // same width); "By the clock" and "Step by step" from 900 px.
+  scaleSwitch(t, wide) {
+    const cur = this.tlScale();
+    const part = (v, word, tip) => h_flex().id(`th-tl-scale-${v}`).flex_none().h(20).px(7).items_center().rounded(4).cursor_pointer()
+      .text_size(11.5).text_color(cur === v ? t.foreground : t.dim).when(cur === v, (el) => el.bg(t.selected))
+      .when(cur !== v, (el) => el.hover((x) => x.bg(t.hover).text_color(t.foreground)))
+      .tooltip(tip)
+      .on_click((_e, cx) => { cx.stop_propagation(); this.tlScaleWant = v; cx.notify(); })
+      .child(word);
+    return h_flex().id("th-tl-scale").flex_none().h(24).p(1).gap(1).items_center().rounded(5).border_1().border_color(t.border)
+      .child(part("clock", wide ? "By the clock" : "Clock", "Each turn as wide as it took"))
+      .child(part("steps", wide ? "Step by step" : "Steps", "Every step the same width"));
+  }
+
+  // The detail of the selected row (ledger.js detailOf): its tag and title with a close button,
+  // its fields, then its whole words. The detail is outside the list, so it takes a click.
+  detailView(t, side) {
+    const k = this.ledgerSel();
+    const i = k != null ? this.baseIndex?.get(k) : undefined;
+    const r = i != null ? this.baseRows?.[i] : null;
+    const d = detailOf(r);
+    const box = v_flex().id("th-detail").flex_none().min_h(0).overflow_hidden().bg(t.background)
+      .when(side, (el) => el.w(this.detailW()).h_full().border_l(1).border_color(t.border))
+      .when(!side, (el) => el.w_full().h(this.detailH()).border_t(1).border_color(t.border));
+    const close = div().id("th-detail-close").flex_none().size(20).flex().items_center().justify_center().rounded(4).cursor_pointer()
+      .text_color(t.dim).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Hide the detail (d)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.detailWant = false; cx.notify(); })
+      .child(svg(ICON("x")).size(12));
+    if (!d) {
+      return box.child(h_flex().h(32).pl(12).pr(8).items_center().child(div().flex_1().text_size(12).text_color(t.dim).child("Select a row to see its detail")).child(close));
+    }
+    const kind = d.kind ? LEDGER_KINDS[d.kind] : null;
+    const { c, tint } = kind ? this.kindInk(t, kind) : { c: t.muted, tint: alpha(t.foreground, 0.08) };
+    const tag = div().flex_none().h(16).px(5).rounded(3).bg(tint).text_size(10.5).text_color(c).flex().items_center().child(d.tag);
+    const field = ([label, value]) => h_flex().gap(10).items_start().min_w(0)
+      .child(div().flex_none().w(64).text_size(11.5).text_color(t.dim).child(label))
+      .child(div().flex_1().min_w(0).text_size(12).text_color(label === "Result" && value === "failed" ? t.blocked : t.foreground).child(value));
+    return box
+      .child(h_flex().flex_none().h(32).pl(12).pr(8).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(tag)
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).when(d.code, (el) => el.font_family(this.mono())).child(d.title))
+        .child(close))
+      .child(v_flex().flex_1().min_h(0).overflow_hidden().px(12).py(8).gap(4)
+        .children(d.fields.map(field))
+        .when(Boolean(d.text), (el) => el.child(div().mt(6).text_size(12).text_color(t.foreground)
+          .when(d.code, (x) => x.font_family(this.mono()))
+          .child(d.text.slice(0, 2000)))));
+  }
+
+  // The footer's numbers, whole-session: turns and steps, failures, then by width tokens (from
+  // 400 px), the time worked (500 px), and from 900 px the user's and agents' messages, as
+  // [number, words, red].
+  trajFoot() {
+    const W = this.pw();
+    const s = this.ledgerSums();
+    const running = Boolean(s.heads?.at(-1)?.going);
+    // A focus range leads: its rows, its failed calls, the time from its first row to its
+    // last, tokens when it holds whole turns; in a wide pane the session's turns and steps
+    // after "of".
+    const st = this.rangeStats();
+    if (st) {
+      const r = [[st.n.toLocaleString(), st.n === 1 ? "row in range" : "rows in range"]];
+      if (st.failed) r.push([st.failed.toLocaleString(), "failed", true]);
+      if (st.ms != null) r.push([durText(st.ms) || "0s", "first to last"]);
+      if (st.tokens != null && W >= 400) r.push([fmtTokens(st.tokens), "tok"]);
+      if (W >= TRAJ_SIDE) r.push([`of ${s.turns.toLocaleString()}`, s.turns === 1 ? "turn" : "turns"], [s.steps.toLocaleString(), s.steps === 1 ? "step" : "steps"]);
+      return r;
+    }
+    const out = [[s.turns.toLocaleString(), s.turns === 1 ? "turn" : "turns"], [s.steps.toLocaleString(), s.steps === 1 ? "step" : "steps"]];
+    if (s.failed) out.push([`${s.failed.toLocaleString()}${s.partial?.length ? "+" : ""}`, "failed", true]);
+    if (W >= 400) out.push([fmtTokens(s.tokens ?? 0), "tok"]);
+    if (W >= 500) out.push([durText(s.worked ?? 0) || "0s", running ? "worked so far" : "worked"]);
+    if (W >= TRAJ_SIDE) out.push([(s.user ?? 0).toLocaleString(), "from the user"], [(s.agent ?? 0).toLocaleString(), "from agents"]);
+    return out;
+  }
+  trajFootView(t) {
+    const kids = [];
+    for (const [n, w, red] of this.trajFoot()) {
+      if (kids.length) kids.push(div().flex_none().text_color(t.dim).child("·"));
+      kids.push(h_flex().flex_none().gap(4).items_center()
+        .when(Boolean(red), (el) => el.child(div().flex_none().size(6).rounded(3).bg(t.blocked)))
+        .child(div().flex_none().text_color(t.foreground).child(n))
+        .child(div().flex_none().whitespace_nowrap().text_color(t.dim).child(w)));
+    }
+    return h_flex().id("th-tfoot").flex_1().min_w(0).gap(6).items_center().overflow_hidden().text_size(11.5).children(kids);
   }
 
   // Stretches of a row as a stroked vector path (one element however many stretches), or as
@@ -3469,12 +3827,610 @@ export default class Threads extends View {
       .children(few.map(([a, z]) => div().absolute().top(Math.max(0, (h - w) / 2)).h(w).left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.5, (z - a) * 100).toFixed(2)}%`).rounded(w / 2).bg(color)));
   }
 
+  // Filled polygons in a w by h px box (points in px), as one filled path, or as whole-pixel
+  // rows (ledger.js polyRows) where Herdr has none. For the slanted ends of unfinished calls.
+  shapeLayer(polys, color, id, w, h) {
+    const win = globalThis.window;
+    const list = polys.filter((pts) => pts.length > 2);
+    const px = (v) => `${((Math.max(0, Math.min(w, v)) / w) * 100).toFixed(3)}%`;
+    const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
+    if (PAINT && typeof win?.paint_path === "function" && list.length) {
+      try {
+        let b = PAINT.PathBuilder.fill();
+        for (const pts of list) {
+          b = b.move_to(px(pts[0][0]), py(pts[0][1]));
+          for (let i = 1; i < pts.length; i++) b = b.line_to(px(pts[i][0]), py(pts[i][1]));
+          b = b.close();
+        }
+        const fill = typeof PAINT.Background?.solid === "function" ? PAINT.Background.solid(color) : color;
+        return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
+      } catch { /* the divs below */ }
+    }
+    return div().id(id).absolute().top(0).left(0).size_full()
+      .children(list.slice(0, 40).flatMap((pts) => polyRows(pts, h).map((r) => div().absolute().top(r.y).h(r.h).left(r.x0).w(Math.max(0.5, r.x1 - r.x0)).bg(color))));
+  }
+
+  // ---- the timeline (round 3's scales, round 6 section 3, round 7) ----
+  // At the top of the pane from TRAJ_BAR wide, unless b or its button hid it. When it does not
+  // show, the 3 px line under each turn heading stands in for it.
+  timelineShown() { return this.ledger() && this.pw() >= TRAJ_BAR && !this.tlHidden; }
+  // The timeline shows a turn that is still going (the last heading's), whose bars grow.
+  trajGoing() { return this.timelineShown() && Boolean(this.ledgerSums().heads?.at(-1)?.going); }
+  tlScale() { return this.tlScaleWant ?? "clock"; }
+  tlWidth() { return Math.max(40, Math.floor(this.pw() - TL_GUT - 12)); }
+  // The layout (ledger.js timelineLayout): the turns placed (timelineGeo) again only when the
+  // session's numbers, the width or the scale change, and once a second while a turn runs (its
+  // bars run to now); the view of them (the steps of the turns in view) again when the zoom or
+  // the pan changes too. Each walks the turns, not the rows. A build that changes nothing (the
+  // debug pane's timing rebuilds) keeps both.
+  tlLayout(cx = null) {
+    const s = this.ledgerSums();
+    const heads = s.heads ?? [];
+    const last = heads.at(-1);
+    const live = Boolean(last?.going);
+    const g = `${this.tlWidth()}|${this.tlScale()}|${live ? Math.floor(Date.now() / 1000) : 0}|${heads.length}|${last?.key}|${last?.span}|${s.steps}|${s.failed}|${s.worked}|${s.tokens}|${s.input}|${s.model}|${s.tools}`;
+    const tv = this.tlView ?? { z: 1, x0: 0 };
+    const R = this.rangeIdx();
+    const k = `${g}|${tv.z}|${tv.x0}|${R ? `${R.ia}-${R.ib}` : ""}`;
+    // Not in the frame that finished a build (its slowest): the last layout stays for that
+    // frame, and the next one lays out. Never two frames in a row: a debug pane (measure) and
+    // a session that grows every frame finish a build in every frame, and the layout would
+    // stay the first one, made before the session was read (no turns).
+    if (this.tlMemo && this.tlMemo.g !== g && cx && this.renderOpen && this.builtFrame === this.renders && this.tlKept !== this.renders - 1) {
+      this.tlKept = this.renders;
+      if (!this.tlNext) { this.tlNext = true; cx.timer.after(0, (cx) => { this.tlNext = false; cx.notify(); }); }
+      return this.tlMemo;
+    }
+    if (this.tlMemo?.k !== k) {
+      const t0 = now();
+      const nowMs = Date.now();
+      const geo = this.tlMemo?.g === g ? this.tlMemo.L.geo : timelineGeo(heads, this.tlWidth(), this.tlScale(), nowMs);
+      // The view was set against a strip and a session total; a new width, scale or session
+      // keeps the same moment in the middle.
+      const v = tv.total && geo.total && (tv.total !== geo.total || tv.cw !== geo.cw)
+        ? { z: tv.z, x0: ((tv.x0 + tv.cw / 2) / tv.total) * geo.total - geo.cw / 2 } : tv;
+      this.tlMemo = { s, g, k, heads, L: timelineLayout(heads, this.tlWidth(), this.tlScale(), nowMs, v, geo, R ? { ia: R.ia, ib: R.ib, pos: this.baseIndex } : null) };
+      this.tlMemo.ms = now() - t0;
+    }
+    return this.tlMemo;
+  }
+  // The zoom and pan, kept inside the session (ledger.js tlClamp). Only handlers set them.
+  setTlView(v, cx) {
+    const geo = this.tlLayout().L.geo;
+    this.tlView = { ...tlClamp(geo, v), total: geo.total, cw: geo.cw };
+    cx?.notify?.();
+    return true;
+  }
+  // Where the buttons and keys zoom about: the focus range, else the selected step (or turn)
+  // when it is in view, else the middle of what is in view. In px of the strip.
+  tlAnchor() {
+    const L = this.tlLayout().L;
+    const cw = L.cw;
+    const r = this.tlRangeBox(L);
+    if (r) return (r.x0 + r.x1) / 2;
+    const b = this.tlSelBox(L);
+    if (b && b.x1 >= 0 && b.x0 <= cw) return (b.x0 + b.x1) / 2;
+    return cw / 2;
+  }
+  // The selected step's bar in the view ({ x0, x1 }), or its turn's when it has no bar.
+  tlSelBox(L) {
+    const ti = L.index.get(this.sel);
+    if (ti == null) return null;
+    const T = tlBox(L, ti);
+    const h = this.tlMemo?.heads?.[ti];
+    const sk = this.ledgerSel();
+    const it = sk !== this.sel ? h?.items?.find((x) => x.key === sk) : null;
+    const b = it?.lane ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+    return b ? { x0: b.x0, x1: b.x1 } : { x0: T.x, x1: T.x + T.w };
+  }
+  // - and = (or the buttons): half or twice the zoom, the anchor put in the middle. w: the whole
+  // session. z: the focus range, else the selected turn, fills most of the strip.
+  tlZoom(f, cx) {
+    const L = this.tlLayout().L;
+    const at = this.tlAnchor();
+    return this.setTlView(tlZoomAt(L.geo, L, L.z * f, at, L.cw / 2), cx);
+  }
+  tlFit(cx) { return this.setTlView({ z: 1, x0: 0 }, cx); }
+  // Twice: a short bar keeps its least width at any zoom, so one pass can fall short.
+  tlZoomTo(cx) {
+    for (let pass = 0; pass < 2; pass++) {
+      const L = this.tlLayout().L;
+      const r = this.tlRangeBox(L);
+      const ti = L.index.get(this.sel);
+      const T = r ? null : ti != null ? tlBox(L, ti) : null;
+      const [a, b] = r ? [r.x0, r.x1] : T ? [T.x, T.x + T.w] : [0, L.cw];
+      const z = L.z * ((0.8 * L.cw) / Math.max(1, b - a));
+      this.setTlView(tlZoomAt(L.geo, L, z, (a + b) / 2, L.cw / 2), cx);
+    }
+    return true;
+  }
+  // A selection that moved off the zoomed strip (j, k, f, m) brings it into the middle.
+  tlFollow() {
+    if (!this.timelineShown() || !this.tlView || this.tlView.z <= 1) return;
+    const L = this.tlLayout().L;
+    const b = this.tlSelBox(L);
+    if (!b || (b.x0 >= 0 && b.x1 <= L.cw)) return;
+    this.tlView = { ...tlClamp(L.geo, { z: L.z, x0: L.x0 + (b.x0 + b.x1) / 2 - L.cw / 2 }), total: L.total, cw: L.cw };
+  }
+  // A sideways swipe, or Shift and the wheel, pans; a swipe up or down does nothing, and does
+  // not reach the ledger.
+  tlWheel(e, cx) {
+    cx?.stop_propagation?.();
+    let dx = Number(e?.delta?.x) || 0;
+    if (!dx && e?.modifiers?.shift) dx = Number(e?.delta?.y) || 0;
+    if (!dx) return;
+    const L = this.tlLayout().L;
+    if (L.z <= 1) return;
+    this.setTlView({ z: L.z, x0: L.x0 - dx / this.zoom() }, cx);
+  }
+  // A pinch zooms about the moment under the pointer.
+  tlPinch(e, cx) {
+    cx?.stop_propagation?.();
+    const d = Number(e?.delta) || 0;
+    const lx = e?.local_position?.x;
+    if (!d || lx == null) return;
+    const L = this.tlLayout().L;
+    const at = lx / this.zoom();
+    this.setTlView(tlZoomAt(L.geo, L, L.z * (1 + d), at), cx);
+  }
+  // The bar under the lanes, while zoomed: a press puts the view's middle there, and a drag
+  // from it pans (the moves and the release are caught on the Trajectory's body).
+  tlMapPress(e, cx) {
+    cx?.stop_propagation?.();
+    const lx = e?.local_position?.x;
+    if (lx == null) return;
+    const zf = this.zoom();
+    this.tlDrag = { kind: "map", left: (Number(e.position?.x) || 0) - lx };
+    this.tlMapTo(lx / zf, cx);
+  }
+  tlMapTo(x, cx) {
+    const L = this.tlLayout().L;
+    const f = (x / L.cw) * L.total;
+    this.setTlView({ z: L.z, x0: f * L.z - L.cw / 2 }, cx);
+  }
+  // A press on the lanes. Within 6 px of an edge of the range, that edge is held. Else it
+  // selects at once (tlPress), and becomes a band when it moves more than 4 px, which puts the
+  // selection back: a drag does not select.
+  tlDown(e, cx) {
+    const lx = e?.local_position?.x;
+    if (lx == null) return;
+    const x = lx / this.zoom();
+    const L = this.tlLayout().L;
+    const f = (x + L.x0) / L.z;
+    const base = { left: (Number(e.position?.x) || 0) - lx, x, px: x, f1: f };
+    const rb = e.modifiers?.shift ? null : this.tlRangeBox(L);
+    if (rb && Math.abs(x - rb.x0) <= 6) { this.tlDrag = { ...base, kind: "edge", from: (rb.x1 + L.x0) / L.z }; return; }
+    if (rb && Math.abs(x - rb.x1) <= 6) { this.tlDrag = { ...base, kind: "edge", from: (rb.x0 + L.x0) / L.z }; return; }
+    this.tlDrag = { ...base, kind: "press", from: f, before: { tsel: this.tsel, sel: this.sel, scrollTo: this.scrollTo, follow: this.follow } };
+    this.tlPress(e, cx);
+  }
+  // A move over the Trajectory's body while a drag that began on the timeline is held: the
+  // band follows the pointer (the ledger waits for the release); at the timeline's edge while
+  // zoomed it pans.
+  tlDragMove(e, cx) {
+    const d = this.tlDrag;
+    if (!d || e?.position?.x == null) return;
+    const x = (e.position.x - d.left) / this.zoom();
+    if (d.kind === "map") { this.tlMapTo(x, cx); return; }
+    d.px = x;
+    if (d.kind === "press") {
+      if (Math.abs(x - d.x) <= 4) return;
+      d.kind = "band";
+      this.tsel = d.before.tsel;
+      this.sel = d.before.sel;
+      this.scrollTo = d.before.scrollTo;
+      this.follow = d.before.follow;
+    }
+    const L = this.tlLayout().L;
+    d.f1 = (Math.max(0, Math.min(L.cw, x)) + L.x0) / L.z;
+    this.tlEdgePan(d, cx);
+    cx?.notify?.();
+  }
+  // Held at the timeline's edge (10 px) while zoomed: it pans 16 px every 40 ms, from a timer,
+  // and the band's end goes with it.
+  tlEdgePan(d, cx) {
+    if (d.edgeDue || !cx?.timer) return;
+    const dir = () => {
+      const L = this.tlLayout().L;
+      return L.z <= 1 ? 0 : d.px < 10 ? -1 : d.px > L.cw - 10 ? 1 : 0;
+    };
+    if (!dir()) return;
+    d.edgeDue = true;
+    cx.timer.after(40, (cx) => {
+      d.edgeDue = false;
+      const k = this.tlDrag === d ? dir() : 0;
+      if (!k) return;
+      const L = this.tlLayout().L;
+      this.setTlView({ z: L.z, x0: L.x0 + 16 * k });
+      const M = this.tlLayout().L;
+      d.f1 = (Math.max(0, Math.min(M.cw, d.px)) + M.x0) / M.z;
+      this.tlEdgePan(d, cx);
+      cx.notify();
+    });
+  }
+  // The release, caught on the Trajectory's body: a band (or a moved edge) becomes the range,
+  // snapped to the rows whose bars start inside it; the ledger dims now, once. A band where no
+  // bar starts makes none, and the range there was stays.
+  tlDragEnd(_e, cx) {
+    const d = this.tlDrag;
+    if (!d) return;
+    this.tlDrag = null;
+    if (d.kind === "band" || d.kind === "edge") {
+      const L = this.tlLayout().L;
+      const lo = Math.min(d.from, d.f1) * L.z - L.x0;
+      const hi = Math.max(d.from, d.f1) * L.z - L.x0;
+      const got = bandRows(L, this.tlMemo.heads, lo, hi);
+      if (got) this.setRange(got.a, got.b, cx);
+    }
+    cx?.notify?.();
+  }
+  // The band in px of the view while a drag is held, else null.
+  tlBand(L) {
+    const d = this.tlDrag;
+    if (!d || (d.kind !== "band" && d.kind !== "edge")) return null;
+    const a = d.from * L.z - L.x0;
+    const b = d.f1 * L.z - L.x0;
+    return { x0: Math.min(a, b), x1: Math.max(a, b) };
+  }
+  // The range's box in px of the view: from its first row's bar start to its last row's bar
+  // end (a heading: its turn's start; a row with no bar: its turn's edge).
+  tlRangeBox(L) {
+    const R = this.rangeIdx();
+    if (!R || !this.tlMemo) return null;
+    const edge = (key, end) => {
+      const r = this.baseRows[this.baseIndex.get(key)];
+      const ti = L.index.get(r?.kind === "trh" ? r.key : rowTurnKey(r));
+      if (ti == null) return null;
+      const T = tlBox(L, ti);
+      if (r.kind === "trh") return T.x;
+      const h = this.tlMemo.heads[ti];
+      const it = h?.items?.find((x) => x.key === key);
+      const b = it ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+      return b ? (end ? b.x1 : b.x0) : end ? T.x + T.w : T.x;
+    };
+    const x0 = edge(R.a, false);
+    const x1 = edge(R.b, true);
+    return x0 == null || x1 == null ? null : { x0, x1: Math.max(x1, x0 + 2) };
+  }
+
+  // ---- the copied reference (round 6, section 9) ----
+  // r: the selected row as two lines, the first for the person pasting and the second for an
+  // agent to search: "turn 212 step 3: Bash bun test export (failed)", then "call <id> in
+  // <transcript>" for a call, "line <id> in ..." for another step (Claude Code's line ids),
+  // or, where the transcript has no id for the step, the turn's id and the step (Codex), else
+  // the file alone. A heading names its turn and its prompt's line. Through the mod's copy
+  // path (copy), with its toast.
+  copyRef(cx) {
+    const k = this.ledgerSel();
+    const i = k != null ? this.baseIndex?.get(k) : undefined;
+    const r = i != null ? this.baseRows?.[i] : null;
+    const text = r ? this.refText(r) : null;
+    if (!text) return false;
+    this.copy(text, `ref:${k}`, "Reference copied", cx);
+    return true;
+  }
+  refText(r) {
+    if (r.kind !== "tr" && r.kind !== "trh") return null;
+    const hi = r.kind === "trh" ? this.baseIndex.get(r.key) : this.baseIndex.get(rowTurnKey(r));
+    const turn = r.turn;
+    const step = r.kind === "trh" || hi == null ? null : this.baseIndex.get(r.key) - hi;
+    const one = (x, n) => { const v = String(x ?? "").replace(/\s+/g, " ").trim(); return v.length > n ? `${v.slice(0, n - 1)}…` : v; };
+    const kind = LEDGER_KINDS[r.lk];
+    const what = r.kind === "trh" ? one(turn?.prompt, 80) : r.tool ? one(`${r.tool} ${r.text ?? ""}`, 90) : `${kind?.label ?? "Step"}: ${one(r.text, 70)}`;
+    const state = r.failed ? " (failed)" : r.lk === "running" ? " (running)" : r.lk === "noresult" ? " (no result)" : "";
+    const first = `turn ${turn?.n}${step != null ? ` step ${step}` : ""}: ${what}${state}`;
+    const file = this.sessions?.[r.si]?.file ?? null;
+    const own = r.kind === "trh" ? (turn?.lineId ? `line ${turn.lineId}` : null) : r.ref;
+    const back = turn?.turnId ? `turn ${turn.turnId}${step != null ? ` step ${step}` : ""}` : null;
+    const second = [own ?? back, file ? `in ${tilde(file)}` : null].filter(Boolean).join(" ");
+    return second ? `${first}\n${second}` : first;
+  }
+
+  // ---- the focus range (round 6, sections 5 to 7) ----
+  // Kept as two row keys, its first and last (trange { a, b }), so it is the same range at any
+  // zoom, on either scale, with the timeline hidden, at any width and after Chat and back. Set
+  // only from handlers: a drag's release, Shift with j, k or an arrow, Shift and a press, Esc,
+  // the close button. Its places in the ledger's rows, in order, or null.
+  rangeIdx() {
+    const R = this.trange;
+    if (!R || !this.baseIndex) return null;
+    const i = this.baseIndex.get(R.a);
+    const j = this.baseIndex.get(R.b);
+    if (i == null || j == null) return null;
+    return i <= j ? { ia: i, ib: j, a: R.a, b: R.b } : { ia: j, ib: i, a: R.b, b: R.a };
+  }
+  // Whether a ledger row is inside: a heading when any row of its turn is.
+  inRange(r, R = this.rangeIdx()) {
+    if (!R) return true;
+    const i = this.baseIndex.get(r.key);
+    if (i == null) return false;
+    if (r.kind === "trh") return i <= R.ib && i + (r.items?.length ?? 0) >= R.ia;
+    return i >= R.ia && i <= R.ib;
+  }
+  // A new range. place: the selection goes to its first row when it was outside, and the list
+  // to that row with one dimmed row above it.
+  setRange(a, b, cx, place = true) {
+    if (this.baseIndex?.get(a) == null || this.baseIndex?.get(b) == null) return false;
+    this.trange = { a, b };
+    const R = this.rangeIdx();
+    if (place) {
+      const si = this.baseIndex.get(this.ledgerSel());
+      if (si == null || si < R.ia || si > R.ib) this.ledgerPick(R.a, false, cx);
+      const li = this.rowIndex(R.a);
+      const above = li > 0 ? this.rowsMemo?.[li - 1] : null;
+      this.scrollTo = { key: above && (above.kind === "tr" || above.kind === "trh") ? above.key : R.a, how: "top" };
+    }
+    cx?.notify?.();
+    return true;
+  }
+  clearRange(cx) {
+    if (!this.trange) return false;
+    this.trange = null;
+    cx?.notify?.();
+    return true;
+  }
+  // A range edge to key, from the row that was selected (from): with no range, from that row to
+  // key; with one, its nearer edge moves to key (a tie goes the way the selection moved, d).
+  rangeTo(key, from, d, cx) {
+    const k = this.baseIndex?.get(key);
+    if (k == null) return false;
+    const R = this.rangeIdx();
+    if (!R) return this.setRange(from ?? key, key, cx, false);
+    const at = this.baseIndex.get(from) ?? k;
+    const da = Math.abs(at - R.ia);
+    const db = Math.abs(at - R.ib);
+    return db < da || (db === da && d > 0) ? this.setRange(R.a, key, cx, false) : this.setRange(key, R.b, cx, false);
+  }
+  // Shift with j, k or an arrow: the selection moves one row and takes the range's nearer edge
+  // with it.
+  rangeStep(d, cx) {
+    const from = this.ledgerSel();
+    this.ledgerStep(d, cx);
+    const to = this.ledgerSel();
+    if (to == null || to === from) return true;
+    this.rangeTo(to, from, d, cx);
+    return true;
+  }
+  // The range's numbers, worked out when it or the session changes, never by walking its rows:
+  // its rows (headings and steps), its failed calls (the session's failures are in row order,
+  // so two halvings), the time from its first row's start to its last row's end, tokens when it
+  // holds whole turns (from the headings' running sums), and its name, "212.3 to 213.2".
+  rangeStats() {
+    const R = this.rangeIdx();
+    if (!R) return null;
+    const s = this.ledgerSums();
+    const k = `${R.a}|${R.b}|${R.ia}|${R.ib}|${s.turns}|${s.failed}|${s.tokens}`;
+    if (this.rangeMemo?.k === k) return this.rangeMemo.v;
+    const rows = this.baseRows;
+    const headAt = (i) => (rows[i].kind === "trh" ? i : this.baseIndex.get(rowTurnKey(rows[i])));
+    const iha = headAt(R.ia);
+    const ihb = headAt(R.ib);
+    const ha = rows[iha];
+    const hb = rows[ihb];
+    const ra = rows[R.ia];
+    const rb = rows[R.ib];
+    const place = (key) => this.baseIndex.get(key) ?? -1;
+    const lower = (list, v) => { let lo = 0; let hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (place(list[m]) < v) lo = m + 1; else hi = m; } return lo; };
+    const failed = lower(s.fails, R.ib + 1) - lower(s.fails, R.ia);
+    const t0 = ha?.t0 != null ? ha.t0 + (ra.kind === "trh" ? 0 : ra.start ?? 0) : null;
+    const t1 = hb?.t0 != null ? hb.t0 + (rb.kind === "trh" ? 0 : (rb.start ?? 0) + (rb.dur ?? 0)) : null;
+    const whole = (R.ia === iha || R.ia === iha + 1) && R.ib === ihb + (hb.items?.length ?? 0);
+    const tokens = whole && ha.cum && hb.cum ? hb.cum.tokens + (hb.tokens ?? 0) - ha.cum.tokens : null;
+    const name = (r, ih, h) => (r.kind === "trh" ? `${h.n}` : `${h.n}.${this.baseIndex.get(r.key) - ih}`);
+    const v = { n: R.ib - R.ia + 1, failed, ms: t0 != null && t1 != null ? Math.max(0, t1 - t0) : null, tokens, whole, name: R.ia === R.ib ? name(ra, iha, ha) : `${name(ra, iha, ha)} to ${name(rb, ihb, hb)}` };
+    this.rangeMemo = { k, v };
+    return v;
+  }
+  // The range's name with its row count, a Zoom button (with the timeline shown) and a close
+  // button: a bar of its own under the timeline, or a chip in the filter bar from TRAJ_SIDE.
+  rangeView(t, chip) {
+    const st = this.rangeStats();
+    if (!st) return null;
+    const close = div().id("th-range-close").flex_none().size(18).flex().items_center().justify_center().rounded(4).cursor_pointer()
+      .text_color(t.dim).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Clear the range (Esc)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.clearRange(cx); cx.notify(); })
+      .child(svg(ICON("x")).size(11));
+    const zoom = this.timelineShown() ? h_flex().id("th-range-zoom").flex_none().h(18).px(6).items_center().rounded(4).cursor_pointer()
+      .text_size(11.5).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Zoom the timeline to the range (z)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.tlZoomTo(cx); cx.notify(); })
+      .child("Zoom") : null;
+    const words = [div().flex_none().text_color(t.dim).child("Range"), div().flex_none().whitespace_nowrap().text_color(t.foreground).child(st.name),
+      div().flex_none().whitespace_nowrap().text_color(t.dim).child(`· ${st.n.toLocaleString()} ${st.n === 1 ? "row" : "rows"}`)];
+    if (chip) {
+      return h_flex().id("th-range").flex_none().h(22).pl(9).pr(2).gap(5).items_center().rounded(11).bg(alpha(t.foreground, 0.08)).text_size(12)
+        .children(words).when(Boolean(zoom), (el) => el.child(zoom)).child(close);
+    }
+    return h_flex().id("th-range").flex_none().w_full().h(TRAJ_RBAR).pl(12).pr(8).gap(5).items_center().overflow_hidden().border_b_1().border_color(t.border).text_size(12)
+      .children(words).child(div().flex_1()).when(Boolean(zoom), (el) => el.child(zoom)).child(close);
+  }
+
+  // b, or the heading's timeline button.
+  toggleTimeline() { this.tlHidden = !this.tlHidden; return true; }
+  // A press on the lanes: the step whose bar is under it (within 4 px), else its turn.
+  tlPress(e, cx) {
+    const z = this.zoom();
+    const lx = e?.local_position?.x;
+    const ly = e?.local_position?.y;
+    if (lx == null) return;
+    const { L, heads } = this.tlLayout();
+    const lane = ly == null ? null : TL_LANES[Math.floor(ly / z / TL_LANE)] ?? null;
+    const hit = timelineHit(L, heads, lx / z, lane);
+    if (!hit) return;
+    // With a range, a press on no bar clears it outside the band and does nothing inside.
+    const bar = hit.key !== hit.turn;
+    if (this.trange && !bar) {
+      const rb = this.tlRangeBox(L);
+      if (!rb || lx / z < rb.x0 || lx / z > rb.x1) this.clearRange(cx);
+      return;
+    }
+    // Shift and a press on a bar: the range's nearer edge to it (or a range from the selection).
+    if (bar && e?.modifiers?.shift) {
+      const from = this.ledgerSel();
+      this.ledgerPick(hit.key, true, cx, true);
+      this.rangeTo(hit.key, from, 0, cx);
+      cx.notify();
+      return;
+    }
+    // A step the filter bar does not list: its turn's heading, if that is listed.
+    const key = !this.filtIndex || this.filtIndex.has(hit.key) ? hit.key : this.filtIndex.has(hit.turn) ? hit.turn : null;
+    if (key == null) return;
+    this.ledgerPick(key, true, cx, true);
+    cx.notify();
+  }
+
+  // A filled rect per span ([x0, x1] px of a strip cw px wide), as one vector path where Herdr
+  // has one, else at most 60 divs.
+  // h: the layer's height in px, for a torn end's teeth (a span [x0, x1, 1]: round 7
+  // decisions, section 2). Torn spans are cut, so the timeline's background shows through.
+  rectLayer(spans, color, id, cw, h = 12) {
+    const win = globalThis.window;
+    const p = (v) => `${((Math.max(0, Math.min(cw, v)) / cw) * 100).toFixed(3)}%`;
+    const q = (v) => `${((v / h) * 100).toFixed(3)}%`;
+    if (PAINT && typeof win?.paint_path === "function" && spans.length) {
+      try {
+        let b = PAINT.PathBuilder.fill();
+        for (const sp of spans) {
+          const [a, z] = sp;
+          if (!(z > 0 && a < cw)) continue;
+          if (sp[2] && z <= cw) {
+            const pts = tornPoints(a, z, h);
+            b = b.move_to(p(pts[0][0]), q(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) b = b.line_to(p(pts[i][0]), q(pts[i][1]));
+            b = b.close();
+          } else b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+        }
+        const fill = typeof PAINT.Background?.solid === "function" ? PAINT.Background.solid(color) : color;
+        return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
+      } catch { /* the divs below */ }
+    }
+    const shown = spans.filter(([a, z]) => z > 0 && a < cw);
+    const plain = shown.filter((sp) => !sp[2] || sp[1] > cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const few = plain.length > 60 ? coarse(plain.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : plain;
+    // A torn span with no filled path: its rows of whole pixels (a 12 px bar is 7 divs).
+    const torn = shown.filter((sp) => sp[2] && sp[1] <= cw).slice(0, 40)
+      .flatMap(([a, z]) => polyRows(tornPoints(a, z, h), h).filter((r) => r.x1 > 0)
+        .map((r) => div().absolute().top(r.y).h(r.h).left(Math.max(0, r.x0)).w(Math.max(0.5, r.x1 - Math.max(0, r.x0))).bg(color)));
+    return div().id(id).absolute().top(0).left(0).size_full()
+      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)))
+      .children(torn);
+  }
+  // The breaks between turns, hatched: 45 degree lines 5 px apart inside each break 4 px or
+  // wider, one stroked path; a faint fill where Herdr has no stroked path.
+  hatchLayer(gaps, color, cw, h) {
+    const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    if (!wide.length) return null;
+    const win = globalThis.window;
+    if (STROKE && typeof win?.paint_path === "function") {
+      try {
+        const px = (v) => `${((v / cw) * 100).toFixed(3)}%`;
+        const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
+        let b = STROKE.PathBuilder.stroke(1);
+        // Lines x - (h - y) = c, clipped to each break.
+        for (const [x0, x1] of wide) {
+          for (let c = x0 - h; c < x1; c += 5) {
+            const a = Math.max(x0, c);
+            const z = Math.min(x1, c + h);
+            if (z <= a) continue;
+            b = b.move_to(px(a), py(h - (a - c))).line_to(px(z), py(h - (z - c)));
+          }
+        }
+        const fill = typeof STROKE.Background?.solid === "function" ? STROKE.Background.solid(color) : color;
+        return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
+      } catch { /* the fills below */ }
+    }
+    return div().id("th-tl-gaps").absolute().top(0).left(0).size_full()
+      .children(coarse(wide.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => div().absolute().top(0).h_full().left(a * cw).w(Math.max(1, (z - a) * cw)).bg(alpha(color, 0.5))));
+  }
+
+  // The timeline: Input, Model and Tools, a bar per step as long as it took (on Steps, every
+  // step the same width), a call that ran while another ran half height on the lower half,
+  // the breaks between turns hatched. Over the lanes, each turn's number (and its length when
+  // there is room) and the ticks, with a red mark at each failed call. The selected turn has a
+  // band behind it, and the selected step an outline. The filter bar's chips hide a lane;
+  // Failed only and User only dim the other bars to 20%.
+  timelineView(t, cx) {
+    const { L, heads } = this.tlLayout(cx);
+    const cw = L.cw;
+    const ink = this.inks(t);
+    const f = this.tf ?? ALL_ROWS;
+    const H = 3 * TL_LANE;
+    const kids = [];
+    const ti = L.index.get(this.sel);
+    const T = ti != null ? tlBox(L, ti) : null;
+    if (T && T.x + T.w >= 0 && T.x <= cw) kids.push(div().absolute().top(0).h_full().left(Math.max(0, T.x)).w(Math.max(1, Math.min(cw, T.x + T.w) - Math.max(0, T.x))).bg(t.hover));
+    const hatch = this.hatchLayer(L.gaps, t.border, cw, H);
+    if (hatch) kids.push(hatch);
+    const colour = (k) => (k === "sub" ? alpha(ink.tools, SUB_ALPHA) : ink[k] ?? t.dim);
+    const dimmed = (k) => (f.failed && k !== "failed") || (f.user && k !== "user");
+    const layers = [...L.spans.entries()].sort(([a], [b]) => (a.endsWith("|1") ? 1 : 0) - (b.endsWith("|1") ? 1 : 0) || (a.includes("|failed|") ? 1 : 0) - (b.includes("|failed|") ? 1 : 0));
+    // Bars outside the focus range ("|o") at 20%, as the filters dim.
+    for (const [k, spans] of layers) {
+      const [lane, kind, track, out] = k.split("|");
+      if (!f[lane]) continue;
+      const li = TL_LANES.indexOf(lane);
+      const c = colour(kind);
+      kids.push(div().id(`th-tl-${k}`).absolute().left(0).w(cw).top(li * TL_LANE + (track === "1" ? 8 : 2)).h(track === "1" ? 6 : 12)
+        .child(this.rectLayer(spans, dimmed(kind) || out ? alpha(c, 0.2) : c, `th-tlr-${k}`, cw, track === "1" ? 6 : 12)));
+    }
+    // The selected step's outline.
+    const sk = this.ledgerSel();
+    if (T && sk !== this.sel) {
+      const h = heads[ti];
+      const it = h?.items?.find((x) => x.key === sk);
+      const b = it?.lane ? itemBox(it, T.x, T.w, L.geo.walls[ti], L.scale, h.items.length) : null;
+      if (b && b.x1 >= 0 && b.x0 <= cw) {
+        const li = TL_LANES.indexOf(it.lane);
+        const top = li * TL_LANE + (b.track ? 8 : 2) - 2;
+        kids.push(div().absolute().left(b.x0 - 2).w(b.x1 - b.x0 + 4).top(top).h((b.track ? 6 : 12) + 4).rounded(2).border_1().border_color(t.foreground));
+      }
+    }
+    const lanes = div().id("th-tl-lanes").relative().w(cw).h(H).cursor_pointer().overflow_hidden()
+      .when(true, (el) => maybe(el, "on_mouse_down", "left", (e, cx) => this.tlDown(e, cx)))
+      .children(kids);
+    // The band: while a drag is held, where the pointer has been; else the range's. A light
+    // wash of the text colour from the turn labels to the lanes' foot, a 2 px edge each side.
+    const band = this.tlBand(L) ?? this.tlRangeBox(L);
+    const bandEl = band && band.x1 >= 0 && band.x0 <= cw
+      ? div().id("th-tl-band").absolute().top(TL_PT).left(Math.max(0, band.x0)).w(Math.max(2, Math.min(cw, band.x1) - Math.max(0, band.x0))).h(TL_AX + TL_TK + TL_LT + H)
+        .bg(alpha(t.foreground, 0.07))
+        .when(band.x0 >= 0, (el) => el.border_l(2)).when(band.x1 <= cw, (el) => el.border_r(2)).border_color(t.foreground)
+      : null;
+    // While zoomed, the bar under the lanes: the whole session, and the part in view.
+    const zoomed = L.z > 1;
+    const a = zoomed && L.total > 0 ? (L.x0 / L.z / L.total) * cw : 0;
+    const mw = zoomed && L.total > 0 ? Math.max(6, (cw / L.z / L.total) * cw) : cw;
+    const map = div().id("th-tl-map").relative().w(cw).h(TL_PB).when(zoomed, (el) => el.cursor_pointer()
+      .when(true, (el) => maybe(el, "on_mouse_down", "left", (e, cx) => this.tlMapPress(e, cx)))
+      .child(div().absolute().top(2).left(0).w(cw).h(3).rounded(2).bg(alpha(t.foreground, 0.07)))
+      .child(div().id("th-tl-map-view").absolute().top(1).left(Math.min(cw - mw, a)).w(mw).h(5).rounded(2).bg(alpha(t.foreground, 0.32))));
+    const labels = div().relative().w(cw).h(TL_AX).overflow_hidden()
+      .children(L.labels.slice(0, 80).map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center().border_l(1).border_color(t.border)
+        .text_size(10.5).child(div().flex_none().text_color(t.foreground).child(l.text))
+        .when(Boolean(l.total), (el) => el.child(div().flex_none().text_color(t.dim).child(l.total)))));
+    const ticks = div().relative().w(cw).h(TL_TK).overflow_hidden()
+      .children(L.ticks.slice(0, 80).map((k) => div().absolute().top(0).left(k.x).h(TL_TK).pl(3).when(!k.step, (el) => el.border_l(1).border_color(t.dim))
+        .text_size(9.5).font_family(this.mono()).text_color(t.dim).child(k.text)))
+      .children(L.fails.slice(0, 120).map((x) => div().absolute().bottom(0).left(Math.max(0, x - 3)).w(6).h(4).rounded(1).bg(ink.failed)));
+    const name = (lane, word) => div().h(TL_LANE).flex().items_center().text_size(10.5).text_color(f[lane] ? t.dim : alpha(t.dim, 0.4)).child(word);
+    return h_flex().id("th-timeline").flex_none().w_full().h(TL_H).items_start().overflow_hidden().border_b_1().border_color(t.border)
+      .bg(alpha(t.foreground, 0.025))
+      .child(v_flex().flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
+        .child(name("input", "Input")).child(name("model", "Model")).child(name("tools", "Tools")))
+      .child(v_flex().id("th-tl-area").relative().flex_none().w(cw).pt(TL_PT)
+        .when(true, (el) => maybe(el, "on_scroll_wheel", (e, cx) => this.tlWheel(e, cx)))
+        // on_pinch is new in Herdr 0.1.16: on 0.1.15 the timeline zooms by the keys, the
+        // buttons and the map bar only.
+        .when(true, (el) => maybe(el, "on_pinch", (e, cx) => this.tlPinch(e, cx)))
+        .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map)
+        .when(Boolean(bandEl), (el) => el.child(bandEl)));
+  }
+
   // A turn's heading: its number and clock time (with the day when it is not today) at the
   // left; calls, failures, tokens and the total at the right. Along its lower edge, 3 px,
   // the turn's clock: each call a stretch of it, a failed one in red.
   ledgerHead(t, r) {
     const sel = this.ledgerSel() === r.key;
-    const p = headParts(r, this.pw());
+    const p = headParts(r, this.ledgerW());
     const day = r.ts ? railDay(r.ts) : null;
     const when = r.going ? "now" : r.ts ? `${day && day !== "Today" ? `${day} ` : ""}${fmtTime(r.ts)}` : "";
     const kids = [];
@@ -3493,10 +4449,64 @@ export default class Threads extends View {
       .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(`#${r.n}`))
       .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(r.going ? t.working : t.dim).child(when))
       .child(right)
-      .when(Boolean(line), (el) => el.child(div().id(`th-tl-${r.key}`).absolute().bottom(0).left(pl).right(pr).h(3)
-        .child(div().absolute().top(0).left(0).size_full().bg(alpha(t.foreground, 0.06)))
-        .when(line.gray.length > 0, (x) => x.child(this.pathLayer(line.gray, t.dim, 3, `th-tlg-${r.key}`)))
-        .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, t.blocked, 3, `th-tlr-${r.key}`)))));
+      .when(Boolean(line) && !this.timelineShown(), (el) => {
+        const ink = this.inks(t);
+        return el.child(div().id(`th-tl-${r.key}`).absolute().bottom(0).left(pl).right(pr).h(3)
+          .child(div().absolute().top(0).left(0).size_full().bg(alpha(t.foreground, 0.06)))
+          .when(line.model.length > 0, (x) => x.child(this.pathLayer(line.model, ink.model, 3, `th-tlm-${r.key}`)))
+          .when(line.tools.length > 0, (x) => x.child(this.pathLayer(line.tools, ink.tools, 3, `th-tlt-${r.key}`)))
+          .when(line.sub.length > 0, (x) => x.child(this.pathLayer(line.sub, alpha(ink.sub, SUB_ALPHA), 3, `th-tls-${r.key}`)))
+          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`)))
+          .when(Boolean(line.open?.length || line.openSub?.length), (x) => {
+            // Unfinished calls: their stretch ends in one 4 px slant (round 7 decisions).
+            const lw = Math.max(1, this.ledgerW() - pl - pr);
+            const polys = (segs) => (segs ?? []).map(([a, z]) => slantPoints(a * lw, z * lw, 3, 4));
+            return x.child(this.shapeLayer(polys(line.openSub), alpha(ink.sub, SUB_ALPHA), `th-tlso-${r.key}`, lw, 3))
+              .child(this.shapeLayer(polys(line.open), ink.tools, `th-tlo-${r.key}`, lw, 3));
+          }))
+          .when(Boolean(this.trange), (x) => { const g = this.lineRange(r); return g ? x.child(g(t)) : x; });
+      });
+  }
+  // The focus range on a heading's thin line: a lighter span over the part of the turn inside
+  // it, with a 1 px edge where the range starts or ends in this turn. null outside it.
+  lineRange(r) {
+    const R = this.rangeIdx();
+    const ih = this.baseIndex?.get(r.key);
+    if (!R || ih == null || !this.inRange(r, R)) return null;
+    const wall = r.total ?? r.span ?? 0;
+    const at = (i, end) => {
+      if (i <= ih) return 0;
+      const it = r.items?.[i - ih - 1];
+      if (!it || it.a == null || !(wall > 0)) return end ? 1 : 0;
+      return Math.min(1, Math.max(0, (end ? it.b ?? it.a : it.a) / wall));
+    };
+    const a = R.ia > ih ? at(R.ia, false) : 0;
+    const b = R.ib < ih + (r.items?.length ?? 0) ? at(R.ib, true) : 1;
+    const startsHere = R.ia >= ih;
+    const endsHere = R.ib <= ih + (r.items?.length ?? 0);
+    return (t) => div().id(`th-tlg-${r.key}`).absolute().top(0).h_full().left(`${(a * 100).toFixed(2)}%`).w(`${(Math.max(0.01, b - a) * 100).toFixed(2)}%`)
+      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1)).when(endsHere, (el) => el.border_r(1));
+  }
+
+  // The Trajectory's inks for this theme (ledger.js trajInks): the user's colour from one
+  // place (USER_COLOR, which a setting can feed later), each kind's colour, and whether the
+  // theme is dark (its background darker than its text).
+  inks(t) {
+    const k = `${t.foreground}|${t.background}|${t.dim}|${t.blocked}|${this.userColor()}`;
+    if (this.inkMemo?.k !== k) {
+      const dark = (contrast(t.background, "#000000") ?? 21) < (contrast(t.foreground, "#000000") ?? 1);
+      this.inkMemo = { k, v: { ...trajInks(t, dark, this.userColor()), dark } };
+    }
+    return this.inkMemo.v;
+  }
+  userColor() { return USER_COLOR; }
+  // A kind's ink and the tint behind its icon square or tag: plain (the user's in the text
+  // colour) has a neutral tint.
+  kindInk(t, k) {
+    const ink = this.inks(t);
+    const c = ink[k.ink] ?? t.dim;
+    const neutral = k.ink === "user" && ink.plain;
+    return { c, tint: neutral ? alpha(t.foreground, 0.1) : alpha(c, k.ink === "sub" ? 0.1 : 0.16), a: k.ink === "sub" ? SUB_ALPHA : 1 };
   }
 
   // The ledger's side padding, [left, right]: on the rail's side, clear of its lane, since
@@ -3508,6 +4518,17 @@ export default class Threads extends View {
       this.padMemo = { k, v: this.railLeft() ? [Math.max(ROW.PAD_X, lane), ROW.PAD_X] : [ROW.PAD_X, Math.max(ROW.PAD_X, lane)] };
     }
     return this.padMemo.v;
+  }
+
+  // A step's kind: a square tinted with its ink holding its mark, or from 900 px a tag with
+  // its word ("User", "Model", "Tool"), tinted the same.
+  ledgerKind(t, k) {
+    const { c, tint, a } = this.kindInk(t, k);
+    if (this.pw() >= TRAJ_SIDE) {
+      return div().flex_none().w(58).h(16).px(5).rounded(3).bg(tint).text_size(10.5).text_color(c).opacity(a < 1 ? 0.8 : 1)
+        .flex().items_center().truncate().child(k.tag ?? "");
+    }
+    return div().flex_none().size(18).rounded(4).bg(tint).flex().items_center().justify_center().child(this.ledgerMark(k, c));
   }
 
   // A step's mark: an icon, or a drawn dot, ring or square, in the kind's colour.
@@ -3528,9 +4549,8 @@ export default class Threads extends View {
   ledgerItem(t, r) {
     const sel = this.ledgerSel() === r.key;
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
-    const cols = ledgerCols(this.pw());
+    const cols = ledgerCols(this.ledgerW());
     const ink = t[k.tone] ?? t.foreground;
-    const markInk = k.accent ? t[k.accent] : r.lk === "you" ? t.foreground : t.muted;
     const startCell = r.start != null ? startText(r.start) : r.startQ ? "?" : "";
     const durCell = r.dur != null ? durText(r.dur) : r.durQ ? "?" : "";
     const status = r.status ?? (r.sub ? [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") : null);
@@ -3541,7 +4561,7 @@ export default class Threads extends View {
       .when(!sel && r.failed, (el) => el.bg(alpha(t.blocked, 0.09)))
       .when(!sel && !r.failed, (el) => el.hover((s) => s.bg(t.hover)))
       .when(cols.start, (el) => el.child(div().flex_none().w(38).text_size(11).font_family(this.mono()).text_color(t.dim).child(startCell)))
-      .child(this.ledgerMark(k, markInk))
+      .child(this.ledgerKind(t, k))
       .child(h_flex().flex_1().min_w(0).gap(6).items_center()
         .when(Boolean(r.tool), (el) => el.child(div().flex_none().max_w(140).truncate().text_size(12).font_family(this.mono()).text_color(t.foreground).child(r.tool)))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(ink)
@@ -3554,12 +4574,14 @@ export default class Threads extends View {
 
   // The bar: one rounded stroke as long as the step took on the session's one scale
   // (ledger.js barFrac), red for a failed call, a faint dotted stretch for a time the
-  // transcript does not give, a short fading one for a call still running.
+  // transcript does not give, the whole track with a slanted end for an unfinished call.
   ledgerBar(t, r) {
     const box = div().id(`th-bar-${r.key}`).flex_none().w(56).h(LEDGER_ROW).relative();
-    if (!["tool", "failed", "subagent", "running"].includes(r.lk)) return box;
     const id = `th-barp-${r.key}`;
-    if (r.lk === "running") return box.child(this.pathLayer([[0, 0.3]], alpha(t.muted, 0.4), 3, id, LEDGER_ROW));
+    // An unfinished call (running or no result): the whole track, 4 px, its right end one
+    // 5 px slant, grey (round 7 decisions, section 2).
+    if (r.open) return box.child(div().absolute().left(0).top((LEDGER_ROW - 4) / 2).w(56).h(4).child(this.shapeLayer([slantPoints(0, 56, 4, 5)], this.inks(t).open, id, 56, 4)));
+    if (!["tool", "failed", "subagent"].includes(r.lk)) return box;
     if (r.dur == null) return r.durQ ? box.child(this.pathLayer([[0, 0.06], [0.14, 0.2], [0.28, 0.34]], t.dim, 2, id, LEDGER_ROW)) : box;
     return box.child(this.pathLayer([[0, barFrac(r.dur)]], r.failed ? t.blocked : t.dim, 3, id, LEDGER_ROW));
   }
@@ -4233,6 +5255,15 @@ export default class Threads extends View {
     this.textSel = null;
     // Quote in the action bar in Select view: quote what ⌘C copied, and leave the keyboard
     // with the editor so its highlight stays.
+    // A folded agent message's line: the message, or folded again (foldState).
+    if (kind === "af") {
+      const k = `${id}:am`;
+      if (this.full.has(k)) this.full.delete(k); else this.full.add(k);
+      this.toList();
+      this.sel = id;
+      this.follow = false;
+      return cx.notify();
+    }
     if (kind === "resume") {
       this.toList();
       this.sel = id;
@@ -4250,7 +5281,13 @@ export default class Threads extends View {
     this.toList();
     // The Trajectory: a press selects the row (a heading or a step) and opens nothing.
     if (this.ledger() && (kind === "tr" || /^\d+$/.test(kind))) {
+      // Shift held at the press (the list's click carries no keys; the body's press does):
+      // the range's nearer edge to this row, or a range from the selected row to it.
+      const from = this.ledgerSel();
+      const shift = this.pressShift;
+      this.pressShift = false;
       this.ledgerPick(key, false, cx);
+      if (shift) this.rangeTo(key, from, 0, cx);
       return cx.notify();
     }
     if (/^\d+$/.test(kind)) {
@@ -4302,6 +5339,13 @@ export default class Threads extends View {
       this.sel = rest.slice(0, 2).join(":");
       if (part?.view) { this.openOutput(part); return cx.notify(); }
       this.callAll.has(id) ? this.callAll.delete(id) : this.callAll.add(id);
+      return cx.notify();
+    }
+    // View diagram under a Mermaid block.
+    if (kind === "mv") {
+      const part = this.baseRows?.find((x) => x.key === key) ?? this.rowsMemo?.find((x) => x.key === key);
+      this.sel = rest.slice(0, 2).join(":");
+      if (part?.seg) this.openDiagram(part);
       return cx.notify();
     }
     // Show all or Show less under a code block.
@@ -4464,7 +5508,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (name === "nextFail" || name === "prevFail") return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name === "timeline" || name === "zoomRange" || /^range(Next|Prev)$/.test(name) || name === "copyRef" || /^(tf|scale):/.test(name)) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));
@@ -4813,16 +5857,33 @@ export default class Threads extends View {
     this.outputOpened = { key: r.key, lines: n };
     return true;
   }
+  // A Mermaid block drawn as text art (diagram.js) in the same viewer, unwrapped and with no
+  // line numbers so the drawing keeps its shape. The editor draws indent guides in leading
+  // spaces, which would stripe the space left of a box: those are no-break spaces instead.
+  // A kind the renderer cannot draw, or source it cannot read, opens the source with a
+  // plain note saying so.
+  openDiagram(r) {
+    const src = String(r.seg?.text ?? "").replace(/\n+$/, "");
+    const d = drawDiagram(src);
+    const text = d.art ? d.art.replace(/^ +/gm, (m) => "\u00a0".repeat(m.length)) : src;
+    const n = text.split("\n").length;
+    openOverlay({ mod: MOD, kind: "dialog", frame: "none", width: 1, height: 1, props: { output: {
+      title: `#${r.turn?.n ?? ""} · ${d.art ? "Diagram" : "Mermaid source"}`, cmd: "", note: d.error ?? "", wrap: !d.art, numbers: !d.art,
+      text, lines: n, total: n, lang: "text",
+    } } });
+    this.diagramOpened = { key: r.key, drawn: Boolean(d.art) };
+    return true;
+  }
   initOutput(p, cx) {
     const o = p.output ?? {};
     // The viewer takes the keyboard, so Esc closes it.
     this.h = cx.focus_handle();
     cx.timer.after(0, () => this.h.focus());
     this.outv = { overlay: p.overlay ?? null, title: String(o.title ?? ""), cmd: String(o.cmd ?? ""), text: String(o.text ?? ""),
-      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null };
+      lines: Number(o.lines) || 0, total: Number(o.total) || 0, st: null, note: String(o.note ?? ""), wrap: o.wrap !== false, numbers: o.numbers !== false };
     try {
       this.outv.st = EditorState.new({
-        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: true, folding: false, soft_wrap: true,
+        language: o.lang || "text", value: this.outv.text, readonly: true, line_numbers: this.outv.numbers, folding: false, soft_wrap: this.outv.wrap,
         font_family: settings().font_family, font_size: 12, syntax: this.syntaxColors(theme()),
       });
     } catch (e) {
@@ -4839,7 +5900,7 @@ export default class Threads extends View {
     // If that stop does not hold, the output still scrolls; there is no list under it.
     const body = o.st ? Editor.new(o.st).size_full()
       : v_flex().id("th-output-plain").size_full().px(10).py(8).overflow_y_scrollbar().text_size(12).font_family(mono).text_color(t.muted)
-        .children(o.text.split("\n").slice(0, 5000).map((l) => div().w_full().min_h(18).line_height("18px").child(l || " ")));
+        .children(o.text.split("\n").slice(0, 5000).map((l) => div().w_full().min_h(18).line_height("18px").when(!o.wrap, (el) => el.whitespace_nowrap()).child(l || " ")));
     return v_flex().id("th-output").size_full().bg(t.background)
       .track_focus(this.h)
       .on_key_down((e) => { if ((e?.key ?? "") === "escape") this.outputClose(); })
@@ -4851,6 +5912,7 @@ export default class Threads extends View {
         .child(this.galleryButton(t, "th-output-close", "x", "Close (Esc)", null, false, null, () => this.outputClose())))
       .when(o.total > o.lines, (el) => el.child(div().flex_none().px(16).py(6).text_size(12).text_color(t.dim)
         .child("Threads reads the first 24 KB of a tool's output from the transcript; the rest is not shown here.")))
+      .when(Boolean(o.note), (el) => el.child(div().flex_none().px(16).py(6).text_size(12).text_color(t.dim).child(o.note)))
       .child(div().id("th-output-body").flex_1().min_h(0).p(12)
         .on_scroll_wheel((_e, cx) => cx.stop_propagation())
         .child(div().size_full().rounded(6).border_1().border_color(t.border).overflow_hidden().child(body)));
@@ -5270,7 +6332,7 @@ export default class Threads extends View {
       .bg(t.background).text_color(t.foreground).text_size(13)
       .when(!floating, (el) => el.child(this.header(t)).children(banners))
       .when(floating && this.topBlock(banners), (el) => el.child(this.topPanels(t, banners)))
-      .child(this.body(t, focusedPanel, cx))
+      .child(this.ledger() ? this.trajBody(t, focusedPanel, cx, banners) : this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .child(this.footer(t))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
@@ -5436,8 +6498,8 @@ export default class Threads extends View {
     const out = [search];
     if (showAgents) {
       const on = Boolean(this.prefs.agentTurns);
-      out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${c.hiddenAll.toLocaleString()} hidden) (a)`, "agents", on,
-        countLabel(on ? c.agentAll : c.hiddenAll), null]);
+      out.push(["th-agents", "bot", on ? "Hide agent messages (a)" : `Show agent messages (${this.agentCountText(c)}) (a)`, "agents", on,
+        countLabel(on ? c.agentAll : c.hiddenAll + c.foldedAll), null]);
     }
     if (!narrow && this.view === "pinned") out.push(pinBtn);
     const label = `Pinned${pins ? ` ${pins}` : ""}`;
@@ -5689,7 +6751,9 @@ export default class Threads extends View {
     const col = this.pinnedPaneOpen();
     const pinTip = col ? "Go to the Pinned column (v)" : pinColumn(this.pw()) ? "Open the Pinned column beside Threads (v)"
       : `Show Pinned in this pane: a Pinned column needs Threads ${PIN_SPLIT_MIN} px wide (v)`;
+    const tl = this.ledger() && this.pw() >= TRAJ_BAR ? [["th-timeline-btn", "timeline", "Show or hide the timeline (b)", "timeline", !this.tlHidden, null]] : [];
     return [
+      ...tl,
       ["th-search", "search", "Search (/)", "filterToggle", this.filtering || Boolean(this.query), null],
       ["th-pinned", "pin", pins ? `${pinTip} · ${plural(pins, "pin")}` : pinTip, "pinned", Boolean(col), pins ? String(pins) : null],
       ["th-settings", "sliders-horizontal", "Settings (,)", "settings", this.settingsOpen, null],
@@ -5758,7 +6822,7 @@ export default class Threads extends View {
     let shown = 0, hit = 0, hiddenHit = 0;
     const agents = this.agentsShown();
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
-      const on = isShown(t, { agentTurns: agents, live: this.isLive(s, si, ti, status) });
+      const on = isShown(t, { agentTurns: agents, live: this.isLive(s, si, ti, status), turns: s.turns });
       const m = threadMatches(s.turns, t, q);
       if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
     }));
@@ -5794,7 +6858,7 @@ export default class Threads extends View {
       .child(h_flex().id("th-set-agents").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("agents", cx); cx.notify(); })
         .child(svg(ICON("bot")).size(13).flex_none().text_color(t.muted))
-        .child(label(this.counts().hiddenAll && !P.agentTurns ? `Agent messages · ${this.counts().hiddenAll.toLocaleString()} hidden` : "Agent messages"))
+        .child(label(!P.agentTurns && this.agentCountText(this.counts()) ? `Agent messages · ${this.agentCountText(this.counts()).replace(", ", " · ")}` : "Agent messages"))
         .child(sw))
       .child(v_flex().gap(2)
         .child(h_flex().id("th-set-time").gap(6).items_center().cursor_pointer()
@@ -6116,7 +7180,7 @@ export default class Threads extends View {
       if (i >= 0 && st.flash && !(how === "land" && st.resume)) this.flashTurn(this.flashKey(rows[i]), cx);
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
-      const lead = (k) => (rows[k - 1]?.kind === "wtop" && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
+      const lead = (k) => ((rows[k - 1]?.kind === "wtop" || rows[k - 1]?.kind === "afold") && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
@@ -6204,6 +7268,7 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
+        this.pressShift = Boolean(e.modifiers?.shift);
         // A double or triple press selects a word or a paragraph straight away.
         if (this.pressCount > 1) this.liftFill(this.sel, cx);
         this.notePress(cx);
@@ -6701,7 +7766,7 @@ export default class Threads extends View {
   height(r) {
     if (r.kind === "turn" && r.shape?.md != null) {
       const m = this.measured(this.cmdFor(r));
-      return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r);
+      return (m != null ? r.shape.mdBase + m : r.shape.height) - this.splitCut(r) - this.foldCut(r);
     }
     if (PROBED.has(r.kind)) {
       const m = this.measured(r);
@@ -6717,7 +7782,8 @@ export default class Threads extends View {
       case "gap": return r.h;
       case "tail": return r.h;
       case "fill": return r.h;
-      case "turn": return r.shape.height - this.splitCut(r);
+      case "turn": return r.shape.height - this.splitCut(r) - this.foldCut(r);
+      case "afold": return r.open ? ROW.META : ROW.PAD_T + ROW.META;
       case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "wake": return WAKE_H;
@@ -6751,6 +7817,7 @@ export default class Threads extends View {
       case "codehead": return 8 + 28;
       case "code": return this.codeBoxH(r);
       case "codeall": return SHOW_ALL_H;
+      case "mview": return SHOW_ALL_H;
       case "fold": return 8 + 26 + (r.left ? 18 : 0);
       case "itext": return 6 + this.mdHeight(r.src);
       case "grp": return STEP_GAP + GROUP_H;
@@ -7063,10 +8130,14 @@ export default class Threads extends View {
       case "fill": return div();
       case "turn": return this.rowItem(t, r, focusedPanel);
       case "line": return this.lineItem(t, r, focusedPanel);
-      case "trh": return this.ledgerHead(t, r);
-      case "tr": return this.ledgerItem(t, r);
+      // Outside the focus range: 40%, the selected row 70% so it can be read.
+      case "trh": case "tr": {
+        const el = r.kind === "trh" ? this.ledgerHead(t, r) : this.ledgerItem(t, r);
+        return this.trange && !this.inRange(r) ? el.opacity(this.ledgerSel() === r.key ? 0.7 : 0.4) : el;
+      }
       case "wrow": return this.workingRow(t, r, focusedPanel);
       case "wtop": return this.workingTop(t, r, focusedPanel);
+      case "afold": return this.foldLine(t, r);
       case "wake": return this.wakeRow(t, r);
       case "working": return this.workingItem(t, r);
       case "divider": return this.ledger() ? this.dividerItem(t, r).py(0).h(LEDGER_ROW) : this.dividerItem(t, r);
@@ -7361,22 +8432,23 @@ export default class Threads extends View {
     const color = tone === "reply" ? t.foreground : tone === "why" || tone === "error" ? t.blocked : t.dim;
     const bt = this.bubbleLook(t, turn.agent).theme;
     // Split: the meta line and tiles are the wtop item over it (closedRows).
+    // Folded (foldState): the sender is the line over it, and the message is left out.
     return this.rowFrame(t, sel, focusedPanel, false, [
-      ...(turn.agent && !r.split ? [this.senderLine(t, turn)] : []),
-      this.youGroup(t, turn, key, sel, [
+      ...(turn.agent && !r.split && !r.fold ? [this.senderLine(t, turn)] : []),
+      ...(r.fold === "folded" ? [] : [this.youGroup(t, turn, key, sel, [
         ...(sh.thumbs && !r.split ? [this.thumbStrip(t, turn, key)] : []),
         this.bubble(t, turn, [
           this.promptBlock(bt, turn, sh, sel, key),
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
-      ]),
+      ])]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
         .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
-    ], r.split ? ROW.GAP : ROW.PAD_T);
+    ], r.split || r.fold ? ROW.GAP : ROW.PAD_T);
   }
 
   // A closed row's message and the strip under it, as one element, so a hover anywhere on
@@ -7844,6 +8916,7 @@ export default class Threads extends View {
               .child(st ? Editor.new(st).size_full().py(6) : this.plainCode(t, `th-code-${r.key}`, r.seg.text, mono))));
       }
       case "codeall": return this.showAllRow(t, r.all ? "Show less" : `Show all · ${plural(r.left, "more row")}`, r.all ? "chevron-up" : "chevron-down");
+      case "mview": return this.showAllRow(t, "View diagram", "panel-right");
       case "fold":
         // Quiet: no border or fill, so it reads as the end of the reply, not a button to find.
         return v_flex().mt(8)
@@ -7986,7 +9059,8 @@ export default class Threads extends View {
     // The outline: move, open the turn, back to the list, then search and pin.
     if (this.outlined()) return fitHints([["↑↓", "move"], ["↵", "open"], ["Esc", "list"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
     // The Trajectory: move a row, step through failures, back to the chat.
-    if (this.ledger()) return fitHints([["↑↓", "move"], ["f", "next failure"], ["y", "chat"], ["c", "copy"], ["/", "filter"], ...(this.trajPane ? [] : pinHint), ["?", "keys"]], this.pw());
+    // The Trajectory's footer is its numbers (trajFoot), then ? keys.
+    if (this.ledger()) return [["?", "keys"]];
     // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
@@ -8005,6 +9079,7 @@ export default class Threads extends View {
         const h = size.height / this.zoom();
         if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }
       })
+      .when(this.ledger(), (el) => el.child(this.trajFootView(t)))
       .children(this.footerHints().map(([k, label]) => hint(k, label)));
   }
 
@@ -8312,13 +9387,17 @@ export default class Threads extends View {
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
         const tick = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY)).cursor_pointer()
-          .on_click((_e, cx) => { cx.stop_propagation(); this.railJump(k.key, cx); })
+          .on_click((_e, cx) => { cx.stop_propagation(); this.railCardClose(k.key); this.railJump(k.key, cx); })
           .child(left ? mark.left(look.right) : mark.right(look.right));
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
         return Popup.new(`th-tick-card-${k.i}`, tick.on_hover((on, cx) => {
-          if (on) { this.railHover = k.key; this.railLeave = null; cx.notify(); return; }
+          // A click closed this tick's card (railCardClose): it stays closed until the pointer
+          // leaves the tick.
+          if (on && this.railQuiet === k.key) return;
+          if (on) { this.railHover = k.key; this.railLeave = null; this.railQuiet = null; cx.notify(); return; }
+          if (this.railQuiet === k.key) this.railQuiet = null;
           if (this.railHover !== k.key || this.railCardOn) return;
           // The card stays 200 ms after the pointer leaves its tick, so it can cross to the
           // card (whose own hover then keeps it); another tick's hover cancels the wait.
@@ -8374,6 +9453,14 @@ export default class Threads extends View {
     cx.timer.after(FLASH.AFTER, (cx) => { if (this.flashN === n) { this.flash = { key, on: true, n }; cx.notify(); } });
     cx.timer.after(FLASH.AFTER + 40, (cx) => { if (this.flashN === n && this.flash) { this.flash = { ...this.flash, on: false }; cx.notify(); } });
     cx.timer.after(FLASH.AFTER + 40 + FLASH.FADE + 60, (cx) => { if (this.flashN === n) { this.flash = null; cx.notify(); } });
+  }
+  // A click on a tick closes its card, so the card does not cover the turn the click brings
+  // up, and keeps it closed while the pointer stays on that tick (railQuiet).
+  railCardClose(key) {
+    this.railHover = null;
+    this.railCardOn = false;
+    this.railLeave = null;
+    this.railQuiet = key;
   }
   railJump(key, cx) {
     const y = this.railTickY(key);

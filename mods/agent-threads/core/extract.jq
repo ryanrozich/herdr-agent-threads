@@ -13,6 +13,7 @@
 #                                       has no such line
 #   i  "[Request interrupted"           {ts}
 #   t  assistant text block             {t, ts}
+#      (a prompt and a text also carry l, their line's uuid)
 #   u  tool call                        {n: tool name, id, ts, in: its input in up to 120
 #                                       characters (the command, the path, the pattern)}
 #   x  a call's result                  {id, ts, f: whether it failed}: extract.sh turns each
@@ -192,4 +193,9 @@ def event:
   elif .type == "agent-name" and (.agentName | type) == "string" and (.agentName | length) > 0 then {k: "an", t: (.agentName | .[0:80])}
   else empty end;
 
-(fromjson? // empty) | select(type == "object") | event
+# A prompt's and a text's own line id (l), for the Trajectory's copied reference (r): an agent
+# in another session finds the line by it.
+def with_line($l):
+  if (.k == "p" or .k == "t") and ($l.uuid | type) == "string" and ($l.uuid | test("^[0-9A-Za-z_-]{8,80}$")) then . + {l: $l.uuid} else . end;
+
+(fromjson? // empty) | select(type == "object") | . as $l | event | with_line($l)

@@ -4,6 +4,7 @@
 //   --extra N    N short turns before the scripted ones (to fill a list)
 //   --only N     only N short turns, none of the scripted ones
 //   --open       end with a turn that has tool calls and no reply yet (a running turn)
+//   --running    with --open: the turn's last call has no result yet (still running)
 //   --start T    ISO time of the first line (default 2026-11-01T09:12:00Z)
 //   --gap S      seconds between the --extra/--only turns (default 300)
 //   --clear      start the file the way /clear starts one: a caveat line, the /clear
@@ -11,6 +12,8 @@
 //   --usage      add /usage command lines (with and without origin, both tag orders)
 //   --skill      add a custom command (/review-pr 12) that Claude answers
 //   --subagents  add a turn with three Agent calls (launch results only) between two commands
+//   --three      with --only 0: a short session of three turns, as one real one: a failing
+//                test fixed, a test run started in the background, a subagent's review
 //   --peer       add a peer prompt that lands mid-turn and shares one turn_duration
 //   --notify     add a task notification that lands before its turn's turn_duration
 //   --agents     add turns other senders gave: an hc report <hc from="t7 review">, a peer
@@ -30,6 +33,8 @@
 //   --busy N     N rounds of a long own prompt then 9 long agent messages (hc reports and
 //                peer messages), each with a long Markdown reply: a busy supervisor session
 //                (--busy 130 is about 1,300 turns), for timing the list
+//   --quiet      with --busy: the agent messages get no reply of their own, so they stay
+//                hidden while agent messages are hidden
 //   --quotes     add prompts that quote the reply above in Markdown ("> "): quote only,
 //                comment only, quote then comment, comment then quote, interleaved, ">"
 //                with no space, nested "> >", a ">" line inside a fence, and a 40-line quote
@@ -59,6 +64,7 @@ const flags = process.argv.slice(2);
 const flag = (name) => { const i = flags.indexOf(name); if (i < 0) return null; const v = flags[i + 1]; flags.splice(i, 2); return v; };
 const bool = (name) => { const i = flags.indexOf(name); if (i < 0) return false; flags.splice(i, 1); return true; };
 const open = bool("--open");
+const running = bool("--running");
 const clear = bool("--clear");
 const usage = bool("--usage");
 const skill = bool("--skill");
@@ -76,9 +82,11 @@ const hostile = bool("--hostile");
 const edge = bool("--edge");
 const blocks = bool("--blocks");
 const imagesFx = bool("--images");
+const three = bool("--three");
 const extra = Number(flag("--extra") ?? 0);
 const only = flag("--only");
 const busy = Number(flag("--busy") ?? 0);
+const quiet = flags.includes("--quiet");
 const gap = Number(flag("--gap") ?? 300);
 const padMb = Number(flag("--pad-mb") ?? 0);
 const start = flag("--start");
@@ -196,7 +204,7 @@ for (let i = 0; i < busy; i++) {
     const k = i * 9 + j;
     const body = `${para(k, 200)}\n\n${para(k + 1, 150)}`;
     prompt(j % 2 ? `<hc from="t${j} worker">${body}</hc>` : `<agent-message from="helper-${j}">${body}</agent-message>`, j % 2 ? "human" : "peer", 20);
-    assistant([{ type: "text", text: longReply(k) }], { out: 300, secs: 4 });
+    if (!quiet) assistant([{ type: "text", text: longReply(k) }], { out: 300, secs: 4 });
     end(20000);
   }
 }
@@ -248,6 +256,27 @@ tool("Edit", { file_path: "README.md" }, "ok", null);
 assistant([{ type: "text", text: "Documented the retry flag under **Testing**." }], { out: 40 });
 end(19000);
 
+}
+
+// A short session, three turns a few seconds apart: a failing test run, an edit and a run
+// that passes; a test run started in the background ("sleep 8 && bun test"); a review by a
+// subagent that answers in the call.
+if (three) {
+  let p = prompt("The date test fails, fix it", "human", 20);
+  tool("Bash", { command: "bun test date" }, "1 fail", p, null, true);
+  tool("Edit", { file_path: "src/date.ts", old_string: "new Date()", new_string: "clock()" }, "ok", p);
+  tool("Bash", { command: "bun test date" }, "3 pass", p);
+  assistant([{ type: "text", text: "Fixed: the test now reads a fixed clock." }], { out: 40, secs: 2 });
+  end(5000);
+  p = prompt("Run the whole suite in the background", "human", 6);
+  tool("Bash", { command: "sleep 8 && bun test", run_in_background: true }, "Command running in background with ID: bg1", p, { backgroundTaskId: "bg1" });
+  assistant([{ type: "text", text: "Started; it reports when it ends." }], { out: 20, secs: 2 });
+  end(15000);
+  p = prompt("Have a subagent review the fix", "human", 8);
+  tool("Agent", { description: "Review the date fix", prompt: "Review the change to src/date.ts.", subagent_type: "general-purpose" },
+    "The fix is right; one test name is out of date.", p, { status: "completed", agentId: "a0000000000000001", totalDurationMs: 11000, totalTokens: 9000 });
+  assistant([{ type: "text", text: "The review agrees with the fix." }], { out: 30, secs: 2 });
+  end(19000);
 }
 
 if (usage) {
@@ -564,6 +593,7 @@ if (imagesFx) {
 if (open) {
   const pid = prompt("Run the full e2e suite and summarise the failures", "human", 40);
   for (let k = 0; k < 6; k++) tool("Bash", { command: "bun run e2e" }, "…", pid);
+  if (running) assistant([{ type: "tool_use", id: "toolu_000999_Bash", name: "Bash", input: { command: "bun test export" } }], { stop: "tool_use", out: 60 });
 }
 
 if (only == null) push({ type: "custom-title", customTitle: "login flake", sessionId });

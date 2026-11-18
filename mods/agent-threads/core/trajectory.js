@@ -18,11 +18,14 @@
 //   it was made and ends when its result was written.
 // - A background update after the reply is a context cell in a group of its own.
 // - A turn carries its stable id (ids.js) when the caller gives it; trajectories(s) does.
+// - A user or message cell carries its line's id (line) where the transcript gives one.
 
 import { reply } from "./turns.js";
 import { turnIds } from "./ids.js";
 
 const at = (ms) => (Number.isFinite(ms) ? ms : null);
+// A user or message cell's own line id, where the transcript gives one (Claude Code).
+const line = (id) => (typeof id === "string" && id ? { line: id } : {});
 
 // The reader keeps each subagent's record under its call's id (s.agents) and under its own
 // agent id (s.agentIds), and the record holds only the call's id: the agent id is the key.
@@ -34,7 +37,7 @@ function agentId(s, a) {
 }
 
 export function trajectory(s, turn, id = null) {
-  const groups = [{ title: "Message", cells: [{ kind: "user", text: turn.prompt, start: at(turn.ts), end: null }] }];
+  const groups = [{ title: "Message", cells: [{ kind: "user", text: turn.prompt, start: at(turn.ts), end: null, ...line(turn.lineId) }] }];
   let step = null;
   const open = () => {
     step = { title: `Step ${groups.length}`, cells: [] };
@@ -43,7 +46,7 @@ export function trajectory(s, turn, id = null) {
   };
   for (const st of turn.steps ?? []) {
     if (st.k === "text") {
-      open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
+      open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null, ...line(st.l) });
       continue;
     }
     if (st.k !== "group") continue;
@@ -65,7 +68,7 @@ export function trajectory(s, turn, id = null) {
     if (st.count > st.calls.length) step.cells.push({ kind: "more", count: st.count - st.calls.length, start: null, end: null });
   }
   const text = reply(turn);
-  if (text) open().cells.push({ kind: "message", text, start: at(turn.afterAt), end: at(turn.endTs) });
+  if (text) open().cells.push({ kind: "message", text, start: at(turn.afterAt), end: at(turn.endTs), ...line(turn.afterLine) });
   if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
   return {
     id,

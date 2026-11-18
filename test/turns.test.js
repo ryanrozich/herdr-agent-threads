@@ -43,7 +43,7 @@ test("assembles turns from the fixture", () => {
   // Each step with its time, each call with its input in short, when it was made, when its
   // result came and whether it failed.
   const ms = (t) => Date.parse(`2026-11-01T09:13:${t}.000Z`);
-  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false, at: ms("08") }, { k: "group", calls: ["Read", "Bash", "Edit"], ids: ["toolu_000002_Read", "toolu_000003_Bash", "toolu_000004_Edit"], count: 3,
+  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false, at: ms("08"), l: "00000000-0000-4000-9000-000000000008" }, { k: "group", calls: ["Read", "Bash", "Edit"], ids: ["toolu_000002_Read", "toolu_000003_Bash", "toolu_000004_Edit"], count: 3,
     info: [{ in: "tests/login.spec.ts", at: ms(12), rt: ms(14), f: false }, { in: "bun test login", at: ms(18), rt: ms(20), f: false }, { in: "tests/login.spec.ts", at: ms(24), rt: ms(26), f: false }] }]);
   expect(reply(fix)).toStartWith("The test raced the redirect.");
   expect(reply(fix)).not.toContain("Let me look");
@@ -211,7 +211,7 @@ test("the new extractor gives the old event stream, less repeated usage, non-own
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t, l: undefined }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });

@@ -215,6 +215,10 @@ function newTurn(s, e) {
         src: typeof e.src?.[i] === "string" && e.src[i].length <= 300 ? e.src[i] : null }))
       : [],
     imgLine: typeof e.u === "string" && /^[0-9A-Za-z_-]{8,80}$/.test(e.u) ? e.u : null,
+    // The prompt's own line id (Claude Code) and the turn's id (Codex), for the Trajectory's
+    // copied reference, only where the transcript gives them.
+    ...(idOk(e.l) ? { lineId: e.l } : {}),
+    ...(idOk(e.tid) ? { turnId: e.tid } : {}),
   };
 }
 
@@ -230,6 +234,8 @@ function newTurn(s, e) {
 // 120 characters; at, when the call was made; rt, when its result was written; f, whether it
 // failed (null when the result does not say). A result ("x") fills rt and f by the call's id.
 export const STEP_TEXT = 3400;
+// A line or turn id the transcript gives, as the reader keeps it: short, no spaces.
+const idOk = (x) => typeof x === "string" && /^[0-9A-Za-z_.:-]{4,100}$/.test(x);
 export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
@@ -238,7 +244,7 @@ function addStep(s, turn, name, id = null, e = null) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   if (text) {
-    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
+    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}), ...(turn.afterLine ? { l: turn.afterLine } : {}) });
     else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
@@ -395,7 +401,12 @@ function applyOne(s, e) {
     case "t":
       if (!cur || !e.t) return;
       if (s.seg === "own") {
-        if (!cur.after.length) cur.afterAt = ms(e.ts);
+        if (!cur.after.length) {
+          cur.afterAt = ms(e.ts);
+          // The first text's line id (Claude Code), kept only where there is one.
+          if (idOk(e.l)) cur.afterLine = e.l;
+          else delete cur.afterLine;
+        }
         cur.after.push(e.t);
       } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
@@ -408,7 +419,7 @@ function applyOne(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; }
+      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; delete cur.afterLine; }
       else cur.latestParts = [];
       return;
     case "m":

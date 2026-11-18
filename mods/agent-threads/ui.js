@@ -9,7 +9,7 @@ const KEYS = {
   end: "latest", enter: "open", space: "open", o: "outline", c: "copy", "/": "filter", escape: "escape",
   "[": "prevDay", "]": "nextDay", a: "agents", t: "focus", ",": "settings", s: "select", i: "legend", v: "pinned",
   "-": "narrower", "=": "wider", w: "fit", "?": "keys", right: "deeper", left: "shallower",
-  y: "view", f: "nextFail",
+  y: "view", f: "nextFail", m: "prevUser", d: "detail", b: "timeline", z: "zoomRange", "+": "wider", r: "copyRef",
 };
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
@@ -25,10 +25,18 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (m.shift) {
     if (k === "g" || k === "G") return "latest";
     if (k === "f" || k === "F") return filtering ? null : "prevFail";
+    if (k === "m" || k === "M") return filtering ? null : "nextUser";
+    if (k === "+" || k === "=") return filtering ? null : "wider";
+    // Shift with j, k or an arrow: the focus range.
+    if (k === "j" || k === "J" || k === "down") return filtering ? null : "rangeNext";
+    if (k === "k" || k === "K" || k === "up") return filtering ? null : "rangePrev";
     return k === "?" || k === "/" ? (filtering ? null : "keys") : null;
   }
   if (k === "G") return "latest";
   if (k === "F") return filtering ? null : "prevFail";
+  if (k === "M") return filtering ? null : "nextUser";
+  if (k === "J") return filtering ? null : "rangeNext";
+  if (k === "K") return filtering ? null : "rangePrev";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
 }
@@ -45,7 +53,11 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ...(outline ? [["Trajectory", [
       [["y"], "The Trajectory pane beside the chat (each step of the turns), or back to the chat"], [["↑", "↓", "j", "k"], "Move a row in the Trajectory"],
-      [["f", "Shift f"], "Next or previous failed call"],
+      [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "The user's message before, or after"],
+      [["d", "↵"], "Show or hide the detail of the selected row"], [["b"], "Show or hide the timeline"],
+      [["-", "="], "Zoom the timeline out or in"], [["w"], "Fit the whole session in the timeline"], [["z"], "Zoom the timeline to the range, or the selected turn"],
+      [["Shift j", "Shift k"], "Make or move the focus range a row (Shift ↑ ↓ too; or drag on the timeline)"], [["Esc"], "Clear the range, then hide the detail"],
+      [["r"], "Copy a reference to the selected step, for another agent"],
     ]]] : []),
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
@@ -1603,9 +1615,25 @@ export function senderIcon(sender) {
 }
 
 // Whether a turn is shown: the person's own turns always; another sender's when the
-// setting is on, or while it is the live newest turn (Working or Needs you).
-export function isShown(turn, { agentTurns = false, live = false } = {}) {
-  return !turn.agent || agentTurns || live;
+// setting is on, or while it is the live newest turn (Working or Needs you), or, given its
+// session's turns, when it has a reply of its own (agentReplied): then its message is folded
+// to one line over the reply.
+export function isShown(turn, { agentTurns = false, live = false, turns = null } = {}) {
+  return !turn.agent || agentTurns || live || (turns != null && agentReplied(turn, turns));
+}
+
+// An agent turn that keeps its reply on screen while agent messages are hidden, its message
+// folded to one line (the owner, 17 Nov: a reply written for the person was hidden because
+// an agent's message had started the turn). Not one with no reply text, and not one whose
+// reply an earlier turn of the person's already shows (main.js borrowedFrom: Claude answered
+// both in one reply). Reads the reply's pieces without joining them, since the counts call
+// this for every turn.
+export function agentReplied(turn, turns) {
+  if (!turn.agent || !turn.after?.some((x) => /\S/.test(x))) return false;
+  for (let i = turn.n - 2; i >= 0 && turns[i] && (turns[i].answeredIn === turn.n || turns[i].answeredBy === turn.n); i--) {
+    if (!turns[i].agent && !turns[i].after.length) return false;
+  }
+  return true;
 }
 
 // The turns shown and how many are hidden, for a list of turns (live: the live turn).
@@ -1616,7 +1644,7 @@ export function visible(turns, { agentTurns = false, live = null, match = null }
   let hiddenMatches = 0;
   let matched = 0;
   for (const t of turns) {
-    const on = isShown(t, { agentTurns, live: t === live });
+    const on = isShown(t, { agentTurns, live: t === live, turns });
     const hit = match ? match(t) : true;
     if (!on) { hidden++; if (match && hit) hiddenMatches++; continue; }
     shown.push(t);

@@ -76,7 +76,8 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "turnId": "turn-0001"
  },
  {
   "n": 2,
@@ -150,6 +151,7 @@
   "latest": "",
   "latestParts": [],
   "images": [],
-  "imgLine": null
+  "imgLine": null,
+  "turnId": "turn-0002"
  }
 ]
