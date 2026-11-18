@@ -1272,6 +1272,54 @@ test("a closed turn's message and reply start select by drag, a click that does 
   v.query = "";
 });
 
+// Issue 108: a long path in a coloured bubble broke in the middle of a word ("median-of-thr",
+// "ee.js"). A closed turn's message breaks a token longer than its line after a "/" or "-",
+// in a blue bubble (plain lines) and a plain one (the selectable text) alike.
+test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubble and a plain one alike", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-wrap-"));
+  const file = join(dir, "f.jsonl");
+  const path = "src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js";
+  const hy = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const prompt = `Why does ${path} round down, and does ${hy} see it?`;
+  const line = (o, n) => JSON.stringify({ isSidechain: false, timestamp: `2026-11-01T09:00:0${n}.000Z`, uuid: `u${n}`, ...o });
+  writeFileSync(file, `${[
+    line({ type: "user", origin: { kind: "human" }, message: { role: "user", content: prompt } }, 1),
+    line({ type: "assistant", message: { id: "m1", model: "claude-opus-5-5", role: "assistant", content: [{ type: "text", text: "It rounds each line first." }], stop_reason: "end_turn" } }, 2),
+  ].join("\n")}\n`);
+  const { v, cx } = await pane(file);
+  v.width = 460;
+  v.prefs = { ...v.prefs, truncate: false };
+  const row = () => v.rows().find((r) => r.kind === "turn");
+  const strings = () => { rec = []; v.rowItem(theme, row(), false); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  // Joined back with the spaces the wrap took out (none after a break inside a token), the
+  // lines are the message: nothing lost or added.
+  const whole = (ls) => ls.reduce((s, l, i) => s + (i && !/[/-]$/.test(ls[i - 1]) ? " " : "") + l, "");
+  const check = (ls) => {
+    expect(whole(ls)).toBe(prompt);
+    const inToken = ls.slice(0, -1).filter((l, i) => !prompt.includes(`${l} ${ls[i + 1]}`));
+    expect(inToken.length).toBeGreaterThan(1);
+    for (const l of inToken) expect(l).toMatch(/[/-]$/);
+    expect(ls.join("\n")).not.toContain("median-of-thr\n");
+  };
+  v.action("bubbleColor:blue", cx);
+  draw(v, cx);
+  const blue = v.shape(row().turn).prompt;
+  check(blue);
+  // Blue: each line drawn as its own plain line, as shaped.
+  const drawn = strings();
+  for (const l of blue) expect(drawn).toContain(l);
+  // Plain: the same lines in the selectable text.
+  v.action("bubbleColor:plain", cx);
+  draw(v, cx);
+  const plain = v.shape(row().turn).prompt;
+  expect(plain).toEqual(blue);
+  const v0 = views.length;
+  v.rowItem(theme, row(), false);
+  const sp = views.slice(v0).find((x) => x.id.startsWith("th-sp-"));
+  expect(sp).toBeTruthy();
+  for (const l of plain) expect(sp.html).toContain(l);
+});
+
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
