@@ -4,6 +4,7 @@
 //   --extra N    N short turns before the scripted ones (to fill a list)
 //   --only N     only N short turns, none of the scripted ones
 //   --open       end with a turn that has tool calls and no reply yet (a running turn)
+//   --running    with --open: the turn's last call has no result yet (still running)
 //   --start T    ISO time of the first line (default 2026-11-01T09:12:00Z)
 //   --gap S      seconds between the --extra/--only turns (default 300)
 //   --clear      start the file the way /clear starts one: a caveat line, the /clear
@@ -63,6 +64,7 @@ const flags = process.argv.slice(2);
 const flag = (name) => { const i = flags.indexOf(name); if (i < 0) return null; const v = flags[i + 1]; flags.splice(i, 2); return v; };
 const bool = (name) => { const i = flags.indexOf(name); if (i < 0) return false; flags.splice(i, 1); return true; };
 const open = bool("--open");
+const running = bool("--running");
 const clear = bool("--clear");
 const usage = bool("--usage");
 const skill = bool("--skill");
@@ -591,6 +593,7 @@ if (imagesFx) {
 if (open) {
   const pid = prompt("Run the full e2e suite and summarise the failures", "human", 40);
   for (let k = 0; k < 6; k++) tool("Bash", { command: "bun run e2e" }, "…", pid);
+  if (running) assistant([{ type: "tool_use", id: "toolu_000999_Bash", name: "Bash", input: { command: "bun test export" } }], { stop: "tool_use", out: 60 });
 }
 
 if (only == null) push({ type: "custom-title", customTitle: "login flake", sessionId });

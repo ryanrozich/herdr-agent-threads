@@ -65,7 +65,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, bandRows, TL_LANES } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf, timelineGeo, timelineLayout, timelineHit, itemBox, tlBox, tlClamp, tlZoomAt, bandRows, TL_LANES, tornPoints, slantPoints, polyRows } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -811,7 +811,9 @@ export default class Threads extends View {
       this.poll(cx);
       this.flushCode(cx);
       if (this.pinDueAt != null && Date.now() >= this.pinDueAt) this.savePins(cx);
-      if (this.liveShown && ["working", "blocked"].includes(this.status())) cx.notify();
+      // In the Trajectory, a running turn's bars run to now: the layout takes the second
+      // (tlLayout), so this tick is what moves a running call's torn end, once a second.
+      if ((this.liveShown || this.trajGoing()) && ["working", "blocked"].includes(this.status())) cx.notify();
       // Past midnight, Today becomes Yesterday in the day bands and the Pinned view's headers.
       const today = dayKey(Date.now());
       if (this.today !== today) { const was = this.today; this.today = today; if (was) cx.notify(); }
@@ -3801,10 +3803,35 @@ export default class Threads extends View {
       .children(few.map(([a, z]) => div().absolute().top(Math.max(0, (h - w) / 2)).h(w).left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.5, (z - a) * 100).toFixed(2)}%`).rounded(w / 2).bg(color)));
   }
 
+  // Filled polygons in a w by h px box (points in px), as one filled path, or as whole-pixel
+  // rows (ledger.js polyRows) where Herdr has none. For the slanted ends of unfinished calls.
+  shapeLayer(polys, color, id, w, h) {
+    const win = globalThis.window;
+    const list = polys.filter((pts) => pts.length > 2);
+    const px = (v) => `${((Math.max(0, Math.min(w, v)) / w) * 100).toFixed(3)}%`;
+    const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
+    if (PAINT && typeof win?.paint_path === "function" && list.length) {
+      try {
+        let b = PAINT.PathBuilder.fill();
+        for (const pts of list) {
+          b = b.move_to(px(pts[0][0]), py(pts[0][1]));
+          for (let i = 1; i < pts.length; i++) b = b.line_to(px(pts[i][0]), py(pts[i][1]));
+          b = b.close();
+        }
+        const fill = typeof PAINT.Background?.solid === "function" ? PAINT.Background.solid(color) : color;
+        return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
+      } catch { /* the divs below */ }
+    }
+    return div().id(id).absolute().top(0).left(0).size_full()
+      .children(list.slice(0, 40).flatMap((pts) => polyRows(pts, h).map((r) => div().absolute().top(r.y).h(r.h).left(r.x0).w(Math.max(0.5, r.x1 - r.x0)).bg(color))));
+  }
+
   // ---- the timeline (round 3's scales, round 6 section 3, round 7) ----
   // At the top of the pane from TRAJ_BAR wide, unless b or its button hid it. When it does not
   // show, the 3 px line under each turn heading stands in for it.
   timelineShown() { return this.ledger() && this.pw() >= TRAJ_BAR && !this.tlHidden; }
+  // The timeline shows a turn that is still going (the last heading's), whose bars grow.
+  trajGoing() { return this.timelineShown() && Boolean(this.ledgerSums().heads?.at(-1)?.going); }
   tlScale() { return this.tlScaleWant ?? "clock"; }
   tlWidth() { return Math.max(40, Math.floor(this.pw() - TL_GUT - 12)); }
   // The layout (ledger.js timelineLayout): the turns placed (timelineGeo) again only when the
@@ -4229,21 +4256,39 @@ export default class Threads extends View {
 
   // A filled rect per span ([x0, x1] px of a strip cw px wide), as one vector path where Herdr
   // has one, else at most 60 divs.
-  rectLayer(spans, color, id, cw) {
+  // h: the layer's height in px, for a torn end's teeth (a span [x0, x1, 1]: round 7
+  // decisions, section 2). Torn spans are cut, so the timeline's background shows through.
+  rectLayer(spans, color, id, cw, h = 12) {
     const win = globalThis.window;
     const p = (v) => `${((Math.max(0, Math.min(cw, v)) / cw) * 100).toFixed(3)}%`;
+    const q = (v) => `${((v / h) * 100).toFixed(3)}%`;
     if (PAINT && typeof win?.paint_path === "function" && spans.length) {
       try {
         let b = PAINT.PathBuilder.fill();
-        for (const [a, z] of spans) if (z > 0 && a < cw) b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+        for (const sp of spans) {
+          const [a, z] = sp;
+          if (!(z > 0 && a < cw)) continue;
+          if (sp[2] && z <= cw) {
+            const pts = tornPoints(a, z, h);
+            b = b.move_to(p(pts[0][0]), q(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) b = b.line_to(p(pts[i][0]), q(pts[i][1]));
+            b = b.close();
+          } else b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+        }
         const fill = typeof PAINT.Background?.solid === "function" ? PAINT.Background.solid(color) : color;
         return win.paint_path(b.build(), fill).absolute().top(0).left(0).size_full();
       } catch { /* the divs below */ }
     }
-    const shown = spans.filter(([a, z]) => z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
-    const few = shown.length > 60 ? coarse(shown.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : shown;
+    const shown = spans.filter(([a, z]) => z > 0 && a < cw);
+    const plain = shown.filter((sp) => !sp[2] || sp[1] > cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const few = plain.length > 60 ? coarse(plain.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : plain;
+    // A torn span with no filled path: its rows of whole pixels (a 12 px bar is 7 divs).
+    const torn = shown.filter((sp) => sp[2] && sp[1] <= cw).slice(0, 40)
+      .flatMap(([a, z]) => polyRows(tornPoints(a, z, h), h).filter((r) => r.x1 > 0)
+        .map((r) => div().absolute().top(r.y).h(r.h).left(Math.max(0, r.x0)).w(Math.max(0.5, r.x1 - Math.max(0, r.x0))).bg(color)));
     return div().id(id).absolute().top(0).left(0).size_full()
-      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)));
+      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)))
+      .children(torn);
   }
   // The breaks between turns, hatched: 45 degree lines 5 px apart inside each break 4 px or
   // wider, one stroked path; a faint fill where Herdr has no stroked path.
@@ -4301,7 +4346,7 @@ export default class Threads extends View {
       const li = TL_LANES.indexOf(lane);
       const c = colour(kind);
       kids.push(div().id(`th-tl-${k}`).absolute().left(0).w(cw).top(li * TL_LANE + (track === "1" ? 8 : 2)).h(track === "1" ? 6 : 12)
-        .child(this.rectLayer(spans, dimmed(kind) || out ? alpha(c, 0.2) : c, `th-tlr-${k}`, cw)));
+        .child(this.rectLayer(spans, dimmed(kind) || out ? alpha(c, 0.2) : c, `th-tlr-${k}`, cw, track === "1" ? 6 : 12)));
     }
     // The selected step's outline.
     const sk = this.ledgerSel();
@@ -4385,7 +4430,14 @@ export default class Threads extends View {
           .when(line.model.length > 0, (x) => x.child(this.pathLayer(line.model, ink.model, 3, `th-tlm-${r.key}`)))
           .when(line.tools.length > 0, (x) => x.child(this.pathLayer(line.tools, ink.tools, 3, `th-tlt-${r.key}`)))
           .when(line.sub.length > 0, (x) => x.child(this.pathLayer(line.sub, alpha(ink.sub, SUB_ALPHA), 3, `th-tls-${r.key}`)))
-          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`))))
+          .when(line.red.length > 0, (x) => x.child(this.pathLayer(line.red, ink.failed, 3, `th-tlr-${r.key}`)))
+          .when(Boolean(line.open?.length || line.openSub?.length), (x) => {
+            // Unfinished calls: their stretch ends in one 4 px slant (round 7 decisions).
+            const lw = Math.max(1, this.ledgerW() - pl - pr);
+            const polys = (segs) => (segs ?? []).map(([a, z]) => slantPoints(a * lw, z * lw, 3, 4));
+            return x.child(this.shapeLayer(polys(line.openSub), alpha(ink.sub, SUB_ALPHA), `th-tlso-${r.key}`, lw, 3))
+              .child(this.shapeLayer(polys(line.open), ink.tools, `th-tlo-${r.key}`, lw, 3));
+          }))
           .when(Boolean(this.trange), (x) => { const g = this.lineRange(r); return g ? x.child(g(t)) : x; });
       });
   }
@@ -4496,12 +4548,14 @@ export default class Threads extends View {
 
   // The bar: one rounded stroke as long as the step took on the session's one scale
   // (ledger.js barFrac), red for a failed call, a faint dotted stretch for a time the
-  // transcript does not give, a short fading one for a call still running.
+  // transcript does not give, the whole track with a slanted end for an unfinished call.
   ledgerBar(t, r) {
     const box = div().id(`th-bar-${r.key}`).flex_none().w(56).h(LEDGER_ROW).relative();
-    if (!["tool", "failed", "subagent", "running"].includes(r.lk)) return box;
     const id = `th-barp-${r.key}`;
-    if (r.lk === "running") return box.child(this.pathLayer([[0, 0.3]], alpha(t.muted, 0.4), 3, id, LEDGER_ROW));
+    // An unfinished call (running or no result): the whole track, 4 px, its right end one
+    // 5 px slant, grey (round 7 decisions, section 2).
+    if (r.open) return box.child(div().absolute().left(0).top((LEDGER_ROW - 4) / 2).w(56).h(4).child(this.shapeLayer([slantPoints(0, 56, 4, 5)], this.inks(t).open, id, 56, 4)));
+    if (!["tool", "failed", "subagent"].includes(r.lk)) return box;
     if (r.dur == null) return r.durQ ? box.child(this.pathLayer([[0, 0.06], [0.14, 0.2], [0.28, 0.34]], t.dim, 2, id, LEDGER_ROW)) : box;
     return box.child(this.pathLayer([[0, barFrac(r.dur)]], r.failed ? t.blocked : t.dim, 3, id, LEDGER_ROW));
   }

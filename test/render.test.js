@@ -146,7 +146,7 @@ execFileSync("mkdir", ["-p", join(app, "mods")]);
 execFileSync("cp", ["-R", modDir, join(app, "mods/agent-threads")]);
 const { default: Threads } = await import("../mods/agent-threads/main.js");
 const { thumbSize, tileRow, bubbleMax, ROW, columnWidth, railLook, rowHeight, MD_MAX, alpha: alphaForTest, dayKey } = await import("../mods/agent-threads/ui.js");
-const { ledgerTotals: ledgerTotalsForTest, tlBox: tlBoxForTest } = await import("../mods/agent-threads/ledger.js");
+const { ledgerTotals: ledgerTotalsForTest, tlBox: tlBoxForTest, detailOf } = await import("../mods/agent-threads/ledger.js");
 const rowTurnForTest = (r) => (r.kind === "trh" ? r.key : `${r.si}:${r.turn.n}`);
 
 function fixture(...flags) {
@@ -8387,6 +8387,61 @@ test("Trajectory focus range: a drag on the timeline, its edges, Shift keys and 
   expect(L().x0).toBeGreaterThan(x0);
   up();
   expect(v.trange).not.toBe(null);
+});
+
+// Round 7 decisions, section 2: an unfinished call is the torn end, one mark for running and
+// for no result. The timeline's bar is cut into teeth, the ledger row's small bar fills its
+// track with a slanted end, the heading's line ends in a slant; the words tell the two cases
+// apart. A running bar grows from the 1 s timer, which only notifies.
+test("Trajectory torn end: a running call's bar, small bar and line; its words; it grows from the 1 s timer", async () => {
+  const { v, cx } = await pane(fixture("--only", "2", "--open", "--running"), { view: "trajectory" });
+  state.terminals[0].status = "working";
+  v.paneW = 1100; v.rootH = 900; v.listH = 790;
+  settleRows(v, cx);
+  const rows = ledgerOnly(v);
+  const run = rows.find((r) => r.lk === "running");
+  expect(run).toBeTruthy();
+  expect([run.open, run.status, run.text]).toEqual([true, "running", "bun test export"]);
+  expect(detailOf(run).fields).toContainEqual(["Result", "Running, no result yet"]);
+  // The other calls of the running turn have results: not torn.
+  expect(rows.filter((r) => r.open).length).toBe(1);
+  v.ledgerPick(run.key, false, cx);
+  rec = [];
+  draw(v, cx);
+  let c = rec;
+  rec = null;
+  const L = v.tlMemo.L;
+  const torn = L.spans.get("tools|tools|0").filter((sp) => sp[2] === 1);
+  expect(torn.length).toBe(1);
+  // Without a filled path (the test's Herdr) the torn bar is its rows of whole pixels.
+  expect(c.some(([n, x]) => n === "id" && x === "th-tlr-tools|tools|0")).toBe(true);
+  expect(c.some(([n, x]) => n === "id" && x === `th-barp-${run.key}`)).toBe(true);
+  // It grows with now: the 1 s timer notifies while the turn runs, and the next draw lays the
+  // timeline out again with the later time. The tick writes nothing shared.
+  const wall0 = L.geo.walls.at(-1);
+  const tick = cx.everies.find((x) => x.ms === 1000).fn;
+  let notes = 0;
+  cx.notifyHook = () => { notes++; };
+  const real = Date.now;
+  try {
+    Date.now = () => real() + 5000;
+    v.debug = false;
+    const shared = JSON.stringify(state.shared);
+    tick(cx);
+    expect(JSON.stringify(state.shared)).toBe(shared);
+    expect(notes).toBeGreaterThan(0);
+    v.render(cx);
+    expect(v.tlMemo.L.geo.walls.at(-1)).toBeGreaterThan(wall0 + 4000);
+  } finally { Date.now = real; v.debug = true; cx.notifyHook = null; }
+  // With the timeline hidden, the heading's line carries it, ending in a slant.
+  v.key(keyEv("b"), cx);
+  rec = [];
+  draw(v, cx);
+  c = rec;
+  rec = null;
+  const head = rows.find((r) => r.kind === "trh" && r.key === `${run.si}:${run.turn.n}`);
+  expect(head.line.open.length).toBe(1);
+  expect(c.some(([n, x]) => n === "id" && x === `th-tlo-${head.key}`)).toBe(true);
 });
 
 // Round 6 section 9: r copies a reference to the selected row in two lines, through the

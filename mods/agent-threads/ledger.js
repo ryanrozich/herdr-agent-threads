@@ -44,6 +44,8 @@ export const TRAJ_INKS = Object.freeze({
   agent: Object.freeze({ light: "#87643A", dark: "#CC9A5E" }),
   model: Object.freeze({ light: "#7A48C0", dark: "#C49BEE" }),
   tools: Object.freeze({ light: "#1C7A6D", dark: "#5DBCAA" }),
+  // The ledger row's small bar for a call with no result (round 7 decisions, section 2).
+  open: Object.freeze({ light: "#878C96", dark: "#747882" }),
 });
 export const SUB_ALPHA = 0.45;
 // The user's colour: "blue" (the default) or "plain" (the text colour, with a neutral-tint
@@ -56,7 +58,7 @@ export function trajInks(t, dark, user = USER_COLOR) {
   return {
     user: user === "plain" ? t.foreground : pick("user"), plain: user === "plain",
     agent: pick("agent"), model: pick("model"), tools: pick("tools"), sub: pick("tools"),
-    context: t.dim, failed: t.blocked,
+    context: t.dim, failed: t.blocked, open: pick("open"),
   };
 }
 // A row's lane of the timeline: "input", "model", "tools", or null.
@@ -181,6 +183,7 @@ export function ledgerTurn(s, turn, si, live = false) {
   const model = [];
   const red = [];
   const openAt = [];
+  const openSub = [];
   cells.forEach((c, i) => {
     // ref: the transcript's own id for the step, for the copied reference: a call's id, or
     // the line's (Claude Code), or null.
@@ -213,6 +216,11 @@ export function ledgerTurn(s, turn, si, live = false) {
       const ended = c.end != null;
       const open = Boolean(c.result) && !ended && (ends || (live && i === lastTool));
       r.lk = failed ? "failed" : c.subagent ? "subagent" : open ? (live ? "running" : "noresult") : "tool";
+      // A subagent whose run has no end and no final state yet: unfinished too, the same torn
+      // end at the subagent's 45%. Its row keeps the run's state as its words.
+      const subOpen = Boolean(c.subagent) && !failed && !ended && !Number.isFinite(c.subagent.ms) && c.start != null
+        && (c.subagent.state == null || c.subagent.state === "async_launched" || c.subagent.state === "running") && (ends || live);
+      if ((open && !c.subagent && !failed) || subOpen) r.open = true;
       if (c.subagent) {
         r.tool = "Agent";
         r.sub = { state: c.subagent.state ?? null, tokens: c.subagent.tokens ?? null };
@@ -225,11 +233,11 @@ export function ledgerTurn(s, turn, si, live = false) {
       else r.startQ = true;
       const ms = c.subagent?.ms ?? (c.start != null && c.end != null ? c.end - c.start : null);
       if (Number.isFinite(ms)) r.dur = ms;
-      else if (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed") r.durQ = true;
+      else if (!r.open && (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed")) r.durQ = true;
       if (c.start != null && c.end != null) (failed ? red : c.subagent ? sub : tools).push([c.start, c.end]);
-      // A call with no result: a flat bar to the turn's end (to now while it runs), drawn
-      // plain until its mark is settled.
-      else if (c.start != null && (r.lk === "running" || r.lk === "noresult")) openAt.push(c.start);
+      // A call with no result: a bar to the turn's end (to now while it runs) with a torn
+      // right end (round 7 decisions, section 2).
+      else if (c.start != null && r.open) (subOpen ? openSub : openAt).push(c.start);
     } else if (c.kind === "more") {
       calls += c.count;
       r.lk = "more";
@@ -248,9 +256,11 @@ export function ledgerTurn(s, turn, si, live = false) {
   if (tr.interrupted) rows.push({ kind: "tr", key: `tr:${key}:stop`, turn, si, lk: "stop", text: "Interrupted", tool: null, status: null, start: timed && tr.end != null ? tr.end - t0 : null, dur: null, startQ: false, durQ: false, failed: false });
   const t1 = tr.end ?? lastEnd;
   const span = t0 != null && t1 != null ? t1 - t0 : null;
-  for (const a of openAt) tools.push([a, Math.max(a, t1)]);
+  // The unfinished calls' stretches apart, each drawn with its torn end (a slant on this line).
+  const open = openAt.map((a) => [a, Math.max(a, t1)]);
+  const opens = openSub.map((a) => [a, Math.max(a, t1)]);
   const line = timed && span > 0
-    ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span) }
+    ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span), open: stretches(open, t0, span), openSub: stretches(opens, t0, span) }
     : null;
   // The turn's own counts, and its steps on the timeline: each row's lane, ink, start and end
   // (ms from the turn's start; b null for an instant, open for a call with no result yet) and,
@@ -266,7 +276,7 @@ export function ledgerTurn(s, turn, si, live = false) {
     if (r.lk === "you") cnt.user++;
     if (r.lk === "agent") cnt.agent++;
     const a = r.start;
-    const openBar = r.lk === "running" || r.lk === "noresult";
+    const openBar = Boolean(r.open);
     const b = a != null && r.dur != null ? a + r.dur : null;
     let track = 0;
     if (k?.lane === "tools" && a != null) {
@@ -401,11 +411,11 @@ export function detailOf(r) {
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
   const call = laneOf(r.lk) === "tools" && r.lk !== "more";
   if (call || r.lk === "reply") {
-    const took = r.dur != null ? durText(r.dur) : r.lk === "running" ? "still running" : r.lk === "noresult" ? "no result" : "not recorded";
+    const took = r.dur != null ? durText(r.dur) : r.lk === "running" ? "still running" : r.lk === "noresult" ? "no result" : r.open ? "still running" : "not recorded";
     F.push(["Took", took]);
   }
   if (call) {
-    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" ? "No result: the turn ended first" : r.durQ ? "not recorded" : "ok"]);
+    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" ? "No result: the turn was interrupted" : r.durQ ? "not recorded" : "ok"]);
     if (r.sub) F.push(["Subagent", [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") || "no state recorded"]);
   }
   if (r.lk === "more") F.push(["Result", "results not kept"]);
@@ -425,8 +435,8 @@ export function detailOf(r) {
 // turn wide enough to draw them (a turn under 2 px is one span per lane it has). Bars that
 // touch are joined, so what is drawn is bounded by the strip's width, not the session's
 // length, at any zoom.
-// A call with no result yet is a plain flat bar to the turn's end (to now while the turn
-// runs). nowMs: the clock, for a running turn.
+// A call with no result yet is a bar to the turn's end (to now while the turn runs) with a
+// torn right end. nowMs: the clock, for a running turn.
 export const TL_LANES = Object.freeze(["input", "model", "tools"]);
 const wallOf = (h, nowMs) => {
   const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
@@ -539,13 +549,18 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   const n = G.turns.length;
   if (!n) return out;
   const walls = G.walls;
-  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch.
-  const add = (k, a, b) => {
+  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
+  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end.
+  const add = (k, a, b, torn = false) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
     const last = list[list.length - 1];
-    if (last && a <= last[1] + 0.5) { if (b > last[1]) last[1] = b; return; }
-    list.push([a, b]);
+    if (last && a <= last[1] + 0.5) {
+      if (b > last[1]) { last[1] = b; if (torn) last[2] = 1; else last.length = 2; }
+      else if (torn && b === last[1]) last[2] = 1;
+      return;
+    }
+    list.push(torn ? [a, b, 1] : [a, b]);
   };
   // The turns in view, and a margin: the first found by halving, since turns are in order.
   const M = 40;
@@ -584,7 +599,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
         const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
         if (!b || !it.sk || b.x1 < -M || b.x0 > cw + M) continue;
         const ip = range ? range.pos.get(it.key) : null;
-        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1);
+        add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${it.sk[b.track ? 1 : 0]}|o` : it.sk[b.track ? 1 : 0], b.x0, b.x1, Boolean(b.open));
         if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step
@@ -614,6 +629,48 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   }
   return out;
 }
+// The torn end (round 7 decisions, section 2) as a polygon in px, for a bar a to z px and h
+// px tall: the right end cut into teeth (3, each 4 px tall and 5 px deep; 3 px deep under 12
+// px wide; a half-height bar 2 teeth 3 px deep), the left corners cut 1 px.
+export function tornPoints(a, z, h) {
+  const teeth = h < 12 ? 2 : 3;
+  const depth = Math.min(h < 12 || z - a < 12 ? 3 : 5, Math.max(1, z - a - 2));
+  const r = Math.min(1, (z - a) / 4);
+  const th = h / teeth;
+  const pts = [[a, r], [a + r, 0], [z - depth, 0]];
+  for (let i = 0; i < teeth; i++) pts.push([z, (i + 0.5) * th], [z - depth, (i + 1) * th]);
+  pts.push([a + r, h], [a, h - r]);
+  return pts;
+}
+// A bar a to z px, h px tall, whose right end is one slant d px long: the ledger's small bar
+// (5 px) and the heading's line (4 px) for an unfinished call.
+export function slantPoints(a, z, h, d) {
+  return [[a, 0], [z, 0], [Math.max(a, z - Math.min(d, z - a)), h], [a, h]];
+}
+// A polygon whose rows each cross it once (a bar with a torn or slanted end) as whole-pixel
+// rows: [{ y, h, x0, x1 }], rows of the same extent joined. For a Herdr with no filled path.
+export function polyRows(pts, h) {
+  const out = [];
+  for (let y = 0; y < h; y++) {
+    const yc = y + 0.5;
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const [px, py] = pts[i];
+      const [qx, qy] = pts[(i + 1) % pts.length];
+      if ((py <= yc && yc < qy) || (qy <= yc && yc < py)) {
+        const x = px + ((yc - py) * (qx - px)) / (qy - py);
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+      }
+    }
+    if (!(x1 > x0)) continue;
+    const last = out[out.length - 1];
+    if (last && last.y + last.h === y && Math.abs(last.x0 - x0) < 0.25 && Math.abs(last.x1 - x1) < 0.25) last.h++;
+    else out.push({ y, h: 1, x0, x1 });
+  }
+  return out;
+}
 // One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
 // ms long, with len steps. null for a step with no time on the clock scale.
 export function itemBox(it, tx, w, wall, scale, len) {
@@ -623,9 +680,13 @@ export function itemBox(it, tx, w, wall, scale, len) {
     return { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
   }
   if (it.a == null || !(wall > 0)) return null;
-  const x0 = Math.min(tx + (it.a / wall) * w, tx + w - 3);
+  // An unfinished call (open) is never under 6 px wide, so its torn end keeps its shape.
+  const least = it.open ? 6 : 3;
+  const x0 = Math.min(tx + (it.a / wall) * w, tx + w - least);
   const end = it.b != null ? tx + (it.b / wall) * w : it.open ? tx + w : x0 + 3;
-  return { x0, x1: Math.max(x0 + 3, Math.min(end, tx + w)), track: it.track };
+  const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: it.track };
+  if (it.open) box.open = true;
+  return box;
 }
 // The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
 // or the turn's heading when no step's bar is within 4 px). heads in the layout's order; x in

@@ -3,7 +3,7 @@
 // times" for a turn with none, failures, the bar's scale and the turn's line. The turns are
 // made up here in the reader's shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
-import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, timelineLayout, timelineHit, itemBox } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, timelineLayout, timelineHit, itemBox, tornPoints, slantPoints, polyRows, detailOf } from "../mods/agent-threads/ledger.js";
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
 // A turn in the reader's shape: steps are [text] or [calls], each call [name, input, at, rt, failed].
@@ -271,4 +271,83 @@ test("timeline: a call with no result runs flat to the turn's end; a long sessio
   expect(spans).toBeLessThan(500);
   expect(big.fails.length).toBeLessThanOrEqual(500 / 6 + 1);
   expect(ms).toBeLessThan(200);
+});
+
+// Round 7 decisions, section 2: an unfinished call is mark 1, the torn end. One mark for a call
+// still running and one with no result; the words tell them apart.
+test("torn end: 3 teeth 4 px tall and 5 px deep; 3 px deep under 12 px wide; a half-height bar 2 teeth 3 px deep; left corners cut 1 px", () => {
+  const right = (pts) => pts.filter(([x]) => x === 100);
+  const wide = tornPoints(20, 100, 12);
+  // Tips at the right edge, one per tooth, in the middle of each 4 px.
+  expect(right(wide).map(([, y]) => y)).toEqual([2, 6, 10]);
+  expect(Math.min(...wide.map(([x]) => x).filter((x) => x > 50))).toBe(95);
+  expect(wide.slice(0, 2)).toEqual([[20, 1], [21, 0]]);
+  expect(wide.slice(-2)).toEqual([[21, 12], [20, 11]]);
+  const narrow = tornPoints(0, 10, 12);
+  expect(right(narrow.map(([x, y]) => [x * 10, y])).length).toBe(3);
+  expect(Math.min(...narrow.map(([x]) => x).filter((x) => x > 5))).toBe(7);
+  const half = tornPoints(0, 100, 6);
+  expect(right(half).map(([, y]) => y)).toEqual([1.5, 4.5]);
+  expect(Math.min(...half.map(([x]) => x).filter((x) => x > 50))).toBe(97);
+  // As whole-pixel rows (a Herdr with no filled path): the teeth's tips reach the end, their
+  // roots are 5 px in, and nothing is drawn past the bar.
+  const rows = polyRows(wide, 12);
+  const at = (y) => rows.find((r) => y >= r.y && y < r.y + r.h);
+  expect(rows.reduce((a, r) => a + r.h, 0)).toBe(12);
+  expect(Math.max(...rows.map((r) => r.x1))).toBeLessThanOrEqual(100);
+  expect(at(0).x1).toBeLessThan(96.5);
+  expect(at(2).x1).toBeGreaterThan(98.5);
+  expect(at(4).x1).toBeLessThan(96.5);
+  expect(at(6).x0).toBe(20);
+  // The slant: the ledger's small bar (5 px) and the heading's line (4 px).
+  expect(slantPoints(0, 56, 4, 5)).toEqual([[0, 0], [56, 0], [51, 4], [0, 4]]);
+  expect(polyRows(slantPoints(0, 56, 4, 5), 4).map((r) => Math.round(r.x1 * 8) / 8)).toEqual([55.375, 54.125, 52.875, 51.625]);
+  expect(slantPoints(0, 2, 3, 4)[2]).toEqual([0, 3]);
+});
+
+test("torn end on the timeline: an unfinished call's span is marked torn and is never under 6 px; running and no result differ in words only", () => {
+  const live = turn(5, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null });
+  const h = ledgerTurn(S, live, 0, true).rows[0];
+  const it = h.items.find((x) => x.open);
+  expect(it.lk).toBe("running");
+  // Its own stretch on the heading's line, apart from the finished calls'.
+  expect(h.line.open.length).toBe(1);
+  expect(h.line.open[0][1]).toBe(1);
+  expect(h.line.tools.length).toBe(1);
+  const L = timelineLayout([h], 400, "clock", T0 + 100000);
+  const torn = L.spans.get("tools|tools|0").filter((sp) => sp[2] === 1);
+  expect(torn.length).toBe(1);
+  expect(torn[0][1]).toBeCloseTo(L.turns[0].w, 3);
+  // A call started at the turn's very end: 6 px, not 3.
+  const box = itemBox({ ...it, a: 99990 }, 0, 400, 100000, "clock", 4);
+  expect(box.x1 - box.x0).toBe(6);
+  expect(box.open).toBe(true);
+  expect(itemBox({ ...it, open: false, b: null, a: 99990 }, 0, 400, 100000, "clock", 4).x1 - 394).toBeLessThanOrEqual(6);
+  // A finished call's span is not torn.
+  const done = ledgerTurn(S, turn(6, [[["Read", "a", 2000, 2500]]]), 0).rows[0];
+  expect([...timelineLayout([done], 400, "clock").spans.values()].flat().some((sp) => sp[2])).toBe(false);
+  // The words: running in a turn that goes on, no result in one that ended (interrupted).
+  const ended = ledgerTurn(S, turn(7, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 }), 0).rows;
+  const nr = ended.find((r) => r.lk === "noresult");
+  expect(nr.status).toBe("no result");
+  expect(detailOf(nr).fields).toContainEqual(["Result", "No result: the turn was interrupted"]);
+  expect(nr.open).toBe(true);
+  expect(ended[0].items.find((x) => x.key === nr.key).open).toBe(true);
+  const run = ledgerTurn(S, live, 0, true).rows.find((r) => r.lk === "running");
+  expect(run.status).toBe("running");
+});
+
+test("torn end: a subagent whose run has no end yet is unfinished too, drawn at the subagent's 45%; one that ended is not", () => {
+  const t = turn(8, [[["Agent", "Review the range math", 2000, null]]], { agent: true, done: false, end: null, reply: null });
+  const id = t.steps[0].ids[0];
+  const s = { agents: new Map([[id, { st: "async_launched", tok: null, ms: null }]]), agentIds: new Map() };
+  const rows = ledgerTurn(s, t, 0, true).rows;
+  const r = rows.find((x) => x.tool === "Agent");
+  expect(r).toMatchObject({ lk: "subagent", open: true, durQ: false });
+  expect(rows[0].line.openSub.length).toBe(1);
+  expect(rows[0].items.find((x) => x.key === r.key).open).toBe(true);
+  const L = timelineLayout([rows[0]], 400, "clock", T0 + 100000);
+  expect(L.spans.get("tools|sub|0").some((sp) => sp[2] === 1)).toBe(true);
+  const done = { agents: new Map([[id, { st: "completed", tok: 1000, ms: 9000 }]]), agentIds: new Map() };
+  expect(ledgerTurn(done, t, 0, true).rows.find((x) => x.tool === "Agent").open).toBe(undefined);
 });
