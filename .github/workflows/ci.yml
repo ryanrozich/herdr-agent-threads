@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml starts this on the release pull request's branch, whose pull request (opened
+  # with the Actions token) starts no run of its own.
+  workflow_dispatch:
 
 permissions:
   contents: read
