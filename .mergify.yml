@@ -1,0 +1,28 @@
+# Merge queue for main. Nothing is queued on its own: a pull request enters
+# only after someone adds the `queue` label or comments `@mergifyio queue`.
+
+queue_rules:
+  - name: main
+    queue_conditions:
+      - base = main
+      - -draft
+      - -conflict
+      - check-success = check
+    # Checked on the batch draft pull request that Mergify builds on top of
+    # the latest main, so every batch runs `check` again before it merges.
+    merge_conditions:
+      - check-success = check
+    merge_method: merge
+    batch_size: 10
+    batch_max_wait_time: 1 minute
+
+merge_queue:
+  # No "Queue this pull request" checkbox comment on every open pull request.
+  queue_controls_comment: false
+
+pull_request_rules:
+  - name: queue a pull request labeled queue
+    conditions:
+      - label = queue
+    actions:
+      queue:
