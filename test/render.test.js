@@ -499,6 +499,47 @@ test("a live agent turn that finishes while hidden hands the selection back (F1)
   expect(v.open.has("0:2")).toBe(false);
 });
 
+// The owner, on the rig (Herdr 0.1.15): a closed row's bubble drew "tests foran odd list" and
+// "runthe tests". Its lines go to one TextView.html, and Herdr there wraps the text itself and
+// draws no break at "<br>", so lines joined by "<br>" alone ran their words together. A soft
+// wrap keeps its space; a long token cut across lines is joined back with none.
+test("a closed bubble's wrapped lines keep their spaces in the selectable HTML", async () => {
+  const prompt = "Add a median function to calc.js with tests for an odd list, an even list and an empty list, run the tests, then run a slow check: sleep 8 && bun test.";
+  const path = "src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js";
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: prompt, ts: at(0) }, { k: "t", t: "Done." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: `Open ${path} next`, ts: at(2) }, { k: "t", t: "Opened." }, { k: "d", ms: 1000, ts: at(3) },
+  ]);
+  // Blue bubbles (the default since the settings card) draw plain lines; this checks the plain path.
+  v.prefs = { ...v.prefs, bubbleColor: "plain" };
+  v.width = 380;
+  settleRows(v, cx);
+  const shape = (k) => v.rows().find((r) => r.key === k).shape;
+  expect(shape("0:1").prompt.length).toBeGreaterThan(2);
+  expect(shape("0:2").prompt.some((l) => l.length > 0 && !l.includes(" ") && path.includes(l) && l !== path)).toBe(true);
+  views.length = 0;
+  draw(v, cx);
+  // The text as Herdr 0.1.15 draws it: "<br>" adds nothing, entities read back.
+  const drawn = (id) => views.filter((x) => x.id === id || x.id.startsWith(`${id}-`)).map((x) => x.html).join("")
+    .replace(/<br>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  expect(drawn("th-sp-p-0:1")).toBe(prompt);
+  expect(drawn("th-sp-p-0:2")).toBe(`Open ${path} next`);
+  // A slash command's arguments, beside its chip: the token cut across lines joins back whole
+  // ("medi an-of-three.js" in review).
+  const { v: w, cx: wx } = await scripted([
+    { k: "p", o: "human", cmd: true, t: `/review-pr ${path} now`, ts: at(0) }, { k: "t", t: "Reviewed." }, { k: "d", ms: 1000, ts: at(1) },
+  ]);
+  w.prefs = { ...w.prefs, bubbleColor: "plain" };
+  w.width = 380;
+  settleRows(w, wx);
+  const cs = w.rows().find((r) => r.key === "0:1").shape;
+  expect(cs.chip?.label).toBe("/review-pr");
+  expect(cs.prompt.some((l) => l.length > 0 && !l.includes(" ") && path.includes(l) && l !== path)).toBe(true);
+  views.length = 0;
+  draw(w, wx);
+  expect(drawn("th-sp-p-0:1")).toBe(`${path} now`);
+});
+
 // A long reply with bold, nested lists and links, for the rows a search lists.
 const LONG_MD = Array.from({ length: 6 }, (_, i) => `**Step ${i + 1}** moves the tax rounding in [the cart module](https://example.com/acme/cart/blob/main/src/total-${i}.ts) to the order total.\n\n- First change for step ${i + 1}, with **bold words** in it\n  - a nested detail about the receipt sum\n  - another nested detail with \`lineTax()\` in it\n- Second change for step ${i + 1}, a little longer than the first so it wraps`).join("\n\n");
 
