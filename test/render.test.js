@@ -18,9 +18,15 @@ const app = mkdtempSync(join(tmpdir(), "threads-render-"));
 let calls = 0;
 // With rec set, every element method call is recorded as [name, ...args].
 let rec = null;
+// Every element method the view asks for, apart for a Herdr from 0.1.16 (the last test checks
+// them against what the runtime knows). toJSON is JSON.stringify reading the stub, not a call.
+const usedOld = new Set();
+const usedNew = new Set();
+const from016 = () => { const [a, b, c] = String(herdrVersion).split(".").map((n) => Number.parseInt(n, 10) || 0); return a > 0 || b > 1 || (b === 1 && c >= 16); };
 const el = new Proxy(() => {}, {
   get(_t, name) {
     if (name === "then") return undefined;
+    if (typeof name === "string" && name !== "toJSON") (from016() ? usedNew : usedOld).add(name);
     if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
     if (name === "hover") return (fn) => { fn(el); return el; };
     return (...args) => { calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
@@ -9080,4 +9086,72 @@ test("View diagram under a mermaid block opens it as text art; a kind it cannot 
   h.init(state.props, hcx);
   rec = []; h.render(hcx); const hd = rec; rec = null;
   expect(hd.some(([n, x]) => n === "child" && x === p.note)).toBe(true);
+});
+
+// Herdr refuses a whole view over one element method it does not know: "This view could not
+// be re-rendered; showing the last version that worked. unknown element method `on_pinch`",
+// on the rig at bedbd88, with the status's errors empty. gpui-kit.d.ts did not catch it: the
+// one read was written by Herdr 0.1.16, and the rig runs an older Herdr. So the list here is
+// what the runtime itself showed it knows, not the declarations:
+// - every element method the view called at 3a4a4bd (recorded by this file's stub over all its
+//   tests), a build the rig's Herdr drew on 2026-11-17 with no banner;
+// - the names in the runtime's own refusal ("nor one of child, children, when, on_click,
+//   on_change, disabled, selected, checked, overflow_scroll, ... overflow_y_scrollbar"), from
+//   the 0.1.16 binary's message;
+// - on_mouse_up, which no build the rig drew used: the runtime's handler table (the 0.1.16
+//   binary) has it beside on_mouse_down and on_mouse_move, and its changelog, which names each
+//   element method mods gained (on_pinch in 0.1.16), never names it, so it is older than 0.1.4.
+// on_pinch is allowed only for a Herdr from 0.1.16, where its changelog adds it. A method not
+// here fails this test: add it only once the rig's Herdr has drawn a build that uses it.
+const RIG_METHODS = new Set(`absolute anchor bg border_1 border_2 border_b border_b_1 border_color border_l border_t
+border_t_1 bottom child children close_delay content cursor_pointer flex flex_1 flex_none
+flex_wrap font_family font_medium font_semibold gap gap_x h h_full hover id italic items_center
+items_end items_start justify_between justify_center justify_end left line_height loop max_h
+max_w max_w_full mb min_h min_w ml mt mx mx_auto on_click on_hover on_item_click on_key_down
+on_modifiers_changed on_mouse_down on_mouse_move on_scroll_wheel on_size_change opacity
+open_delay overflow_hidden overflow_x_scroll overflow_y_scrollbar p pb pl pr pt px py relative
+right rounded rounded_b rounded_bl rounded_br rounded_t rounded_tl rounded_tr shadow_md size
+size_full spin text_center text_color text_ellipsis_middle text_ellipsis_start text_right
+text_size tooltip top track_focus track_scroll transition trigger truncate w w_full when
+whitespace_nowrap
+on_change disabled selected checked overflow_scroll overflow_y_scroll overflow_scrollbar overflow_x_scrollbar
+on_mouse_up`.split(/\s+/));
+const FROM_016 = new Set(["on_pinch"]);
+
+test("element methods: the views call only methods the rig's Herdr knows, and on_pinch only from Herdr 0.1.16", async () => {
+  // The Trajectory at its widest: the timeline zoomed (the map bar), a focus range (the band
+  // and the Range bar), a running call (the torn end), the detail; the heading's line with the
+  // timeline hidden; and the chat. On the tests' Herdr (0.1.13) first.
+  const draws = async () => {
+    const { v, cx } = await pane(fixture("--only", "3", "--open", "--running"), { view: "trajectory" });
+    state.terminals[0].status = "working";
+    v.paneW = 1400; v.rootH = 900; v.listH = 700;
+    settleRows(v, cx);
+    rec = [];
+    draw(v, cx);
+    v.key(keyEv("="), cx);
+    const rows = ledgerOnly(v).filter((r) => r.kind === "tr");
+    v.setRange(rows[0].key, rows[3].key, cx);
+    draw(v, cx);
+    v.key(keyEv("b"), cx);
+    draw(v, cx);
+    const c = rec;
+    rec = null;
+    const chat = await pane(fixture("--only", "2", "--open"));
+    draw(chat.v, chat.cx);
+    return c;
+  };
+  const old = await draws();
+  expect(old.some(([n]) => n === "on_pinch")).toBe(false);
+  expect(old.some(([n]) => n === "on_scroll_wheel")).toBe(true);
+  // From 0.1.16 the timeline hears a pinch.
+  const was = herdrVersion;
+  herdrVersion = "0.1.16";
+  try {
+    const now = await draws();
+    expect(now.some(([n]) => n === "on_pinch")).toBe(true);
+  } finally { herdrVersion = was; }
+  // Every method asked for in this file, by any test so far.
+  expect([...usedOld].filter((n) => !RIG_METHODS.has(n)).sort()).toEqual([]);
+  expect([...usedNew].filter((n) => !RIG_METHODS.has(n) && !FROM_016.has(n)).sort()).toEqual([]);
 });

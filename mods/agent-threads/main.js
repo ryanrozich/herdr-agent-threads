@@ -4369,7 +4369,9 @@ export default class Threads extends View {
     const bandEl = band && band.x1 >= 0 && band.x0 <= cw
       ? div().id("th-tl-band").absolute().top(TL_PT).left(Math.max(0, band.x0)).w(Math.max(2, Math.min(cw, band.x1) - Math.max(0, band.x0))).h(TL_AX + TL_TK + TL_LT + H)
         .bg(alpha(t.foreground, 0.07))
-        .when(band.x0 >= 0, (el) => el.border_l(2)).when(band.x1 <= cw, (el) => el.border_r(2)).border_color(t.foreground)
+        .when(band.x0 >= 0, (el) => el.border_l(2)).border_color(t.foreground)
+        // The right edge as a child, not border_r: no build the rig's Herdr drew used border_r.
+        .when(band.x1 <= cw, (el) => el.child(div().absolute().top(0).right(0).w(2).h_full().bg(t.foreground)))
       : null;
     // While zoomed, the bar under the lanes: the whole session, and the part in view.
     const zoomed = L.z > 1;
@@ -4394,7 +4396,9 @@ export default class Threads extends View {
         .child(name("input", "Input")).child(name("model", "Model")).child(name("tools", "Tools")))
       .child(v_flex().id("th-tl-area").relative().flex_none().w(cw).pt(TL_PT)
         .on_scroll_wheel((e, cx) => this.tlWheel(e, cx))
-        .on_pinch((e, cx) => this.tlPinch(e, cx))
+        // on_pinch is new in Herdr 0.1.16 (its changelog); an older Herdr refuses the whole
+        // view over an element method it does not know, so it is asked for only from 0.1.16.
+        .when(this.pinchOk(), (el) => el.on_pinch((e, cx) => this.tlPinch(e, cx)))
         .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes).child(div().h(2)).child(map)
         .when(Boolean(bandEl), (el) => el.child(bandEl)));
   }
@@ -4459,7 +4463,9 @@ export default class Threads extends View {
     const startsHere = R.ia >= ih;
     const endsHere = R.ib <= ih + (r.items?.length ?? 0);
     return (t) => div().id(`th-tlg-${r.key}`).absolute().top(0).h_full().left(`${(a * 100).toFixed(2)}%`).w(`${(Math.max(0.01, b - a) * 100).toFixed(2)}%`)
-      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1)).when(endsHere, (el) => el.border_r(1));
+      .bg(alpha(t.foreground, 0.22)).border_color(t.foreground).when(startsHere, (el) => el.border_l(1))
+      // The end's edge as a child, not border_r: no build the rig's Herdr drew used border_r.
+      .when(endsHere, (el) => el.child(div().absolute().top(0).right(0).w(1).h_full().bg(t.foreground)));
   }
 
   // The Trajectory's inks for this theme (ledger.js trajInks): the user's colour from one
@@ -4575,6 +4581,15 @@ export default class Threads extends View {
     // left under the footer); closing keeps the row in view.
     this.scrollTo = { key, how: this.open.has(key) ? "card" : "top" };
     cx.notify();
+  }
+
+  // Whether Herdr has on_pinch (new in 0.1.16). A Herdr that does not know an element method
+  // shows the view's last good version instead (seen on the rig at bedbd88).
+  pinchOk() {
+    if (this.pinchMemo == null) {
+      try { this.pinchMemo = atLeast(updates().app.version, "0.1.16"); } catch { this.pinchMemo = false; }
+    }
+    return this.pinchMemo;
   }
 
   // Whether the formatted reply can be selected: before Herdr 0.1.13 its Markdown view drew
