@@ -380,7 +380,7 @@ test("the list has one entry a rule in the file, with its name, match, example, 
   expect(list.map((r) => [r.n, r.name, r.label, r.on, r.prefix, r.pattern, r.example, r.why])).toEqual([
     [1, "Checker", "Checker", true, "From {name}:", "", FROM, null],
     [2, "Nightly", "Nightly", false, "", "^\\[(?<sender>[a-z-]+)\\] ", "[nightly-bot] all green", null],
-    [3, "Rule 3", "From:", true, "From:", "", "", "prefix has no {name}; it would mark every prompt that starts with it"],
+    [3, "From:", "From:", true, "From:", "", "", "prefix has no {name}; it would mark every prompt that starts with it"],
     [4, "Rule 4", "Rule 4", true, "", "", "", "not an object"],
   ]);
   expect(notes).toEqual(["Sender rule 3: prefix has no {name}; it would mark every prompt that starts with it", "Sender rule 4: not an object"]);

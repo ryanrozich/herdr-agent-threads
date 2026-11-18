@@ -444,8 +444,8 @@ export const SLOW_LONG = "too slow on long text; disabled";
 // Two optional keys: on (false keeps the rule out of rules, so it marks nothing; it is still
 // checked, takes no part of the step budget, and stays on the page) and example (a prompt
 // shown on the Sender rules page, never used to mark). list: one entry a rule in the file,
-// for the page: { n, name (its name, else "Rule n"), label, on, prefix, pattern, example,
-// why (null when it works), rule (compiled, also when off) }.
+// for the page: { n, name and label (its name, else its prefix or pattern, else "Rule n"),
+// on, prefix, pattern, example, why (null when it works), rule (compiled, also when off) }.
 export function parseSenders(raw, cost = senderCost) {
   const rules = [];
   const notes = [];
@@ -490,7 +490,8 @@ export function parseSenders(raw, cost = senderCost) {
     const hasPattern = typeof pattern === "string" && pattern !== "";
     if (hasPrefix === hasPattern) return no(hasPrefix ? "has both a prefix and a pattern; use one" : "no prefix or pattern");
     const label = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : (hasPrefix ? prefix : pattern).slice(0, 60);
-    entry.label = label;
+    // A rule with no name shows its text as its name, on the page as in the tooltip.
+    entry.name = entry.label = label;
     if (hasPrefix) {
       if (prefix.length > 100) return no("prefix over 100 characters");
       const parts = prefix.split("{name}");

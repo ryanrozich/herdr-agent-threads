@@ -49,7 +49,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
@@ -204,15 +204,41 @@ const RULE_FIELDS = [
   ["example", "Example", "Text this rule should link, such as Fixed in ACME-412.", 200],
 ];
 // The Sender rules page's editor: its fields, as RULE_FIELDS. One of Starts with and Pattern
-// shows, as Matches by says; each keeps its own text.
+// shows, as its Type says; each keeps its own text.
 const SENDER_FIELDS = [
-  ["name", "Name", "Release checker", 40],
-  ["prefix", "Starts with", "From {name}:", 100],
+  ["name", "Name", "Optional", 40],
+  ["prefix", "Starts with", "[{name}] ", 100],
   ["pattern", "Pattern", "^From (?<sender>[a-z]+-[a-z-]+):", 200],
-  ["example", "Example", "A prompt it should mark, such as From release-checker: done", 200],
+  ["example", "Example", "[build-bot] nightly build green on main", 200],
 ];
-// Matches by: the key it writes, its words and its icon.
-const SENDER_BY = [["prefix", "Start of the prompt", "text-cursor"], ["pattern", "Pattern", "regex"]];
+// A sender rule's two types: the key it writes, its word, its icon and its line in the editor.
+const SENDER_TYPES = [
+  ["prefix", "Starts with", "text-cursor", "Text at the start, with {name} where the sender's name is."],
+  ["pattern", "Pattern", "regex", "A regular expression with a group named sender."],
+];
+// No sender rules: two that fill a new rule, with Use.
+const SENDER_EXAMPLES = {
+  brackets: { line: "[build-bot] at the start of a prompt", rule: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" } },
+  from: { line: "From build-bot: at the start of a prompt", rule: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" } },
+};
+// A rule's example with the sender's name marked (as examplePieces draws a link), or null
+// when the rule finds no sender in it. The rule reads it as core/turns.js ruleSender does:
+// the first line from its first non-space, RULE_TEXT characters.
+function senderPieces(rule, text) {
+  let a = 0;
+  while (a < text.length && a < RULE_TEXT && /\s/.test(text[a])) a++;
+  let head = text.slice(a, a + RULE_TEXT);
+  const nl = head.indexOf("\n");
+  if (nl >= 0) head = head.slice(0, nl);
+  rule.re.lastIndex = 0;
+  const m = rule.re.exec(head);
+  const raw = m?.groups?.sender;
+  if (!m || !raw?.trim()) return null;
+  const at = a + m.index + m[0].indexOf(raw);
+  return [{ t: text.slice(0, at) }, { t: raw, url: true }, { t: text.slice(at + raw.length) }].filter((p) => p.t);
+}
+// Whether an example runs past what a sender rule reads.
+const pastRuleText = (text) => { const t = text.trimStart(); return t.length > RULE_TEXT || t.slice(0, RULE_TEXT).includes("\n"); };
 // How long typing may stop before a rule's fault is shown (chat-look round 10).
 const REASON_PAUSE = 1500;
 // Why a change to the link or sender rules was not written, on the card's File line.
@@ -1413,13 +1439,28 @@ export default class Threads extends View {
       this.ruleCheck();
     } else e.typeOpen = false;
   }
-  // Matches by pressed on a sender rule: its field shows, with the text it had.
-  chooseBy(by) {
+  // A sender rule's type pressed: its field shows, with the text it had, and on a kept rule
+  // the two rows fold back to one line.
+  chooseSenderType(by) {
     const e = this.ruleEdit;
-    if (e?.kind !== "senders" || !SENDER_BY.some(([k]) => k === by) || e.draft.by === by) return;
+    if (e?.kind !== "senders" || !SENDER_TYPES.some(([k]) => k === by)) return;
+    e.typeOpen = false;
+    if (e.draft.by === by) return;
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     e.draft.by = by;
     e.shown = { prefix: null, pattern: null };
+    this.ruleCheck();
+  }
+  // Use on an example: a new rule filled from it, not kept until Keep rule.
+  useSenderExample(k) {
+    const x = SENDER_EXAMPLES[k];
+    if (!x) return;
+    this.openRule(null, null, null, "senders");
+    const e = this.ruleEdit;
+    if (e?.kind !== "senders") return;
+    Object.assign(e.draft, x.rule, { by: "prefix" });
+    e.touched = true;
+    for (const [f] of SENDER_FIELDS) this.setRuleField(f, e.draft[f], "senders");
     this.ruleCheck();
   }
   // A key in one of the rule's fields. Good news at every key; a fault shows when typing
@@ -1463,8 +1504,8 @@ export default class Threads extends View {
     e.lastGood = e.result;
     e.stale = false;
   }
-  // A sender rule's fault, in parseSenders' words, is on the field Matches by names: the
-  // draft alone, as the file would read it (settings.js checkSender).
+  // A sender rule's fault, in parseSenders' words, is on the field its type names: the draft
+  // alone, as the file would read it (settings.js checkSender).
   senderCheck() {
     const e = this.ruleEdit;
     const d = e.draft;
@@ -1478,18 +1519,20 @@ export default class Threads extends View {
     e.stale = false;
   }
   // What a sender rule does to its example, as the reader would (core/turns.js ruleSender:
-  // the first line, its first 100 characters), and a rule higher in the list that marks it
-  // first.
+  // the first line, its first 100 characters): the example with the sender's name marked and
+  // the label a match shows, or no match; a rule higher in the list that takes it first; and
+  // whether the example runs past what a rule reads. null with no example.
   senderResult(e, rule) {
     const d = e.draft;
-    if (!d.example) return { line: "Type an example to see what this rule marks." };
+    if (!d.example) return null;
+    const past = pastRuleText(d.example);
     const hit = ruleSender([rule], d.example);
-    if (!hit) return { line: "Marks nothing in its example" };
+    if (!hit) return { past };
     const pos = e.at ?? e.insertAt;
     const above = (this.senders ?? []).filter((r) => r.n - 1 < pos);
     const first = above.length ? ruleSender(above, d.example) : null;
     const beaten = first ? (this.senderList[first.rule - 1]?.name ?? "A rule above") : null;
-    return { line: hit.name ? `Marks this as an agent message from ${hit.name}` : "Marks this as an agent message", beaten };
+    return { pieces: senderPieces(rule, d.example) ?? [{ t: d.example }], label: hit.name ? `${hit.name} · matched by rule` : "matched by rule", beaten, past };
   }
   // The session's repository changed (another session, another folder) under the open
   // rule: its example's result is worked out again for the new one.
@@ -6488,10 +6531,10 @@ export default class Threads extends View {
   }
 
   // The Sender rules page, on the Link rules page's pattern: what a sender rule is, then
-  // each rule in the file with its name, what it matches, the sender its example gives and
-  // its switch (or why the mod will not run it). A press on a row opens the rule in place,
-  // as Edit does; Delete takes it at once, with Undo. Notes not about one rule ("senders is
-  // not a list") show blocked under the list.
+  // each rule in the file as a card (senderRow), the two examples with Use when there are
+  // none, Add rule, a note not about one rule ("senders is not a list") in the blocked color
+  // above File, and File. A press on a card opens the rule in place, as Edit does; Delete
+  // takes it at once, with Undo.
   senderRulesRows(t, w) {
     const { note, group } = this.cardKit(t);
     const list = this.senderList ?? [];
@@ -6502,12 +6545,13 @@ export default class Threads extends View {
     if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.senderEditor(t));
     if (this.ruleUndo?.kind === "senders") rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
     return [
-      note("A sender rule marks a prompt typed in the terminal as a message from another agent, by how it starts. A rule can make \"From release-checker: ...\" a message from release-checker.", t.muted),
+      note("A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.", t.muted),
       group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
-      ...other.map((n) => note(n, t.blocked)),
+      !list.length && !e && edit ? this.senderExamples(t) : null,
       list.length >= 2 ? note("When two rules match the same prompt, the higher one wins.") : null,
       edit && !e && list.length < MAX_RULES
         ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null, null, null, "senders"); cx.notify(); }, "plus", CARD_BUTTON)) : null,
+      ...other.map((n) => note(n, t.blocked)),
       group("File", [
         note(edit ? "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."
           : writable(this.prefsRaw) ? "\"senders\" in the settings file is not a list now, so rules change only in the file until it is fixed."
@@ -6518,23 +6562,27 @@ export default class Threads extends View {
     ].filter(Boolean);
   }
 
-  // A sender rule's card, as a link rule's (ruleRow): the bot icon, the name, Edit and
-  // Delete, and the switch at the far right, or the warning mark in its place on a rule
-  // the mod will not run, with "Not working" and why. Under the name, what it matches (its
-  // prefix or pattern) in the mono font, its example, and the sender the example gives.
+  // A sender rule's card, the box a link rule's has (ruleRow): 12 px in, lines 4 px apart.
+  // Line 1: its type's icon (text-cursor for Starts with, regex for Pattern), its name (its
+  // text when it has none), Off, Edit, Delete, and the switch at the far right, or the
+  // warning mark in its place on a rule the mod will not run. Then its example with the
+  // sender's name underlined, or "No example yet"; with the tag icon, what a match shows as,
+  // or "Finds no sender in its example"; "Starts with" or "Pattern" and its text in the code
+  // font, in a small box so a space at its end shows; and on a refused rule, why.
   senderRow(t, r, i, edit = false) {
     const { toggle } = this.cardKit(t);
     const bad = r.why != null;
     const off = !bad && !r.on;
     const ex = this.senderExample(r);
+    const pattern = Boolean(r.pattern) && !r.prefix;
     const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i, null, null, "senders"); cx.notify(); };
     const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
-    const match = r.prefix || r.pattern;
+    const text = r.prefix || r.pattern;
     return v_flex().id(`th-sender-${r.n}`).p(12).gap(4).rounded(6).border_1()
       .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
       .when(edit, (el) => el.cursor_pointer().on_click(open))
       .child(h_flex().gap(8).items_center()
-        .child(svg(ICON("bot")).size(14).flex_none().text_color(t.dim).when(off, (el) => el.opacity(0.55)))
+        .child(svg(ICON(pattern ? "regex" : "text-cursor")).size(14).flex_none().text_color(t.dim).when(off, (el) => el.opacity(0.55)))
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(off ? t.muted : t.foreground).child(r.name))
         .when(off, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
         .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
@@ -6546,68 +6594,111 @@ export default class Threads extends View {
             .child(toggle(r.on))
             : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
       .child(v_flex().gap(4).when(off, (el) => el.opacity(0.55))
-        .when(Boolean(match), (el) => el.child(div().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(match)))
-        .when(Boolean(r.example), (el) => el.child(div().min_w(0).truncate().text_size(12).text_color(t.muted).child(r.example)))
-        .when(Boolean(ex), (el) => el.child(div().min_w(0).truncate().text_size(12).text_color(t.muted).child(ex))))
+        .child(this.examplePieces(t, ex))
+        .when(Boolean(ex.label), (el) => el.child(this.matchedLine(t, ex.label)))
+        .when(Boolean(ex.under), (el) => el.child(div().text_size(12).text_color(t.muted).child(ex.under)))
+        .when(Boolean(text), (el) => el.child(this.senderText(t, pattern ? "Pattern" : "Starts with", text))))
       .when(bad, (el) => el.child(div().text_size(12).text_color(t.blocked).child(`Not working: ${r.why}`)));
   }
+  // What a match shows as: the tag icon and the label, in the accent.
+  matchedLine(t, label, lead = null) {
+    return h_flex().gap(6).items_center().min_w(0)
+      .child(svg(ICON("tag")).size(13).flex_none().text_color(lead ? t.muted : t.accent))
+      .when(Boolean(lead), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(lead)))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(t.accent).child(label));
+  }
+  // "Starts with" or "Pattern", then the rule's text in the code font in a small box.
+  senderText(t, word, text) {
+    return h_flex().gap(6).items_center().min_w(0)
+      .child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.muted).child(word))
+      .child(div().min_w(0).truncate().px(4).rounded(3).border_1().border_color(t.border).bg(t.background)
+        .text_size(11.5).font_family(this.mono()).text_color(t.foreground).child(text));
+  }
 
-  // What a sender rule does to its own example, as a line, kept until the list changes:
-  // "release-checker · agent message", "Marks nothing in its example" or "No example yet";
-  // null for a rule that does not run (its card says why).
+  // What a sender rule does to its own example, kept until the list changes, in the shape
+  // examplePieces draws: { pieces (the sender's name marked), label } on a match,
+  // { pieces, under: "Finds no sender in its example" }, or { line: "No example yet" }. A
+  // refused rule shows its example as it is.
   senderExample(r) {
     const k = this.senderListVer ?? 0;
     if (this.senderExKey !== k) { this.senderExKey = k; this.senderExMemo = new Map(); }
-    if (this.senderExMemo.has(r)) return this.senderExMemo.get(r);
-    let out = null;
-    if (!r.example) out = "No example yet";
-    else if (r.rule) {
-      const hit = ruleSender([r.rule], r.example);
-      out = !hit ? "Marks nothing in its example" : hit.name ? `${hit.name} · agent message` : "agent message";
+    const hit = this.senderExMemo.get(r);
+    if (hit) return hit;
+    let out;
+    if (!r.example) out = { line: "No example yet" };
+    else if (!r.rule) out = { pieces: [{ t: r.example }] };
+    else {
+      const m = ruleSender([r.rule], r.example);
+      out = m ? { pieces: senderPieces(r.rule, r.example) ?? [{ t: r.example }], label: m.name ? `${m.name} · matched by rule` : "matched by rule" }
+        : { pieces: [{ t: r.example }], under: "Finds no sender in its example" };
     }
     this.senderExMemo.set(r, out);
     return out;
   }
 
-  // The open sender rule: Name, Matches by (Start of the prompt or Pattern), the field it
-  // names, Example, the line that says what the rule does to its example, and Keep rule with
-  // the rest.
+  // No sender rules: two that fill a rule, in dashed boxes, each with Use.
+  senderExamples(t) {
+    return v_flex().gap(6)
+      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
+      .children(Object.entries(SENDER_EXAMPLES).map(([k, x]) => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+        .child(svg(ICON("text-cursor")).size(14).flex_none().text_color(t.dim))
+        .child(v_flex().flex_1().min_w(0).gap(4)
+          .child(div().text_size(13).font_semibold().text_color(t.foreground).child(x.rule.name))
+          .child(div().text_size(12).text_color(t.muted).child(x.line)))
+        .child(this.miniButton(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }))));
+  }
+
+  // The open sender rule: Type (two rows on a new rule, else one line with Change), Name,
+  // Starts with or Pattern, Example, what the rule does to the example, and Keep rule with
+  // the rest. A draft that would not run shows no result: its reason is under its field.
   senderEditor(t) {
     const e = this.ruleEdit;
     const d = e.draft;
     const { note } = this.cardKit(t);
+    const label = (text) => this.ruleLabel(t, text);
+    const firstLine = note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
     const hints = {
-      prefix: note("Text the prompt starts with, with {name} where the sender's name stands. Capitals count."),
-      pattern: h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
-        .child(div().flex_none().child("A JavaScript regular expression with a (?<sender>...) group for the name. Start it with ^."))
-        .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
-          .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
-          .child("Reference")),
-      example: note("A prompt this rule should mark. It is never used to mark."),
+      name: note("It shows in the list, and in the tooltip on a message it matched."),
+      prefix: v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine),
+      pattern: v_flex().gap(2)
+        .child(h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
+          .child(div().flex_none().child("A JavaScript regular expression with a group named sender. Capitals count."))
+          .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
+            .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
+            .child("Reference")))
+        .child(firstLine),
+      example: note("A prompt this rule should match. Type any prompt here to try the rule."),
     };
-    const field = (k) => {
-      const f = SENDER_FIELDS.find((x) => x[0] === k);
-      return this.ruleField(t, e, k, f[1], hints[k]);
-    };
-    const by = v_flex().gap(4).child(this.ruleLabel(t, "Matches by"))
-      .child(h_flex().gap(6).flex_wrap().children(SENDER_BY.map(([k, word, icon]) => {
-        const on = d.by === k;
-        return h_flex().id(`th-sender-by-${k}`).p(6).gap(6).items_center().rounded(5).cursor_pointer().border_1()
-          .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
-          .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { cx.stop_propagation(); this.chooseBy(k); cx.notify(); })
-          .child(svg(ICON(icon)).size(13).flex_none().text_color(on ? t.foreground : t.dim))
-          .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(word));
-      })));
-    const r = e.stale ? e.lastGood : e.result;
+    const field = (k) => this.ruleField(t, e, k, SENDER_FIELDS.find((x) => x[0] === k)[1], hints[k]);
+    const type = SENDER_TYPES.find(([k]) => k === d.by) ?? SENDER_TYPES[0];
+    const typeBlock = e.at == null || e.typeOpen
+      ? v_flex().gap(4).child(label("Type"))
+        .children(SENDER_TYPES.map(([k, word, icon, line]) => {
+          const on = d.by === k;
+          return h_flex().id(`th-sender-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+            .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
+            .hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseSenderType(k); cx.notify(); })
+            .child(svg(ICON(icon)).size(13).flex_none().text_color(on ? t.foreground : t.dim))
+            .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(word))
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(line));
+        }))
+      : h_flex().gap(6).items_center()
+        .child(label("Type"))
+        .child(svg(ICON(type[2])).size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(type[1]))
+        .child(this.miniButton(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+    const r = e.stale ? null : e.result;
     const result = r
-      ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
-        .child(div().text_size(12).text_color(t.muted).child(r.line))
-        .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(this.beatenLine(e, r.beaten, "marks this prompt first"), t.muted)))
+      ? v_flex().id("th-rule-result").gap(4)
+        .when(Boolean(r.label), (el) => el.child(this.examplePieces(t, r)).child(this.matchedLine(t, r.label, "Matches. It shows as")))
+        .when(!r.label, (el) => el.child(note("No match. This prompt would stay yours.")))
+        .when(Boolean(r.beaten), (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this prompt first"))))
+        .when(Boolean(r.past), (el) => el.child(note(`Only the first ${RULE_TEXT} characters of the first line are read.`)))
       : null;
     return this.ruleShell(t, e)
+      .child(typeBlock)
       .child(field("name"))
-      .child(by)
       .child(field(d.by))
       .child(field("example"))
       .when(Boolean(result), (el) => el.child(result))
