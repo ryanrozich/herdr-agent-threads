@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false };
+const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -162,6 +162,14 @@ test("truncate is a boolean, false by default: long messages show in full", () =
   expect(v({ truncate: true })).toBe(true);
   expect(v({ truncate: "yes" })).toBe(false);
   expect(DEFAULTS.truncate).toBe(false);
+});
+
+test("agentRail is a boolean, true by default: agent messages keep their rail ticks", () => {
+  expect(DEFAULTS.agentRail).toBe(true);
+  expect(parseSettings("{}").values.agentRail).toBe(true);
+  expect(parseSettings('{"agentRail": false}').values.agentRail).toBe(false);
+  expect(parseSettings('{"agentRail": "no"}').values.agentRail).toBe(true);
+  expect(JSON.parse(settingsText({ ...DEFAULTS, agentRail: false }, null)).agentRail).toBe(false);
 });
 
 test("alwaysShowTime is a boolean, false by default", () => {
