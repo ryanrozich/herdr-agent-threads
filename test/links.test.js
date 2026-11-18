@@ -12,8 +12,8 @@ mock.module("herdr", () => ({
   ...Object.fromEntries(["exec", "hc", "home", "appHome", "readTextFile", "watchFolder", "theme", "themes", "settings", "panes", "terminals",
     "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
-const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS } = await import("../mods/agent-threads/settings.js");
-const { linkify, linkPieces, fillUrl, parseRemote, promptMd } = await import("../mods/agent-threads/ui.js");
+const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG } = await import("../mods/agent-threads/settings.js");
+const { linkify, linkPieces, fillUrl, parseRemote, promptMd, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
 
 const ISSUE = { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" };
 const PR = { name: "PR", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" };
@@ -25,7 +25,7 @@ test("valid rules compile, with their host and whether they use {repo}", () => {
   expect(notes).toEqual([]);
   expect(r.map((x) => [x.n, x.name, x.host, x.repo])).toEqual([[1, "Issue", "linear.app", false], [2, "PR", "github.com", true]]);
   expect(r[0].re.flags).toContain("g");
-  expect(parseLinks(undefined)).toEqual({ rules: [], notes: [] });
+  expect(parseLinks(undefined)).toEqual({ rules: [], notes: [], list: [] });
   expect(parseLinks({}).notes[0]).toContain("not a list");
 });
 
@@ -216,4 +216,58 @@ test("linkify: a pasted-image label is never a link, the text after it still is"
   expect(out.links).toBe(1);
   expect(out.md).toContain("[Image #2] [Image #3]");
   expect(out.md).toContain("[\\#45](https://github.com/acme/widgets/pull/45)");
+});
+
+test("a rule's optional keys: on, type, description and example, each with its fallback", () => {
+  const { list, rules, notes } = parseLinks([
+    { ...ISSUE, type: "ticket", description: "  Our   tracker  ", example: "Fixed in ACME-412." },
+    { ...PR, type: "pull-request", on: false },
+    { ...ISSUE, name: "", type: "weird", description: "x".repeat(120), example: 7 },
+    { pattern: "x(", url: "https://x.example/$1", type: "ticket" },
+  ]);
+  expect(list.map((x) => [x.n, x.name, x.type, x.on, Boolean(x.rule), x.why])).toEqual([
+    [1, "Issue", "ticket", true, true, null],
+    [2, "PR", "pull-request", false, true, null],
+    [3, "Rule 3", "custom", true, true, null],
+    [4, "Rule 4", "ticket", true, false, "pattern not valid"],
+  ]);
+  expect(list[0].description).toBe("Our tracker");
+  expect(list[0].example).toBe("Fixed in ACME-412.");
+  expect(list[2].description.length).toBe(80);
+  expect(list[2].example).toBe("");
+  // A rule switched off links nothing and is not a fault: no note.
+  expect(rules.map((r) => r.n)).toEqual([1, 3]);
+  expect(notes).toEqual(["Link rule 4: pattern not valid"]);
+  expect(linkify("ACME-1 and #2", rules, ctx).links).toBe(1);
+  // An older file's rule has none of the four.
+  expect(parseLinks([ISSUE]).list[0]).toMatchObject({ type: "custom", description: "", example: "", on: true });
+  expect(parseExtras(JSON.stringify({ links: [ISSUE] })).linkList.length).toBe(1);
+});
+
+test("quantifiers side by side that overlap are slow on long runs, and the check says so in bounded time; plain rules still pass", () => {
+  const t0 = performance.now();
+  const l = parseLinks([
+    { name: "a", pattern: "\\s*\\s*\\s*\\s*Q", url: "https://x.example/$0" },
+    { name: "b", pattern: "\\w+\\w+\\w+X", url: "https://x.example/$0" },
+    { name: "c", pattern: "\\d*\\d*\\d*\\d*\\d*\\d*Z", url: "https://x.example/$0" },
+    { name: "ok1", pattern: "\\bACME-(\\d+)\\b", url: "https://x.example/$1" },
+    { name: "ok2", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1" },
+    { name: "ok3", pattern: "\\b[A-Z]{2,10}-\\d+\\b", url: "https://x.example/$0" },
+  ]);
+  // The first is caught only by the long runs; the others by one check or the other.
+  expect(l.list[0].why).toBe(SLOW_LONG);
+  expect(l.list.map((r) => r.why)).toEqual([SLOW_LONG, expect.stringMatching(/^too slow/), expect.stringMatching(/^too slow/), null, null, null]);
+  expect(performance.now() - t0).toBeLessThan(3000);
+});
+
+test("a rule slow on a reply is skipped from then on, and says why, so one rule cannot stall a draw", () => {
+  let calls = 0;
+  const slow = { name: "slow", url: "https://x.example/$0", host: "x.example", re: { lastIndex: 0, exec() { calls++; const t = performance.now(); while (performance.now() - t < 12) { /* a slow search */ } return null; } } };
+  const fast = { name: "fast", re: /ACME-(\d+)/g, url: "https://t.example/$1", host: "t.example" };
+  const p = linkPieces("see ACME-4 and more", [slow, fast]);
+  expect(p.filter((x) => x.url).map((x) => x.url)).toEqual(["https://t.example/4"]);
+  expect(slow.slow).toBe(SLOW_REPLY);
+  const n = calls;
+  expect(linkify("ACME-5 again", [slow, fast]).links).toBe(1);
+  expect(calls).toBe(n);
 });
