@@ -7334,7 +7334,9 @@ export default class Threads extends View {
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
-      case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
+      // The Markdown form draws a Show less row only after Show all (not when whole) and a note
+      // past the cap (left), so both are part of its layout.
+      case "latest": return `${head}|${r.md ? `all${r.md.length}|${r.whole ? "w" : "s"}|${r.left ?? 0}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
       default: return head;
     }
