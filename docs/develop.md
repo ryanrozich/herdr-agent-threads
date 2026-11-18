@@ -50,7 +50,17 @@ To act out `/clear`, write a second fixture made with `--clear` into the same pr
 
 ## Merging
 
-Pull requests merge to main through Mergify's merge queue (`.mergify.yml`). A pull request enters it when it gets the `queue` label or a `@mergifyio queue` comment, and only once it is out of draft, has no conflict, has a passing `check` and has no unresolved review thread. Mergify waits up to 1 minute to fill a batch of up to 10 queued pull requests, builds one draft pull request with them on top of main, runs `check` on that, and merges each one with a merge commit. Pull requests whose checks are still pending after 15 minutes leave the queue, and a failed check gets one fresh run on a new draft pull request before its pull requests leave the queue.
+Pull requests merge to main through Mergify's merge queue (`.mergify.yml`), and main is what people get: the herdr.dev/mods listing installs main's head. A pull request enters the queue when it gets the `queue` label or a `@mergifyio queue` comment, and only once it is out of draft, has no conflict, has a passing `check`, has no unresolved review thread and has a title in the form below. Mergify waits up to 1 minute to fill a batch of up to 10 queued pull requests, builds one draft pull request with them on top of main, runs `check` on that, and squashes each one into a single commit on main. Pull requests whose checks are still pending after 15 minutes leave the queue, and a failed check gets one fresh run on a new draft pull request before its pull requests leave the queue.
+
+**Titles.** The squash commit takes the pull request's title and number, `feat: the settings card shows the version (#154)`, with its description as the body. The release tool reads those titles, so a title is a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/): a type, an optional scope in parentheses, an optional `!` for a breaking change, a colon and a space, then what changes for the person using the mod.
+
+| Type | For |
+|---|---|
+| `feat` | something new a user can see or do (a minor release) |
+| `fix`, `perf`, `revert` | a bug fixed, something faster, a change taken back (a patch release) |
+| `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style` | everything else (no release of its own) |
+
+`feat!:` or `fix(settings)!:` marks a breaking change (a major release). The title check (`.github/workflows/pr-title.yml`) says at once whether a title fits, and the queue will not take one that does not. The commits on a branch can say anything, since only the title reaches main. Commits from before the switch to squash keep their merge commits.
 
 When one pull request has to land after another, put a `Depends-On:` line in the later one's description, with the reference alone on the line:
 
@@ -58,7 +68,17 @@ When one pull request has to land after another, put a `Depends-On:` line in the
 Depends-On: #136
 ```
 
-This repo has not used `Depends-On:` yet. Mergify's docs say it holds that pull request until #136 has merged, with its Merge Protections check pending meanwhile, so a whole set can be labeled at once and still land in order. They also say a line that holds anything besides the reference is ignored, and that a dependency closed without merging, or a loop, never clears. For a stack, where each branch is based on the one below and each pull request above the bottom carries a `Depends-On:` line for the one below it, the docs say Mergify queues every member against main and keeps them in order in the same batch. See Mergify's [built-in merge protections](https://docs.mergify.com/merge-protections/builtin/) and [stacked pull requests](https://docs.mergify.com/merge-queue/stacks/).
+Mergify's docs say it holds that pull request until #136 has merged, with its Merge Protections check pending meanwhile, so a whole set can be labeled at once and still land in order. They also say a line that holds anything besides the reference is ignored, and that a dependency closed without merging, or a loop, never clears. See Mergify's [built-in merge protections](https://docs.mergify.com/merge-protections/builtin/).
+
+**Stacks.** A squash commit holds none of the branch's commits, so a branch built on another still carries the lower one's commits after it lands. Base each pull request on main, give the upper one `Depends-On:` for the lower one, and once the lower one has merged, move the upper branch onto main before it is queued:
+
+```sh
+git fetch origin
+git rebase --onto origin/main <the lower branch's last commit> <upper branch>
+git push --force-with-lease
+```
+
+The upper pull request then shows only its own change, and its checks run again on the new head.
 
 ## Regenerating the screenshots
 
