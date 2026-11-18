@@ -21,6 +21,7 @@ required_checks = ["check"]
 [environment]
 toolchains = [{ name = "bun", version = "1.4.2" }]
 system_packages = [
+  { name = "gitleaks" },
   { name = "jq" },
   { name = "lsof" },
   { name = "perl" },
@@ -28,7 +29,20 @@ system_packages = [
   { name = "rsync" },
   { name = "shellcheck" },
   { name = "sqlite3" },
+  { name = "tesseract-ocr" },
 ]
+
+[[environment.clis]]
+name = "pen"
+install = { source = "npm", package = "@pen.dev/cli", version = "0.3.16" }
+required = false
+description = "Edit and export Pen design files for design tasks."
+
+[[environment.variables]]
+name = "PEN_CLI_KEY"
+required = false
+secret = true
+description = "Pen CLI authentication for headless design work."
 
 [[environment.verify]]
 name = "lint"
