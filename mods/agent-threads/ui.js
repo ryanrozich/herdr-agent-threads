@@ -151,12 +151,15 @@ export function outlineHeight(size = TEXT_SIZE) { return Math.max(30, readType(s
 export function outlineNumW(maxN) { return Math.ceil((String(Math.max(1, maxN | 0)).length + 1) * 7.2) + 6; }
 
 // One line of text that keeps the first match in view: the start is cut to "…" plus
-// `lead` characters before the match.
+// `lead` characters before the match, from a word's start when one begins in them (a match
+// inside a long token, such as an address, keeps the token's cut end).
 export function around(text, q, lead = 18) {
   const s = text ?? "";
   const i = q ? s.toLowerCase().indexOf(q.toLowerCase()) : -1;
   if (i <= lead) return s;
-  return `…${s.slice(i - lead).replace(/^\S*\s/, "")}`;
+  const t = s.slice(i - lead);
+  const sp = t.search(/\s/);
+  return `…${sp >= 0 && sp < lead ? t.slice(sp + 1) : t}`;
 }
 
 // Code fence names to the read-only editor's highlighters. Herdr's editor highlights the
@@ -801,6 +804,25 @@ export function flattenMd(md, max = Infinity) {
     else out += (p.bullet && parts[i - 1].bullet ? " · " : " ") + p.t;
   });
   return out.replace(/\s+/g, " ").trim();
+}
+
+// A reply under a search, as one run that holds its first match, or null when it has none.
+// The match is the filter's (core/turns.js matches): the reply as written, all of it, case
+// ignored, so the flattening's own words ("[code]", " · ") never count. The run is the reply
+// flattened from the start of the match's line (from the top when the match is near it); a
+// match the flattening drops (in a code fence's opening line, a link's address, emphasis marks
+// inside the query) shows in the source around it instead.
+export function searchPreview(md, q, chars = 1200) {
+  const s = String(md ?? "");
+  const needle = String(q ?? "").toLowerCase();
+  const at = needle ? s.toLowerCase().indexOf(needle) : -1;
+  if (at < 0) return null;
+  const from = at < chars ? 0 : s.lastIndexOf("\n", at) + 1;
+  const lead = from > 0 ? "… " : "";
+  const flat = flattenMd(s.slice(from, Math.max(from + chars * 2, at + needle.length + chars)));
+  if (flat.toLowerCase().includes(needle)) return lead + flat;
+  const a = Math.max(0, at - chars);
+  return (a > 0 ? "… " : "") + s.slice(a, at + needle.length + chars).replace(/\s+/g, " ").trim();
 }
 
 // Text cut in the middle to at most `max` characters: "plugin:rev…ew-pr".
