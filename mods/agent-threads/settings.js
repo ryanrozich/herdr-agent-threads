@@ -38,6 +38,7 @@
 import { writeTextFile } from "herdr";
 import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "./ui.js";
 import { MOD, PREVIOUS } from "./name.js";
+import { RULE_TEXT } from "./core/turns.js";
 
 export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "plain", agentBubbleColor: "plum", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right" });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
@@ -175,6 +176,33 @@ function patternSlow(re, pattern) {
   return null;
 }
 
+// Long runs of one kind of character, alone or after a word or the pattern's own opening
+// words: quantifiers side by side that can take the same characters ("\s*\s*Z", "\w+\w+X")
+// cost polynomial time on a near miss, which the short probes miss and riskyShape does not
+// see. Lengths grow by half from 16 to max, stopping at the first probe over 3 ms, and the
+// whole check stops at 100 ms. The same probes as PR 97's link check (SLOW_LONG there), plus
+// the leads, which catch "^(?<sender>\w+)\s*\s*\s*Z" on "x" and spaces. Why, or null.
+function patternRuns(re, pattern, max) {
+  const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
+  const open = (/^\^?((?:[A-Za-z0-9_ :-]|\\.)+)/.exec(pattern)?.[1] ?? "").replace(/\\(.)/g, "$1").slice(0, 20);
+  const leads = [...new Set(["", "x", `${open}x`])];
+  const start = now();
+  for (const lead of leads) {
+    for (const unit of [" ", "a", "1", "a1 _-.", "#", lit]) {
+      for (let len = 16; ; len = Math.min(max, Math.ceil(len * 1.5))) {
+        const probe = `${lead}${unit.repeat(Math.ceil(len / unit.length)).slice(0, len)}!`;
+        const t0 = now();
+        re.lastIndex = 0;
+        re.exec(probe);
+        const t1 = now();
+        if (t1 - t0 > 3 || t1 - start > 100) return "too slow on long text; disabled";
+        if (len >= max) break;
+      }
+    }
+  }
+  return null;
+}
+
 // links: [{ name, pattern, url }] → { rules, notes }. A rule is dropped, with a note, when
 // it has no pattern or URL, the pattern is over 200 characters, does not compile, matches
 // the empty string, has a nested quantifier, an alternation under a quantifier or a
@@ -208,13 +236,17 @@ export function parseLinks(raw) {
 
 // senders: [{ name?, prefix } or { name?, pattern }] → { rules, notes }. A typed prompt one
 // matches is an agent message (core/turns.js ruleSender). A prefix is literal text at the
-// prompt's start with at most one {name} in it, the sender: "From {name}:". A pattern is a
-// JavaScript regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
+// prompt's start with one {name} in it, the sender: "[{name}] ". A pattern is a JavaScript
+// regular expression with a named group "sender": "^\\[(?<sender>[a-z-]+)\\] ".
 // A rule is dropped, with a note, when it has both or neither, a prefix is over 100
-// characters, holds {name} twice or has under 2 characters besides it, a pattern has no
-// sender group or fails a check link patterns have (patternShape, patternSlow), or it is
-// past the 20th. Each kept rule: { n, label (its name, else its prefix or pattern), re,
-// named (the match names the sender) }. No rule ships.
+// characters, has no {name} (it would mark every prompt that starts with it, "From:" or
+// "ab", with no sender), holds {name} twice or has under 2 characters besides it, a pattern
+// is not valid, has no sender group, or fails a check link patterns have (patternShape,
+// patternSlow) or the long-run probes (patternRuns, up to RULE_TEXT and a little more), or
+// it is past the 20th. Each kept rule: { n, label (its name, else its prefix or pattern),
+// re, named (true: the match names the sender) }. At run time a rule that passes all this
+// and is still slow on a real prompt is switched off (core/turns.js ruleSender, its off
+// field). No rule ships.
 export function parseSenders(raw) {
   const rules = [];
   const notes = [];
@@ -234,21 +266,28 @@ export function parseSenders(raw) {
       if (prefix.length > 100) return no("prefix over 100 characters");
       const parts = prefix.split("{name}");
       if (parts.length > 2) return no("{name} more than once");
+      if (parts.length < 2) return no("prefix has no {name}; it would mark every prompt that starts with it");
       if (parts.join("").trim().length < 2) return no("prefix needs 2 characters or more besides {name}");
       const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // The name runs to the text after it, or to a space or the end when it ends the prefix.
-      const name = parts.length < 2 ? "" : parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
-      rules.push({ n, label, re: new RegExp(`^${esc(parts[0])}${name}${parts.length < 2 ? "" : esc(parts[1])}`), named: parts.length === 2 });
+      const name = parts[1] ? "(?<sender>\\S{1,60}?)" : "(?<sender>\\S{1,60})(?=\\s|$)";
+      rules.push({ n, label, re: new RegExp(`^${esc(parts[0])}${name}${esc(parts[1])}`), named: true });
       return;
     }
-    if (!/\(\?<sender>/.test(pattern)) return no("pattern has no (?<sender>...) group");
     const shape = patternShape(pattern, "");
     if (shape.why) return no(shape.why);
-    const slow = patternSlow(shape.re, pattern);
+    if (!senderGroup(pattern)) return no("pattern has no (?<sender>...) group");
+    const slow = patternSlow(shape.re, pattern) ?? patternRuns(shape.re, pattern, RULE_TEXT + 20);
     if (slow) return no(slow);
     rules.push({ n, label, re: shape.re, named: true });
   });
   return { rules, notes };
+}
+
+// Whether a valid pattern has a group named sender: an empty match of it or of nothing
+// lists every named group, matched or not, so "\\(?<sender>" or "[(?<sender>]" does not count.
+function senderGroup(pattern) {
+  try { return "sender" in (new RegExp(`(?:${pattern})|`).exec("")?.groups ?? {}); } catch { return false; }
 }
 
 // quoteKey, links and senders from the file's text, with their notes. Text that does not

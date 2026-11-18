@@ -5,7 +5,7 @@ import { test, expect, mock } from "bun:test";
 
 mock.module("herdr", () => ({ writeTextFile: async () => null }));
 const { parseSenders, parseExtras } = await import("../mods/agent-threads/settings.js");
-const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT } = await import("../mods/agent-threads/core/turns.js");
+const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT, RULE_BUDGET_MS, RULE_SLOW } = await import("../mods/agent-threads/core/turns.js");
 
 const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
 const FROM = "From release-checker: two links in the changelog are dead";
@@ -39,12 +39,92 @@ test("a prefix rule: the hourly shape and the From shape name the sender", () =>
   const [br] = parseSenders([{ prefix: "[{name}] " }]).rules;
   expect(ruleSender([br], "[deploy-bot] staging is up")?.name).toBe("deploy-bot");
   expect(ruleSender([br], "deploy-bot staging is up")).toBe(null);
-  // {name} at the end runs to a space or the end; a prefix without {name} gives no name.
+  // {name} at the end runs to a space or the end.
   const [end] = parseSenders([{ prefix: "Report by {name}" }]).rules;
   expect(ruleSender([end], "Report by night-owl all quiet")?.name).toBe("night-owl");
-  const [plain] = parseSenders([{ prefix: "[bot] " }]).rules;
-  expect(plain.named).toBe(false);
-  expect(ruleSender([plain], "[bot] nightly done")).toEqual({ kind: "peer", rule: 1, ruleLabel: "[bot] " });
+});
+
+test("a prefix with no {name} is refused with a note: it would take every prompt that starts with it", () => {
+  const { rules, notes } = parseSenders([{ prefix: "From:" }, { prefix: "ab" }, { prefix: "[bot] " }, { prefix: "From {name}:" }]);
+  const why = "prefix has no {name}; it would mark every prompt that starts with it";
+  expect(notes).toEqual([`Sender rule 1: ${why}`, `Sender rule 2: ${why}`, `Sender rule 3: ${why}`]);
+  expect(rules.map((r) => r.n)).toEqual([4]);
+  // Prompts that start with the refused prefixes stay the person's.
+  for (const p of ["From: the release notes, trimmed", "ab testing plan for the cart", "[bot] nightly done"]) expect(ruleSender(rules, p)).toBe(null);
+});
+
+test("a pattern that is not valid says so, and only a real sender group counts", () => {
+  const { notes } = parseSenders([{ pattern: "(" }, { pattern: "^(?<sender>\\w+" }, { pattern: "^\\(?<sender>x\\)" }, { pattern: "^[(?<sender>]x" }, { pattern: "^(?<senders>\\w+):" }]);
+  expect(notes).toEqual([
+    "Sender rule 1: pattern not valid",
+    "Sender rule 2: pattern not valid",
+    "Sender rule 3: pattern has no (?<sender>...) group",
+    "Sender rule 4: pattern has no (?<sender>...) group",
+    "Sender rule 5: pattern has no (?<sender>...) group",
+  ]);
+  // The group may sit in a branch or after other named groups.
+  expect(parseSenders([{ pattern: "^(?:x|From (?<sender>[a-z-]+):)" }, { pattern: "^(?<k>\\d) (?<sender>[a-z-]+):" }]).notes).toEqual([]);
+});
+
+// The outside review's rule: five stacked optional-space runs after a word. Read as written
+// it took about 4.9 s on one prompt of "x", 250 spaces and "!".
+const STACKED = "(?<sender>\\w+)\\s*\\s*\\s*\\s*\\s*Z";
+const SPACED = `x${" ".repeat(250)}!`;
+
+test("a pattern slow on a long run of one character is refused, as the long-run probes refuse link rules", () => {
+  const { rules, notes } = parseSenders([{ pattern: STACKED }, { pattern: `^${STACKED}` }, { pattern: "^(?<sender>\\w+)\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*Z" }]);
+  expect(notes).toEqual([
+    "Sender rule 1: too slow on long text; disabled",
+    "Sender rule 2: too slow on long text; disabled",
+    "Sender rule 3: too slow on long text; disabled",
+  ]);
+  expect(rules).toEqual([]);
+  // A plain pattern passes them.
+  expect(parseSenders([{ pattern: "^(?<sender>[a-z][a-z0-9-]*) hourly \\d{4}-\\d{2}-\\d{2}" }]).notes).toEqual([]);
+});
+
+test("a rule that slips past every check keeps to the time budget on a prompt and is switched off", () => {
+  // Built by hand, as if the checks had passed it.
+  const slow = { n: 2, label: "Stacked", re: new RegExp(`^${STACKED}`), named: true };
+  const quick = { n: 3, label: "Seat", re: /^(?<sender>x) /, named: true };
+  const t0 = performance.now();
+  const got = ruleSender([slow, quick], SPACED);
+  const spent = performance.now() - t0;
+  expect(spent).toBeLessThan(RULE_BUDGET_MS);
+  expect(slow.off).toBe(RULE_SLOW);
+  expect(RULE_SLOW).toBe("too slow on a typed prompt (over 20 ms); switched off");
+  // The prompt goes on to the next rule, and the slow rule is passed over from then on.
+  expect(got).toEqual({ kind: "peer", name: "x", rule: 3, ruleLabel: "Seat" });
+  const t1 = performance.now();
+  expect(ruleSender([slow], SPACED)).toBe(null);
+  expect(performance.now() - t1).toBeLessThan(5);
+  // A plain rule on many long prompts is never switched off.
+  const { rules } = parseSenders([{ pattern: "^From (?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]):" }]);
+  for (let i = 0; i < 2000; i++) ruleSender(rules, `From ${i % 2 ? "seat-one" : "scratch"}: ${"word ".repeat(60)}`);
+  expect(rules[0].off).toBeUndefined();
+  expect(ruleSender(rules, "From seat-one: done")?.name).toBe("seat-one");
+});
+
+// The rules the PR body offers for an owner's own seats, with made-up seat names: relay, and
+// lower-case names with a hyphen. "From {name}:" would take the person's own "From scratch:".
+const SEATS = [
+  { name: "Seat message", pattern: "^From (?<sender>relay|[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]):" },
+  { name: "Hourly seat report", pattern: "^(?<sender>relay|[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]) hourly \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}" },
+];
+
+test("seat rules: only a seat's name marks a prompt, never the person's own From and hourly wording", () => {
+  const x = parseExtras(JSON.stringify({ senders: SEATS }));
+  expect(x.notes).toEqual([]);
+  expect(x.senders.length).toBe(2);
+  const who = (p) => ruleSender(x.senders, p);
+  for (const p of ["From scratch: rebuild it", "From here: keep going", "From now on, keep the changelog sorted", "From now: x", "fix the hourly job", "cron hourly 5 runs", "From Seat-One: x", "From seat-: x", "seat-one hourly report"]) {
+    expect([p, who(p)]).toEqual([p, null]);
+  }
+  expect(who("From seat-one: hourly")).toEqual({ kind: "peer", name: "seat-one", rule: 1, ruleLabel: "Seat message" });
+  expect(who("From relay: status")).toEqual({ kind: "peer", name: "relay", rule: 1, ruleLabel: "Seat message" });
+  expect(who("From build-bot-2: merged")).toEqual({ kind: "peer", name: "build-bot-2", rule: 1, ruleLabel: "Seat message" });
+  expect(who("build-bot-2 hourly 2026-11-18T05:00 report")).toEqual({ kind: "peer", name: "build-bot-2", rule: 2, ruleLabel: "Hourly seat report" });
+  expect(who("relay hourly 2026-11-18T05:00")?.name).toBe("relay");
 });
 
 test("a regular expression rule with a named group sender", () => {

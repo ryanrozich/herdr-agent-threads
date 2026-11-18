@@ -150,19 +150,21 @@ Some agents send a message by typing it into the terminal, as a person would, so
 {
   "senders": [
     { "name": "Hourly report", "prefix": "{name} hourly" },
-    { "prefix": "From {name}:" },
+    { "name": "Seat message", "pattern": "^From (?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]):" },
     { "name": "Bracket", "pattern": "^\\[(?<sender>[a-z-]+)\\] " }
   ]
 }
 ```
 
-- A rule has a `prefix` or a `pattern`, not both, and an optional `name`. A prefix is literal text at the start of the prompt, with `{name}` where the sender's name stands: `From {name}:` matches "From release-checker: two links in the changelog are dead" and names release-checker. The name runs up to the text after `{name}`, or to a space when `{name}` ends the prefix. Case counts, and spaces before the prompt are skipped.
+- A rule has a `prefix` or a `pattern`, not both, and an optional `name`. A prefix is literal text at the start of the prompt, with `{name}` where the sender's name stands: `[{name}] ` matches "[docs-bot] the guide builds again" and names docs-bot. The name runs up to the text after `{name}`, or to a space when `{name}` ends the prefix. Case counts, and spaces before the prompt are skipped. A prefix must hold `{name}`.
+- A prefix such as `From {name}:` also takes your own "From scratch: rebuild it" or "From here: keep going". When the agents' names have a shape of their own, a pattern that allows only that shape is safer: the Seat message rule above takes "From release-checker: two links are dead" (a lower-case name with a hyphen) and leaves "From now: ..." yours.
 - A `pattern` is a JavaScript regular expression (JSON-escaped) with a named group `sender` for the name. Start it with `^` unless the name can be anywhere.
 - A rule sees only the prompt's first line, up to 300 characters. The first rule that matches wins. The prompt is shown as typed.
 - Rules apply only to prompts typed in the terminal. Never to replies, slash commands, or turns already marked as from an agent (an hc report, a teammate's message, a schedule).
 - A rule that matches your own typing hides your words, so keep each one specific to the agent's wording.
-- To see which rule marked a message, rest the pointer on its folded line, or on its sender line when agent messages are shown: "Marked by sender rule 2 · From {name}:" (the rule's `name` when it has one).
-- A rule is dropped, with a note in the settings panel, when it has both a prefix and a pattern or neither, a prefix is over 100 characters, holds `{name}` twice or has under 2 characters besides it, a pattern has no `sender` group, and for the same pattern checks as link rules. The panel's line reads "Sender rules · 3 (1 not valid)". Past the 20th rule, rules are ignored. A change applies to the turns already read, about a second after you save the file.
+- To see which rule marked a message, rest the pointer on its folded line, or on its sender line when agent messages are shown: "Marked by sender rule 2 · Seat message" (the rule's prefix or pattern when it has no `name`).
+- A rule is dropped, with a note in the settings panel, when it has both a prefix and a pattern or neither, a prefix is over 100 characters, has no `{name}`, holds `{name}` twice or has under 2 characters besides it, a pattern is not valid or has no `sender` group, for the same pattern checks as link rules, and when a pattern is slow on a long run of one character, such as a word and 300 spaces ("too slow on long text").
+- Each rule has 20 ms for one prompt. A rule that would take longer is switched off, with the note "too slow on a typed prompt (over 20 ms); switched off" in the settings panel, and the prompt stays yours. Prompts it marked before stay marked. Saving the file with the rule changed, or restarting the pane, gives it another try. The panel's line reads "Sender rules · 3 (1 not valid)". Past the 20th rule, rules are ignored. A change applies to the turns already read, about a second after you save the file.
 
 You can edit the file by hand; open Threads panes pick up a save within a second. Values out of range are clamped, and a file that is not valid JSON leaves the defaults in place (the settings panel says so). While the file does not parse, Threads never writes it: a change made in the panel applies in the pane only, and the panel says the file was left as it is, so a hand edit in progress is never wiped. The file lives in Herdr's data folder for this mod, outside `mods/`, so `./install.sh` and updates never touch it. Apart from the image cache beside it (`images/`, trimmed to 200 MB), it is the only file Threads writes.
 

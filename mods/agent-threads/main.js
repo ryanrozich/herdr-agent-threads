@@ -806,10 +806,10 @@ export default class Threads extends View {
       selColors: themes().map((x) => ({ name: x.name, light: x.light, background: x.colors?.background, selected: x.colors?.selected, selection: x.colors?.selection })),
       // Round 2: the quote key, the last quote press (never its text), the link rules and
       // the repo they use.
-      quoteKey: this.quoteKey, settingsNotes: this.prefsNotes, lastQuote: this.lastQuote,
+      quoteKey: this.quoteKey, settingsNotes: this.notesNow(), lastQuote: this.lastQuote,
       editorFocused: Boolean(this.editorFocused), panelFocused: this.panelFocused(), focusEvents: this.focusEvents ?? null,
       links: { count: this.linkCount ?? 0, valid: this.links.length, ver: this.linksVer, rules: this.links.map((r) => `${r.n} ${r.name}${r.repo ? " {repo}" : ""}`) },
-      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
+      senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}${r.off ? " off" : ""}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
     };
@@ -5403,8 +5403,8 @@ export default class Threads extends View {
       .when(Boolean(this.prefsError), (el) => el.child(div().text_size(11.5).text_color(t.blocked).child(this.prefsError)))
       // quoteKey and links are edited in the file; the panel says what it read.
       .child(div().text_size(11.5).text_color(t.muted).child(this.settingsLine()))
-      .children(this.prefsNotes.slice(0, 4).map((n) => div().text_size(11.5).text_color(t.blocked).child(n)))
-      .when(this.prefsNotes.length > 4, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`and ${this.prefsNotes.length - 4} more notes`)))
+      .children(this.notesNow().slice(0, 4).map((n) => div().text_size(11.5).text_color(t.blocked).child(n)))
+      .when(this.notesNow().length > 4, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`and ${this.notesNow().length - 4} more notes`)))
       .child(h_flex().gap(6).items_center()
         .child(div().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_start().text_size(11).font_family(mono).text_color(t.dim).child(path))
         .child(this.button(t, "th-set-copy", this.narrow() ? "Copy" : "Copy path", (_e, cx) => { this.copy(this.prefsPath(), "settings-path", "Settings path copied", cx); }, "copy")))
@@ -7539,8 +7539,15 @@ export default class Threads extends View {
   settingsLine() {
     const bad = (this.linkCount ?? 0) - this.links.length;
     const sn = this.senderCount ?? 0;
-    const sbad = sn - this.senders.length;
+    const sbad = sn - this.senders.filter((r) => !r.off).length;
     return `Link rules · ${this.linkCount ?? 0}${bad > 0 ? ` (${bad} not valid)` : ""}${sn ? ` · Sender rules · ${sn}${sbad > 0 ? ` (${sbad} not valid)` : ""}` : ""} · Quote key · ${this.quoteKey}`;
+  }
+
+  // The settings notes: the file's (prefsNotes), then a note for each sender rule switched
+  // off at run time for being too slow (core/turns.js ruleExec).
+  notesNow() {
+    const off = this.senders.filter((r) => r.off);
+    return off.length ? [...this.prefsNotes, ...off.map((r) => `Sender rule ${r.n}: ${r.off}`)] : this.prefsNotes;
   }
 
   // Which sender rule made a typed prompt an agent message, for the tooltip on its sender:
