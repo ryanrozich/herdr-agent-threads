@@ -70,6 +70,7 @@ It needs the Herdr app and `jq`. Some agents need a few more command-line tools,
 ## Links
 
 - Link rules turn text such as ticket keys and PR numbers into links in an open turn.
+- A link rule links text in replies and in plain user bubbles. In a coloured user bubble, and blue is the default, the text shows without links: Herdr draws a coloured bubble as plain lines (issue 116).
 - Add, edit and delete rules on the settings card: Custom, Ticket key or Pull request, with what the rule finds, what it opens and an example. Each rule has a switch, and Delete has Undo.
 - The pull request rule is on after a fresh install. It links `#58` to the session's repository when that repository is on GitHub.
 - Rules are checked for patterns that would be slow, and a rule that is slow on a reply is skipped and marked as not working.
