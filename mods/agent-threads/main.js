@@ -3431,10 +3431,12 @@ export default class Threads extends View {
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
   // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
-  // copied, only when it is part of this reply (so text from anywhere else is never pasted);
-  // otherwise the whole reply as Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
-  // the highlight, so it never falls back to the whole reply: when the clipboard holds
-  // nothing from this reply, the quote says how instead.
+  // copied, only when it is part of this reply, or of a turn on screen (copiedPart), so text
+  // from anywhere else is never pasted; otherwise the whole reply as Markdown source.
+  // { text, source, from } or { refuse, source, why }: from is the turn the copied text came
+  // from, when it is another one. In Select view a press means the highlight, so it never
+  // falls back to the whole reply: when the clipboard holds nothing from the pane, the quote
+  // says how instead.
   quoteSource(key, cx) {
     const turn = key ? this.findTurn(key) : null;
     const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
@@ -3445,6 +3447,9 @@ export default class Threads extends View {
       if (lit?.trim()) return { text: lit, source: "selection", how: "editor" };
       const clip = readClip(cx);
       if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection", how: "clipboard" };
+      // ⌘C on the formatted text of another turn on screen, Select view still open here.
+      const part = this.copiedPart(cx);
+      if (part) return { text: part.text, source: "selection", how: "clipboard", from: part.key };
       const say = lit != null ? `Nothing highlighted: select text, then ${this.quoteKey}` : `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`;
       return { refuse: say, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
@@ -3454,13 +3459,13 @@ export default class Threads extends View {
   }
 
   // After ⌘C in Select view, once the editor's copy has run: when the clipboard holds text
-  // from this reply, a toast says q quotes it. Never the text itself in the record.
+  // from this reply or another turn on screen, a toast says q quotes it. Never the text itself in the record.
   sawCopy(key, cx) {
     cx.timer.after(60, (cx) => {
       if (this.selecting !== key) return;
       const turn = this.findTurn(key);
       const clip = readClip(cx);
-      const ok = Boolean(turn && clip.trim() && inReply(clip, this.replyText(turn)));
+      const ok = Boolean(turn && clip.trim() && (inReply(clip, this.replyText(turn)) || this.copiedPart(cx)));
       this.selectCopy = { at: Date.now(), ok, chars: clip.length };
       if (ok) {
         const words = clip.trim().split(/\s+/).length;
@@ -3501,18 +3506,30 @@ export default class Threads extends View {
     this.clipBefore = this.clipAtPress;
     this.clipAtPress = readClip(cx);
   }
-  // { key, text } when the clipboard holds text copied since the last press from the selected
-  // or an open turn's reply or message, or null.
+  // { key, text } when the clipboard holds text copied since the last press from the reply
+  // or message of the selected turn, an open turn or a turn on screen, or null. A drag's
+  // release often lands on another turn's item, which then is the selected one (click).
   copiedPart(cx) {
     if (this.clipAtPress == null || !this.replySelectable()) return null;
     const clip = readClip(cx);
     if (!clip.trim() || clip === this.clipAtPress) return null;
-    const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
+    const keys = [...new Set([this.sel, ...this.open, ...this.screenTurns()])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
       return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
+  }
+  // The turns with an item in the range the list drew last, top to bottom.
+  screenTurns() {
+    const rows = this.rowsMemo ?? [];
+    const [a, b] = this.viewRange ?? [0, 0];
+    const out = [];
+    for (let i = a; i < Math.min(b, rows.length); i++) {
+      const k = rowTurnKey(rows[i]);
+      if (k && !out.includes(k)) out.push(k);
+    }
+    return out;
   }
   // ⌘ released: the one moment after ⌘C that reaches the panel. Says once that q quotes it.
   cmdUp(e, cx) {
@@ -3536,8 +3553,12 @@ export default class Threads extends View {
   // A quote press (the quote key, the Quote button, or debugQuote in tests). Returns false
   // when it did nothing, so the key can reach Herdr. Key repeat is ignored by the caller,
   // and a second press within 1 s does nothing.
-  quote(cx, via, key = this.selecting ?? this.copiedPart(cx)?.key ?? this.sel) {
+  quote(cx, via, button = null) {
     if (this.settingsOpen || this.choosing) return false;
+    // The turn a press is for (a button's, the one in Select view, the selected one), and the
+    // turn quoted from: without a button, the turn ⌘C copied from when it is another one.
+    const target = button ?? this.selecting ?? this.sel;
+    const key = button ?? this.selecting ?? this.copiedPart(cx)?.key ?? this.sel;
     const at = Date.now();
     if (this.quoteAt && at - this.quoteAt < 1000) return true;
     this.quoteAt = at;
@@ -3547,10 +3568,14 @@ export default class Threads extends View {
     // what it copied.
     const k = this.quoteKey;
     const q = this.quoteSource(key, cx);
+    // Text copied from a turn other than the one the press is for: the toast names it ("from #12").
+    const fromKey = q.from ?? key;
+    const fromTurn = !q.refuse && fromKey && fromKey !== target ? this.findTurn(fromKey)?.n ?? null : null;
+    const from = fromTurn != null ? ` from #${fromTurn}` : "";
     // Kept for the debug report and, with no text in it, in shared("threads.lastQuote") on
     // every build, so a quote that went wrong can be told apart afterwards.
     const record = (x) => {
-      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, ...x };
+      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, fromTurn, ...x };
       try { setShared("threads.lastQuote", this.lastQuote); } catch { /* the report still has it */ }
     };
     const out = q.refuse ? null : quoteText(q.text);
@@ -3595,10 +3620,10 @@ export default class Threads extends View {
         const folds = out.text.length > 800 || (out.text.match(/\n/g) ?? []).length > 2;
         let text;
         if (!r.pasted) text = `Could not focus ${t4}. Quote copied.`;
-        else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
-        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
-        else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
-        else if (q.source === "selection") text = `Quoted your selection into ${t4}`;
+        else if (gate.busy) text = `Quoted${from} into ${t4} · ${this.agent().short} will queue it`;
+        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines${from} into ${t4}`;
+        else if (out.cut === "chars") text = `Quoted the start${from} into ${t4} · cut at 2,000 characters`;
+        else if (q.source === "selection") text = `Quoted your selection${from} into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
         // Claude Code folds a long paste, and a second paste opens it.
         if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";

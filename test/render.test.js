@@ -826,6 +826,73 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   expect(v.selectHint()).toBe("q quotes the highlight · s returns");
 });
 
+test("q quotes what ⌘C copied from another turn on screen, from that turn, and names it; text from outside the pane is still refused", async () => {
+  const { v, cx } = await quotePane();
+  const [k1, k2] = v.turnKeys(v.rows());
+  expect(v.sel).toBe(k1);
+  const t2 = v.findTurn(k2);
+  // Words from the next turn's reply (a closed row shows its start), not in the open one.
+  const part = "no test changes";
+  expect(v.replyText(t2)).toContain(part);
+  expect(v.replyText(v.findTurn(k1))).not.toContain(part);
+  const quoteNow = async () => {
+    log = [];
+    v.quoteAt = 0;
+    v.key(keyEv("q"), cx);
+    cx.flush();
+    await settleCx(cx);
+  };
+  // A press and drag in the list, then ⌘C: the clipboard changed since the press.
+  const copy = (text) => { cx.clip = "older text"; v.notePress(cx); cx.clip = text; };
+  // Select view on the open turn, Herdr 0.1.16: its editor has nothing highlighted.
+  v.toggleSelect(k1, cx);
+  v.selEditor.st.selected_range = () => ({ start: 0, end: 0 });
+  drawRange(v, 0); // both turns on screen
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: true, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted your selection from #${t2.n} into t4`));
+  // The other turn's message too.
+  copy("Bump Playwright");
+  await quoteNow();
+  expect(cx.clip).toBe("> Bump Playwright\n\n");
+  expect(v.lastQuote).toMatchObject({ fromTurn: t2.n, pasted: true });
+  // Text from outside the pane: nothing is pasted, as before.
+  copy("rm -rf / from some other window");
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // A turn that is not on screen is not a source.
+  v.viewRange = [0, v.rowIndex(k2)];
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // Out of Select view: the open turn is still selected, the copy came from the closed one.
+  // ⌘ released says q quotes it and selects that turn; q quotes it, not the open reply.
+  v.endSelect();
+  drawRange(v, 0);
+  copy(part);
+  v.toast = null;
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(v.toast?.text).toBe("Copied 3 words · q quotes them");
+  expect(v.sel).toBe(k2);
+  v.sel = k1; // the ⌘ release can be missed: q finds the turn itself
+  await quoteNow();
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: false, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted your selection from #${t2.n} into t4`));
+  // Copied from the selected turn itself: the toast names no turn.
+  v.sel = k2;
+  copy(part);
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ fromTurn: null, pasted: true });
+  expect(v.toast.text).toMatch(/^Quoted your selection into t4/);
+});
+
 test("in Select view q quotes what ⌘C copied from the reply, and never the whole reply", async () => {
   const { v, cx } = await quotePane();
   const key = v.sel;
