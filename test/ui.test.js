@@ -929,9 +929,9 @@ test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column b
   expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
   // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
   // 8, 12 and 6.
-  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24 });
-  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6, peak: 16 });
-  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16 });
+  expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24, grow: 36 });
+  expect(railLook(32)).toEqual({ lane: 32, mark: 8, sel: 12, right: 6, peak: 16, grow: 24 });
+  expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16, grow: 24 });
 });
 
 test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {

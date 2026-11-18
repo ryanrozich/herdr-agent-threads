@@ -4277,7 +4277,7 @@ export default class Threads extends View {
       const k = this.railMemo?.all.find((x) => String(x.turns[0].turn.n) === n);
       if (!k) return true;
       this.railJumpAt = this.railTickY(k.key);
-      this.railJump(k.key, cx);
+      this.railClick(k.key, cx);
       return true;
     }
     // Tests only: "debugRailCard:3" opens the rail card of the turn #3 tick, as a hover
@@ -8233,19 +8233,23 @@ export default class Threads extends View {
         const color = k.live ? busy : k.pinned ? t.accent : k.sel || hot ? t.foreground : k.inView ? t.muted : t.dim;
         const op = (k.miss && !hot ? 0.16 : k.live || k.pinned || k.sel || k.inView || hot ? 1 : 0.5) * (hot ? 1 : k.fade);
         const own = k.sel ? look.sel : look.mark;
-        const w = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
+        const swell = ys ? Math.max(own, railSwell(look.mark, look.peak, Math.abs(ys[i] - ys[hi]))) : own;
+        // A clicked tick (railGrow): out to its grow width at the usual slide, then back over
+        // the flash's fade, so the two fade together.
+        const grow = this.railGrow?.key === k.key ? this.railGrow : null;
+        const w = grow?.on ? look.grow : swell;
         // The mark hangs from the pane's edge and grows inward; it is placed by hand so the
         // peak can be wider than the lane leaves beside the inset.
         // Herdr slides a change of width over 90 ms by itself (round 7, the slide): the draw
         // only sets the new width, and no timer runs in the mod.
         const mark = div().id(`th-mark-${k.i}`).absolute().top(Math.floor((L.pitch - L.mark) / 2)).w(w).h(L.mark).rounded(1).bg(color).opacity(op)
-          .transition("width", { duration: RAIL.SLIDE_MS, easing: "ease-out" })
+          .transition("width", { duration: grow && !grow.on ? FLASH.FADE : RAIL.SLIDE_MS, easing: "ease-out" })
           .when(k.live, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1400 }));
         const still = div().id(`th-tick-${k.i}`).flex_none().relative().w(look.lane).h(L.pitch)
           .when(k.dayStart, (el) => el.mt(RAIL.DAY))
           .child(left ? mark.left(look.right) : mark.right(look.right));
         if (quiet) return still;
-        const tick = still.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); this.railCardClose(k.key); this.railJump(k.key, cx); });
+        const tick = still.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); this.railClick(k.key, cx); });
         // On Herdr 0.1.15 a hovered tick shows the card beside it, on the rail's inner side;
         // before that, the one-line tooltip.
         if (!Popup) return tick.tooltip(this.railTip(k));
@@ -8308,8 +8312,31 @@ export default class Threads extends View {
     const n = (this.flashN ?? 0) + 1;
     this.flashN = n;
     cx.timer.after(FLASH.AFTER, (cx) => { if (this.flashN === n) { this.flash = { key, on: true, n }; cx.notify(); } });
-    cx.timer.after(FLASH.AFTER + 40, (cx) => { if (this.flashN === n && this.flash) { this.flash = { ...this.flash, on: false }; cx.notify(); } });
-    cx.timer.after(FLASH.AFTER + 40 + FLASH.FADE + 60, (cx) => { if (this.flashN === n) { this.flash = null; cx.notify(); } });
+    cx.timer.after(FLASH.AFTER + 40, (cx) => { if (this.flashN === n && this.flash) { this.flash = { ...this.flash, on: false }; this.railGrowEnd(key); cx.notify(); } });
+    cx.timer.after(FLASH.AFTER + 40 + FLASH.FADE + 60, (cx) => { if (this.flashN === n) { this.flash = null; if (this.railGrow?.key === key && !this.railGrow.on) this.railGrow = null; cx.notify(); } });
+  }
+  // The owner's experiment, 17 Nov: "If you clicked it, the line would briefly extend, then
+  // flash, and they would all fade out together so you see which one you clicked on." A
+  // clicked tick grows to look.grow (railGrow on); when the turn's flash starts to fade, the
+  // tick shrinks back over the same FLASH.FADE (railGrowEnd), and both are dropped together.
+  // If no flash comes (the jump found nothing), RAIL.GROW_KEEP_MS shrinks it anyway.
+  railGrowStart(key, cx) {
+    const g = (this.railGrow = { key, on: true });
+    cx.timer.after(RAIL.GROW_KEEP_MS, (cx) => {
+      if (this.railGrow !== g) return;
+      this.railGrow = { key, on: false };
+      cx.notify();
+      cx.timer.after(FLASH.FADE + 60, (cx) => { if (this.railGrow?.key === key && !this.railGrow.on) { this.railGrow = null; cx.notify(); } });
+    });
+  }
+  // A click on a tick: its card closes, the tick grows, and the turn comes up level with it.
+  railClick(key, cx) {
+    this.railCardClose(key);
+    this.railGrowStart(key, cx);
+    this.railJump(key, cx);
+  }
+  railGrowEnd(key) {
+    if (this.railGrow?.on && this.railGrow.key === key) this.railGrow = { key, on: false };
   }
   // A click on a tick closes its card, so the card does not cover the turn the click brings
   // up, and keeps it closed while the pointer stays on that tick (railQuiet).
