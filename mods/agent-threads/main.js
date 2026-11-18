@@ -1245,7 +1245,9 @@ export default class Threads extends View {
   // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
   // pane shows the file again and the card says why. undo: the Undo line a Delete just set,
   // cleared when that Delete is not written, so Undo cannot add the rule a second time.
-  writeLinks(raw, cx, undo = null) {
+  // kept: the rule Keep rule just closed; when its save is refused it opens again where its
+  // rule now is, with what was typed, and says why beside its buttons (issue 114).
+  writeLinks(raw, cx, undo = null, kept = null) {
     const from = JSON.stringify(this.fileLinks());
     this.linksPending = raw;
     const l = parseLinks(raw);
@@ -1256,6 +1258,11 @@ export default class Threads extends View {
       const now = this.linksOf(text);
       const why = now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
       if (why && undo && this.ruleUndo === undo) this.ruleUndo = null;
+      if (why && kept && !this.ruleEdit && this.settingsOpen && this.setPage === "links") {
+        this.ruleEdit = kept;
+        for (const [k] of RULE_FIELDS) this.setRuleField(k, kept.draft[k]);
+      }
+      if (why && kept && this.ruleEdit === kept) kept.refused = why;
       return why;
     };
     const chain = this.changePrefs({}, cx, { links: raw }, fits);
@@ -1322,7 +1329,7 @@ export default class Threads extends View {
     else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     const e = { at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
-      shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0 };
+      shown: { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0, refused: null };
     this.ruleEdit = e;
     for (const [k] of RULE_FIELDS) this.setRuleField(k, d[k]);
     this.ruleCheck();
@@ -1426,14 +1433,14 @@ export default class Threads extends View {
       this.ruleInputs[bad[0]].focus();
       return false;
     }
-    if (this.linksRefused()) return false;
+    if (this.linksRefused()) { e.refused = this.prefsError; return false; }
     const raw = this.fileLinks();
     this.followRules(raw);
     const o = this.ruleObject(e.draft, e.base);
     if (e.at != null) raw[e.at] = o;
     else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
     this.closeRule();
-    this.writeLinks(raw, cx);
+    this.writeLinks(raw, cx, null, e);
     return true;
   }
   // The switch on a row: off keeps the rule and links nothing with it.
@@ -6292,7 +6299,9 @@ export default class Threads extends View {
   }
 
   // The open rule: Type, then Name, Description, Finds, Opens and Example, the line that says
-  // what the rule does to its example, and Keep rule with the rest.
+  // what the rule does to its example, and Keep rule with the rest. A Keep rule that was not
+  // saved has the File line's reason under the buttons too, while the File line shows it: a
+  // tall rule can push the foot of the page out of view (issue 114).
   ruleEditor(t) {
     const e = this.ruleEdit;
     const d = e.draft;
@@ -6363,7 +6372,8 @@ export default class Threads extends View {
       .child(typeBlock)
       .children(RULE_FIELDS.map(field))
       .when(Boolean(result), (el) => el.child(result))
-      .child(buttons);
+      .child(buttons)
+      .when(Boolean(e.refused) && e.refused === this.prefsError, (el) => el.child(note(e.refused, t.blocked)));
   }
 
   // Why a rule that needs the session's repository links nothing here, or null.

@@ -9550,6 +9550,93 @@ test("a Delete that is not saved because the file's rules changed offers no Undo
   } finally { done(v); }
 });
 
+// Issue 114: a refused Keep rule said why only on the File line at the foot of the page, which
+// a tall open rule can push out of view. The same line shows in the open rule too, under its
+// buttons. inRule counts it between Keep rule and the File group, onFile after the File note.
+const FILE_NOTE = "Rules are kept under \"links\" in the settings file. A change made there shows here within a second.";
+const NOT_LIST_NOTE = "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed.";
+function reasonsOf(c, why) {
+  const at = c.flatMap((e, i) => (e[0] === "child" && e[1] === why ? [i] : []));
+  const file = c.findIndex((e) => e[0] === "child" && (e[1] === FILE_NOTE || e[1] === NOT_LIST_NOTE));
+  const keep = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-keep");
+  return { inRule: at.filter((i) => keep >= 0 && i > keep && i < file).length, onFile: at.filter((i) => i > file).length };
+}
+
+test("a Keep rule refused because \"links\" is not a list says why in the open rule too, until the file is fixed or the rule closes", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    // In an editor "links" becomes a string, and the pane reads it: the open rule stays open.
+    const oops = JSON.stringify({ textSize: 15, links: "oops" });
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.ruleEdit).not.toBe(null);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 1, onFile: 1 });
+    // Discard: the reason stays on the File line only.
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 1 });
+    // Refused again, then the file fixed: the reason goes from both places, the next Keep is written.
+    const fixed = JSON.stringify({ textSize: 15, links: RULES });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-8.", cx);
+    v.applyPrefs(oops);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 1, onFile: 1 });
+    v.applyPrefs(fixed);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastLinks().map((r) => r.example)).toEqual(["Fixed in ACME-8.", RULES[0].example, RULES[1].example]);
+    expect(strsOf(cardOf(v))).not.toContain(NOT_LIST);
+  } finally { done(v); }
+});
+
+test("a Keep rule whose save finds the file's rules changed opens the rule again with what was typed, and says why in it", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Keep rule is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null); // closed at once, as for a Keep that is written
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleEdit?.at).toBe(1);
+    expect(v.ruleInputs.example.value()).toBe("Fixed in ACME-7.");
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 1, onFile: 1 });
+    // From the list it now shows, the same Keep is written, and the reason goes.
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastLinks()).toEqual([X, { ...RULES[0], example: "Fixed in ACME-7." }, RULES[1]]);
+    expect(strsOf(cardOf(v))).not.toContain(MOVED);
+    // Refused again and closed with Discard: the reason stays on the File line only.
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: [X, RULES[1]] });
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    typeIn(v, "example", "See #59.", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit?.at).toBe(1);
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 1, onFile: 1 });
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 0, onFile: 1 });
+  } finally { done(v); }
+});
+
 // Review of PR 97, L2: the open rule's example follows the session's repository.
 test("the open rule's example is worked out again when the session's repository changes", async () => {
   const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
