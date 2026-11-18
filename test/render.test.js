@@ -112,6 +112,9 @@ let pinWrites = 0;
 // keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
 let keepSettings = false;
+// With settingsStale set, a settings write whose expected text is not what the file holds is
+// rejected, as Herdr rejects a stale snapshot.
+let settingsStale = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -139,7 +142,11 @@ function herdrRest() { return {
   updates: () => ({ app: { version: herdrVersion } }),
   readTextFile: async (p) => recordFiles[p] ?? null,
   writeTextFile: async (p, text, expected) => {
-    if (p.endsWith("settings.json")) { settingsWrites.push(text); if (keepSettings) recordFiles[p] = text; }
+    if (p.endsWith("settings.json")) {
+      if (settingsStale && (recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
+      settingsWrites.push(text);
+      if (keepSettings) recordFiles[p] = text;
+    }
     if (!p.endsWith("pins.json")) return null;
     if ((recordFiles[p] ?? null) !== (expected ?? null)) throw new Error("stale snapshot");
     recordFiles[p] = text;
@@ -8616,7 +8623,7 @@ async function rulesPane(rules = RULES) {
 const settleAll = async (cx) => { for (let i = 0; i < 3; i++) { const p = cx.pending; cx.pending = []; await Promise.all(p); } };
 const lastLinks = () => JSON.parse(settingsWrites.at(-1)).links;
 function typeIn(v, k, text, cx) { v.ruleInputs[k].set_value(text); v.ruleInputs[k].handlers.change({}, cx); }
-function done(v) { keepSettings = false; delete recordFiles[v.prefsPath()]; }
+function done(v) { keepSettings = false; settingsStale = false; delete recordFiles[v.prefsPath()]; }
 
 test("a fresh install has the pull request rule, on; the first write records it, and a file without links has none", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
@@ -8971,6 +8978,204 @@ test("Undo puts a removed rule back beside the same neighbor, whatever was added
     await settleAll(cx);
     expect(lastLinks().map((r) => r.name).slice(0, 3)).toEqual(["Y", "X", "A"]);
   } finally { done(v); }
+});
+
+const NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+
+// Review of PR 97, M2: a hand edit that makes "links" a string is never written over.
+test("Undo, Delete and the switch write nothing while \"links\" in the file is not a list, and the card says why", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(strsOf(cardOf(v))).toContain("Deleted Ticket.");
+    // In an editor "links" becomes the string "oops", and the pane reads it.
+    const oops = `${JSON.stringify({ textSize: 15, links: "oops" }, null, 2)}\n`;
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    const c = cardOf(v);
+    expect(strsOf(c)).toContain(NOT_LIST);
+    expect(strsOf(c)).toContain("\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed.");
+    expect(v.ruleUndo).not.toBe(null); // Undo waits for the file to be fixed
+    // Delete and the switch are not drawn now; called anyway, they write nothing and say why.
+    expect(idsIn(c)).not.toContain("th-rule-delete-btn-2");
+    expect(idsIn(c)).not.toContain("th-rule-on-2");
+    for (const press of [() => v.removeRule(0, cx), () => v.toggleRule(0, cx)]) {
+      v.prefsError = null;
+      press();
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(v.prefsError).toBe(NOT_LIST);
+    }
+    expect(recordFiles[v.prefsPath()]).toBe(oops);
+    // The file fixed: Undo puts the rule back.
+    const fixed = JSON.stringify({ textSize: 15, links: [RULES[1]] });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    expect(strsOf(cardOf(v))).not.toContain(NOT_LIST);
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+  } finally { done(v); }
+});
+
+test("a press that races the hand edit to a non-list \"links\" (the pane has not read it yet) writes nothing and says why", async () => {
+  for (const which of ["delete", "switch", "undo"]) {
+    const { v, cx } = await rulesPane();
+    try {
+      settingsStale = true;
+      if (which === "undo") { v.removeRule(0, cx); await settleAll(cx); }
+      const before = v.prefsRaw;
+      const oops = JSON.stringify({ textSize: 15, links: "oops" });
+      recordFiles[v.prefsPath()] = oops; // on disk, not read yet
+      settingsWrites.length = 0;
+      const c = cardOf(v);
+      expect(v.prefsRaw).toBe(before);
+      if (which === "delete") onOf(c, "th-rule-delete-btn-1", "on_click")({}, cx);
+      if (which === "switch") onOf(c, "th-rule-on-1", "on_click")({}, cx);
+      if (which === "undo") onOf(c, "th-rule-undo", "on_click")({}, cx);
+      await settleAll(cx);
+      expect(settingsWrites).toEqual([]);
+      expect(recordFiles[v.prefsPath()]).toBe(oops);
+      // The pane shows the file as it is, and the card says why.
+      expect(v.prefsRaw).toBe(oops);
+      expect(v.linkList).toEqual([]);
+      expect(strsOf(cardOf(v))).toContain(NOT_LIST);
+    } finally { done(v); }
+  }
+});
+
+// Review of PR 97, L1: the card's change to the rules never replaces a newer list in the file.
+test("a rule change whose save finds the file's rules changed writes nothing over them; a change to other keys still merges", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    // An editor adds a rule in the same moment as the switch is pressed.
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited;
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-on-1", "on_click")({}, cx);
+    expect(v.links.map((r) => r.name)).toEqual(["Hash"]); // shown at once
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(recordFiles[v.prefsPath()]).toBe(edited);
+    expect(v.linkList.map((r) => [r.name, r.on])).toEqual([["X", true], ["Ticket", true], ["Hash", true]]);
+    expect(strsOf(cardOf(v))).toContain(MOVED);
+    // From the list it now shows, the same press is written.
+    onOf(cardOf(v), "th-rule-on-2", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([X, { ...RULES[0], on: false }, RULES[1]]);
+    expect(strsOf(cardOf(v))).not.toContain(MOVED);
+    // An editor changes only the text size: the rules match, so the change is written on top.
+    const sized = JSON.stringify({ ...JSON.parse(recordFiles[v.prefsPath()]), textSize: 17 });
+    recordFiles[v.prefsPath()] = sized;
+    v.removeRule(0, cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual([{ ...RULES[0], on: false }, RULES[1]]);
+    expect(w.textSize).toBe(17);
+    expect(v.prefsError).toBe(null);
+  } finally { done(v); }
+});
+
+// Review of PR 97, L2: the open rule's example follows the session's repository.
+test("the open rule's example is worked out again when the session's repository changes", async () => {
+  const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
+  const { v, cx } = await rulesPane([PR]);
+  try {
+    v.remote = { key: "t4|null", repo: "acme/exports", owner: "acme", host: "github.com", why: "test" };
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("https://github.com/acme/exports/pull/58");
+    // Another session, in another repository: no key is typed in the rule.
+    v.remote = { ...v.remote, repo: "acme/billing" };
+    frame(v, cx);
+    let s = strsOf(cardOf(v));
+    expect(s).toContain("https://github.com/acme/billing/pull/58");
+    expect(s).not.toContain("https://github.com/acme/exports/pull/58");
+    v.remote = { ...v.remote, repo: null, owner: null, why: "no git remote origin" };
+    frame(v, cx);
+    s = strsOf(cardOf(v));
+    expect(s).toContain("This session has no repository, so this rule links nothing here.");
+    expect(v.ruleEdit.draft.example).toBe("Merged in #58.");
+  } finally { done(v); }
+});
+
+test("the settings card stays open and as it was when the pane's session changes", async () => {
+  const f = sharedFolder();
+  f.record(5101, SESSION_A);
+  f.record(5102, SESSION_B);
+  hcBy = { t3c: fg(5101, f.cwd), t3b: fg(5102, f.cwd) };
+  const { v, cx } = sharedState(f, "t3c");
+  try {
+    await looked(v);
+    expect(shownPrompts(v)).toEqual(["Prompt in session A"]);
+    v.action("settings", cx);
+    v.setTab = "general";
+    v.setPage = "links";
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "name", "Pull", cx);
+    const before = idsIn(cardOf(v));
+    // The terminal's agent moves to session B (a /clear or a resume).
+    f.record(5101, SESSION_B);
+    v.resolve(cx);
+    await looked(v);
+    expect(v.current().file).toEndWith(`${SESSION_B}.jsonl`);
+    expect(shownPrompts(v)).toContain("Prompt in session B");
+    expect([v.settingsOpen, v.setTab, v.setPage]).toEqual([true, "general", "links"]);
+    expect(v.ruleEdit.draft.name).toBe("Pull");
+    const c = frame(v, cx);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-set-card", "th-rule-keep"]));
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Still closes as before.
+    v.key(keyEv("escape"), cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    hcBy = {};
+    recordFiles = {};
+  }
+});
+
+// Herdr tells a mod pane it lost focus only through its pane's focused flag (read in react);
+// there is no blur event for the pane in the API or the stubs.
+test("the settings card stays open and as it was when the pane loses focus, and the keys work when it comes back", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    state.panes[1].focused = true;
+    v.react(cx);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const before = idsIn(cardOf(v));
+    // Focus goes to the terminal's pane.
+    state.panes[1].focused = false;
+    state.panes[0].focused = true;
+    v.react(cx);
+    const c = frame(v, cx);
+    expect([v.settingsOpen, v.setPage, v.ruleEdit?.at]).toEqual([true, "links", 0]);
+    expect(v.ruleEdit.draft.example).toBe("Fixed in ACME-7.");
+    expect(idsIn(c)).toContain("th-set-card");
+    expect(idsIn(cardOf(v))).toEqual(before);
+    // Back: the pane takes the keyboard, and Esc closes the rule, then the card.
+    state.panes[0].focused = false;
+    state.panes[1].focused = true;
+    v.react(cx);
+    v.key(keyEv("escape"), cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(v.settingsOpen).toBe(true);
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally {
+    delete state.panes[0].focused;
+    delete state.panes[1].focused;
+    done(v);
+  }
 });
 
 test("a rule whose address is on github.com links only when the session's origin is on GitHub; elsewhere it says why", async () => {

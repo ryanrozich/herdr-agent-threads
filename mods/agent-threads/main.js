@@ -205,6 +205,10 @@ const RULE_FIELDS = [
 ];
 // How long typing may stop before a rule's fault is shown (chat-look round 10).
 const REASON_PAUSE = 1500;
+// Why a change to the link rules was not written, on the card's File line.
+const RULES_NOT_JSON = "settings.json is not valid JSON, so the rule change was not saved. Fix the file first.";
+const RULES_NOT_LIST = "\"links\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+const RULES_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
 const REGEX_REFERENCE = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions/Cheatsheet";
 // The flash on a turn a jump lands on: accent at this strength, shown FLASH.AFTER ms after the
 // jump (once its scroll is done) and faded out over FADE ms.
@@ -1049,13 +1053,19 @@ export default class Threads extends View {
 
   // Changes settings from the panel, keys or commands: applied now, then written. A save
   // that finds the file changed meanwhile reads it again and applies the change on top.
-  // extra: keys written as they are (the card's quote key). Returns the save.
-  changePrefs(patch, cx, extra = null) {
+  // extra: keys written as they are (the card's quote key, the link rules). fits: given the
+  // file's text, why extra may not be written over it, or null; asked before the save and
+  // again on the text read after a stale one (writeLinks). Returns the save.
+  changePrefs(patch, cx, extra = null, fits = null) {
     // The current mark, so a slate chosen here is kept (settings.js LOOK).
     const next = parseSettings(JSON.stringify({ ...this.prefs, ...patch, look: LOOK })).values;
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
+    // Not written: the pane shows the file as it is, and the card says why.
+    const refuse = (text, why) => { this.linksPending = null; this.applyPrefs(text); this.prefsError = why; };
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
+      const why = writable(this.prefsRaw) ? fits?.(this.prefsRaw) : null;
+      if (why) { refuse(this.prefsRaw, why); return; }
       try {
         await saveSettings(appHome(), next, this.prefsRaw, extra);
         this.prefsRaw = settingsText(next, this.prefsRaw, extra);
@@ -1065,6 +1075,8 @@ export default class Threads extends View {
         // The file holds a hand edit that does not parse: leave it, keep the change in the
         // pane only, and say so.
         if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; return; }
+        const late = fits?.(text);
+        if (late) { refuse(text, late); return; }
         const merged = { ...parseSettings(text).values, ...patch };
         try {
           await saveSettings(appHome(), merged, text, extra);
@@ -1173,28 +1185,47 @@ export default class Threads extends View {
   // Whether the card may change rules: not while the file holds text that is not settings
   // (a hand edit in progress) or a "links" that is not a list, which a write would replace.
   linksEditable() {
-    if (!writable(this.prefsRaw)) return false;
+    return writable(this.prefsRaw) && this.linksOf(this.prefsRaw) != null;
+  }
+  // A change to the rules (Delete, Undo, the switch, Keep rule, Move up) while the card may
+  // not change them: refused, and the card's File line says why. Returns true when refused.
+  linksRefused() {
+    if (this.linksEditable()) return false;
+    this.prefsError = writable(this.prefsRaw) ? RULES_NOT_LIST : RULES_NOT_JSON;
+    return true;
+  }
+  // The rules a settings text holds, as copies to change: the fresh install's rule for no
+  // file or an empty one, none for a file without "links" (or one that does not parse), and
+  // null when "links" is not a list.
+  linksOf(text) {
+    if (text == null || String(text).trim() === "") return defaultLinks();
     let raw = null;
-    try { raw = JSON.parse(this.prefsRaw ?? ""); } catch { return true; }
-    return raw?.links == null || Array.isArray(raw.links);
+    try { raw = JSON.parse(text); } catch { return []; }
+    if (raw?.links == null) return [];
+    return Array.isArray(raw.links) ? raw.links.map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : null;
   }
   // The rules as the file holds them, as copies to change: the list just written while its
   // save runs, or the fresh install's rule while there is no file.
   fileLinks() {
     if (this.linksPending) return this.linksPending.map((r) => (r && typeof r === "object" ? { ...r } : r));
-    if (this.prefsRaw == null || String(this.prefsRaw).trim() === "") return defaultLinks();
-    let raw = null;
-    try { raw = JSON.parse(this.prefsRaw); } catch { return []; }
-    return Array.isArray(raw?.links) ? raw.links.map((r) => (r && typeof r === "object" && !Array.isArray(r) ? { ...r } : r)) : [];
+    return this.linksOf(this.prefsRaw) ?? [];
   }
   // Applies a changed list at once, then writes it as "links" (settings.js keeps the rest).
+  // The save writes it only over the list it was made from: when the file's "links" changed
+  // meanwhile (a hand edit, another pane) or is no longer a list, nothing is written, the
+  // pane shows the file again and the card says why.
   writeLinks(raw, cx) {
+    const from = JSON.stringify(this.fileLinks());
     this.linksPending = raw;
     const l = parseLinks(raw);
     this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...l.notes];
     this.setLinks(l.rules, l.list, raw.length);
     this.followRules(raw);
-    const chain = this.changePrefs({}, cx, { links: raw });
+    const fits = (text) => {
+      const now = this.linksOf(text);
+      return now == null ? RULES_NOT_LIST : JSON.stringify(now) !== from ? RULES_MOVED : null;
+    };
+    const chain = this.changePrefs({}, cx, { links: raw }, fits);
     chain.then(() => { if (this.linksPending === raw) this.linksPending = null; });
     return chain;
   }
@@ -1316,10 +1347,19 @@ export default class Threads extends View {
     const uf = url ? ruleFault({ pattern: "x(\\d)", url }) : "no url";
     e.faults = { pattern: pf ?? (uf ? null : ruleFault({ pattern: d.pattern, url })), url: uf };
     for (const f of ["pattern", "url"]) if (e.shown[f] != null) e.shown[f] = e.faults[f];
+    e.repo = this.repoSig();
     if (e.faults.pattern || e.faults.url) { e.stale = true; return; }
     e.result = this.ruleResult(e);
     e.lastGood = e.result;
     e.stale = false;
+  }
+  // The session's repository changed (another session, another folder) under the open
+  // rule: its example's result is worked out again for the new one.
+  ruleRepoCheck() {
+    const e = this.ruleEdit;
+    if (!e || e.repo === this.repoSig()) return;
+    e.repo = this.repoSig();
+    if (!e.stale) e.result = e.lastGood = this.ruleResult(e);
   }
   ruleResult(e) {
     const d = e.draft;
@@ -1353,6 +1393,7 @@ export default class Threads extends View {
       this.ruleInputs[bad[0]].focus();
       return false;
     }
+    if (this.linksRefused()) return false;
     const raw = this.fileLinks();
     this.followRules(raw);
     const o = this.ruleObject(e.draft, e.base);
@@ -1364,6 +1405,7 @@ export default class Threads extends View {
   }
   // The switch on a row: off keeps the rule and links nothing with it.
   toggleRule(at, cx) {
+    if (this.linksRefused()) return;
     const raw = this.fileLinks();
     const o = raw[at];
     if (!o || typeof o !== "object") return;
@@ -1373,6 +1415,7 @@ export default class Threads extends View {
   }
   // Remove: gone at once, with Undo in its place until the page is left or another goes.
   removeRule(at, cx) {
+    if (this.linksRefused()) return;
     const raw = this.fileLinks();
     if (at < 0 || at >= raw.length) return;
     const key = (r) => (r === undefined ? null : JSON.stringify(r));
@@ -1386,7 +1429,7 @@ export default class Threads extends View {
   }
   undoRemove(cx) {
     const u = this.ruleUndo;
-    if (!u) return;
+    if (!u || this.linksRefused()) return;
     const raw = this.fileLinks();
     this.followRules(raw);
     raw.splice(Math.min(u.at, raw.length), 0, u.rule);
@@ -1396,7 +1439,7 @@ export default class Threads extends View {
   // Move up: the open rule one place higher, so it takes text before the rule it passes.
   moveRuleUp(cx) {
     const e = this.ruleEdit;
-    if (!e || e.at == null || e.at < 1) return;
+    if (!e || e.at == null || e.at < 1 || this.linksRefused()) return;
     const raw = this.fileLinks();
     [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
     e.at -= 1; // so the twin nearest the new place is the one followed
@@ -1998,6 +2041,7 @@ export default class Threads extends View {
     this.settleSplit();
     this.autoPinned(cx);
     this.lookRepo(cx);
+    this.ruleRepoCheck();
     const t = this.term();
     const now = { turn: t?.turn ?? null, status: t?.status ?? null, there: Boolean(t), fg: this.pane()?.program?.key ?? null };
     const was = this.seen;
@@ -4029,9 +4073,10 @@ export default class Threads extends View {
   // ---- link rules ----
 
   // The repo link rules may use ({repo}, {owner}): the terminal's git remote origin, looked
-  // up once per terminal and folder, outside the draw, and only when a rule uses it.
+  // up once per terminal and folder, outside the draw, and only when a rule (or the one open
+  // on the card) uses it.
   lookRepo(cx) {
-    if (!this.links.some((r) => r.repo)) return;
+    if (!this.links.some((r) => r.repo) && !/\{(repo|owner)\}/.test(this.ruleEdit?.draft.url ?? "")) return;
     const cwd = this.res.cwd ?? this.pane()?.cwd ?? this.term()?.cwd ?? null;
     const key = `${this.terminal}|${cwd}`;
     if (this.remote.key === key || this.repoLooking) return;
@@ -6084,8 +6129,10 @@ export default class Threads extends View {
         ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus", CARD_BUTTON)) : null,
       group("File", [
         note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
-          : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
+          : writable(this.prefsRaw) ? "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed."
+            : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
         this.fileRow(t, w),
+        this.prefsError ? note(this.prefsError, t.blocked) : null,
       ]),
     ].filter(Boolean);
   }
