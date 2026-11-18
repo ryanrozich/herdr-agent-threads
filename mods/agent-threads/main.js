@@ -3811,13 +3811,10 @@ export default class Threads extends View {
   }
 
   // A code block with no editor (one that failed to start): its lines, wrapped, in the box.
-  // In the image viewer, outside the list (scroll), they do not wrap and scroll both ways.
+  // In the image viewer, outside the list (scroll), a taller block scrolls down inside.
   plainCode(t, id, text, mono, scroll = false) {
-    if (scroll) {
-      return v_flex().id(id).size_full().px(8).py(6).items_start().overflow_scroll().text_size(12).font_family(mono).text_color(t.muted)
-        .children(text.split("\n").map((l) => div().flex_none().h(CODE_LINE).line_height(`${CODE_LINE}px`).whitespace_nowrap().child(l || " ")));
-    }
     return v_flex().id(id).size_full().px(8).py(6).text_size(12).font_family(mono).text_color(t.muted)
+      .when(scroll, (el) => el.overflow_y_scroll())
       .children(text.split("\n").map((l) => div().w_full().min_h(CODE_LINE).line_height(`${CODE_LINE}px`).child(l || " ")));
   }
   // The quiet line under a code block or a tool's output whose rest is hidden: Show all and
@@ -4887,7 +4884,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -5189,7 +5186,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k, L) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -5223,11 +5220,13 @@ export default class Threads extends View {
   }
   // A fenced code block in the panel, as the open turn draws one: the language and Copy on a
   // head, then the highlighted code, up to CODE_LINES wrapped rows (a taller one scrolls
-  // inside, and says so).
-  galleryCode(t, c, k) {
+  // inside, and says so). Rows are wrapped at the panel's text width, less the box's border
+  // and the editor's inset, at 12 px mono (codePer in the list).
+  galleryCode(t, c, k, L) {
     const mono = this.mono();
     const copied = this.gal.codeCopied === k;
-    const rows = c.text.split("\n").length;
+    const textW = L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX);
+    const rows = Math.max(1, codeRows(c.text, (textW - 18) / (12 * MONO_EM)));
     const shown = Math.min(CODE_LINES, rows);
     return v_flex().w_full()
       .child(h_flex().h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
