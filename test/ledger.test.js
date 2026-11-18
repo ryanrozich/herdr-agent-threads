@@ -3,7 +3,7 @@
 // times" for a turn with none, failures, the bar's scale and the turn's line. The turns are
 // made up here in the reader's shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
-import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, timelineLayout, timelineHit, itemBox } from "../mods/agent-threads/ledger.js";
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
 // A turn in the reader's shape: steps are [text] or [calls], each call [name, input, at, rt, failed].
@@ -221,4 +221,54 @@ test("ledger filters: the lane chips take rows out, Failed only and User only li
   expect(noTools.rows.some((r) => laneOf(r.lk) === "tools")).toBe(false);
   expect(noTools.sizes.length).toBe(noTools.rows.length);
   expect(passes({ kind: "tr", lk: "stop" }, { ...ALL_ROWS, tools: false, model: false, input: false })).toBe(true);
+});
+
+test("timeline: a turn as wide as it took, a hatched break between turns, bars on Input, Model and Tools, joined where they touch", () => {
+  // Turn 1 takes 60 s, turn 2 120 s; a call in turn 2 runs while another does (track 1).
+  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 6000, 12000, true]]]), 0).rows[0];
+  const b = ledgerTurn(S, turn(2, [[["Read", "y", 6000, 60000], ["Grep", "z", 10000, 20000]]], { end: T0 + 120000 }), 0).rows[0];
+  const L = timelineLayout([a, b], 600, "clock");
+  expect(L.turns.length).toBe(2);
+  expect(L.gaps.length).toBe(1);
+  expect(L.gaps[0][1] - L.gaps[0][0]).toBe(14);
+  expect(L.total).toBeCloseTo(600, 0);
+  expect(L.turns[1].w / L.turns[0].w).toBeCloseTo(2, 1);
+  // The failed call is its own span in the Tools lane; the overlapping call is on track 1.
+  expect(L.spans.get("tools|failed|0").length).toBe(1);
+  expect(L.spans.get("tools|tools|1").length).toBe(1);
+  expect(L.spans.get("input|user|0").length).toBe(2);
+  expect(L.spans.has("model|model|0")).toBe(true);
+  // The failed call's marker, and the labels.
+  expect(L.fails.length).toBe(1);
+  expect(L.labels.map((l) => l.text)).toEqual(["1", "2"]);
+  // A press on the failed call's bar finds its row; on empty lane the turn's heading.
+  const fx = (L.spans.get("tools|failed|0")[0][0] + L.spans.get("tools|failed|0")[0][1]) / 2;
+  expect(timelineHit(L, [a, b], fx, "tools").key).toBe(a.items.find((it) => it.failed).key);
+  expect(timelineHit(L, [a, b], L.turns[1].x + L.turns[1].w - 1, "input").key).toBe(b.key);
+  // Steps: every step the same width.
+  const St = timelineLayout([a, b], 600, "steps");
+  expect(St.turns[0].w / a.items.length).toBeCloseTo(St.turns[1].w / b.items.length, 6);
+  expect(St.ticks.every((t) => t.step)).toBe(true);
+});
+
+test("timeline: a call with no result runs flat to the turn's end; a long session is one span per lane per turn under 2 px", () => {
+  const t = turn(3, [[["Bash", "sleep", 6000, null]], [["Read", "a", 7000, 8000]]], { done: false, end: null, reply: null });
+  const h = ledgerTurn(S, t, 0, true).rows[0];
+  const open = h.items.find((it) => it.open);
+  expect(open).toBeTruthy();
+  const L = timelineLayout([h], 400, "clock", T0 + 100000);
+  const box = itemBox(open, 0, L.turns[0].w, 100000, "clock", h.items.length);
+  expect(box.x1).toBeCloseTo(L.turns[0].w, 3);
+  // 6,000 turns: each under 2 px, so the layout walks turns, not steps, and draws few spans.
+  const one = ledgerTurn(S, turn(4, ["a", [["Bash", "x", 1000, 2000, true]]]), 0).rows[0];
+  const heads = Array.from({ length: 6000 }, (_, i) => ({ ...one, key: `0:${i + 1}`, n: i + 1, t0: T0 + i * 120000 }));
+  const t0 = performance.now();
+  const big = timelineLayout(heads, 500, "clock");
+  const ms = performance.now() - t0;
+  expect(big.turns.length).toBe(6000);
+  let spans = 0;
+  for (const list of big.spans.values()) spans += list.length;
+  expect(spans).toBeLessThan(500);
+  expect(big.fails.length).toBeLessThanOrEqual(500 / 6 + 1);
+  expect(ms).toBeLessThan(200);
 });

@@ -5685,7 +5685,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -8047,6 +8047,77 @@ test("Trajectory layout by width: the filter bar and its whole-session counts, t
   expect(state.shared["threads.debug"].t4.tlayout.detail).toBe("below");
 });
 
+// Round 6 and 7: the timeline at the top from 540 px. Input, Model and Tools, a bar per step;
+// a press selects the step under it; Clock and Steps; b hides it and the heading lines come
+// back; under 540 px it never shows.
+test("Trajectory timeline: lanes and bars at the top from 540 px, a press selects a step, Clock and Steps, b hides it", async () => {
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
+  v.paneW = 640; v.rootH = 800;
+  settleRows(v, cx);
+  const calls = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  const snap = () => state.shared["threads.debug"].t4;
+  let c = calls();
+  const sums = v.ledgerSums();
+  expect(c.some(([n, x]) => n === "id" && x === "th-timeline")).toBe(true);
+  expect(snap().tlayout.timeline).toMatchObject({ scale: "clock", turns: sums.turns });
+  for (const lane of ["Input", "Model", "Tools"]) expect(c.some(([n, x]) => n === "child" && x === lane)).toBe(true);
+  // Bars by kind: the user's blue, the model's violet, the calls teal, the failed red.
+  for (const id of ["th-tl-input|user|0", "th-tl-model|model|0", "th-tl-tools|tools|0", "th-tl-tools|failed|0"]) expect(c.some(([n, x]) => n === "id" && x === id)).toBe(true);
+  // No line under the headings while the timeline shows.
+  expect(c.some(([n, x]) => n === "id" && String(x).startsWith("th-tl-0:"))).toBe(false);
+  // A press on the first failed call's bar selects it; on the Input lane of a turn, a step or
+  // the turn.
+  const { L } = v.tlLayout();
+  const [x0, x1] = L.spans.get("tools|failed|0")[0];
+  v.tlPress({ local_position: { x: (x0 + x1) / 2, y: 2 * 16 + 6 } }, cx);
+  const picked = ledgerOnly(v).find((r) => r.key === v.ledgerSel());
+  expect(picked?.failed).toBe(true);
+  c = calls();
+  // The selected turn's band and the step's outline.
+  expect(c.some(([n, x]) => n === "border_color" && x === theme.foreground)).toBe(true);
+  // Steps: every step the same width.
+  afterId(c, "th-tl-scale-steps").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  c = calls();
+  expect(snap().tlayout.timeline.scale).toBe("steps");
+  const S = v.tlLayout().L;
+  const h = v.ledgerSums().heads;
+  expect(S.turns[0].w / h[0].items.length).toBeCloseTo(S.turns[1].w / h[1].items.length, 4);
+  // b hides it, and the line under each heading stands in; b again shows it.
+  v.key(keyEv("b"), cx);
+  c = calls();
+  expect(snap().tlayout.timeline).toBe(null);
+  expect(c.some(([n, x]) => n === "id" && String(x).startsWith("th-tl-0:"))).toBe(true);
+  v.key(keyEv("b"), cx);
+  draw(v, cx);
+  expect(snap().tlayout.timeline).not.toBe(null);
+  // Under 540 px: no timeline, the lines.
+  v.paneW = 500;
+  c = calls();
+  expect(snap().tlayout.timeline).toBe(null);
+  expect(c.some(([n, x]) => n === "id" && x === "th-timeline")).toBe(false);
+});
+
+// The timeline over a long session: its layout walks the turns when the session's numbers
+// change (not the rows, not every frame; the debug pane rebuilds its rows each frame to time
+// them, and the layout stays), and what it draws is bounded by its width.
+test("Trajectory timeline over 2,000 turns: laid out once, few spans, a frame with nothing changed lays out nothing", { timeout: 60000 }, async () => {
+  const { v, cx } = await pane(fixture("--extra", "2000"), { view: "trajectory" });
+  v.paneW = 640; v.rootH = 900; v.listH = 600;
+  settleRows(v, cx);
+  draw(v, cx);
+  settleRows(v, cx);
+  const m = v.tlMemo;
+  expect(m.L.turns.length).toBe(v.ledgerSums().turns);
+  let spans = 0;
+  for (const list of m.L.spans.values()) spans += list.length;
+  expect(spans).toBeLessThan(2000);
+  draw(v, cx);
+  v.key(keyEv("j"), cx);
+  draw(v, cx);
+  expect(v.tlMemo).toBe(m);
+  console.log(`timeline at ${m.L.turns.length} turns: layout ${m.ms.toFixed(2)} ms, ${spans} spans`);
+});
+
 test("Trajectory failures: a failed call and a failed subagent run; the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
   const { v, cx } = await pane(twoFails(), { view: "trajectory" });
   v.paneW = 573;
@@ -8091,8 +8162,19 @@ test("Trajectory failures: a failed call and a failed subagent run; the cross, t
   expect(wash()).toBe(2);
   expect(calls.some((c) => c[0] === "svg" && String(c[1]).endsWith("/x.svg"))).toBe(true);
   const head = rows.find((r) => r.kind === "trh" && r.fails);
-  expect(calls.some((c) => c[0] === "id" && c[1] === `th-tlr-${head.key}`)).toBe(true);
   expect(calls.some((c) => c[0] === "id" && c[1] === `th-barp-${fails[0]}`)).toBe(true);
+  // With the timeline at the top, the failed calls are red bars on its Tools lane and the
+  // headings have no line; with it hidden (b), the red stretch is in the turn's line.
+  expect(calls.some((c) => c[0] === "id" && c[1] === "th-tl-tools|failed|0")).toBe(true);
+  expect(calls.some((c) => c[0] === "id" && c[1] === `th-tlr-${head.key}`)).toBe(false);
+  v.key(keyEv("b"), cx);
+  rec = [];
+  draw(v, cx);
+  calls = rec;
+  rec = null;
+  expect(calls.some((c) => c[0] === "id" && c[1] === `th-tlr-${head.key}`)).toBe(true);
+  expect(calls.some((c) => c[0] === "id" && c[1] === "th-timeline")).toBe(false);
+  v.key(keyEv("b"), cx);
   // Off the failure: the wash shows, and the top row says how many.
   v.action("first", cx);
   rec = [];

@@ -270,7 +270,10 @@ export function ledgerTurn(s, turn, si, live = false) {
       track = a < end0 ? 1 : 0;
       if (track === 0) end0 = openBar ? Infinity : b ?? a;
     }
-    items.push({ key: r.key, i, lane: k?.lane ?? null, ink: k?.ink ?? "context", a, b, open: openBar && a != null, track, failed: r.failed, lk: r.lk });
+    const ink = k?.ink ?? "context";
+    // The timeline's span keys for this step, made once (timelineLayout joins by them).
+    const sk = k?.lane ? [`${k.lane}|${ink}|0`, `${k.lane}|${ink}|1`] : null;
+    items.push({ key: r.key, i, lane: k?.lane ?? null, ink, a, b, open: openBar && a != null, track, failed: r.failed, lk: r.lk, sk });
   });
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
@@ -401,4 +404,151 @@ export function detailOf(r) {
   if (r.lk === "more") F.push(["Result", "results not kept"]);
   const title = r.tool ? r.tool : k.label;
   return { kind: r.lk, tag: k.tag, title, fields: F, text: String(r.text ?? "").trim() || null, code: Boolean(k.code && r.tool) };
+}
+
+// ---- the timeline (round 3 and round 7) ----
+// The session as bars on three lanes, Input, Model and Tools, in a strip cw px wide. Two
+// scales: "clock", where a turn is as wide as it took (never under a minimum) and the idle
+// time between turns is folded into a fixed break, hatched; "steps", where every step gets
+// the same width. heads are the ledger's headings in order (each carries its turn's steps,
+// items, from ledgerTurn), so the layout walks the turns, and the steps only of a turn wide
+// enough to draw them: a turn under 2 px is one span per lane it has. Bars that touch are
+// joined, so what is drawn is bounded by the strip's width, not the session's length.
+// A call with no result yet is a plain flat bar to the turn's end (to now while the turn
+// runs; the torn end is a later round). nowMs: the clock, for a running turn.
+export const TL_LANES = Object.freeze(["input", "model", "tools"]);
+export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now()) {
+  const n = heads.length;
+  const out = { cw, scale, turns: [], gaps: [], spans: new Map(), labels: [], ticks: [], fails: [], index: new Map() };
+  if (!n || !(cw > 0)) return out;
+  const GAP = cw < 700 ? 14 : 30;
+  const MIN = cw < 700 ? 30 : 48;
+  const gap = n > 1 ? Math.min(GAP, (0.15 * cw) / (n - 1)) : 0;
+  const min = Math.min(MIN, (0.3 * cw) / n);
+  const target = Math.max(1, cw - gap * (n - 1));
+  const wallOf = (h) => {
+    const w = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+    return Number.isFinite(w) && w > 0 ? w : 0;
+  };
+  const walls = heads.map(wallOf);
+  let widths;
+  if (scale === "steps") {
+    const total = heads.reduce((a, h) => a + Math.max(1, h.items?.length ?? 1), 0);
+    const sw = target / total;
+    widths = heads.map((h) => Math.max(1, h.items?.length ?? 1) * sw);
+  } else {
+    // The px per ms that fills the strip, each turn at least min wide: the turns held at min
+    // and the px per ms for the rest found in turn until neither moves (a few passes; the
+    // held set only grows as m falls). n * min is at most 30% of the strip, so it fits.
+    let m = 0;
+    let all = 0;
+    for (const w of walls) all += w;
+    if (all > 0) {
+      m = target / all;
+      for (let k = 0; k < 12; k++) {
+        let held = 0;
+        let rest = 0;
+        for (const w of walls) { if (w * m < min) held++; else rest += w; }
+        const next = rest > 0 ? Math.max(0, target - held * min) / rest : 0;
+        if (Math.abs(next - m) <= m * 1e-9) { m = next; break; }
+        m = next;
+      }
+    }
+    widths = walls.map((w) => Math.max(min, w * m));
+    // No turn has a length: each gets an even share.
+    if (!(all > 0)) widths = walls.map(() => target / n);
+  }
+  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch.
+  const add = (k, x0, x1) => {
+    let list = out.spans.get(k);
+    if (!list) { list = []; out.spans.set(k, list); }
+    const last = list[list.length - 1];
+    if (last && x0 <= last[1] + 0.5) { if (x1 > last[1]) last[1] = x1; return; }
+    list.push([x0, x1]);
+  };
+  let x = 0;
+  let labelEnd = -Infinity;
+  let failEnd = -Infinity;
+  heads.forEach((h, ti) => {
+    const w = widths[ti];
+    out.turns.push({ x, w, key: h.key, n: h.n });
+    out.index.set(h.key, ti);
+    if (w >= 24 && x >= labelEnd) {
+      out.labels.push({ x, w, text: `${h.n}`, total: w >= 120 ? (h.going ? "running" : durText(walls[ti]) || null) : null });
+      labelEnd = x + Math.max(24, Math.min(w, 120));
+    }
+    if (w < 2) {
+      const c = h.cnt ?? {};
+      const x1 = x + Math.max(w, 1);
+      if (c.input) add(c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0", x, x1);
+      if (c.model) add("model|model|0", x, x1);
+      if (c.tools) add(c.failed ? "tools|failed|0" : "tools|tools|0", x, x1);
+      if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
+    } else {
+      for (const it of h.items ?? []) {
+        const b = itemBox(it, x, w, walls[ti], scale, h.items.length);
+        if (!b || !it.sk) continue;
+        add(it.sk[b.track ? 1 : 0], b.x0, b.x1);
+        if (it.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
+      }
+      // Ticks inside a wide turn: on the clock its time from the start, by steps its step
+      // numbers.
+      if (w >= 120) {
+        if (scale === "steps") {
+          const len = h.items.length;
+          const every = Math.max(1, Math.ceil(36 / (w / len)));
+          for (let i = 0; i < len; i += every) out.ticks.push({ x: x + ((i + 0.5) * w) / len, text: `${i + 1}`, step: true });
+        } else if (walls[ti] > 0) {
+          const pps = w / walls[ti];
+          const step = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000).find((v) => v * pps >= 62);
+          for (let k = 1; step && k * step < walls[ti] && k * step * pps < w - 34; k++) out.ticks.push({ x: x + k * step * pps, text: startText(k * step) });
+        }
+      }
+    }
+    x += w;
+    if (ti < n - 1) {
+      out.gaps.push([x, x + gap, heads[ti + 1].t0 != null && h.t0 != null ? heads[ti + 1].t0 - (h.t0 + walls[ti]) : null]);
+      x += gap;
+    }
+  });
+  out.total = x;
+  return out;
+}
+// One step's box on the strip: x0 and x1 in px, and its track. A turn tx px in, w px wide, wall
+// ms long, with len steps. null for a step with no time on the clock scale.
+export function itemBox(it, tx, w, wall, scale, len) {
+  if (scale === "steps") {
+    const sw = w / Math.max(1, len);
+    const pad = sw > 4 ? 1 : 0;
+    return { x0: tx + it.i * sw + pad, x1: tx + (it.i + 1) * sw - pad, track: 0 };
+  }
+  if (it.a == null || !(wall > 0)) return null;
+  const x0 = Math.min(tx + (it.a / wall) * w, tx + w - 3);
+  const end = it.b != null ? tx + (it.b / wall) * w : it.open ? tx + w : x0 + 3;
+  return { x0, x1: Math.max(x0 + 3, Math.min(end, tx + w)), track: it.track };
+}
+// The turn and step under px x of the strip in a lane: { turn, key } (key: the step's row,
+// or the turn's heading when no step's bar is within 4 px). heads in the layout's order.
+export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
+  const T = L.turns;
+  if (!T.length) return null;
+  let lo = 0;
+  let hi = T.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (T[m].x <= x) lo = m; else hi = m - 1; }
+  const t = T[lo];
+  const h = heads[lo];
+  if (!h || h.key !== t.key) return null;
+  // Past the turn into its break: the nearer turn.
+  if (x > t.x + t.w && T[lo + 1] && T[lo + 1].x - x < x - (t.x + t.w)) return timelineHit(L, heads, T[lo + 1].x, lane, nowMs);
+  const wall = h.going && h.t0 != null ? Math.max(h.span ?? 0, nowMs - h.t0) : (h.total ?? h.span ?? 0);
+  let best = null;
+  let bestD = 4;
+  for (const it of h.items ?? []) {
+    if (lane && it.lane !== lane) continue;
+    const b = itemBox(it, t.x, t.w, wall, L.scale, h.items.length);
+    if (!b) continue;
+    const d = x < b.x0 ? b.x0 - x : x > b.x1 ? x - b.x1 : 0;
+    if (d < bestD || (d === 0 && bestD === 0 && it.track === 1)) { best = it; bestD = d; }
+  }
+  return { turn: h.key, key: best ? best.key : h.key };
 }
