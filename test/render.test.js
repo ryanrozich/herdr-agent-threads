@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast, linkLineRows } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -1642,6 +1642,39 @@ test("link rules in a coloured bubble: the open turn lists the prompt's links un
   const bare = v.youMd(v.rows().find((r) => r.kind === "you"));
   expect(bare.linkMd).toBe(null);
   expect(withLinks - v.youHeight(v.rows().find((r) => r.kind === "you"))).toBeGreaterThan(0);
+});
+
+test("the link line is in the prompt part's measure key: a measure taken without the line is not used once it draws (PR 120 follow-up)", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--links"));
+  v.width = 380;
+  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
+  v.open = new Set(["0:1"]);
+  draw(v, cx);
+  const you = v.rows().find((r) => r.kind === "you");
+  // Another session lands on the same part key (the session's place and the turn number): a
+  // prompt of the same length, first with no match, measured at 60 px with no line.
+  const asTurn = (prompt) => ({ ...you, turn: { ...you.turn, prompt, youMemo: undefined } });
+  const before = asTurn("Fix the rounding bug in ACMX-123 today");
+  const after = asTurn("Fix the rounding bug in ACME-123 today");
+  expect(before.turn.prompt.length).toBe(after.turn.prompt.length);
+  expect(v.youMd(before).linkMd).toBe(null);
+  v.probed(before.key, v.partSig(before), { width: 300, height: 60 * v.zoom() }, cx);
+  expect(v.measured(before)).toBe(60);
+  // The same key and length, now with a link line: the old 60 px would put the line over the
+  // time strip, so the measure is not used and the slot falls back to the estimate, which
+  // counts the line, until the probe measures again.
+  expect(v.youMd(after).linkMd).toContain("ACME\\-123");
+  expect(v.measured(after)).toBe(null);
+  expect(v.youHeight(after)).toBeGreaterThan(v.youHeight(before));
+  // The worst case for the line: a prompt of short lines, one ticket key each, makes a narrow
+  // bubble and eight links. The line is as wide as the bubble, inside its padding, and its
+  // estimate is the whole-link wrap (ui.js linkLineRows, checked against a word wrap in
+  // links.test.js), here one link a row.
+  const keys = Array.from({ length: 8 }, (_, i) => `ACME-${101 + i}`);
+  const y = v.youMd(asTurn(keys.join("\n")));
+  expect(y.bw).toBeLessThan(140);
+  expect(y.linkH).toBe(4 + 18 * linkLineRows(keys, y.bw - 2 * 10));
+  expect(y.linkH).toBeGreaterThanOrEqual(4 + 18 * 8);
 });
 
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {

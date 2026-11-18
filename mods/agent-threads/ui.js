@@ -1416,6 +1416,27 @@ export function linkify(md, rules, ctx = {}, { maxChars = 20000, maxMatches = 25
 // plain text in the bubble's ink (TextView draws only in the theme's text colour) and the links
 // go on a line of their own under it (issue 116). Code spans and fenced code get none, as in
 // promptMd. At most `max`, within promptMd's budgets.
+// Rows of the link line under a coloured bubble (issue 116), at `inner` px: whole links at 8 px
+// a character (capitals and digits run 7.3 to 8 at 12 px), " \u00b7 " (12 px) before each after the
+// first, a link that starts a row carrying the dot that may wrap with it (7 px), and a link
+// wider than the line on rows of its own. Errs tall: a short estimate draws the line over the
+// time strip until the probe measures; a tall one leaves a gap for those frames.
+export function linkLineRows(texts, inner) {
+  const w = Math.max(1, inner);
+  let rows = 1;
+  let x = 0;
+  texts.forEach((t, i) => {
+    const lw = t.length * 8;
+    if (i && x + 12 + lw <= w) { x += 12 + lw; return; }
+    if (!i && lw <= w) { x = lw; return; }
+    if (i) rows++;
+    const start = (i ? 7 : 0) + lw;
+    rows += Math.ceil(start / w) - 1;
+    x = start % w || w;
+  });
+  return rows;
+}
+
 export function promptLinks(text, rules, ctx = {}, max = 8) {
   const out = [];
   if (!rules?.length || !text) return out;
