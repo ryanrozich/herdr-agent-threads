@@ -5685,7 +5685,7 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 34 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
 });
@@ -7860,7 +7860,9 @@ test("y in a pane under 480 px switches the pane to the Trajectory and back; the
   const snap = state.shared["threads.debug"].t4;
   expect([snap.traj, snap.tsel]).toEqual([true, pick]);
   expect(snap.detail).toContain("tr#4 failed 0:14 Bash | bun test login | failed 2s");
-  expect(snap.footer).toContain("f next failure");
+  // The footer is the session's numbers, then ? keys.
+  expect(snap.footer).toEqual(["? keys"]);
+  expect(snap.tfoot).toMatch(/^\d+ turns · \d+ steps · \d+ failed/);
   // j and k move by row: into the turn's steps, with the turn still selected.
   const own = rows.filter((r) => r.kind === "tr" && r.turn === v.findTurn(pick));
   v.key(keyEv("j"), cx);
@@ -7941,10 +7943,13 @@ test("Trajectory words and colours: the user's rows blue-tinted, User on the tag
   // A user row: its square tinted blue, its mark blue; no word tag under 900 px.
   expect(calls.some(([n, x]) => n === "bg" && String(x).toLowerCase().startsWith("#7ba2ff") && String(x).length === 9)).toBe(true);
   expect(calls.some(([n, x]) => n === "text_color" && x === "#7BA2FF")).toBe(true);
-  expect(calls.some(([n, x]) => n === "child" && x === "User")).toBe(false);
+  // Under 900 px "User" is only the filter bar's chip; from 900 px the chip says "User only"
+  // and each user row has the tag.
+  expect(calls.filter(([n, x]) => n === "child" && x === "User").length).toBe(1);
   v.paneW = 960;
   calls = drawn();
-  expect(calls.some(([n, x]) => n === "child" && x === "User")).toBe(true);
+  expect(calls.some(([n, x]) => n === "child" && x === "User only")).toBe(true);
+  expect(calls.filter(([n, x]) => n === "child" && x === "User").length).toBeGreaterThan(1);
   expect(calls.some(([n, x]) => n === "child" && x === "Model")).toBe(true);
   // m: the user's message before the selection, then the one before that; it stops at the first.
   const users = ledgerOnly(v).filter((r) => r.lk === "you").map((r) => r.key);
@@ -7961,6 +7966,85 @@ test("Trajectory words and colours: the user's rows blue-tinted, User on the tag
   // In the chat m does nothing.
   const chat = await pane(twoFails());
   expect(chat.v.action("prevUser", chat.cx)).toBe(false);
+});
+
+// Round 6, section 3: the layout by width. The filter bar from 540 px with whole-session
+// counts; the detail below the ledger under 900 px and to its right from 900 px, closed to
+// start with in a pane under 560 px tall; the footer's numbers.
+test("Trajectory layout by width: the filter bar and its whole-session counts, the detail below or to the right, d and Enter, the footer", async () => {
+  const { v, cx } = await pane(twoFails(), { view: "trajectory" });
+  v.paneW = 573; v.rootH = 800;
+  settleRows(v, cx);
+  const calls = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  const snap = () => state.shared["threads.debug"].t4;
+  let c = calls();
+  expect(snap().tlayout).toMatchObject({ bar: true, detail: "below", filter: null });
+  const all = v.ledgerSums();
+  const steps = ledgerOnly(v).filter((r) => r.kind === "tr").length;
+  expect(all.input + all.model + all.tools).toBeLessThanOrEqual(steps);
+  // Counts from 640 px: none at 573.
+  expect(afterId(c, "th-tf-tools").some(([n, x]) => n === "child" && x === all.tools.toLocaleString())).toBe(false);
+  // Failed only: only the failed calls and their headings; the counts stay whole-session.
+  afterId(c, "th-tf-failed").find((e) => e[0] === "on_click").at(-1)({}, cx);
+  const listed = ledgerOnly(v);
+  expect(listed.filter((r) => r.kind === "tr").every((r) => r.failed)).toBe(true);
+  expect(listed.filter((r) => r.kind === "tr").length).toBe(all.failed);
+  expect(listed.filter((r) => r.kind === "trh").every((h) => listed.some((r) => r.kind === "tr" && r.turn === h.turn))).toBe(true);
+  expect(v.ledgerSums()).toMatchObject({ failed: all.failed, tools: all.tools, user: all.user });
+  draw(v, cx);
+  expect(snap().tlayout).toMatchObject({ filter: { failed: true }, listed: all.failed });
+  // j moves through the listed rows only, and the selection was moved onto one.
+  expect(listed.some((r) => r.key === v.ledgerSel())).toBe(true);
+  for (let k = 0; k < 4; k++) { v.key(keyEv("j"), cx); expect(listed.some((r) => r.key === v.ledgerSel())).toBe(true); }
+  // User only takes Failed only's place; Tools off takes the calls out.
+  v.action("tf:user", cx);
+  expect(v.tf).toMatchObject({ user: true, failed: false });
+  expect(ledgerOnly(v).filter((r) => r.kind === "tr").every((r) => r.lk === "you")).toBe(true);
+  v.action("tf:user", cx);
+  v.action("tf:tools", cx);
+  expect(ledgerOnly(v).some((r) => ["tool", "failed", "subagent"].includes(r.lk))).toBe(false);
+  v.action("tf:tools", cx);
+  expect(ledgerOnly(v).filter((r) => r.kind === "tr").length).toBe(steps);
+  // The detail of the selected row: a failed call's result, a user message's From line.
+  const failRow = ledgerOnly(v).find((r) => r.failed && r.tool === "Bash");
+  v.ledgerPick(failRow.key, false, cx);
+  c = calls();
+  const det = afterId(c, "th-detail") ?? [];
+  expect(c.some(([n, x]) => n === "child" && x === "failed")).toBe(true);
+  expect(det.length).toBeGreaterThan(0);
+  v.ledgerPick(ledgerOnly(v).find((r) => r.lk === "you").key, false, cx);
+  c = calls();
+  expect(c.some(([n, x]) => n === "child" && x === "the user")).toBe(true);
+  // d and Enter hide and show it.
+  v.key(keyEv("d"), cx);
+  draw(v, cx);
+  expect(snap().tlayout.detail).toBe(null);
+  v.key(keyEv("enter"), cx);
+  draw(v, cx);
+  expect(snap().tlayout.detail).toBe("below");
+  // From 900 px: to the right, the ledger stops growing at 1,100 px, the detail never under 360.
+  v.paneW = 960;
+  c = calls();
+  expect(snap().tlayout.detail).toBe("right");
+  expect(v.ledgerW()).toBe(600);
+  v.paneW = 1800;
+  expect([v.detailW(), v.ledgerW()]).toEqual([700, 1100]);
+  v.paneW = 960;
+  // Counts on the chips, "Failed only" and "User only", and the footer's wide numbers.
+  c = calls();
+  expect(afterId(c, "th-tf-tools").some(([n, x]) => n === "child" && x === all.tools.toLocaleString())).toBe(true);
+  expect(c.some(([n, x]) => n === "child" && x === "Failed only")).toBe(true);
+  expect(snap().tfoot).toContain(`${all.user} from the user`);
+  expect(snap().tfoot).toContain("from agents");
+  // A short pane starts with the detail closed; under 540 px there is no filter bar.
+  const short = await pane(twoFails(), { view: "trajectory" });
+  short.v.paneW = 500; short.v.rootH = 480;
+  settleRows(short.v, short.cx);
+  draw(short.v, short.cx);
+  expect(state.shared["threads.debug"].t4.tlayout).toMatchObject({ bar: false, detail: null });
+  short.v.key(keyEv("d"), short.cx);
+  draw(short.v, short.cx);
+  expect(state.shared["threads.debug"].t4.tlayout.detail).toBe("below");
 });
 
 test("Trajectory failures: a failed call and a failed subagent run; the cross, the wash, the word, the count in the heading and the top row; f and Shift f step and stop at the ends", async () => {
@@ -8335,7 +8419,7 @@ test("the Trajectory always shows agent messages, marked apart, and reads none o
 // draw: every item is 24 px, the gap and the tail as 24 px fillers.
 test("a 2,000-turn Trajectory (over 10,000 rows) gives the list one size and draws, also after a rail jump", { timeout: 60000 }, async () => {
   const { v, cx } = await pane(fixture("--extra", "2000"), { view: "trajectory" });
-  v.paneW = 600; v.rootH = 1100; v.listH = 1000;
+  v.paneW = 520; v.rootH = 1100; v.listH = 1000;
   listWindow = (m) => ({ start: Math.max(0, m - 27), end: m });
   try {
     settleRows(v, cx);
@@ -8344,7 +8428,8 @@ test("a 2,000-turn Trajectory (over 10,000 rows) gives the list one size and dra
     expect(() => draw(v, cx)).not.toThrow();
     expect(lastList.as).toBe(24);
     expect(rows.every((r) => v.height(r) === 24)).toBe(true);
-    // The floating top's 32 px gap: two 24 px fillers before the first heading.
+    // The floating top's 32 px gap: two 24 px fillers before the first heading (at 520 px,
+    // under the filter bar's 540).
     expect(rows.slice(0, 3).map((r) => r.kind)).toEqual(["gap", "gap", "trh"]);
     const heads = rows.filter((r) => r.kind === "trh");
     expect(v.rowIndex(heads[0].key)).toBe(2);

@@ -11,7 +11,7 @@
 // lane of the timeline (Input, Model or Tools).
 
 import { trajectory } from "./core/trajectory.js";
-import { reply, stats, fmtClock, fmtTokens, fmtDuration } from "./core/turns.js";
+import { reply, stats, fmtClock, fmtTokens, fmtDuration, fmtTime } from "./core/turns.js";
 import { outlineText, flattenMd, callTime } from "./ui.js";
 
 export const LEDGER_ROW = 24;
@@ -331,4 +331,74 @@ export function addTotals(t, r) {
   if (r.lk === "you") { t.user++; t.users.push(r.key); }
   if (r.lk === "agent") t.agent++;
   if (r.failed) { t.failed++; t.fails.push(r.key); }
+}
+
+// ---- the filter bar (round 6, section 3) ----
+// The rows listed: the Input, Model and Tools chips each take their lane's rows out when off;
+// Failed only lists only failed calls, User only only the user's messages (one at a time). A
+// heading is listed when any row of its turn is. Its counts are whole-session (ledgerTotals).
+export const ALL_ROWS = Object.freeze({ input: true, model: true, tools: true, failed: false, user: false });
+export function filterOn(f) { return Boolean(f) && (!f.input || !f.model || !f.tools || f.failed || f.user); }
+export function passes(r, f) {
+  if (r.kind !== "tr") return true;
+  const lane = laneOf(r.lk);
+  if (lane && !f[lane]) return false;
+  if (f.failed) return r.failed === true;
+  if (f.user) return r.lk === "you";
+  return true;
+}
+// The listed rows and their sizes, and how many steps are listed (n). A row that is not the
+// ledger's (a session divider, a note) is kept.
+export function filterRows(rows, sizes, f) {
+  const out = [];
+  const hs = [];
+  let head = -1;
+  let n = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.kind === "trh") { head = i; continue; }
+    if (r.kind === "tr") {
+      if (!passes(r, f)) continue;
+      if (head >= 0) { out.push(rows[head]); hs.push(sizes[head]); head = -1; }
+      n++;
+    }
+    out.push(r);
+    hs.push(sizes[i]);
+  }
+  return { rows: out, sizes: hs, n };
+}
+
+// ---- the detail (round 6, section 3) ----
+// What the detail says about a row: its tag and title, its fields as [label, value] and its
+// whole words (null for none). A heading's detail is its turn's numbers.
+export function detailOf(r) {
+  if (!r) return null;
+  if (r.kind === "trh") {
+    const p = headParts(r, 10000);
+    const F = [["Started", r.ts ? fmtTime(r.ts) : "not recorded"]];
+    F.push(["Calls", r.calls ? `${r.calls}${r.partial ? " (some results not kept)" : ""}` : "none"]);
+    if (r.fails) F.push(["Failed", `${r.fails}${r.partial ? "+" : ""}`]);
+    if (p.tokens) F.push(["Tokens", p.tokens]);
+    F.push(["Took", p.total ?? "not recorded"]);
+    return { kind: null, tag: "Turn", title: `Turn ${r.n}`, fields: F, text: null, code: false };
+  }
+  const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
+  const F = [];
+  if (r.lk === "you") F.push(["From", "the user"]);
+  else if (r.lk === "agent") F.push(["From", `${r.sender ?? "an agent"} · another agent, not the user`]);
+  else if (r.lk === "context") F.push(["From", "the harness · nobody typed this"]);
+  F.push(["Turn", `${r.turn?.n ?? "?"}`]);
+  F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
+  const call = laneOf(r.lk) === "tools" && r.lk !== "more";
+  if (call || r.lk === "reply") {
+    const took = r.dur != null ? durText(r.dur) : r.lk === "running" ? "still running" : r.lk === "noresult" ? "no result" : "not recorded";
+    F.push(["Took", took]);
+  }
+  if (call) {
+    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" ? "No result: the turn ended first" : r.durQ ? "not recorded" : "ok"]);
+    if (r.sub) F.push(["Subagent", [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") || "no state recorded"]);
+  }
+  if (r.lk === "more") F.push(["Result", "results not kept"]);
+  const title = r.tool ? r.tool : k.label;
+  return { kind: r.lk, tag: k.tag, title, fields: F, text: String(r.text ?? "").trim() || null, code: Boolean(k.code && r.tool) };
 }

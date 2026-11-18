@@ -3,7 +3,7 @@
 // times" for a turn with none, failures, the bar's scale and the turn's line. The turns are
 // made up here in the reader's shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
-import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, TRAJ_INKS, trajInks, laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes } from "../mods/agent-threads/ledger.js";
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
 // A turn in the reader's shape: steps are [text] or [calls], each call [name, input, at, rt, failed].
@@ -202,4 +202,23 @@ test("ledger totals: the whole session's lanes, the user's and agents' messages,
   expect(t.users).toEqual([a.find((r) => r.lk === "you").key]);
   expect(t.heads.map((h) => h.key)).toEqual(["0:1", "0:2"]);
   expect(t.tokens).toBe(a[0].tokens + b[0].tokens);
+});
+
+test("ledger filters: the lane chips take rows out, Failed only and User only list one kind, a heading only with a row listed", () => {
+  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const b = ledgerTurn(S, turn(2, [[["Read", "y", 1000, 2000]]]), 0).rows;
+  const rows = [...a, { kind: "divider", key: "d" }, ...b];
+  const sizes = rows.map(() => 24);
+  expect(filterOn(ALL_ROWS)).toBe(false);
+  expect(filterRows(rows, sizes, ALL_ROWS).rows).toEqual(rows);
+  const failed = filterRows(rows, sizes, { ...ALL_ROWS, failed: true });
+  expect(failed.rows.map((r) => r.key)).toEqual(["0:1", a.find((r) => r.failed).key, "d"]);
+  expect(failed.n).toBe(1);
+  const user = filterRows(rows, sizes, { ...ALL_ROWS, user: true });
+  expect(user.rows.filter((r) => r.kind === "tr").every((r) => r.lk === "you")).toBe(true);
+  expect(user.rows.filter((r) => r.kind === "trh").length).toBe(2);
+  const noTools = filterRows(rows, sizes, { ...ALL_ROWS, tools: false });
+  expect(noTools.rows.some((r) => laneOf(r.lk) === "tools")).toBe(false);
+  expect(noTools.sizes.length).toBe(noTools.rows.length);
+  expect(passes({ kind: "tr", lk: "stop" }, { ...ALL_ROWS, tools: false, model: false, input: false })).toBe(true);
 });

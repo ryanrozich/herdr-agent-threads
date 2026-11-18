@@ -65,7 +65,7 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
-import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR } from "./ledger.js";
+import { LEDGER_ROW, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, addTotals, newTotals, startText, durText, barFrac, coarse, evenRows, trajInks, SUB_ALPHA, USER_COLOR, ALL_ROWS, filterOn, filterRows, detailOf } from "./ledger.js";
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -172,9 +172,14 @@ const SEL_KEY = "threads.turnSel";
 // pane itself), and given this px width, room for its start column and bars (ledger.js).
 const TRAJ_SPLIT_MIN = 480;
 const TRAJ_COL = 560;
-// The Trajectory by its pane's width: the kind's word tag (and, later, the detail to the
-// right of the ledger) from TRAJ_SIDE.
+// The Trajectory by its pane's width (round 6, section 3): the filter bar from TRAJ_BAR, its
+// counts from TRAJ_NUMS; the kind's word tag and the detail to the right of the ledger from
+// TRAJ_SIDE (below it under that). In a pane under TRAJ_SHORT tall the detail starts closed.
+const TRAJ_BAR = 540;
+const TRAJ_NUMS = 640;
 const TRAJ_SIDE = 900;
+const TRAJ_SHORT = 560;
+const TRAJ_FBAR = 34;
 // syncSel: how long a loaded pane waits for a turn the other pane selected and it has not read
 // or built yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
@@ -833,6 +838,8 @@ export default class Threads extends View {
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
+      tfoot: this.ledger() ? this.trajFoot().map(([n, w]) => `${n} ${w}`).join(" · ") : null,
+      tlayout: this.ledger() ? { bar: this.trajTop(), detail: this.detailShown() ? (this.detailSide() ? "right" : "below") : null, filter: filterOn(this.tf) ? this.tf : null, listed: this.filtShown } : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -869,7 +876,7 @@ export default class Threads extends View {
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
       // The Trajectory: "trh#4 4 calls · 1 failed · 12.2k tok · 52s" and
       // "tr#4 failed 0:14 Bash | bun test login | failed 2s".
-      case "trh": return `trh${n} ${Object.values(headParts(r, this.pw())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.tools.length}/${r.line.sub.length}/${r.line.model.length}/${r.line.red.length}` : ""}`;
+      case "trh": return `trh${n} ${Object.values(headParts(r, this.ledgerW())).filter(Boolean).join(" · ")}${r.line ? ` line ${r.line.tools.length}/${r.line.sub.length}/${r.line.model.length}/${r.line.red.length}` : ""}`;
       case "tr": return `tr${n} ${r.lk} ${r.start != null ? startText(r.start) : r.startQ ? "?" : "-"} ${r.tool ?? ""} | ${r.text} | ${r.status ?? ""} ${r.dur != null ? durText(r.dur) : r.durQ ? "?" : "-"}`;
       case "afold": return `afold${n} ${r.fold}${r.open ? " open" : ""} ${senderLabel(r.turn.sender, this.width)} h${this.height(r)}`;
       case "head": return `head${n}${who}`;
@@ -1738,13 +1745,24 @@ export default class Threads extends View {
       if (lr.kind !== kind) { lr.kind = kind; this.baseSizes[li] = this.height(lr); this.fitKey = null; }
     }
     const z = this.zoom();
-    const gap = this.floating() ? TOP_BAND : 0;
+    const gap = this.floating() && !this.trajTop() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}`;
+    const tf = this.ledger() && filterOn(this.tf) ? this.tf : null;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${tf ? JSON.stringify(tf) : ""}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
+      // The Trajectory's filter bar: the rows it lists, found once a build (filterRows), with
+      // their own index (rowIndex). Nothing listed: a note says so.
+      this.filtIndex = null;
+      this.filtShown = null;
+      if (tf) {
+        const f = filterRows(rows, sizes, tf);
+        ({ rows, sizes } = f);
+        this.filtShown = f.n;
+        if (!f.n) { rows = [...rows, { kind: "note", key: "tf-none", text: "Nothing matches. Turn a filter back on." }]; sizes = [...sizes, LEDGER_ROW]; }
+      }
       if (this.view !== "pinned" && !this.outlined() && rows.length) { rows = [...rows, { kind: "tail", key: "tail", h: TAIL }]; sizes = [...sizes, TAIL]; }
       // A short list sits at the bottom, by the newest turn, like the chat. The Pinned view
       // reads from the top: pin 1 first.
@@ -1767,6 +1785,7 @@ export default class Threads extends View {
       }
       this.rowsMemo = rows;
       this.indexedRows = rows;
+      if (tf) this.filtIndex = new Map(rows.map((r, i) => [r.key, i]));
       this.sizesMemo = sizes;
       // What the list is given: whole design px. v_virtual_list scales item sizes by zoom
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
@@ -1974,6 +1993,7 @@ export default class Threads extends View {
   // first): a search over every row for each one drawn took 1 ms a row in a long session.
   rowIndex(key) {
     const rows = this.rowsMemo ?? [];
+    if (this.filtIndex) return this.filtIndex.get(key) ?? -1;
     // The rows before the built ones: a spacer or a gap (several in the Trajectory, evenRows).
     let off = 0;
     while (rows[off]?.kind === "spacer" || rows[off]?.kind === "gap") off++;
@@ -3383,9 +3403,10 @@ export default class Threads extends View {
   // The next ledger row d rows on (heading or step), or the first or last with d = -Infinity
   // or Infinity.
   ledgerStep(d, cx) {
-    const rows = this.baseRows ?? [];
+    // With the filter bar narrowing the list, through the rows it lists.
+    const rows = (this.filtIndex ? this.rowsMemo : this.baseRows) ?? [];
     const own = (r) => r && (r.kind === "tr" || r.kind === "trh");
-    let i = this.baseIndex?.get(this.ledgerSel());
+    let i = (this.filtIndex ?? this.baseIndex)?.get(this.ledgerSel());
     if (d === Infinity || d === -Infinity || i == null) {
       i = d < 0 ? 0 : rows.length - 1;
       while (i >= 0 && i < rows.length && !own(rows[i])) i += d < 0 ? 1 : -1;
@@ -3428,7 +3449,9 @@ export default class Threads extends View {
   // f and Shift f: the next or previous failed call from the selection. At the last one it
   // stops; nothing pops up.
   stepFail(d, cx) { return this.stepIn(this.ledgerSums().fails, d, cx); }
-  stepIn(fails, d, cx) {
+  stepIn(all, d, cx) {
+    // Only the rows the filter bar lists (Failed only lists every failure).
+    const fails = this.filtIndex ? all.filter((k) => this.filtIndex.has(k)) : all;
     if (!fails.length) return false;
     const at = this.baseIndex?.get(this.ledgerSel()) ?? (d > 0 ? -1 : Infinity);
     let to = null;
@@ -3449,10 +3472,13 @@ export default class Threads extends View {
       case "nextFail": return this.stepFail(1, cx);
       case "prevFail": return this.stepFail(-1, cx);
       case "prevUser": return this.stepUser(-1, cx);
+      // Enter and d show or hide the detail.
+      case "open": case "detail": this.detailWant = !this.detailShown(); return true;
+      case "tf:input": case "tf:model": case "tf:tools": case "tf:failed": case "tf:user": return this.setFilter(name.slice(3), cx);
       case "nextUser": return this.stepUser(1, cx);
       // Opening a row, the outline, a turn's work, Select view and the Turn card belong to
       // the chat (opening a row here is a later round).
-      case "open": case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
+      case "outline": case "outline:on": case "deeper": case "shallower": case "select": case "legend":
       case "prevDay": case "nextDay": return false;
       case "outline:off": return true;
       case "escape":
@@ -3525,6 +3551,149 @@ export default class Threads extends View {
       .child(arrow("th-fail-next", "chevron-down", "Next failure (f)", 1));
   }
 
+  // ---- the Trajectory's layout by width (round 6, section 3) ----
+  // The filter bar above the list, from TRAJ_BAR wide.
+  trajTop() { return this.ledger() && this.pw() >= TRAJ_BAR; }
+  // The detail: shown unless hidden with d or Enter, and closed to start with in a pane under
+  // TRAJ_SHORT tall. From TRAJ_SIDE wide it sits to the right of the ledger: the ledger stops
+  // growing at 1,100 px and the detail takes the rest, never under 360 px. Under that it sits
+  // below the ledger, 40% of the pane's height.
+  detailShown() { return this.detailWant ?? !(this.rootH > 0 && this.rootH < TRAJ_SHORT); }
+  detailSide() { return this.detailShown() && this.pw() >= TRAJ_SIDE; }
+  detailW() { return Math.max(360, this.pw() - 1100); }
+  detailH() { return Math.max(120, Math.round((this.rootH || 600) * 0.4)); }
+  // The ledger's own width: the pane less a detail at its right.
+  ledgerW() { return this.pw() - (this.ledger() && this.detailSide() ? this.detailW() : 0); }
+
+  // A chip of the filter bar, or the filter's key: Input, Model and Tools take their lane's
+  // rows out when off; Failed only and User only list one kind, one at a time. The selection
+  // stays when it is still listed, else the first listed row.
+  setFilter(k, cx) {
+    const f = { ...(this.tf ?? ALL_ROWS) };
+    f[k] = !f[k];
+    if (k === "failed" && f.failed) f.user = false;
+    if (k === "user" && f.user) f.failed = false;
+    this.tf = f;
+    this.rows();
+    if (this.filtIndex && !this.filtIndex.has(this.ledgerSel())) {
+      const r = this.rowsMemo.find((x) => x.kind === "tr");
+      if (r) this.ledgerPick(r.key, true, cx);
+    }
+    cx?.notify?.();
+    return true;
+  }
+
+  // The list with what the width puts around it: the filter bar over it (under the floating
+  // top's band), and the detail below it or to its right.
+  trajBody(t, focusedPanel, cx, banners) {
+    const top = this.trajTop();
+    const pad = top && this.floating() && !this.topBlock(banners);
+    const list = this.body(t, focusedPanel, cx);
+    const side = this.detailSide();
+    const main = !this.detailShown() ? list
+      : side ? h_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(v_flex().flex_1().min_w(0).h_full().child(list)).child(this.detailView(t, true))
+        : v_flex().id("th-traj-main").flex_1().min_h(0).w_full().child(list).child(this.detailView(t, false));
+    return v_flex().id("th-traj").flex_1().min_h(0).w_full()
+      .when(pad, (el) => el.pt(TOP_BAND))
+      .when(top, (el) => el.child(this.trajBar(t)))
+      .child(main);
+  }
+
+  // The filter bar, 34 px: the Input, Model and Tools chips, each with its swatch, then Failed
+  // and User ("Failed only" and "User only" from 900 px, after "Show"). Counts from 640 px,
+  // always the whole session's.
+  trajBar(t) {
+    const W = this.pw();
+    const wide = W >= TRAJ_SIDE;
+    const nums = W >= TRAJ_NUMS;
+    const s = this.ledgerSums();
+    const f = this.tf ?? ALL_ROWS;
+    const ink = this.inks(t);
+    const chip = (k, mark, word, n, tip) => {
+      const on = Boolean(f[k]);
+      return h_flex().id(`th-tf-${k}`).flex_none().h(22).pl(7).pr(8).gap(5).items_center().rounded(11).cursor_pointer()
+        .text_size(12).text_color(on ? t.foreground : t.dim)
+        .when(on, (el) => el.bg(t.selected))
+        .when(!on, (el) => el.hover((x) => x.bg(t.hover).text_color(t.foreground)))
+        .tooltip(tip)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.setFilter(k, cx); cx.notify(); })
+        .child(div().flex_none().flex().items_center().opacity(on ? 1 : 0.45).child(mark))
+        .child(div().flex_none().whitespace_nowrap().child(word))
+        .when(nums && n != null, (el) => el.child(div().flex_none().text_color(t.dim).child(n)));
+    };
+    const sw = (c) => div().size(7).rounded(2).bg(c);
+    const input = h_flex().gap(1).child(div().w(4).h(7).rounded(1).bg(ink.user)).child(div().w(4).h(7).rounded(1).bg(ink.agent)).child(div().w(4).h(7).rounded(1).bg(ink.context));
+    const partial = s.partial?.length ? "+" : "";
+    return h_flex().id("th-fbar").flex_none().w_full().h(TRAJ_FBAR).pl(10).pr(8).gap(4).items_center().overflow_hidden().border_b_1().border_color(t.border)
+      .when(wide, (el) => el.child(div().flex_none().pr(2).text_size(11.5).text_color(t.dim).child("Show")))
+      .child(chip("input", input, "Input", s.input.toLocaleString(), "Input: the user's and agents' messages and context"))
+      .child(chip("model", sw(ink.model), "Model", s.model.toLocaleString(), "Model: the text the agent wrote and its reply"))
+      .child(chip("tools", sw(ink.tools), "Tools", s.tools.toLocaleString(), "Tools: each call"))
+      .child(chip("failed", div().size(6).rounded(3).bg(ink.failed), wide ? "Failed only" : "Failed", `${s.failed.toLocaleString()}${partial}`, "Only the failed calls (f goes to the next)"))
+      .child(chip("user", svg(ICON("user")).size(12).text_color(ink.user), wide ? "User only" : "User", s.user.toLocaleString(), "Only the user's messages (m goes to the user's message before)"));
+  }
+
+  // The detail of the selected row (ledger.js detailOf): its tag and title with a close button,
+  // its fields, then its whole words. The detail is outside the list, so it takes a click.
+  detailView(t, side) {
+    const k = this.ledgerSel();
+    const i = k != null ? this.baseIndex?.get(k) : undefined;
+    const r = i != null ? this.baseRows?.[i] : null;
+    const d = detailOf(r);
+    const box = v_flex().id("th-detail").flex_none().min_h(0).overflow_hidden().bg(t.background)
+      .when(side, (el) => el.w(this.detailW()).h_full().border_l(1).border_color(t.border))
+      .when(!side, (el) => el.w_full().h(this.detailH()).border_t(1).border_color(t.border));
+    const close = div().id("th-detail-close").flex_none().size(20).flex().items_center().justify_center().rounded(4).cursor_pointer()
+      .text_color(t.dim).hover((x) => x.bg(t.hover).text_color(t.foreground)).tooltip("Hide the detail (d)")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.detailWant = false; cx.notify(); })
+      .child(svg(ICON("x")).size(12));
+    if (!d) {
+      return box.child(h_flex().h(32).pl(12).pr(8).items_center().child(div().flex_1().text_size(12).text_color(t.dim).child("Select a row to see its detail")).child(close));
+    }
+    const kind = d.kind ? LEDGER_KINDS[d.kind] : null;
+    const { c, tint } = kind ? this.kindInk(t, kind) : { c: t.muted, tint: alpha(t.foreground, 0.08) };
+    const tag = div().flex_none().h(16).px(5).rounded(3).bg(tint).text_size(10.5).text_color(c).flex().items_center().child(d.tag);
+    const field = ([label, value]) => h_flex().gap(10).items_start().min_w(0)
+      .child(div().flex_none().w(64).text_size(11.5).text_color(t.dim).child(label))
+      .child(div().flex_1().min_w(0).text_size(12).text_color(label === "Result" && value === "failed" ? t.blocked : t.foreground).child(value));
+    return box
+      .child(h_flex().flex_none().h(32).pl(12).pr(8).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(tag)
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).when(d.code, (el) => el.font_family(this.mono())).child(d.title))
+        .child(close))
+      .child(v_flex().flex_1().min_h(0).overflow_hidden().px(12).py(8).gap(4)
+        .children(d.fields.map(field))
+        .when(Boolean(d.text), (el) => el.child(div().mt(6).text_size(12).text_color(t.foreground)
+          .when(d.code, (x) => x.font_family(this.mono()))
+          .child(d.text.slice(0, 2000)))));
+  }
+
+  // The footer's numbers, whole-session: turns and steps, failures, then by width tokens (from
+  // 400 px), the time worked (500 px), and from 900 px the user's and agents' messages, as
+  // [number, words, red].
+  trajFoot() {
+    const W = this.pw();
+    const s = this.ledgerSums();
+    const running = Boolean(s.heads?.at(-1)?.going);
+    const out = [[s.turns.toLocaleString(), s.turns === 1 ? "turn" : "turns"], [s.steps.toLocaleString(), s.steps === 1 ? "step" : "steps"]];
+    if (s.failed) out.push([`${s.failed.toLocaleString()}${s.partial?.length ? "+" : ""}`, "failed", true]);
+    if (W >= 400) out.push([fmtTokens(s.tokens ?? 0), "tok"]);
+    if (W >= 500) out.push([durText(s.worked ?? 0) || "0s", running ? "worked so far" : "worked"]);
+    if (W >= TRAJ_SIDE) out.push([(s.user ?? 0).toLocaleString(), "from the user"], [(s.agent ?? 0).toLocaleString(), "from agents"]);
+    return out;
+  }
+  trajFootView(t) {
+    const kids = [];
+    for (const [n, w, red] of this.trajFoot()) {
+      if (kids.length) kids.push(div().flex_none().text_color(t.dim).child("·"));
+      kids.push(h_flex().flex_none().gap(4).items_center()
+        .when(Boolean(red), (el) => el.child(div().flex_none().size(6).rounded(3).bg(t.blocked)))
+        .child(div().flex_none().text_color(t.foreground).child(n))
+        .child(div().flex_none().whitespace_nowrap().text_color(t.dim).child(w)));
+    }
+    return h_flex().id("th-tfoot").flex_1().min_w(0).gap(6).items_center().overflow_hidden().text_size(11.5).children(kids);
+  }
+
   // Stretches of a row as a stroked vector path (one element however many stretches), or as
   // a div each where Herdr has no stroked path. segs are [from, to] fractions of the width.
   pathLayer(segs, color, w, id, h = w) {
@@ -3551,7 +3720,7 @@ export default class Threads extends View {
   // the turn's clock: each call a stretch of it, a failed one in red.
   ledgerHead(t, r) {
     const sel = this.ledgerSel() === r.key;
-    const p = headParts(r, this.pw());
+    const p = headParts(r, this.ledgerW());
     const day = r.ts ? railDay(r.ts) : null;
     const when = r.going ? "now" : r.ts ? `${day && day !== "Today" ? `${day} ` : ""}${fmtTime(r.ts)}` : "";
     const kids = [];
@@ -3642,7 +3811,7 @@ export default class Threads extends View {
   ledgerItem(t, r) {
     const sel = this.ledgerSel() === r.key;
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
-    const cols = ledgerCols(this.pw());
+    const cols = ledgerCols(this.ledgerW());
     const ink = t[k.tone] ?? t.foreground;
     const startCell = r.start != null ? startText(r.start) : r.startQ ? "?" : "";
     const durCell = r.dur != null ? durText(r.dur) : r.durQ ? "?" : "";
@@ -4593,7 +4762,7 @@ export default class Threads extends View {
     if (this.ledger()) {
       const done = this.ledgerAction(name, cx);
       if (done !== undefined) return done;
-    } else if (/^(next|prev)(Fail|User)$/.test(name)) return false;
+    } else if (/^(next|prev)(Fail|User)$/.test(name) || name === "detail" || name.startsWith("tf:")) return false;
     // The turn keys, worked out only for a key that needs them (a walk over every row).
     let keyList = null;
     const turnList = () => (keyList ??= this.turnKeys(rows));
@@ -5417,7 +5586,7 @@ export default class Threads extends View {
       .bg(t.background).text_color(t.foreground).text_size(13)
       .when(!floating, (el) => el.child(this.header(t)).children(banners))
       .when(floating && this.topBlock(banners), (el) => el.child(this.topPanels(t, banners)))
-      .child(this.body(t, focusedPanel, cx))
+      .child(this.ledger() ? this.trajBody(t, focusedPanel, cx, banners) : this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .child(this.footer(t))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
@@ -8138,7 +8307,8 @@ export default class Threads extends View {
     // The outline: move, open the turn, back to the list, then search and pin.
     if (this.outlined()) return fitHints([["↑↓", "move"], ["↵", "open"], ["Esc", "list"], ["/", "filter"], ...pinHint, ["?", "keys"]], this.pw());
     // The Trajectory: move a row, step through failures, back to the chat.
-    if (this.ledger()) return fitHints([["↑↓", "move"], ["f", "next failure"], ["y", "chat"], ["c", "copy"], ["/", "filter"], ...(this.trajPane ? [] : pinHint), ["?", "keys"]], this.pw());
+    // The Trajectory's footer is its numbers (trajFoot), then ? keys.
+    if (this.ledger()) return [["?", "keys"]];
     // The Pinned column has no outline; in the list the outline's hint gives way first.
     const out = this.view === "pinned"
       ? [["↑↓", "next pin"], ["↵", "open"], ["c", "copy"], ...quote, ...(pin ? [["p", "unpin"]] : [])]
@@ -8157,6 +8327,7 @@ export default class Threads extends View {
         const h = size.height / this.zoom();
         if (Math.abs(h - (this.footerH ?? 0)) > 1) { this.footerH = h; cx.notify(); }
       })
+      .when(this.ledger(), (el) => el.child(this.trajFootView(t)))
       .children(this.footerHints().map(([k, label]) => hint(k, label)));
   }
 
