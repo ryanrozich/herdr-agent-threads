@@ -57,7 +57,7 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, promptParts, linkify, escapeMd,
+  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, agentState, linkPieces, gutter, PROSE_EM, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
@@ -236,7 +236,6 @@ const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU b
 // a character of its 12 px text, for the estimate the probe then measures.
 const YOU_LINK_GAP = 4;
 const YOU_LINK_LINE = 18;
-const YOU_LINK_CHAR = 6.6;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
@@ -7157,8 +7156,8 @@ export default class Threads extends View {
     // line of their own under the bubble (youLinks), each once (issue 116).
     const lk = plain && this.links.length ? promptLinks(c.text, this.links, this.linkCtx()) : [];
     const linkMd = lk.length ? lk.map((p) => `[${escapeMd(p.t)}](${p.url})`).join(" \u00b7 ") : null;
-    // Its lines at the width inside the bubble's padding (the line has the same padding).
-    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * Math.max(1, Math.ceil((lk.reduce((n, p) => n + p.t.length + 3, 0) * YOU_LINK_CHAR) / Math.max(1, bw - 2 * ROW.BUBBLE_PX))) : 0;
+    // Its rows at the width inside the bubble's padding (the line has the same padding).
+    const linkH = linkMd ? YOU_LINK_GAP + YOU_LINK_LINE * linkLineRows(lk.map((p) => p.t), bw - 2 * ROW.BUBBLE_PX) : 0;
     const v = { ...m, text: c.text, more: c.more, hl, plain, parts, extra, bw, bodyH: capped ? YOU_MAX : raw, capped, long, linkMd, linkH };
     r.turn.youMemo = { sig, v };
     return v;

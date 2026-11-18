@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, contrast, linkLineRows } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -1666,14 +1666,15 @@ test("the link line is in the prompt part's measure key: a measure taken without
   expect(v.youMd(after).linkMd).toContain("ACME\\-123");
   expect(v.measured(after)).toBe(null);
   expect(v.youHeight(after)).toBeGreaterThan(v.youHeight(before));
-  // A line that wraps is estimated at the width inside the bubble's padding, so the estimate
-  // is never short of the drawn line.
-  v.applyPrefs(JSON.stringify({ links: [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" }] }));
-  const many = asTurn(Array.from({ length: 8 }, (_, i) => `ACME-${1000 + i}`).join(" "));
-  const y = v.youMd(many);
-  const inner = y.bw - 2 * 10;
-  const chars = (y.linkMd.match(/\[[^\]]+\]/g) ?? []).reduce((n, x) => n + x.length - 2 + 3, 0);
-  expect(y.linkH).toBeGreaterThanOrEqual(4 + 18 * Math.ceil((chars * 6.6) / inner));
+  // The worst case for the line: a prompt of short lines, one ticket key each, makes a narrow
+  // bubble and eight links. The line is as wide as the bubble, inside its padding, and its
+  // estimate is the whole-link wrap (ui.js linkLineRows, checked against a word wrap in
+  // links.test.js), here one link a row.
+  const keys = Array.from({ length: 8 }, (_, i) => `ACME-${101 + i}`);
+  const y = v.youMd(asTurn(keys.join("\n")));
+  expect(y.bw).toBeLessThan(140);
+  expect(y.linkH).toBe(4 + 18 * linkLineRows(keys, y.bw - 2 * 10));
+  expect(y.linkH).toBeGreaterThanOrEqual(4 + 18 * 8);
 });
 
 test("link rules: the open card's reply and prompt carry links, rows never do", async () => {
