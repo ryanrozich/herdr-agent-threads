@@ -10,10 +10,11 @@ description: Open a pull request in the Agent Threads repo so the merge queue wi
 3. **Check it.**
    ```sh
    bun test
-   bunx @biomejs/biome@2.6.4 lint mods test
+   bunx @biomejs/biome@2.6.4 lint
+   shellcheck -S warning $(git ls-files '*.sh')
    sh test/scan-private.sh
    ```
-   All three must pass. If `RECIPE.md` changed, keep it under 64 KB (`test/recipe-size.test.js`).
+   All four must pass. They are CI's commands plus the private scan. If `RECIPE.md` changed, keep it under 60 KB (`test/recipe-size.test.js`).
 4. **Title it.** A Conventional Commit, `type(scope)!: what changes for the person using the mod`. Use `feat` for something a user can see or do, `fix` for a bug, `perf` for speed, `docs`, `test`, `ci`, `build`, `refactor`, `chore` or `style` for the rest, and `revert` to take a change back. Add `!` only for a breaking change. The title becomes the commit on main and decides the next release.
 5. **Order, if any.** Put `Depends-On: #N` on its own line in the description for each pull request that must land first. After #N lands, run `git fetch origin && git rebase --onto origin/main <N's last commit> <this branch>` and push with `--force-with-lease`.
 6. **Open it as a draft.** `gh pr create --draft --base main --title "<title>" --body-file <file>`. The body says what changed, why, how it was tested, and anything a reviewer should look at first. It becomes the squash commit's body.

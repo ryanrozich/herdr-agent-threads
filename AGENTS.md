@@ -4,14 +4,17 @@ Agent Threads is a [Herdr](https://herdr.dev) mod: `mods/agent-threads/` is the 
 
 ## Main is what people run
 
-The herdr.dev/mods listing installs main's head, not a release. Anything merged to main reaches people within the hour, so every merge must leave main working: tests pass, `RECIPE.md` stays under 64 KB (the listing skips a bigger one), and `preview.png` shows the mod as it is.
+The herdr.dev/mods listing installs main's head, not a release. Anything merged to main can reach people within the hour. (Both observed on 2026-11-18: each index entry names the default branch and its head commit, and the index is rebuilt about every half hour.) So every merge must leave main working: tests pass, `RECIPE.md` stays under 60 KB (`test/recipe-size.test.js`; the listing skips one over 64 KB), and `preview.png` shows the mod as it is.
 
 ## Checks before a commit
 
+The same commands CI runs (`.github/workflows/ci.yml`), plus the private scan:
+
 ```sh
-bun test                                    # the whole suite
-bunx @biomejs/biome@2.6.4 lint mods test    # lint
-sh test/scan-private.sh                     # no home paths, names, emails or real ids, in text and in PNGs
+bun test                                     # the whole suite (CI runs it through sh test/leftover-check.sh)
+bunx @biomejs/biome@2.6.4 lint               # lint, with the paths from biome.jsonc
+shellcheck -S warning $(git ls-files '*.sh') # shell scripts
+sh test/scan-private.sh                      # no home paths, names, emails or real ids, in text and in PNGs
 ```
 
 Fixtures and screenshots are synthetic (the staged `acme-web` session, `test/make-hero.js`). Never commit a real transcript, path or name.
@@ -27,7 +30,7 @@ The Merging section of `docs/develop.md` has the details. The skill `.claude/ski
 
 ## Releases
 
-release-please (`.github/workflows/release.yml`) keeps one release pull request open, "chore(main): release X.Y.Z". It bumps `mods/agent-threads/version.js` (the version the settings card shows), `.release-please-manifest.json` and `CHANGELOG.md`, from the titles merged since the last release: `feat` makes a minor release, `fix`, `perf` and `revert` a patch, and `!` a major. Merging that pull request through the queue makes the tag (`v1.2.0`) and the GitHub release. Never edit `version.js`, the manifest or a released changelog entry by hand, and never tag by hand. The skill `.claude/skills/cut-a-release/SKILL.md` walks through it.
+release-please (`.github/workflows/release.yml`) keeps one release pull request open, "chore(main): release X.Y.Z". It bumps `mods/agent-threads/version.js` (the version the settings card shows), `.release-please-manifest.json` and `CHANGELOG.md`, from the titles merged since the last release: `feat` makes a minor release, `fix`, `perf` and `revert` a patch, and `!` a major. Merging that pull request through the queue makes the tag (`v1.2.0`) and the GitHub release. The workflow needs the repo setting "Allow GitHub Actions to create and approve pull requests" to open that pull request. Never edit `version.js`, the manifest or a released changelog entry by hand, and never tag by hand. The skill `.claude/skills/cut-a-release/SKILL.md` walks through it.
 
 <!-- catalyst:start -->
 ## Catalyst
