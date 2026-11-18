@@ -20,7 +20,15 @@ required_checks = ["check"]
 
 [environment]
 toolchains = [{ name = "bun", version = "1.4.2" }]
-system_packages = [{ name = "jq" }, { name = "perl" }, { name = "shellcheck" }, { name = "sqlite3" }]
+system_packages = [
+  { name = "jq" },
+  { name = "lsof" },
+  { name = "perl" },
+  { name = "procps" },
+  { name = "rsync" },
+  { name = "shellcheck" },
+  { name = "sqlite3" },
+]
 
 [[environment.verify]]
 name = "lint"
