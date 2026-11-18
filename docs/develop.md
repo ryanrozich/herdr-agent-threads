@@ -8,7 +8,7 @@ bun test/make-big.js out.jsonl 600 [real|noisy|dense]   # very large synthetic t
 sh test/scan-private.sh                    # before committing: no home paths, names, emails, real ids or sidebars (PNGs via tesseract)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. The test run also writes a JUnit report (`junit.xml`, ignored by git), which the next step sends to Mergify Test Engine with the job's own ID token; no secret is stored. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
 
 Each `bun test` run keeps its temp files in one folder, `threads-run-<pid>-*` under `$TMPDIR`, and removes it, along with any process it started that is still alive, when it ends or is stopped (`test/preload.js`, loaded through `bunfig.toml`). Tests make temp folders with `mkdtempSync(join(tmpdir(), ...))` as before; they land in the run's folder.
 

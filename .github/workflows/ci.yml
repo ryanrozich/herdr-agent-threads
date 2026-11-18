@@ -12,6 +12,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The upload step below trades the job's ID token for a short-lived Mergify token, so no
+    # secret is stored. A job's own block replaces the workflow's, so contents is listed again.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,11 +36,22 @@ jobs:
         run: for f in mods/*/core/extract*.jq; do echo '"x"' | jq -R -f "$f" > /dev/null; done
 
       # bun test through the leftover check: it fails when the run leaves a file in its temp
-      # folder or a process running.
+      # folder or a process running. The same run also writes a JUnit report for the upload
+      # below; what it prints stays the same.
       - name: Tests, leaving nothing behind
+        id: tests
         run: |
           command -v sqlite3 || { sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3; }
-          sh test/leftover-check.sh
+          sh test/leftover-check.sh --reporter=junit --reporter-outfile=junit.xml
+
+      # Sends the report to Mergify Test Engine, also when the tests failed. Skipped when no
+      # report was written, and on a pull request from a fork, which gets no ID token.
+      - name: Test results to Mergify
+        if: (success() || failure()) && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && hashFiles('junit.xml') != ''
+        uses: mergifyio/gha-mergify-ci@v30
+        with:
+          report_path: junit.xml
+          test_step_outcome: ${{ steps.tests.outcome }}
 
       # The commits this push or pull request adds. A full-history scan is a one-time manual pass.
       - name: Secrets in new commits (gitleaks)
