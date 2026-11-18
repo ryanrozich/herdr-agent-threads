@@ -8557,7 +8557,7 @@ test("the settings card: over the list, opens at the top with the keyboard, clos
   draw(v, cx);
 });
 
-test("one page: Text and colors, Messages, Layout, Rules and keys and File, in that order, then Reset once", async () => {
+test("one page: Messages, Agent messages, Layout, Links and keys and File, in that order, then Reset once", async () => {
   const { v, cx } = await pane(fixture("--extra", "4", "--agents"));
   v.width = 545; v.paneW = 573; v.rootH = 700;
   v.action("settings", cx);
@@ -8567,10 +8567,10 @@ test("one page: Text and colors, Messages, Layout, Rules and keys and File, in t
   // renaming a section is one line here (and one in CARD_SECTIONS). A section's heading is
   // recorded after its rows, so a row belongs to the first heading that follows it.
   const PAGE = [
-    ["Text and colors", ["Text size", "User messages", "Agent messages"]],
-    ["Messages", ["Show agent messages", "Agent messages on the rail", "Shorten long messages", "Always show time"]],
+    ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
+    ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color"]],
     ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
-    ["Rules and keys", ["Link rules", "Quote key"]],
+    ["Links and keys", ["Link rules", "Quote key"]],
     ["File", ["Copy path"]],
   ];
   const heads = PAGE.map(([name]) => gs.indexOf(name));
@@ -8589,7 +8589,7 @@ test("one page: Text and colors, Messages, Layout, Rules and keys and File, in t
   expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
   expect(gs.indexOf("Link rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
-  for (const x of ["General", "Chat", "Text", "Colors", "Links and keys", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
+  for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
   expect(gs.filter((x) => x === "Layout")).toHaveLength(1);
   // Headings in the keys sheet's style, US spelling; the rows have no icons.
@@ -8824,6 +8824,22 @@ test("key hints at the bottom are off by default; the switch brings the row back
   expect(idsIn(frame(v, cx))).toContain("th-footer");
   expect(v.footSpace()).toBe(38);
   await new Promise((r) => setTimeout(r, 20));
+});
+
+test("the card leaves a 160 px strip of the list under it, except in a pane under 514 px tall", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  // 800 px tall: the card ends 160 px above the bottom (top band 32, head 40, foot 40, 2 px border).
+  v.rootH = 800;
+  expect(bodyH()).toBe(800 - 32 - 160 - (40 + 40 + 2));
+  v.rootH = 514;
+  expect(bodyH()).toBe(514 - 32 - 160 - (40 + 40 + 2));
+  // Under 514 px the card takes the height, 12 px above the bottom.
+  v.rootH = 513;
+  expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
 });
 
 test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
