@@ -4870,10 +4870,17 @@ export default class Threads extends View {
         const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
         const mains = threads.filter((p) => !pinnedIds.has(p.pane));
         if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
-          if (this.action(c, cx)) cx.notify();
+          this.command(c, cx);
         }
       }
     });
+  }
+
+  // A command bound in keys.json (next, previous and the like) is a key by another road: like
+  // key(), it wins over a press's pending open (OPEN_WAIT_MS).
+  command(name, cx) {
+    this.openWait = null;
+    if (this.action(name, cx)) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.

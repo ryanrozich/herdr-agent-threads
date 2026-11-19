@@ -6548,6 +6548,15 @@ test("a key or a search after a press on a closed turn wins: the turn is not ope
   v.key(keyEv("escape"), cx);
   afterPress(cx);
   expect(v.open.has(a)).toBe(false);
+  // Press, then a command bound in keys.json (it comes through nextCommand, not key()): it
+  // moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.command("next", cx);
+  const next = v.sel;
+  expect(next).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, next]);
   // Press, then a search started from its button (no key reaches the panel): closed.
   cx.timers = [];
   gesture(v, cx, b);
