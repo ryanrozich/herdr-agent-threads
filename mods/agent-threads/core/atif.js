@@ -132,6 +132,7 @@ function turnSteps(turn, tr, next, results) {
         subagent_trajectory_ref: got?.sub ? [clean({ trajectory_id: got.sub.trajectory_id, session_id: got.sub.session_id })] : undefined,
         extra: clean({
           subagent_transcript: got?.subMissing ? "not found" : undefined,
+          subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
           result_ts: iso(c.result?.end),
           failed: c.result?.failed ?? undefined,
           no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
@@ -209,7 +210,7 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
     agent: clean({ name: AGENT_NAMES[agent] ?? agent, version, model_name: model ?? undefined, extra: { reader: "agent-threads" } }),
     steps,
     notes: results
-      ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text (cut only past 4,194,304 characters, with a marker) are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step."
+      ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text (cut only past 4,194,304 characters, with a marker) are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step. Results are whole, so this file is as sensitive as the transcript: whatever a tool printed, a secret included, is in it."
       : "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
     final_metrics: clean({
       total_prompt_tokens: total(any ? prompt : undefined, "total_prompt_tokens"),
@@ -369,6 +370,29 @@ async function main(argv) {
     } catch { return null; }
   };
 
+  // A subagent transcript's first prompt: its first user line that is not bookkeeping (isMeta),
+  // as text, from the first 256 KB; null when that line carries no text.
+  const firstPrompt = (f) => {
+    let fd = null;
+    try {
+      fd = fs.openSync(f, "r");
+      const b = Buffer.alloc(262144);
+      const n = fs.readSync(fd, b, 0, b.length, 0);
+      for (const l of b.subarray(0, n).toString("utf8").split("\n")) {
+        let x = null;
+        try { x = JSON.parse(l); } catch { continue; }
+        if (x?.type !== "user" || x.isMeta === true) continue;
+        const c = x.message?.content;
+        if (typeof c === "string") return c;
+        const t = Array.isArray(c) ? c.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n") : "";
+        return t || null;
+      }
+      return null;
+    } catch { return null; } finally { if (fd != null) fs.closeSync(fd); }
+  };
+  // Each subagent file is attached to one call only: the first that names it.
+  const attached = new Map();
+
   const build = (path, opts, depth, seen) => {
     const s = read(path, opts.env);
     if (!s) return null;
@@ -401,6 +425,15 @@ async function main(argv) {
         const k = task ? kids.get(task) : null;
         if (k) child = { file: k.file, id: k.thread, env: Number.isInteger(k.from) ? { THREADS_FROM_ORDINAL: String(k.from) } : {} };
       } else continue;
+      // A Claude Code subagent named by text could be any subagent of the session: its file must
+      // start with the call's own prompt, and no other call may have it already.
+      if (child && agent === "claude") {
+        const want = typeof r.args?.prompt === "string" ? r.args.prompt.trim() : null;
+        const got = want != null ? firstPrompt(child.file)?.trim() ?? null : null;
+        if (attached.has(child.file)) { r.subReason = `already attached to ${attached.get(child.file)}`; child = null; }
+        else if (want != null && got != null && want !== got) { r.subReason = "its first prompt is not the call's prompt"; child = null; }
+        else attached.set(child.file, c.call);
+      }
       const t = child && depth < SUB_DEPTH && !seen.has(child.file) && fs.existsSync(child.file)
         ? build(child.file, { env: child.env, root, id: root, trajectoryId: child.id, subs: opts.subs ?? (agent === "claude" ? join(path.replace(/\.jsonl$/, ""), "subagents") : undefined) }, depth + 1, new Set([...seen, child.file]))
         : null;

@@ -81,14 +81,19 @@ def results($l; $c):
   | {k: "x", id: .tool_use_id, ts: $l.timestamp, f: (.is_error == true)};
 # In a subagent's own transcript (THREADS_SIDECHAIN=1, the ATIF export only), the result of
 # a subagent it started has no toolUseResult: the started one's id is only a line of the
-# result text, "agentId: <id>". Letters, digits, "-" and "_" only; core/atif.js checks the
-# file it names again.
+# result text, "agentId: <id>", in the footer Claude Code puts after what the subagent said.
+# What the subagent said can hold such a line too, so only the last text block with one
+# counts, and its last match. Letters, digits, "-" and "_" only; core/atif.js checks the file
+# it names again, its first prompt against the call's, and that no other call has it.
 def side_launch($c):
   if ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
   else $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
     | .tool_use_id as $id
-    | (.content | if type == "string" then . elif type == "array" then [.[]? | select(type == "object" and .type == "text") | (.text // "") | tostring] | join("\n") else "" end) as $t
-    | ($t | capture("(?:^|\n)agentId: (?<a>[A-Za-z0-9_-]{1,80})(?![A-Za-z0-9_-])")? | .a) as $a
+    | ([.content | if type == "string" then [.] elif type == "array" then [.[]? | select(type == "object" and .type == "text") | (.text // "") | tostring] else [] end
+        | .[] | select(test("(?:^|\n)agentId: [A-Za-z0-9_-]"))] | last) as $t
+    | select($t != null)
+    | ([$t | match("(?:^|\n)agentId: (?<a>[A-Za-z0-9_-]{1,80})(?![A-Za-z0-9_-])"; "g") | .captures[0].string] | last) as $a
+    | select($a != null)
     | {k: "r", id: $id, a: $a, m: null, st: null}
   end;
 # A short result line: one call, or several with one error flag between them (which of them

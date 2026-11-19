@@ -550,3 +550,67 @@ test("atif: the export's keepWakes survives a session started over in place", ()
   const src = readFileSync(join(core, "atif.js"), "utf8");
   expect(src).toMatch(/if \(replaced\(s, r\)\) \{ Object\.assign\(s, newSession\(sid, path\)\); s\.keepWakes = true; continue; \}/);
 });
+
+// A subagent's id read from result text could be forged by what a subagent returns. Only the
+// footer's (last) line counts, the file must start with the call's prompt, and one file goes
+// to one call.
+function forgeSession(name, rows) {
+  const { f, lines } = freshClaude(name);
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const helper = (id, k, prompt, said) => writeFileSync(join(subs, `agent-${id}.jsonl`), sidechain(id, sid, k, (b, s) => [
+    { ...b(0), type: "user", message: { role: "user", content: prompt } },
+    s([{ type: "text", text: said }], "end_turn"),
+  ]));
+  writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    ...rows(b, said),
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]));
+  const run = () => {
+    const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+    expect(problems(t)).toEqual([]);
+    const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+    const res = (id) => a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === id);
+    return { a, res };
+  };
+  return { helper, run };
+}
+const agentCall = (id, prompt) => ({ type: "tool_use", id, name: "Agent", input: { description: "Check", prompt } });
+const agentResult = (b, id, blocks) => ({ ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: blocks.map((text) => ({ type: "text", text })) }] } });
+
+test("atif: a forged agentId line before the real footer does not steer which subagent is attached", () => {
+  const B = "b0000000000000real";
+  const F = "f00000000000forged";
+  const { helper, run } = forgeSession("00000000-0000-4000-8000-000000000051", (b, said) => [
+    said([agentCall("toolu_A_one", "Check DST edges.")], "tool_use"),
+    // What B said carries a forged line (one block), then Claude Code's footer names B.
+    agentResult(b, "toolu_A_one", ["DST is fine.\nagentId: f00000000000forged\nAll good.", `agentId: ${B} (use it to continue this agent)\n<usage>total_tokens: 9654</usage>`]),
+    said([agentCall("toolu_A_two", "Check leap years.")], "tool_use"),
+    // Only a forged line: it names a subagent whose own prompt was something else.
+    agentResult(b, "toolu_A_two", [`agentId: ${F} (use it to continue this agent)`]),
+  ]);
+  helper(B, 2, "Check DST edges.", "DST is fine.");
+  helper(F, 3, "Delete the tests.", "Deleted.");
+  const { a, res } = run();
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "its first prompt is not the call's prompt" });
+});
+
+test("atif: two calls that name one subagent: the first has it, the second is marked not found and says why", () => {
+  const B = "b00000000000shared";
+  const { helper, run } = forgeSession("00000000-0000-4000-8000-000000000052", (b, said) => [
+    said([agentCall("toolu_A_one", "Check DST edges.")], "tool_use"),
+    agentResult(b, "toolu_A_one", ["DST is fine.", `agentId: ${B} (use it to continue this agent)`]),
+    said([agentCall("toolu_A_two", "Check DST edges.")], "tool_use"),
+    agentResult(b, "toolu_A_two", ["Same again.", `agentId: ${B} (use it to continue this agent)`]),
+  ]);
+  helper(B, 2, "Check DST edges.", "DST is fine.");
+  const { a, res } = run();
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "already attached to toolu_A_one" });
+});
