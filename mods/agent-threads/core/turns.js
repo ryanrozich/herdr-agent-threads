@@ -301,7 +301,8 @@ export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
 const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
-function addStep(s, turn, name, id = null, e = null) {
+// owner: the turn a call's result belongs to, when the steps are a wake-up's (keepWakes).
+function addStep(s, turn, name, id = null, e = null, owner = turn) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   if (text) {
@@ -330,7 +331,7 @@ function addStep(s, turn, name, id = null, e = null) {
       if (info && ok) {
         s.calls ??= new Map();
         if (s.calls.size >= CALLS_KEEP) s.calls.clear();
-        s.calls.set(id, { info, turn });
+        s.calls.set(id, { info, turn: owner });
       }
     }
   }
@@ -456,6 +457,9 @@ function applyOne(s, e) {
         // This wake-up's own clock and tool count, apart from the prompt's.
         s.followSince = e.ts ? Date.parse(e.ts) : null;
         cur.wakeTools = 0;
+        // The ATIF export (s.keepWakes) keeps each wake-up's texts and calls as steps of its
+        // own. The panel never sets it: it shows a wake-up as its last text only.
+        if (s.keepWakes) (cur.wakes ??= []).push({ steps: [], after: [], afterAt: null });
         startModelTurn(s, e);
       }
       return;
@@ -469,6 +473,8 @@ function applyOne(s, e) {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
+        const w = s.keepWakes ? cur.wakes?.at(-1) : null;
+        if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
       }
       return;
     case "u":
@@ -477,7 +483,11 @@ function applyOne(s, e) {
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
       if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; }
-      else cur.latestParts = [];
+      else {
+        cur.latestParts = [];
+        const w = s.keepWakes ? cur.wakes?.at(-1) : null;
+        if (w) { addStep(s, w, e.n, e.id, e, cur); w.after = []; w.afterAt = null; }
+      }
       return;
     case "m":
       if (!cur) return;
