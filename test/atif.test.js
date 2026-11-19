@@ -5,7 +5,7 @@
 // UPDATE=1 bun test test/atif.test.js writes the golden files again.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
@@ -365,4 +365,36 @@ test("atif: the command line nests Codex subagents by their rollout's parent thr
   const bad = t.steps.flatMap((st) => st.tool_calls ?? []).find((c) => c.tool_call_id === "call_bad");
   expect(bad.arguments).toEqual({});
   expect(bad.extra.arguments_unread).toBe("not JSON");
+});
+
+// A subagent's id is transcript text: one that names a file outside the session's subagents
+// folder is not read, by its spelling or through a link.
+test("atif: a subagent id with folder steps, odd characters, or a file linked from elsewhere is not found, and nothing outside is read", () => {
+  const d = mkdtempSync(join(tmpdir(), "threads-atif-id-"));
+  const f = join(d, "s", "00000000-0000-4000-8000-000000000047.jsonl");
+  mkdirSync(join(d, "s"));
+  execFileSync("bun", [join(root, "test/make-fixture.js"), f, "00000000-0000-4000-8000-000000000047", "/Users/dev/acme-web", "--subagents"]);
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const launches = lines.filter((l) => typeof l?.toolUseResult?.agentId === "string");
+  // A transcript outside the session's folder, whose text must never reach the export.
+  const secret = (id) => `${JSON.stringify({ isSidechain: true, agentId: id, sessionId: "x", type: "user", uuid: "00000000-0000-4000-b000-000000000001", timestamp: "2026-11-01T10:00:00Z", message: { role: "user", content: "OUTSIDE-THE-SESSION" } })}\n`;
+  writeFileSync(join(d, "secret.jsonl"), secret("secret"));
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  // 1: parent-folder steps that land on secret.jsonl; 2: a link inside the folder to it;
+  // 3: characters an id never has.
+  const ids = ["x/../../../../secret", "linked0000000001", "a b;c"];
+  writeFileSync(join(d, "secret2.jsonl"), secret(ids[1]));
+  symlinkSync(join(d, "secret2.jsonl"), join(subs, `agent-${ids[1]}.jsonl`));
+  launches.forEach((l, k) => { l.toolUseResult.agentId = ids[k]; });
+  writeFileSync(f, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  expect(existsSync(join(subs, `agent-${ids[0]}.jsonl`))).toBe(true);
+  const out = execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("OUTSIDE-THE-SESSION");
+  const t = JSON.parse(out);
+  expect(problems(t)).toEqual([]);
+  expect(t.subagent_trajectories).toBeUndefined();
+  const agentResults = t.steps.flatMap((st) => (st.tool_calls ?? []).filter((c) => c.function_name === "Agent")
+    .map((c) => st.observation.results.find((r) => r.source_call_id === c.tool_call_id)));
+  expect(agentResults.map((r) => r.extra.subagent_transcript)).toEqual(["not found", "not found", "not found"]);
 });
