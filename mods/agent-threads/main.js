@@ -4112,7 +4112,9 @@ export default class Threads extends View {
     this.openWait = null;
     if (!this.follow && !this.toBottom) return;
     // A scroll to the bottom a frame already queued (16 ms, below) checks this and does not run.
-    this.heldAt = Date.now();
+    // A count, not a time: a clock that steps back, or a hold in the same millisecond as the
+    // request, would drop a later request.
+    this.holds = (this.holds ?? 0) + 1;
     this.follow = false;
     this.toBottom = false;
     this.pinningUntil = 0;
@@ -6766,9 +6768,9 @@ export default class Threads extends View {
       this.pinningUntil = Date.now() + 1000;
       this.upAt = 0;
       this.downAt = 0;
-      const asked = Date.now();
+      const holds = this.holds ?? 0;
       cx.timer.after(16, (cx) => {
-        if ((this.heldAt ?? 0) >= asked) return; // a highlight started meanwhile (holdForSelect)
+        if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
         this.scroll.scroll_to_bottom();
         cx.notify();
       });
