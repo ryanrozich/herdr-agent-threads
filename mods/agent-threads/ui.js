@@ -76,10 +76,12 @@ export function fitHints(hints, width, gap = 10, pad = 26) {
 }
 
 // The status line at the pane's foot: up to three groups, each an icon and its text, that fit
-// in width px. Turns, the hidden count and tool calls; tokens and the cache hit; context.
-// A number the session did not record (Cursor's tokens) is left out, never shown as 0. In a
-// narrow pane, what gives way first: context, the cache hit, the hidden count, the tokens;
-// then "tool calls" shortens to "tools", then the tool count goes. The turns always stay.
+// in width px. Turns, the hidden count and tool calls; tokens and the cache hit; the count in
+// the context window, with the percent where the window is stated. A number the session did
+// not record (Cursor's tokens) is left out, never shown as 0. In a narrow pane, what gives way
+// first: the cache hit, the hidden count, the tokens; then "tool calls" shortens to "tools",
+// then the tool count goes, then the ring and percent, then the turns. The context count
+// always stays, and without one the turns do.
 const STATUS = { char: 6.3, icon: 17, gap: 18, pad: 24 };
 const n = (x) => x.toLocaleString();
 const many = (x, w) => `${n(x)} ${w}${x === 1 ? "" : "s"}`;
