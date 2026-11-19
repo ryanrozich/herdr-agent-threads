@@ -353,8 +353,9 @@ function closeOpen(s, cur, end, e) {
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
-    // Answered together with a later prompt: its reply is on that row.
-    if (t !== cur && !t.after.length) t.answeredBy = cur.n;
+    // Answered together with a later prompt: its reply is on that row. Not a turn with a line
+    // left out (noteSkip): its reply may be the line itself.
+    if (t !== cur && !t.after.length && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
@@ -543,6 +544,24 @@ function applyOne(s, e) {
 // OpenCode rewrites its last turn in place while it streams, so a read gets that turn again
 // each time: rows after the last settled one are dropped before the new events apply. The
 // turn numbers come out the same.
+// A line the reader skipped (extract.sh's line_max): counted on the newest turn read so far,
+// or on the session's head before the first turn, so the pane can say where in byte order a
+// line was left out. Only by turn: the line's own type and time are not read.
+export function noteSkip(s, bytes) {
+  if (!(bytes > 0)) return;
+  const t = s.turns[s.turns.length - 1];
+  const at = t ?? s;
+  const key = t ? "skipped" : "skippedHead";
+  at[key] = { lines: (at[key]?.lines ?? 0) + 1, bytes: (at[key]?.bytes ?? 0) + bytes };
+  s.version++;
+}
+
+// The note for skipped lines: "A line of 300 MB was left out here, too long to read".
+export function skipNote(k) {
+  const mb = Math.max(1, Math.round(k.bytes / 1048576));
+  return k.lines === 1 ? `A line of ${mb} MB was left out here, too long to read` : `${k.lines} lines, ${mb} MB in all, were left out here, too long to read`;
+}
+
 export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
   s.open = [];
