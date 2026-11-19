@@ -168,3 +168,5 @@ Amp keeps its conversations on its own servers, not on your computer. Reading th
 ## License
 
 [MIT](LICENSE).
+
+Catalyst Cloud enabled
