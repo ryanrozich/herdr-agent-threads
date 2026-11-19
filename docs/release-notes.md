@@ -41,7 +41,7 @@ For another agent, put its name after the path: `codex`, `pi`, `cursor` or `anti
 - On some Linux systems (Ubuntu 26.04 among them), a prompt or reply of several megabytes no longer goes missing or shows empty.
 - The settings card stays inside a short pane with its foot in view, and it no longer grows when you make the pane smaller.
 - A link rule is no longer turned off as too slow because the computer was busy for a moment.
-- A closing paste tag with text before it on its line no longer shows in the bubble.
+- Pasted output no longer shows a leftover closing tag at the end of its last line.
 
 ## 1.0.0
 
