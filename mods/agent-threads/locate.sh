@@ -207,7 +207,7 @@ cursor-peers)
 cursor-label)
   # The first prompt as typed, 100 characters, read as the pane reads it.
   LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
-    | jq -Rc -f "$(dirname "$0")/core/extract-cursor.jq" 2>/dev/null \
+    | perl "$(dirname "$0")/core/lines.pl" | jq -c -f "$(dirname "$0")/core/extract-cursor.jq" 2>/dev/null \
     | jq -r 'select(.k == "p") | .t | gsub("\\s+"; " ") | .[0:100]' 2>/dev/null ;;
 agy-dir)
   printf '%s\n' "${AGY_DATA_DIR:-$HOME/.gemini/antigravity-cli}" ;;
