@@ -23,6 +23,6 @@ union all
 select json_object('id', id, 'k', 'out',
   'ts', case when t1 is null then null else strftime('%Y-%m-%dT%H:%M:%fZ', t1 / 1000.0, 'unixepoch') end,
   'err', json(case when status = 'error' then 'true' else 'false' end),
-  'out', substr(txt, 1, 24576), 'lines', length(txt) - length(replace(txt, char(10), '')) + 1,
+  'out', substr(txt, 1, :cap) || case when :mark = 1 and length(txt) > :cap then char(10) || char(10) || '… (cut at 4,194,304 characters of ' || length(txt) || ')' else '' end, 'lines', length(txt) - length(replace(txt, char(10), '')) + 1,
   'ms', case when t0 is null or t1 is null then null else t1 - t0 end)
 from o where status in ('completed', 'error');

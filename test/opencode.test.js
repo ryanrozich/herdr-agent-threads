@@ -270,3 +270,21 @@ test("1.x level 3: calls carry their callID, and calls.sh reads each one's input
   // A call still running has its input and no output yet.
   expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["toolu_b1", false, "1 fail\nexpected 3", 2, 2000], ["call_w1", true, "fetch failed", 1, 10]]);
 });
+
+test("1.x: calls.sh gives the panel a result's first 24 KB, and the ATIF export (THREADS_WHOLE=1) the whole of it up to 4,194,304 characters, then a marker", () => {
+  const o = open();
+  user(o, "msg_u1", "Read the logs", 0);
+  assistant(o, "msg_a1", "msg_u1", 100, { finish: "tool-calls" });
+  const mid = `${"m".repeat(29990)}\nexit 1`;
+  const huge = "h".repeat(4194404);
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "call_mid", state: { status: "completed", input: { command: "cat mid.log" }, output: mid, title: "x", time: { start: T0 + 100, end: T0 + 200 } } });
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "call_huge", state: { status: "completed", input: { command: "cat huge.log" }, output: huge, title: "x", time: { start: T0 + 300, end: T0 + 400 } } });
+  o.db.close();
+  const outs = (env) => Object.fromEntries(execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), `${o.path}#${SID}`, "opencode", "call_mid", "call_huge"], { encoding: "utf8", maxBuffer: 1 << 26, env: { ...process.env, ...env } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.k === "out").map((x) => [x.id, x.out]));
+  const panel = outs({});
+  expect([panel.call_mid.length, panel.call_huge.length]).toEqual([24576, 24576]);
+  const whole = outs({ THREADS_WHOLE: "1" });
+  expect(whole.call_mid).toBe(mid);
+  expect(whole.call_huge).toBe(`${"h".repeat(4194304)}\n\n… (cut at 4,194,304 characters of 4194404)`);
+});

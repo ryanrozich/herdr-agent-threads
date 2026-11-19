@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
 import { atif, ATIF_VERSION } from "../mods/agent-threads/core/atif.js";
@@ -414,4 +414,437 @@ test("atif: a subagents folder that is itself a link is not read", () => {
   const out = execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" });
   expect(out).not.toContain("LINKED-FOLDER");
   expect(JSON.parse(out).subagent_trajectories).toBeUndefined();
+});
+
+// ---- found on real sessions by an eval reader, reproduced here on made-up ones ----
+
+// A Claude Code session whose fixture is fresh, in a folder of its own.
+function freshClaude(name) {
+  const d = mkdtempSync(join(tmpdir(), "threads-atif-fix-"));
+  const f = join(d, `${name}.jsonl`);
+  execFileSync("bun", [join(root, "test/make-fixture.js"), f, name, "/Users/dev/acme-web", "--subagents"]);
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  return { d, f, lines, save: (ls) => writeFileSync(f, `${ls.map((l) => JSON.stringify(l)).join("\n")}\n`) };
+}
+const sideUsage = { input_tokens: 4, output_tokens: 50, cache_read_input_tokens: 9000, cache_creation_input_tokens: 600 };
+// One subagent's transcript: every line isSidechain, as Claude Code writes them.
+function sidechain(agent, sid, k, rows) {
+  let n = 0;
+  let clock = Date.parse("2026-11-01T10:00:00Z") + k * 600000;
+  const b = (sec) => ({ isSidechain: true, agentId: agent, sessionId: sid, userType: "external", cwd: "/Users/dev/acme-web", version: "2.1.0", uuid: `00000000-0000-4000-a${k}00-${String(++n).padStart(12, "0")}`, timestamp: new Date((clock += sec * 1000)).toISOString() });
+  const said = (content, stop) => ({ ...b(3), type: "assistant", message: { id: `msg_${agent}_${n}`, model: "claude-sonnet-5-5", role: "assistant", type: "message", content, stop_reason: stop, usage: sideUsage } });
+  return `${rows(b, said).map((l) => JSON.stringify(l)).join("\n")}\n`;
+}
+
+test("atif: a subagent's own subagent is found in the session's one subagents folder, where Claude Code writes every one", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000044");
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const B = "b00000000000000nest";
+  writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    said([{ type: "tool_use", id: "toolu_A_Agent", name: "Agent", input: { description: "Check DST", prompt: "Check DST edges." } }], "tool_use"),
+    // In a subagent's own file the result of the subagent it started has no toolUseResult:
+    // the id is only a line of the result's text.
+    { ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Agent", content: [{ type: "text", text: "DST is fine." }, { type: "text", text: `agentId: ${B} (use it to continue this agent)\n<usage>total_tokens: 9654</usage>` }] }] } },
+    said([{ type: "text", text: "The range math is right, and DST is fine." }], "end_turn"),
+  ]));
+  // B sits beside A, not in a folder of A's own.
+  writeFileSync(join(subs, `agent-${B}.jsonl`), sidechain(B, sid, 2, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Check DST edges." } },
+    said([{ type: "tool_use", id: "toolu_B_Read", name: "Read", input: { file_path: "src/calendar/dst.ts" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "export const DST = true;" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_B_Read", content: "export const DST = true;" }] } },
+    said([{ type: "text", text: "DST is fine." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  const res = a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_A_Agent");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res.extra?.subagent_transcript).toBeUndefined();
+  expect(a.subagent_trajectories[0].steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.function_name)).toEqual(["Read"]);
+});
+
+test("atif: the work after a background notice wakes the agent is kept, call by call, and the panel's reader still only counts it", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000045");
+  const ref = lines.find((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const note = lines.find((l) => l.type === "user" && l.origin?.kind === "task-notification");
+  const last = lines.findLast((l) => typeof l.timestamp === "string").timestamp;
+  let clock = Date.parse(last) + 60000;
+  const at = (sec) => new Date((clock += sec * 1000)).toISOString();
+  const usage = { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 };
+  const said = (k, content, stop) => ({ ...ref, uuid: `00000000-0000-4000-f000-0000000000${k}`, timestamp: at(3), message: { ...ref.message, id: `msg_wake${k}`, content, stop_reason: stop, usage } });
+  const result = (k, id, text, err) => ({ ...ref, type: "user", uuid: `00000000-0000-4000-f000-0000000001${k}`, timestamp: at(2), toolUseResult: { stdout: text }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text, ...(err ? { is_error: true } : {}) }] } });
+  // The turn has ended; a late notice wakes the agent, which says something, runs two
+  // commands (the second fails) and answers.
+  save([...lines,
+    { ...note, uuid: "00000000-0000-4000-f000-000000000000", timestamp: at(0) },
+    said(10, [{ type: "text", text: "A late report came in; checking the tests." }, { type: "tool_use", id: "toolu_wake1", name: "Bash", input: { command: "bun test test/range.test.ts" } }], "tool_use"),
+    result(10, "toolu_wake1", "2 fail"),
+    said(11, [{ type: "tool_use", id: "toolu_wake2", name: "Bash", input: { command: "bun run build" } }], "tool_use"),
+    result(11, "toolu_wake2", "exit 1", true),
+    said(12, [{ type: "text", text: "Fixed the clock in two tests; the build still exits 1." }], "end_turn"),
+  ]);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const wake = t.steps.filter((st) => st.extra?.kind === "background_update");
+  // Both wake-ups, each with its own steps: the fixture's earlier one (its text only), then
+  // this one's text with its two calls (no text between them, so one step, as in the prompt's
+  // own work), then its answer.
+  expect(wake.map((st) => [st.message, (st.tool_calls ?? []).map((c) => c.tool_call_id)])).toEqual([
+    ["The background build finished cleanly.", []],
+    ["A late report came in; checking the tests.", ["toolu_wake1", "toolu_wake2"]],
+    ["Fixed the clock in two tests; the build still exits 1.", []],
+  ]);
+  const results = wake.flatMap((st) => st.observation?.results ?? []);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.failed ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
+  expect(wake[1].tool_calls[1].arguments).toEqual({ command: "bun run build" });
+  expect(wake[1].timestamp).toBeDefined();
+  // The panel's reader is unchanged: the wake-up's calls are counted, not kept as steps.
+  const s = readFile(f, "claude");
+  const turn = s.turns.at(-1);
+  expect(turn.wakeTools).toBe(2);
+  expect(turn.steps.flatMap((st) => st.ids ?? []).filter((id) => /^toolu_wake/.test(id ?? ""))).toEqual([]);
+});
+
+test("atif: a result is whole in the export; the panel's calls.sh still cuts it at 24 KB", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000046");
+  const at = lines.findIndex((l) => l.type === "user" && Array.isArray(l.message?.content) && l.message.content[0]?.type === "tool_result" && typeof l.message.content[0].content === "string");
+  const id = lines[at].message.content[0].tool_use_id;
+  const long = `${"x".repeat(29990)}\nexit 1`;
+  lines[at] = { ...lines[at], toolUseResult: { stdout: long }, message: { ...lines[at].message, content: [{ ...lines[at].message.content[0], content: long }] } };
+  save(lines);
+  const out = (env) => execFileSync("sh", [join(core, "calls.sh"), f, "claude", id], { encoding: "utf8", env: { ...process.env, ...env } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.k === "out").out;
+  expect(out({}).length).toBe(24576);
+  expect(out({ THREADS_WHOLE: "1" })).toBe(long);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  const r = t.steps.flatMap((st) => st.observation?.results ?? []).find((x) => x.source_call_id === id);
+  expect(r.content).toBe(long);
+});
+
+test("atif: past 4,194,304 characters a result is cut for the export too, with a marker that gives its whole length", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000048");
+  const at = lines.findIndex((l) => l.type === "user" && Array.isArray(l.message?.content) && l.message.content[0]?.type === "tool_result" && typeof l.message.content[0].content === "string");
+  const id = lines[at].message.content[0].tool_use_id;
+  const huge = "h".repeat(4194404);
+  lines[at] = { ...lines[at], toolUseResult: { stdout: "" }, message: { ...lines[at].message, content: [{ ...lines[at].message.content[0], content: huge }] } };
+  save(lines);
+  const out = execFileSync("sh", [join(core, "calls.sh"), f, "claude", id], { encoding: "utf8", maxBuffer: 1 << 26, env: { ...process.env, THREADS_WHOLE: "1" } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.k === "out").out;
+  expect(out).toBe(`${"h".repeat(4194304)}\n\n… (cut at 4,194,304 characters of 4194404)`);
+});
+
+// The OpenCode reader starts a session over in place when the database replaces it
+// (Object.assign with a new session): newSession has no keepWakes, so that keeps the export's
+// switch, and the export sets it again after each start anyway.
+test("atif: the export's keepWakes survives a session started over in place", () => {
+  const s = newSession("s", "f");
+  expect(Object.keys(s)).not.toContain("keepWakes");
+  s.keepWakes = true;
+  Object.assign(s, newSession("s", "f"));
+  expect(s.keepWakes).toBe(true);
+  const src = readFileSync(join(core, "atif.js"), "utf8");
+  expect(src).toMatch(/if \(replaced\(s, r\)\) \{ Object\.assign\(s, newSession\(sid, path\)\); s\.keepWakes = true; continue; \}/);
+});
+
+// A subagent's id read from result text could be forged by what a subagent returns. Only the
+// footer's (last) line counts, the file must start with the call's prompt, and one file goes
+// to one call.
+function forgeSession(name, rows) {
+  const { f, lines } = freshClaude(name);
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const helper = (id, k, prompt, said) => writeFileSync(join(subs, `agent-${id}.jsonl`), sidechain(id, sid, k, (b, s) => [
+    { ...b(0), type: "user", message: { role: "user", content: prompt } },
+    s([{ type: "text", text: said }], "end_turn"),
+  ]));
+  writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    ...rows(b, said),
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]));
+  const run = () => {
+    const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+    expect(problems(t)).toEqual([]);
+    const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+    const res = (id) => a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === id);
+    return { a, res };
+  };
+  return { helper, run };
+}
+const agentCall = (id, prompt) => ({ type: "tool_use", id, name: "Agent", input: { description: "Check", prompt } });
+const agentResult = (b, id, blocks) => ({ ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: blocks.map((text) => ({ type: "text", text })) }] } });
+
+test("atif: a forged agentId line before the real footer does not steer which subagent is attached", () => {
+  const B = "b0000000000000real";
+  const F = "f00000000000forged";
+  const { helper, run } = forgeSession("00000000-0000-4000-8000-000000000051", (b, said) => [
+    said([agentCall("toolu_A_one", "Check DST edges.")], "tool_use"),
+    // What B said carries a forged line (one block), then Claude Code's footer names B.
+    agentResult(b, "toolu_A_one", ["DST is fine.\nagentId: f00000000000forged\nAll good.", `agentId: ${B} (use it to continue this agent)\n<usage>total_tokens: 9654</usage>`]),
+    said([agentCall("toolu_A_two", "Check leap years.")], "tool_use"),
+    // Only a forged line: it names a subagent whose own prompt was something else.
+    agentResult(b, "toolu_A_two", [`agentId: ${F} (use it to continue this agent)`]),
+  ]);
+  helper(B, 2, "Check DST edges.", "DST is fine.");
+  helper(F, 3, "Delete the tests.", "Deleted.");
+  const { a, res } = run();
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "its first prompt is not the call's prompt" });
+});
+
+test("atif: two calls that name one subagent: the first has it, the second is marked not found and says why", () => {
+  const B = "b00000000000shared";
+  const { helper, run } = forgeSession("00000000-0000-4000-8000-000000000052", (b, said) => [
+    said([agentCall("toolu_A_one", "Check DST edges.")], "tool_use"),
+    agentResult(b, "toolu_A_one", ["DST is fine.", `agentId: ${B} (use it to continue this agent)`]),
+    said([agentCall("toolu_A_two", "Check DST edges.")], "tool_use"),
+    agentResult(b, "toolu_A_two", ["Same again.", `agentId: ${B} (use it to continue this agent)`]),
+  ]);
+  helper(B, 2, "Check DST edges.", "DST is fine.");
+  const { a, res } = run();
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "already attached to toolu_A_one" });
+});
+
+// A fork: the subagent's file starts with copies of its caller's records (the same uuids),
+// then its own. The copies are not read again, and the call's prompt ends its first prompt.
+test("atif: a forked subagent skips the records copied from its caller, so nothing is written twice, and its prompt is checked after them", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000053");
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const F = "f0000000000000fork";
+  const prompt = "Fork: check the DST edges with what you know.";
+  const parentRows = (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    said([{ type: "tool_use", id: "toolu_A_Grep", name: "Grep", input: { pattern: "endOfRange" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "src/calendar/range.ts:12" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Grep", content: "src/calendar/range.ts:12" }] } },
+    said([{ type: "tool_use", id: "toolu_A_Fork", name: "Agent", input: { description: "Fork", prompt, subagent_type: "fork", name: "dst" } }], "tool_use"),
+  ];
+  const aText = sidechain(A, sid, 1, (b, said) => [
+    ...parentRows(b, said),
+    { ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Fork", content: [{ type: "text", text: "DST is fine." }, { type: "text", text: `agentId: ${F} (use it to continue this agent)` }] }] } },
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]);
+  writeFileSync(join(subs, `agent-${A}.jsonl`), aText);
+  // The fork's file: A's first four records as they are, then its own.
+  const copied = aText.split("\n").slice(0, 4).join("\n");
+  const own = sidechain(F, sid, 2, (b, said) => [
+    said([{ type: "text", text: "Forking." }], "end_turn"),
+    { ...b(1), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Fork", content: "forked" }, { type: "text", text: `You are a fork of the conversation above.\n\n${prompt}` }] } },
+    said([{ type: "tool_use", id: "toolu_F_Read", name: "Read", input: { file_path: "src/calendar/dst.ts" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "export const DST = true;" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_F_Read", content: "export const DST = true;" }] } },
+    said([{ type: "text", text: "DST is fine." }], "end_turn"),
+  ]);
+  writeFileSync(join(subs, `agent-${F}.jsonl`), `${copied}\n${own}`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+  const res = a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_A_Fork");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(F);
+  const fork = a.subagent_trajectories.find((x) => x.trajectory_id === F);
+  // Only the fork's own call: the copied Grep and the copied Agent call are A's alone.
+  expect(fork.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_F_Read"]);
+  expect(JSON.stringify(fork)).not.toContain("toolu_A_Grep");
+});
+
+// A Skill call that forks a subagent: its launch record (status "forked") names it.
+function skillSession(name, args, laterMeta = false) {
+  const { f, lines, save } = freshClaude(name);
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const at = lines.findIndex((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const ref = lines[at];
+  const S = "s000000000000skill";
+  const usage = { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 };
+  lines.splice(at, 0,
+    { ...ref, uuid: "00000000-0000-4000-e000-000000000001", message: { ...ref.message, id: "msg_skill", content: [{ type: "tool_use", id: "toolu_Skill", name: "Skill", input: { skill: "review-tests", ...(args ? { args } : {}) } }], stop_reason: "tool_use", usage } },
+    { ...ref, type: "user", uuid: "00000000-0000-4000-e000-000000000002", toolUseResult: { agentId: S, commandName: "review-tests", result: "Reviewed.", status: "forked", success: true }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_Skill", content: "Reviewed." }] } });
+  save(lines);
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(join(subs, `agent-${S}.jsonl`), sidechain(S, sid, 3, (b, said) => [
+    // As Claude Code writes it: the one prompt is the first record, marked meta.
+    { ...b(0), type: "user", isMeta: true, message: { role: "user", content: `Base directory for this skill: review-tests\n\nReview the tests.${args ? `\n\nARGUMENTS: ${args}` : ""}` } },
+    // A later meta record with no parent is bookkeeping, not a second prompt.
+    ...(laterMeta ? [{ ...b(1), type: "user", isMeta: true, message: { role: "user", content: "LATER META NOTE" } }] : []),
+    said([{ type: "tool_use", id: "toolu_S_Grep", name: "Grep", input: { pattern: "Date.now" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "test/range.test.ts:4" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_S_Grep", content: "test/range.test.ts:4" }] } },
+    said([{ type: "text", text: "Two tests need a fixed clock." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const res = t.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_Skill");
+  return { t, res, S };
+}
+
+test("atif: a Skill call's forked subagent is attached by its launch record; its args are looked for in the subagent's first prompt", () => {
+  const { t, res, S } = skillSession("00000000-0000-4000-8000-000000000054", "src/calendar and test/range");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(S);
+  expect(res.extra.subagent_link).toBeUndefined();
+  const sub = t.subagent_trajectories.find((x) => x.trajectory_id === S);
+  expect(sub.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.function_name)).toEqual(["Grep"]);
+});
+
+test("atif: a Skill call with no args to look for is still attached, and extra says the link rests on the id alone", () => {
+  const { res, S } = skillSession("00000000-0000-4000-8000-000000000055", null);
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(S);
+  expect(res.extra.subagent_link).toBe("id only: the Skill call has no args to look for in the subagent's first prompt");
+  // Short args could be in any prompt: attached, and marked.
+  const short = skillSession("00000000-0000-4000-8000-000000000057", "src");
+  expect(short.res.subagent_trajectory_ref[0].trajectory_id).toBe(short.S);
+  expect(short.res.extra.subagent_link).toBe("id only: the Skill call's args are under 16 characters, too short to tell one subagent from another");
+});
+
+// A helper named in a subagent's own file, as the nested test's shape: the call's prompt and
+// the helper's first user line are set per test.
+function nestedWith(name, callPrompt, firstUser, extraType) {
+  const { f, lines } = freshClaude(name);
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const B = "b0000000000000check";
+  writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    said([{ type: "tool_use", id: "toolu_A_Agent", name: "Agent", input: { description: "Check", prompt: callPrompt, ...(extraType ? { subagent_type: extraType } : {}) } }], "tool_use"),
+    { ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Agent", content: [{ type: "text", text: "Done." }, { type: "text", text: `agentId: ${B} (use it to continue this agent)` }] }] } },
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]));
+  writeFileSync(join(subs, `agent-${B}.jsonl`), sidechain(B, sid, 2, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: firstUser } },
+    said([{ type: "tool_use", id: "toolu_B_Read", name: "Read", input: { file_path: "src/calendar/dst.ts" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "ok" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_B_Read", content: "ok" }] } },
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", maxBuffer: 1 << 26 }));
+  const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+  return { res: a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_A_Agent"), B };
+}
+
+test("atif: a fork call with an empty prompt attaches nothing, since every prompt ends with an empty one", () => {
+  const { res } = nestedWith("00000000-0000-4000-8000-000000000058", "", "Anything at all.", "fork");
+  expect(res.subagent_trajectory_ref).toBeUndefined();
+  expect(res.extra.subagent_reason).toBe("the call's prompt is empty");
+});
+
+test("atif: a helper whose first prompt cannot be read (an image alone) is attached on the id alone, and marked so", () => {
+  const { res, B } = nestedWith("00000000-0000-4000-8000-000000000059", "Look at this.", [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } }]);
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res.extra.subagent_link).toBe("id only: the subagent's first prompt could not be read");
+});
+
+test("atif: a first prompt on a line longer than 256 KB is read whole and checked", () => {
+  const long = `Check these: ${"x".repeat(300000)}`;
+  const ok = nestedWith("00000000-0000-4000-8000-000000000060", long, long);
+  expect(ok.res.subagent_trajectory_ref[0].trajectory_id).toBe(ok.B);
+  expect(ok.res.extra.subagent_link).toBeUndefined();
+  const other = nestedWith("00000000-0000-4000-8000-000000000061", long, `${long}y`);
+  expect(other.res.subagent_trajectory_ref).toBeUndefined();
+  expect(other.res.extra.subagent_reason).toBe("its first prompt is not the call's prompt");
+});
+
+test("atif: transcripts no call names are capped, and the notes count the ones left out", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000062");
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  for (const k of [1, 2, 3]) {
+    const U = `u00000000000capped${k}`;
+    writeFileSync(join(subs, `agent-${U}.jsonl`), sidechain(U, sid, 5 + k, (b, said) => [
+      { ...b(0), type: "user", message: { role: "user", content: `Watch build ${k}.` } },
+      said([{ type: "text", text: "Fine." }], "end_turn"),
+    ]));
+  }
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", env: { ...process.env, THREADS_UNNAMED_MAX: "2" } }));
+  expect(t.extra.subagents_no_call_names.map((x) => x.trajectory.trajectory_id)).toEqual(["u00000000000capped1", "u00000000000capped2"]);
+  expect(t.notes).toContain("1 more that no call names is left out: at most 2 are written.");
+});
+
+test("atif: a subagent transcript no call names is written apart, attached to no call, with its shared promptId as a hint and a count in the notes", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000056");
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const pid = lines.find((l) => typeof l.promptId === "string").promptId;
+  const before = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const U = "u0000000000unnamed";
+  writeFileSync(join(subs, `agent-${U}.jsonl`), sidechain(U, sid, 4, (b, said) => [
+    { ...b(0), type: "user", promptId: pid, message: { role: "user", content: "Watch the build." } },
+    said([{ type: "tool_use", id: "toolu_U_Bash", name: "Bash", input: { command: "bun run build" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "ok" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_U_Bash", content: "ok" }] } },
+    said([{ type: "text", text: "The build is fine." }], "end_turn"),
+  ]));
+  // A link in the folder to a file elsewhere is never read, named or not.
+  const d = dirname(f);
+  writeFileSync(join(d, "elsewhere.jsonl"), sidechain("elsewhere00000001", sid, 5, (b) => [{ ...b(0), type: "user", message: { role: "user", content: "ELSEWHERE" } }]));
+  symlinkSync(join(d, "elsewhere.jsonl"), join(subs, "agent-elsewhere00000001.jsonl"));
+  const out = execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("ELSEWHERE");
+  const t = JSON.parse(out);
+  expect(problems(t)).toEqual([]);
+  const un = t.extra.subagents_no_call_names;
+  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "hints, not links: no call in the session names this transcript; shared_prompt_id is a promptId it shares with the session, and same_prompt_calls are calls with no launch record whose prompt is its first prompt", shared_prompt_id: pid, same_prompt_calls: [] }]]);
+  expect(un[0].trajectory.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_U_Bash"]);
+  expect(t.notes).toContain("1 subagent transcript in the session's subagents folder that no call names is in extra.subagents_no_call_names");
+  // Attached to no call and not in the totals or the standard field.
+  expect(t.subagent_trajectories ?? []).toEqual(before.subagent_trajectories ?? []);
+  expect(t.final_metrics).toEqual(before.final_metrics);
+  expect(JSON.stringify(t.steps)).not.toContain(U);
+});
+
+test("atif: with a Skill-started subagent, only its file's first record is read as its prompt", () => {
+  const { t, S } = skillSession("00000000-0000-4000-8000-000000000063", "src/calendar and test/range", true);
+  const sub = t.subagent_trajectories.find((x) => x.trajectory_id === S);
+  expect(JSON.stringify(sub)).not.toContain("LATER META NOTE");
+  expect(sub.steps.filter((st) => st.source === "user").length).toBe(1);
+});
+
+test("atif: a transcript no call names lists, as a hint, the calls with no launch record that have its first prompt", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000064");
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const at = lines.findIndex((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const ref = lines[at];
+  const prompt = "Watch the build and report.";
+  // An Agent call whose result is an error, with no launch record: Claude Code wrote a string.
+  lines.splice(at, 0,
+    { ...ref, uuid: "00000000-0000-4000-e100-000000000001", message: { ...ref.message, id: "msg_err", content: [{ type: "tool_use", id: "toolu_Err", name: "Agent", input: { description: "Watch", prompt } }], stop_reason: "tool_use" } },
+    { ...ref, type: "user", uuid: "00000000-0000-4000-e100-000000000002", toolUseResult: "Error: the agent stopped", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_Err", is_error: true, content: "Error: the agent stopped" }] } });
+  save(lines);
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const U = "u000000000erroredx";
+  writeFileSync(join(subs, `agent-${U}.jsonl`), sidechain(U, sid, 6, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: prompt } },
+    said([{ type: "text", text: "The build is fine." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const un = t.extra.subagents_no_call_names;
+  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint.same_prompt_calls])).toEqual([[U, ["toolu_Err"]]]);
+  // Not attached: the call's result names no subagent.
+  const res = t.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_Err");
+  expect(res.subagent_trajectory_ref).toBeUndefined();
+});
+
+test("atif: a transcript line longer than the ceiling is skipped, the rest is read, and the notes say so", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000065");
+  const at = lines.findIndex((l) => l.type === "user" && typeof l.message?.content === "string");
+  const before = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  // A record of 3 MB before the first prompt, with a 2 MB ceiling.
+  lines.splice(at, 0, { ...lines[at], type: "system", uuid: "00000000-0000-4000-e200-000000000001", content: "x".repeat(3000000) });
+  save(lines);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", env: { ...process.env, THREADS_LINE_MAX: "2000000" } }));
+  expect(problems(t)).toEqual([]);
+  expect(t.notes).toContain("1 transcript line was skipped for being longer than 2000000 bytes");
+  expect(t.steps.length).toBe(before.steps.length);
 });
