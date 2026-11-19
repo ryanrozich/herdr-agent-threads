@@ -43,7 +43,8 @@ test("the release pull request gets its check: release.yml starts ci.yml on its 
   // approves them, but a dispatch with that token runs at once, so the workflow runs ci.yml
   // itself on the release branch's head.
   expect(ci.split("\npermissions:")[0]).toMatch(/^ {2}workflow_dispatch:$/m);
-  expect(release).toMatch(/uses: googleapis\/release-please-action@v4\n/);
+  // Pinned to a commit, with the release it is in the comment.
+  expect(release).toMatch(/uses: googleapis\/release-please-action@[0-9a-f]{40} # v4\.\d+\.\d+\n/);
   expect(release).toMatch(/if: \$\{\{ steps\.release\.outputs\.prs_created == 'true' \}\}/);
   expect(release).toMatch(/BRANCH: \$\{\{ fromJSON\(steps\.release\.outputs\.pr\)\.headBranchName \}\}/);
   expect(release).toMatch(/gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref "\$BRANCH"/);

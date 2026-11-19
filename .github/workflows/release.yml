@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
 
       # A pull request the Actions token opens or updates gets its pull_request runs only in
       # an approval-required state: they wait until someone with write access approves them,
