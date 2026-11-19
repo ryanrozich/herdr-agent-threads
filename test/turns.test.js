@@ -551,22 +551,34 @@ test("senderOf's hc and peer splits match the old patterns on every fixture prom
   expect(checked).toBeGreaterThan(1300);
 });
 
-// Under the interpreter's speed (BUN_JSC_useJIT=0, set for a child bun) the 1,306 busy
-// prompts take under 5 ms (the old pattern took about 46 ms).
-test("senderOf stays under 5 ms for the busy fixture's prompts with JIT off", () => {
+// Under the interpreter's speed (BUN_JSC_useJIT=0, set for a child bun), senderOf and the old
+// split (oldSender, above) are timed one after the other over the same 1,306 busy prompts in
+// the same child, best of five rounds each, and the old split must take at least 4 times as
+// long. A fixed limit failed on runner timing alone: 5.027 ms against 5 ms in CI at commit
+// 8866382, then a pass on rerun (issue #160). Contention slows both loops together, so the
+// ratio holds: 10.58 or more across 200 idle and loaded runs, while a senderOf regressed to
+// the old split in one branch or both measures 0.97 to 1.95. oldSender uses nothing from
+// turns.js, so a change there moves only senderOf's side. The JIT stays off: with it on, the
+// ratio is 3.4 to 4.0.
+test("senderOf stays at least 4x faster than the pre-round-3 split on the busy fixture with JIT off", () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-sender-"));
   const file = join(dir, "p.json");
   writeFileSync(file, JSON.stringify(prompts("--busy", "130").map((e) => [e.o, e.t])));
   const script = join(dir, "time.js");
   writeFileSync(script, `import { senderOf } from ${JSON.stringify(join(root, "mods/agent-threads/core/turns.js"))};
+${oldSender}
 const ps = JSON.parse(require("fs").readFileSync(${JSON.stringify(file)}, "utf8"));
-for (const [o, t] of ps.slice(0, 50)) senderOf(o, t);
-let best = Infinity;
-for (let r = 0; r < 5; r++) { const a = performance.now(); for (const [o, t] of ps) senderOf(o, t); best = Math.min(best, performance.now() - a); }
-console.log(JSON.stringify({ n: ps.length, ms: best }));`);
+for (const [o, t] of ps.slice(0, 50)) { senderOf(o, t); oldSender(o, t); }
+let msNew = Infinity, msOld = Infinity;
+for (let r = 0; r < 5; r++) {
+  let a = performance.now(); for (const [o, t] of ps) senderOf(o, t); msNew = Math.min(msNew, performance.now() - a);
+  a = performance.now(); for (const [o, t] of ps) oldSender(o, t); msOld = Math.min(msOld, performance.now() - a);
+}
+console.log(JSON.stringify({ n: ps.length, msNew, msOld }));`);
   const out = JSON.parse(execFileSync("bun", [script], { encoding: "utf8", env: { ...process.env, BUN_JSC_useJIT: "0" } }));
+  console.log(`senderOf timing, JIT off: n=${out.n} msNew=${out.msNew.toFixed(2)} msOld=${out.msOld.toFixed(2)} ratio=${(out.msOld / out.msNew).toFixed(2)}`);
   expect(out.n).toBeGreaterThan(1300);
-  expect(out.ms).toBeLessThan(5);
+  expect(out.msOld / out.msNew).toBeGreaterThanOrEqual(4);
 });
 
 // ---- round 3: C3 ------------------------------------------------------------------------------
