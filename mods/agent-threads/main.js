@@ -65,6 +65,14 @@ import {
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
+import { VERSION, versionLine, parseBuild } from "./version.js";
+// build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
+// is missing or does not parse still loads; the version line then says the commit is not
+// known. It settles long before anyone opens the settings card.
+let built = null;
+import("./build.js")
+  .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
+  .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -795,6 +803,7 @@ export default class Threads extends View {
     this.linksPending = null;
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
+    this.build = undefined; // a stand-in for build.js in tests; undefined reads build.js (built)
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
     this.senders = []; // compiled sender rules (settings.js parseSenders)
@@ -6040,12 +6049,13 @@ export default class Threads extends View {
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
   }
 
-  // The card's foot, under the scroll: the agent, the turn count and the session's title (the
-  // floating top has no header to hold them), and "? keys", the way to every key while the key
-  // hints are off.
+  // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
+  // the way to every key while the key hints are off. The chat's agent, counts and title
+  // (aboutRow) were here with the floating top; the owner wants the version here and the
+  // chat's stats elsewhere, not yet chosen.
   cardFoot(t, pad) {
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
-      .child(this.floating() ? this.aboutRow(t) : div().flex_1())
+      .child(this.versionRow(t))
       .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
         .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
@@ -6229,6 +6239,15 @@ export default class Threads extends View {
       .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
         .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
       .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
+  }
+
+  // The card's last row: the mod's name and version (version.js), with the commit install.sh
+  // found. A plain line, not a control; a copy without a build says the commit is not known,
+  // and its tooltip says why. It takes the room "? keys" leaves and truncates in a narrow card,
+  // so otherwise its tooltip is the whole line.
+  versionRow(t) {
+    const line = versionLine(VERSION, this.build === undefined ? built : this.build);
+    return div().id("th-set-version").flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).tooltip(line.tip ?? line.text).child(line.text);
   }
 
   // The quote key field's note: a letter that cannot be the quote key, and why it stays.
@@ -6470,8 +6489,10 @@ export default class Threads extends View {
     return out;
   }
 
-  // The settings card's foot with the floating top: the agent, the turn and hidden counts and
-  // the session's title, which the header row showed. Its tooltip names the terminal and session.
+  // The agent, the turn and hidden counts and the session's title, which the header row shows.
+  // It was the settings card's foot with the floating top, until the version took that row; it
+  // is kept for the chat's stats' next place (not yet chosen). Its tooltip names the terminal
+  // and session.
   aboutRow(t) {
     const agent = this.agent();
     const s = this.current();
