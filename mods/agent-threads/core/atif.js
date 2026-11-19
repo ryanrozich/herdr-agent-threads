@@ -296,6 +296,7 @@ async function main(argv) {
     let chunk = base;
     for (let guard = 0; guard < 100000 && chunk; guard++) {
       const r = parseChunk(sh("extract.sh", [path, String(s.offset), String(chunk), agent], env));
+      if (process.env.THREADS_LINE_MAX) console.error('PROBE', JSON.stringify({ off: s.offset, chunk, used: r.used, size: r.size, max: LINE_MAX, events: r.events.length }));
       if (r.missing) return null;
       s.size = r.size;
       for (const e of r.events) apply(s, e);

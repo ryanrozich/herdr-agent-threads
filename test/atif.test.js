@@ -4,7 +4,7 @@
 // call of their own step) and against golden files in test/fixtures/atif.
 // UPDATE=1 bun test test/atif.test.js writes the golden files again.
 import { test, expect } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -843,7 +843,10 @@ test("atif: a transcript line longer than the ceiling is skipped, the rest is re
   // A record of 3 MB before the first prompt, with a 2 MB ceiling.
   lines.splice(at, 0, { ...lines[at], type: "system", uuid: "00000000-0000-4000-e200-000000000001", content: "x".repeat(3000000) });
   save(lines);
-  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", env: { ...process.env, THREADS_LINE_MAX: "2000000" } }));
+  const probe = spawnSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", maxBuffer: 1 << 28, env: { ...process.env, THREADS_LINE_MAX: "2000000" } });
+  console.log("PROBE stderr", probe.stderr.slice(0, 3000));
+  console.log("PROBE head", JSON.stringify(readFileSync(f, "utf8").split("\n").map((l) => l.length).slice(0, 8)));
+  const t = JSON.parse(probe.stdout);
   expect(problems(t)).toEqual([]);
   expect(t.notes).toContain("1 transcript line was skipped for being longer than 2000000 bytes");
   expect(t.steps.length).toBe(before.steps.length);
