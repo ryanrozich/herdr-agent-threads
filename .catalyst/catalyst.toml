@@ -15,6 +15,7 @@ done = "Done"
 canceled = "Canceled"
 
 [merge]
+policy = "checks-and-threads"
 queue = "mergify"
 required_checks = ["check"]
 
@@ -32,18 +33,6 @@ system_packages = [
   { name = "tesseract-ocr" },
 ]
 
-[[environment.clis]]
-name = "pen"
-install = { source = "npm", package = "@pen.dev/cli", version = "0.3.16" }
-required = false
-description = "Edit and export Pen design files for design tasks."
-
-[[environment.variables]]
-name = "PEN_CLI_KEY"
-required = false
-secret = true
-description = "Pen CLI authentication for headless design work."
-
 [[environment.verify]]
 name = "lint"
 run = ["bunx", "@biomejs/biome@2.6.4", "lint"]
@@ -54,9 +43,7 @@ run = ["sh", "-ec", "git ls-files -z '*.sh' | xargs -0 shellcheck -S warning"]
 
 [[environment.verify]]
 name = "extractor-syntax"
-run = ["sh", "-ec", """for f in mods/*/core/extract*.jq; do
-  printf '%s\n' '"x"' | jq -R -f "$f" > /dev/null
-done"""]
+run = ["sh", "-ec", "for f in mods/*/core/extract*.jq; do echo '\"x\"' | jq -R -f \"$f\" > /dev/null; done"]
 
 [[environment.verify]]
 name = "tests"
