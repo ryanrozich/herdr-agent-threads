@@ -446,7 +446,9 @@ test("atif: a subagent's own subagent is found in the session's one subagents fo
   writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
     { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
     said([{ type: "tool_use", id: "toolu_A_Agent", name: "Agent", input: { description: "Check DST", prompt: "Check DST edges." } }], "tool_use"),
-    { ...b(9), type: "user", toolUseResult: { status: "completed", agentId: B, content: [{ type: "text", text: "DST is fine." }] }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Agent", content: [{ type: "text", text: "DST is fine." }] }] } },
+    // In a subagent's own file the result of the subagent it started has no toolUseResult:
+    // the id is only a line of the result's text.
+    { ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Agent", content: [{ type: "text", text: "DST is fine." }, { type: "text", text: `agentId: ${B} (use it to continue this agent)\n<usage>total_tokens: 9654</usage>` }] }] } },
     said([{ type: "text", text: "The range math is right, and DST is fine." }], "end_turn"),
   ]));
   // B sits beside A, not in a folder of A's own.
@@ -522,4 +524,29 @@ test("atif: a result is whole in the export; the panel's calls.sh still cuts it 
   const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
   const r = t.steps.flatMap((st) => st.observation?.results ?? []).find((x) => x.source_call_id === id);
   expect(r.content).toBe(long);
+});
+
+test("atif: past 4,194,304 characters a result is cut for the export too, with a marker that gives its whole length", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000048");
+  const at = lines.findIndex((l) => l.type === "user" && Array.isArray(l.message?.content) && l.message.content[0]?.type === "tool_result" && typeof l.message.content[0].content === "string");
+  const id = lines[at].message.content[0].tool_use_id;
+  const huge = "h".repeat(4194404);
+  lines[at] = { ...lines[at], toolUseResult: { stdout: "" }, message: { ...lines[at].message, content: [{ ...lines[at].message.content[0], content: huge }] } };
+  save(lines);
+  const out = execFileSync("sh", [join(core, "calls.sh"), f, "claude", id], { encoding: "utf8", maxBuffer: 1 << 26, env: { ...process.env, THREADS_WHOLE: "1" } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.k === "out").out;
+  expect(out).toBe(`${"h".repeat(4194304)}\n\n… (cut at 4,194,304 characters of 4194404)`);
+});
+
+// The OpenCode reader starts a session over in place when the database replaces it
+// (Object.assign with a new session): newSession has no keepWakes, so that keeps the export's
+// switch, and the export sets it again after each start anyway.
+test("atif: the export's keepWakes survives a session started over in place", () => {
+  const s = newSession("s", "f");
+  expect(Object.keys(s)).not.toContain("keepWakes");
+  s.keepWakes = true;
+  Object.assign(s, newSession("s", "f"));
+  expect(s.keepWakes).toBe(true);
+  const src = readFileSync(join(core, "atif.js"), "utf8");
+  expect(src).toMatch(/if \(replaced\(s, r\)\) \{ Object\.assign\(s, newSession\(sid, path\)\); s\.keepWakes = true; continue; \}/);
 });

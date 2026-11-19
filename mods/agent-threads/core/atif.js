@@ -209,7 +209,7 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
     agent: clean({ name: AGENT_NAMES[agent] ?? agent, version, model_name: model ?? undefined, extra: { reader: "agent-threads" } }),
     steps,
     notes: results
-      ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step."
+      ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text (cut only past 4,194,304 characters, with a marker) are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step."
       : "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
     final_metrics: clean({
       total_prompt_tokens: total(any ? prompt : undefined, "total_prompt_tokens"),
@@ -224,10 +224,12 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
 
 // ---- the command line: bun core/atif.js <transcript> [agent] ----
 // Reads the transcript the way the panel does (extract.sh, or opencode.sh), takes each call's
-// whole result text and whole input from calls.sh (THREADS_WHOLE=1, THREADS_ARGS=1), keeps
+// whole result text (up to 4,194,304 characters, then a marker with its whole length) and
+// whole input from calls.sh (THREADS_WHOLE=1, THREADS_ARGS=1), keeps
 // each background wake-up's texts and calls as steps of their own (the reader's keepWakes),
 // nests each subagent's own transcript (SUB_DEPTH levels at most), and prints the
-// trajectory. Writes nothing.
+// trajectory. Writes nothing. Its output holds every result whole, so it is as sensitive as the
+// transcript itself: whatever a tool printed, a secret included, is in it.
 const SUB_DEPTH = 4;
 // Codex day folders searched for a thread's children: its own days and one either side.
 const CODEX_DAYS = 60;
@@ -276,7 +278,7 @@ async function main(argv) {
       s.keepWakes = true;
       for (let guard = 0; guard < 100000; guard++) {
         const r = parseChunk(sh("opencode.sh", ["read", db, sid, String(s.offset), "40"]));
-        if (replaced(s, r)) { Object.assign(s, newSession(sid, path)); continue; }
+        if (replaced(s, r)) { Object.assign(s, newSession(sid, path)); s.keepWakes = true; continue; }
         s.size = r.size;
         if (r.rewind) rewindTail(s);
         for (const e of r.events) apply(s, e);

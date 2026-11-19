@@ -510,7 +510,7 @@ function applyOne(s, e) {
       const a = s.agentIds.get(e.a) ?? { st: null, ms: null, tok: null };
       a.id = e.id;
       a.m = typeof e.m === "string" ? e.m : null;
-      if (!a.st) a.st = e.st === "async_launched" ? "running" : String(e.st);
+      if (!a.st && typeof e.st === "string") a.st = e.st === "async_launched" ? "running" : e.st;
       s.agents.set(e.id, a);
       s.agentIds.set(e.a, a);
       return;

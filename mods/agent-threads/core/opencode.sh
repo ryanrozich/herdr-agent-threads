@@ -114,15 +114,16 @@ calls)
   done
   [ -n "$ids" ] || exit 0
   here=$(dirname "$0")
-  # A result's first 24 KB for the panel; all of it for the ATIF export (THREADS_WHOLE=1).
-  cap=24576
-  [ "${THREADS_WHOLE:-}" = 1 ] && cap=2000000000
+  # A result's first 24 KB for the panel. For the ATIF export (THREADS_WHOLE=1) the whole of
+  # it up to 4,194,304 characters, and past that a marker with its whole length.
+  cap=24576 mark=0
+  [ "${THREADS_WHOLE:-}" = 1 ] && cap=4194304 mark=1
   sql=opencode-calls.sql
   if v2 "$db" && [ "$(q "$db" "select count(*) from (select 1 from session_message where session_id='$sid' limit 1);")" = 1 ]; then
     sql=opencode-calls-v2.sql
   fi
   sqlite3 -readonly -batch -noheader -cmd ".timeout 3000" -cmd ".parameter set :sid '$sid'" \
-    -cmd ".parameter set :ids '[$ids]'" -cmd ".parameter set :cap $cap" "$db" < "$here/$sql" ;;
+    -cmd ".parameter set :ids '[$ids]'" -cmd ".parameter set :cap $cap" -cmd ".parameter set :mark $mark" "$db" < "$here/$sql" ;;
 *)
   echo "usage: opencode.sh db|sessions|peers|read|calls ..." >&2
   exit 2 ;;
