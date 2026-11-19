@@ -124,6 +124,10 @@ def user_event:
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.
+    # A Skill-started subagent's prompt is its first record, marked meta (THREADS_SKILL=1, the
+    # ATIF export only).
+    elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") == "1" and ($l.parentUuid | type) != "string" then
+      {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
       if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
     else ($c | text_of) as $t
