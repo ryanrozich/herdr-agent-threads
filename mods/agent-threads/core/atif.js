@@ -26,7 +26,9 @@
 //   own steps are in its own transcript: the command line reads it (Claude Code's
 //   subagents/agent-<id>.jsonl beside the session; Codex's rollout whose session_meta names
 //   this thread as its parent) and nests it in subagent_trajectories, its call's result
-//   pointing at it (subagent_trajectory_ref). One it cannot find is marked
+//   pointing at it (subagent_trajectory_ref). A Claude Code subagent's id must be letters,
+//   digits, "-" and "_", and its file must resolve inside the subagents folder. One it cannot
+//   find, or will not read, is marked
 //   (extra.subagent_transcript "not found"). The totals then count the subagents too, as
 //   Harbor's do.
 // - Calls counted but not named (past STEP_CALLS) are a count, extra.calls_not_listed.
@@ -231,7 +233,7 @@ async function main(argv) {
   }
   const cp = await import("node:child_process");
   const fs = await import("node:fs");
-  const { join, dirname, basename } = await import("node:path");
+  const { join, dirname, basename, sep } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } = await import("./turns.js");
   const here = dirname(fileURLToPath(import.meta.url));
@@ -343,6 +345,14 @@ async function main(argv) {
     return found;
   };
 
+  // A subagent's id comes from transcript text, which a tool result or a pasted message can
+  // carry, so it is never trusted as a path: only letters, digits, "-" and "_", and the file
+  // it names must resolve (links followed) inside the subagents folder. Else it is not found.
+  const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+  const inside = (dir, f) => {
+    try { return fs.realpathSync(f).startsWith(`${fs.realpathSync(dir)}${sep}`); } catch { return false; }
+  };
+
   const build = (path, opts, depth, seen) => {
     const s = read(path, opts.env);
     if (!s) return null;
@@ -358,7 +368,9 @@ async function main(argv) {
       let child = null;
       if (agent === "claude" && c.subagent) {
         const a = c.subagent.agent;
-        if (a) child = { file: join(path.replace(/\.jsonl$/, ""), "subagents", `agent-${a}.jsonl`), id: a, env: { THREADS_SIDECHAIN: "1" } };
+        const dir = join(path.replace(/\.jsonl$/, ""), "subagents");
+        const f = typeof a === "string" && SAFE_ID.test(a) ? join(dir, `agent-${a}.jsonl`) : null;
+        if (f && inside(dir, f)) child = { file: f, id: a, env: { THREADS_SIDECHAIN: "1" } };
       } else if (agent === "codex" && /^spawn_agent$/.test(c.tool)) {
         let task = null;
         try { task = JSON.parse(r.out ?? "null")?.task_name ?? null; } catch { task = null; }
