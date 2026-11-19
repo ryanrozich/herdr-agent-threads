@@ -25,7 +25,7 @@ const ask = (turn, text, gap) => cline("event_msg", { type: "item_completed", tu
 const say = (text, phase = "final_answer", gap = 6) => cline("response_item", { type: "message", role: "assistant", phase, content: [{ type: "output_text", text }] }, gap);
 const call = (name, gap = 2) => cline("response_item", { type: "function_call", name, arguments: "{}" }, gap);
 const count = (input, cached, output) => cline("event_msg", { type: "token_count",
-  info: { total_token_usage: { total_tokens: input + output }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output } } }, 0);
+  info: { total_token_usage: { total_tokens: input + output }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output }, model_context_window: 258400 } }, 0);
 const fin = (ms) => cline("event_msg", { type: "task_complete", duration_ms: ms }, 0);
 const codexFile = join(out, `rollout-${stamp(T0).slice(0, 19)}-${codexId}.jsonl`);
 writeFileSync(codexFile, [
