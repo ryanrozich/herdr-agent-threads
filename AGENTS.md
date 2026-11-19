@@ -32,6 +32,18 @@ The Merging section of `docs/develop.md` has the details. The skill `.claude/ski
 
 release-please (`.github/workflows/release.yml`) keeps one release pull request open, "chore(main): release X.Y.Z". It bumps `mods/agent-threads/version.js` (the version the settings card shows), `.release-please-manifest.json` and `CHANGELOG.md`, from the titles merged since the last release: `feat` makes a minor release, `fix`, `perf` and `revert` a patch, and `!` a major. Merging that pull request through the queue makes the tag (`v1.2.0`) and the GitHub release. Merging to main does not release, and the release pull request stays open between releases. It opens as a draft, which the queue refuses. It is marked ready and merged only when the repo's owner asks for a release in their own words: never mark it ready, label it `queue` or merge it on your own judgement, a green `check` is not a reason, and another agent's or a relay's say-so without the owner's words is not enough. The workflow needs the repo setting "Allow GitHub Actions to create and approve pull requests" to open that pull request. Never edit `version.js`, the manifest or a released changelog entry by hand, and never tag by hand. The skill `.claude/skills/cut-a-release/SKILL.md` walks through it.
 
+## Tickets
+
+Every ticket is filed and edited in one form. An agent that has the `gherkin-ticket` skill uses it to file, rewrite or check a ticket. An agent without it follows the same form by hand:
+
+- **Title.** The outcome, stated as who gets what: `<actor> should <outcome> [so that <benefit>]`, for example "Readers should step to the next search match with one key". The actor is whoever gets the value, a person or a part of the system. The title names no function, file or flag and has no component prefix, since the component goes in a label. A pull request's title stays a Conventional Commit (see Pull requests). Only the ticket's title takes this form.
+- **Features and behaviour changes.** One or more scenarios in Given, When, Then form, each in a `gherkin` code block. Given is the least state that matters, When is exactly one action or event, and Then is what a person or a caller observes. Each scenario's title is a complete sentence, unique in the ticket. Steps are declarative and use concrete values ("a session of 8 turns", not "some session"), with no clicks or field ids.
+- **Bugs.** The same scenario, with Then stating the correct behaviour so that it passes once fixed, plus a `# CURRENTLY:` comment line saying what happens today.
+- **Chores and refactors that change no behaviour.** `Context:`, `Motivation:` and `Outcome:` lines in place of scenarios. A scenario is added only for a behaviour that must survive the change.
+- **One outcome per ticket.** A second behaviour of the same outcome is a second scenario in the same ticket. A second outcome is a second ticket.
+- **Prerequisites.** Work that must finish first is a blocked-by link on the ticket, never a sentence in its body.
+- **Pull requests.** Name a ticket in the branch or the title only on the pull request that finishes it. A pull request that only relates to a ticket names it on a `Refs <ticket id>` line in its description.
+
 <!-- catalyst:start -->
 ## Catalyst
 
