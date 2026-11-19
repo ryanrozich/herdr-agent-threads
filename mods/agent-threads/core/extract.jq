@@ -79,6 +79,23 @@ def brief:
 def results($l; $c):
   $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
   | {k: "x", id: .tool_use_id, ts: $l.timestamp, f: (.is_error == true)};
+# In a subagent's own transcript (THREADS_SIDECHAIN=1, the ATIF export only), the result of
+# a subagent it started has no toolUseResult: the started one's id is only a line of the
+# result text, "agentId: <id>", in the footer Claude Code puts after what the subagent said.
+# What the subagent said can hold such a line too, so only the last text block with one
+# counts, and its last match. Letters, digits, "-" and "_" only; core/atif.js checks the file
+# it names again, its first prompt against the call's, and that no other call has it.
+def side_launch($c):
+  if ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
+  else $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
+    | .tool_use_id as $id
+    | ([.content | if type == "string" then [.] elif type == "array" then [.[]? | select(type == "object" and .type == "text") | (.text // "") | tostring] else [] end
+        | .[] | select(test("(?:^|\n)agentId: [A-Za-z0-9_-]"))] | last) as $t
+    | select($t != null)
+    | ([$t | match("(?:^|\n)agentId: (?<a>[A-Za-z0-9_-]{1,80})(?![A-Za-z0-9_-])"; "g") | .captures[0].string] | last) as $a
+    | select($a != null)
+    | {k: "r", id: $id, a: $a, m: null, st: null}
+  end;
 # A short result line: one call, or several with one error flag between them (which of them
 # failed is not known then).
 def short_results:
@@ -97,10 +114,20 @@ def user_event:
   . as $l
   | ($l.message.content) as $c
   | if $l.toolUseResult != null then launch($l; $c), results($l; $c)
-    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then results($l; $c)
+    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then
+      # A fork's own transcript, read after the records it copied from its caller (THREADS_FORK=1,
+      # the ATIF export only): its first record carries the fork call's result and, beside it,
+      # the fork's prompt as text blocks.
+      (if ($ENV.THREADS_FORK // "") == "1" and any($c[]?; type == "object" and .type == "text")
+       then {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)} else empty end),
+      side_launch($c), results($l; $c)
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.
+    # A Skill-started subagent's prompt is its first record, marked meta (THREADS_SKILL holds that
+    # record's uuid, in the ATIF export only).
+    elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") != "" and $l.uuid == $ENV.THREADS_SKILL then
+      {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
       if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
     else ($c | text_of) as $t
