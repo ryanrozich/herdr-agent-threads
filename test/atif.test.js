@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
 import { atif, ATIF_VERSION } from "../mods/agent-threads/core/atif.js";
@@ -613,4 +613,120 @@ test("atif: two calls that name one subagent: the first has it, the second is ma
   expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
   expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
   expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "already attached to toolu_A_one" });
+});
+
+// A fork: the subagent's file starts with copies of its caller's records (the same uuids),
+// then its own. The copies are not read again, and the call's prompt ends its first prompt.
+test("atif: a forked subagent skips the records copied from its caller, so nothing is written twice, and its prompt is checked after them", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000053");
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const F = "f0000000000000fork";
+  const prompt = "Fork: check the DST edges with what you know.";
+  const parentRows = (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    said([{ type: "tool_use", id: "toolu_A_Grep", name: "Grep", input: { pattern: "endOfRange" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "src/calendar/range.ts:12" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Grep", content: "src/calendar/range.ts:12" }] } },
+    said([{ type: "tool_use", id: "toolu_A_Fork", name: "Agent", input: { description: "Fork", prompt, subagent_type: "fork", name: "dst" } }], "tool_use"),
+  ];
+  const aText = sidechain(A, sid, 1, (b, said) => [
+    ...parentRows(b, said),
+    { ...b(9), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Fork", content: [{ type: "text", text: "DST is fine." }, { type: "text", text: `agentId: ${F} (use it to continue this agent)` }] }] } },
+    said([{ type: "text", text: "Done." }], "end_turn"),
+  ]);
+  writeFileSync(join(subs, `agent-${A}.jsonl`), aText);
+  // The fork's file: A's first four records as they are, then its own.
+  const copied = aText.split("\n").slice(0, 4).join("\n");
+  const own = sidechain(F, sid, 2, (b, said) => [
+    said([{ type: "text", text: "Forking." }], "end_turn"),
+    { ...b(1), type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Fork", content: "forked" }, { type: "text", text: `You are a fork of the conversation above.\n\n${prompt}` }] } },
+    said([{ type: "tool_use", id: "toolu_F_Read", name: "Read", input: { file_path: "src/calendar/dst.ts" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "export const DST = true;" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_F_Read", content: "export const DST = true;" }] } },
+    said([{ type: "text", text: "DST is fine." }], "end_turn"),
+  ]);
+  writeFileSync(join(subs, `agent-${F}.jsonl`), `${copied}\n${own}`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+  const res = a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_A_Fork");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(F);
+  const fork = a.subagent_trajectories.find((x) => x.trajectory_id === F);
+  // Only the fork's own call: the copied Grep and the copied Agent call are A's alone.
+  expect(fork.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_F_Read"]);
+  expect(JSON.stringify(fork)).not.toContain("toolu_A_Grep");
+});
+
+// A Skill call that forks a subagent: its launch record (status "forked") names it.
+function skillSession(name, args) {
+  const { f, lines, save } = freshClaude(name);
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const at = lines.findIndex((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const ref = lines[at];
+  const S = "s000000000000skill";
+  const usage = { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 };
+  lines.splice(at, 0,
+    { ...ref, uuid: "00000000-0000-4000-e000-000000000001", message: { ...ref.message, id: "msg_skill", content: [{ type: "tool_use", id: "toolu_Skill", name: "Skill", input: { skill: "review-tests", ...(args ? { args } : {}) } }], stop_reason: "tool_use", usage } },
+    { ...ref, type: "user", uuid: "00000000-0000-4000-e000-000000000002", toolUseResult: { agentId: S, commandName: "review-tests", result: "Reviewed.", status: "forked", success: true }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_Skill", content: "Reviewed." }] } });
+  save(lines);
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  writeFileSync(join(subs, `agent-${S}.jsonl`), sidechain(S, sid, 3, (b, said) => [
+    { ...b(0), type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: review-tests" }] } },
+    { ...b(1), type: "user", message: { role: "user", content: `Review the tests.${args ? `\n\nARGUMENTS: ${args}` : ""}` } },
+    said([{ type: "tool_use", id: "toolu_S_Grep", name: "Grep", input: { pattern: "Date.now" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "test/range.test.ts:4" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_S_Grep", content: "test/range.test.ts:4" }] } },
+    said([{ type: "text", text: "Two tests need a fixed clock." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const res = t.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_Skill");
+  return { t, res, S };
+}
+
+test("atif: a Skill call's forked subagent is attached by its launch record; its args are looked for in the subagent's first prompt", () => {
+  const { t, res, S } = skillSession("00000000-0000-4000-8000-000000000054", "src/calendar");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(S);
+  expect(res.extra.subagent_link).toBeUndefined();
+  const sub = t.subagent_trajectories.find((x) => x.trajectory_id === S);
+  expect(sub.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.function_name)).toEqual(["Grep"]);
+});
+
+test("atif: a Skill call with no args to look for is still attached, and extra says the link rests on the id alone", () => {
+  const { res, S } = skillSession("00000000-0000-4000-8000-000000000055", null);
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(S);
+  expect(res.extra.subagent_link).toBe("id only: the Skill call has no args to look for in the subagent's first prompt");
+});
+
+test("atif: a subagent transcript no call names is written apart, attached to no call, with its shared promptId as a hint and a count in the notes", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000056");
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const pid = lines.find((l) => typeof l.promptId === "string").promptId;
+  const before = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const U = "u0000000000unnamed";
+  writeFileSync(join(subs, `agent-${U}.jsonl`), sidechain(U, sid, 4, (b, said) => [
+    { ...b(0), type: "user", promptId: pid, message: { role: "user", content: "Watch the build." } },
+    said([{ type: "tool_use", id: "toolu_U_Bash", name: "Bash", input: { command: "bun run build" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "ok" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_U_Bash", content: "ok" }] } },
+    said([{ type: "text", text: "The build is fine." }], "end_turn"),
+  ]));
+  // A link in the folder to a file elsewhere is never read, named or not.
+  const d = dirname(f);
+  writeFileSync(join(d, "elsewhere.jsonl"), sidechain("elsewhere00000001", sid, 5, (b) => [{ ...b(0), type: "user", message: { role: "user", content: "ELSEWHERE" } }]));
+  symlinkSync(join(d, "elsewhere.jsonl"), join(subs, "agent-elsewhere00000001.jsonl"));
+  const out = execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("ELSEWHERE");
+  const t = JSON.parse(out);
+  expect(problems(t)).toEqual([]);
+  const un = t.extra.subagents_no_call_names;
+  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "a hint, not a link: no call in the session names this transcript", shared_prompt_id: pid }]]);
+  expect(un[0].trajectory.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_U_Bash"]);
+  expect(t.notes).toContain("1 subagent transcript in the session's subagents folder that no call names is in extra.subagents_no_call_names");
+  // Attached to no call and not in the totals or the standard field.
+  expect(t.subagent_trajectories ?? []).toEqual(before.subagent_trajectories ?? []);
+  expect(t.final_metrics).toEqual(before.final_metrics);
+  expect(JSON.stringify(t.steps)).not.toContain(U);
 });
