@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, reply, stats } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, reply, stats, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -275,4 +275,35 @@ test("level 3: Codex calls carry their call ids, and calls.sh reads each one's i
   expect(outs.call_j1.err).toBe(true);
   expect(outs.call_x1.out).toContain("rg: src: no such file");
   expect(outs.call_e1.ts).toMatch(/^2026-01-02T03:/);
+});
+
+// TRD-17: each count states the window of the model that answered it (model_context_window).
+// The ring uses the newest count's own window, so a model changed mid-session shows from its
+// first count, and a count with no window shows no ring rather than the last one's.
+test("the context window comes from the newest count, through a model change", () => {
+  ordinal = 0;
+  second = 0;
+  const win = (total, input, cached, output, w) => line("event_msg", { type: "token_count",
+    info: { total_token_usage: { total_tokens: total }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output }, ...(w === undefined ? {} : { model_context_window: w }) } });
+  const dir = mkdtempSync(join(tmpdir(), "threads-codex-"));
+  const file = join(dir, `rollout-2026-01-02T03-00-00-${ID}.jsonl`);
+  const head = [line("session_meta", { id: ID, cwd: "/home/dev/shop" }), ctx("gpt-5.5-codex", "medium"), prompt("turn-0001", [{ type: "text", text: "Why does the cart test fail?" }]), win(100, 64600, 60000, 20, 258400), say("It rounds tax per line."), done(1000)];
+  writeFileSync(file, head.join(""));
+  const at = (lines) => { appendFileSync(file, lines.join("")); return sessionStats(read(file, 1 << 20).turns); };
+  let st = sessionStats(read(file, 1 << 20).turns);
+  expect([st.context, st.contextPct]).toEqual([64600, 25]);
+  // Another model for the next turn: until it answers, the ring stays with the count it has.
+  st = at([ctx("gpt-5.5-codex-max", "high"), prompt("turn-0002", [{ type: "text", text: "Fix it" }])]);
+  expect([st.context, st.contextPct]).toEqual([64600, 25]);
+  // Its first count states its own window.
+  st = at([win(300, 95000, 90000, 30, 475000)]);
+  expect([st.context, st.contextPct]).toEqual([95000, 20]);
+  // A count that states no window (or a zero or a string one): the context stays, the ring goes.
+  for (const w of [undefined, 0, "475000", null]) {
+    st = at([win(400 + second, 96000, 90000, 30, w)]);
+    expect([st.context, st.contextPct]).toEqual([96000, null]);
+  }
+  // Over the window (a count Codex wrote just before it compacted): the real percent.
+  st = at([win(900, 480000, 400000, 30, 475000)]);
+  expect(st.contextPct).toBe(101);
 });
