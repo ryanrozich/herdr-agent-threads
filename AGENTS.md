@@ -36,10 +36,13 @@ release-please (`.github/workflows/release.yml`) keeps one release pull request 
 
 Every ticket is filed and edited in one form. An agent that has the `gherkin-ticket` skill uses it to file, rewrite or check a ticket. An agent without it follows the same form by hand:
 
-- **Title.** The outcome, stated as who gets what: `<actor> should <outcome> [so that <benefit>]`, for example "Readers should step to the next search match with one key". The actor is whoever gets the value, a person or a part of the system. The title names no function, file or flag.
-- **Body.** One or more scenarios in Given, When, Then form, each in a `gherkin` code block: the starting state, the one action, and what the reader or the system then sees. Bugs and chores get scenarios too. A bug's scenario is the behaviour it should have, and a chore's is what is true once it is done.
-- **One outcome.** A ticket carries one outcome. Two outcomes are two tickets, even when one change would deliver both.
-- **Pull requests name their ticket.** The description names the ticket it works on by its id, on a line such as `Refs <ticket id>`.
+- **Title.** The outcome, stated as who gets what: `<actor> should <outcome> [so that <benefit>]`, for example "Readers should step to the next search match with one key". The actor is whoever gets the value, a person or a part of the system. The title names no function, file or flag and has no component prefix, since the component goes in a label. A pull request's title stays a Conventional Commit (see Pull requests). Only the ticket's title takes this form.
+- **Features and behaviour changes.** One or more scenarios in Given, When, Then form, each in a `gherkin` code block. Given is the least state that matters, When is exactly one action or event, and Then is what a person or a caller observes. Each scenario's title is a complete sentence, unique in the ticket. Steps are declarative and use concrete values ("a session of 8 turns", not "some session"), with no clicks or field ids.
+- **Bugs.** The same scenario, with Then stating the correct behaviour so that it passes once fixed, plus a `# CURRENTLY:` comment line saying what happens today.
+- **Chores and refactors that change no behaviour.** `Context:`, `Motivation:` and `Outcome:` lines in place of scenarios. A scenario is added only for a behaviour that must survive the change.
+- **One outcome per ticket.** A second behaviour of the same outcome is a second scenario in the same ticket. A second outcome is a second ticket.
+- **Prerequisites.** Work that must finish first is a blocked-by link on the ticket, never a sentence in its body.
+- **Pull requests.** Name a ticket in the branch or the title only on the pull request that finishes it. A pull request that only relates to a ticket names it on a `Refs <ticket id>` line in its description.
 
 <!-- catalyst:start -->
 ## Catalyst
