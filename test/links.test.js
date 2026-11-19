@@ -12,7 +12,7 @@ mock.module("herdr", () => ({
   ...Object.fromEntries(["exec", "hc", "home", "appHome", "readTextFile", "watchFolder", "theme", "themes", "settings", "panes", "terminals",
     "spaces", "focused", "props", "run", "shared", "setShared", "closeOverlay", "openOverlay", "notify", "nextCommand", "updates"].map((k) => [k, stub])),
 }));
-const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG } = await import("../mods/agent-threads/settings.js");
+const { parseLinks, parseQuoteKey, parseExtras, templateHost, saveSettings, parseSettings, DEFAULTS, SLOW_LONG, LINK_TEMPLATES } = await import("../mods/agent-threads/settings.js");
 const { linkify, linkPieces, fillUrl, parseRemote, promptMd, promptLinks, linkLineRows, SLOW_REPLY } = await import("../mods/agent-threads/ui.js");
 
 const ISSUE = { name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://linear.app/acme/issue/ACME-$1" };
@@ -258,6 +258,29 @@ test("quantifiers side by side that overlap are slow on long runs, and the check
   expect(l.list[0].why).toBe(SLOW_LONG);
   expect(l.list.map((r) => r.why)).toEqual([SLOW_LONG, expect.stringMatching(/^too slow/), expect.stringMatching(/^too slow/), null, null, null]);
   expect(performance.now() - t0).toBeLessThan(3000);
+});
+
+// The check times each probe once. Under load (a busy machine, a garbage collection, CI with
+// other jobs) one run can take 10 ms for a plain rule, which then read as too slow and was
+// turned off. The clock here jumps 10 ms once, at a given read.
+function withClock(step, fn) {
+  const real = performance.now;
+  let reads = 0;
+  let off = 0;
+  performance.now = () => { reads++; off += step(reads); return real.call(performance) + off; };
+  try { return fn(); } finally { performance.now = real; }
+}
+test("a plain rule is not turned off by one slow run under load, in the short or the long probes", () => {
+  const rules = [LINK_TEMPLATES.ticket.rule, LINK_TEMPLATES["pull-request"].rule, { name: "k", pattern: "\\b[A-Z]{2,10}-\\d+\\b", url: "https://x.example/$0" }];
+  // Read 2 ends the first short probe's run; read 120 falls in the long probes.
+  for (const at of [2, 9, 120, 160]) {
+    const l = withClock((n) => (n === at ? 10 : 0), () => parseLinks(rules));
+    expect(l.list.map((r) => r.why)).toEqual([null, null, null]);
+  }
+  // A clock that is slow on every run still reads as slow: 4 ms a run is under the short
+  // probes' 5 ms and over the long probes' 3 ms.
+  const slow = withClock(() => 4, () => parseLinks(rules.slice(0, 1)));
+  expect(slow.list[0].why).toBe(SLOW_LONG);
 });
 
 test("a rule slow on a reply is skipped from then on, and says why, so one rule cannot stall a draw", () => {
