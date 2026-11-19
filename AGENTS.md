@@ -26,7 +26,7 @@ Fixtures and screenshots are synthetic (the staged `acme-web` session, `test/mak
 - **The queue.** Nothing merges by hand. A maintainer adds the `queue` label (or comments `@mergifyio queue`) once a pull request is out of draft, `check` passes and every review thread is resolved. Mergify batches queued pull requests, runs `check` on the batch and squashes each one onto main.
 - **Order.** When one pull request must land after another, its description carries `Depends-On: #N` on a line of its own. For a stack, base each pull request on main, and after the lower one lands, move the upper one with `git rebase --onto origin/main <lower's last commit> <upper>`.
 
-The Merging section of `docs/develop.md` has the details. The skill `.claude/skills/open-a-pr/SKILL.md` walks through it.
+The Merging section of `docs/develop.md` has the details. The skill `.claude/skills/open-a-pr/SKILL.md` walks through it, and `.claude/skills/verify-a-change/SKILL.md` gives the checks and the evidence a change needs, including the part only a desktop with Herdr can do.
 
 ## Releases
 
