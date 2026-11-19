@@ -9054,6 +9054,42 @@ test("the card leaves a 160 px strip of the list under it, except in a pane unde
   expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
 });
 
+// TRD-7 (#142): in a pane under about 224 px the card ran past the bottom, cutting off its foot.
+test("in a very short pane the card stays inside it: the rows shrink first, then the card moves up, and the head and foot always show", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  const box = () => {
+    const c = cardOf(v);
+    const card = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card");
+    const top = c.slice(card).find((e) => e[0] === "top")[1];
+    const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+    return { top, bodyH: c.slice(at).find((e) => e[0] === "h")[1] };
+  };
+  const fixed = 40 + 40 + 2;
+  // 224 px and up: as before, the card under the top band, 12 px above the bottom.
+  v.rootH = 224;
+  expect(box()).toEqual({ top: 32, bodyH: 224 - 32 - 12 - fixed });
+  for (const h of [223, 200, 160, 126]) {
+    v.rootH = h;
+    const b = box();
+    expect([h, b.top, b.bodyH]).toEqual([h, 32, h - 32 - 12 - fixed]);
+    expect(b.top + fixed + b.bodyH).toBeLessThanOrEqual(h - 12);
+  }
+  // Too short for the head and foot under the top band: the rows are gone, and the card moves
+  // up over the icons, so its head and foot stay inside the pane.
+  for (const h of [125, 110, 94]) {
+    v.rootH = h;
+    expect([h, box()]).toEqual([h, { top: h - 12 - fixed, bodyH: 0 }]);
+  }
+  // The key hints keep their room only while the card fits above them.
+  v.rootH = 200;
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  expect(box().bodyH).toBe(200 - 32 - 12 - fixed);
+});
+
 test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.width = 545; v.paneW = 573; v.rootH = 400;
