@@ -60,7 +60,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -939,7 +939,7 @@ export default class Threads extends View {
       case "turn": case "wrow": {
         const sh = r.shape;
         if (r.compact) return `pin${n} ${r.pinNo} p${sh.p} h${sh.height}${r.fresh ? " new" : ""}${r.running ? " live" : ""} | ${sh.prompt.join(" ⏎ ")} | ${sh.reply}`;
-        const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "c" ? l : `▎${l}`)) : sh.prompt;
+        const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "q" || sh.kinds[i] === "qonly" ? `▎${l}` : l)) : sh.prompt;
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
@@ -5282,8 +5282,10 @@ export default class Threads extends View {
   galleryPrompt(t, turn, rt, L) {
     const g = this.gal;
     const shown = g.images[g.i]?.n;
-    const all = String(turn.prompt ?? "").split("\n");
-    const lines = all.slice(0, 400);
+    // The prompt's lines as promptParts segments them: a pasted block's wrapper tags are
+    // gone and its body is verbatim, so a shell transcript's ">" lines keep their marker.
+    const entries = promptParts(String(turn.prompt ?? ""), 1000).flatMap((r) => r.lines.map((l) => ({ text: l, quote: r.quote, paste: Boolean(r.paste) })));
+    const lines = entries.slice(0, 400);
     const ink = turn.ink ?? t.foreground;
     const tag = (p, li, k) => {
       const j = g.images.findIndex((x) => x.n === p.n);
@@ -5300,13 +5302,12 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " "))))));
     };
-    const QUOTE = /^ {0,3}>\s?/;
     const sub = turn.sub ?? t.muted;
     const blocks = [];
     for (let li = 0; li < lines.length; li++) {
-      if (!QUOTE.test(lines[li])) { blocks.push(line(lines[li], li)); continue; }
+      if (!lines[li].quote) { blocks.push(line(lines[li].text, li)); continue; }
       const quoted = [];
-      for (; li < lines.length && QUOTE.test(lines[li]); li++) quoted.push(line(lines[li].replace(QUOTE, ""), li, sub));
+      for (; li < lines.length && lines[li].quote; li++) quoted.push(line(lines[li].text, li, sub));
       li--;
       blocks.push(div().relative().min_w(0).pl(QUOTE_INSET).text_size(rt.small)
         .child(div().absolute().left(0).top(3).bottom(3).w(2).rounded(1).bg(turn.agent ? sub : alpha(ink, 0.28)))
@@ -5315,7 +5316,7 @@ export default class Threads extends View {
     const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(blocks)
-      .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
+      .when(entries.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(entries.length - lines.length, "more line")} not shown`)))
       .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
     const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
     return h_flex().w_full().pb(14).when(!turn.agent, (el) => el.justify_end())
@@ -7934,11 +7935,16 @@ export default class Threads extends View {
         .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size, sh.pHard)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
-    // quote that is the whole prompt keeps the prompt's own colour and size.
+    // quote that is the whole prompt keeps the prompt's own colour and size. A pasted
+    // block: one quiet label row ("Pasted · N lines", muted 12.5 px, no bar), then each
+    // body line its own mono row, clipped by the shape, never wrapped.
     if (sh.kinds) {
       return v_flex().min_w(0).children(sh.prompt.map((l, i) => {
         const k = sh.kinds[i];
         if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl(i, [l], color, size));
+        if (k === "p") return h_flex().h(lh).min_w(0).items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_family(this.mono()).text_color(color).child(l || " "));
+        if (k === "pl") return h_flex().h(lh).min_w(0).items_center().child(sl(i, [l], t.muted, rt.small));
         return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
@@ -8329,12 +8335,16 @@ export default class Threads extends View {
         const canLess = !longLine && r.less && this.youClip(turn).more > 0;
         // Markdown through TextView (quotes, code and link rules drawn the way the reply is),
         // or with a filter that matches the prompt, the matches marked and each quote run
-        // behind the same bar.
+        // behind the same bar. A pasted block: the quiet label, then its body in the mono
+        // face, one block, the wrapper gone.
         const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
             ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
               .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
-            : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
+            : p.paste
+              ? v_flex().min_w(0).child(div().text_size(12.5).text_color(bt.muted).child(pasteLabel(p.lines.length)))
+                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, p.lines.join("\n"), bt.muted)))
+              : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
           : this.mdView(tv(`th-you-${r.key}`), y.md, this.replySelectable());
         const cmd = commandParts(turn);

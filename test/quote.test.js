@@ -128,6 +128,26 @@ test("promptMd: quotes become blockquotes, everything else shows as typed", () =
   expect(md("> a\n>\n> b")).toBe("> a\n>\n> b");
 });
 
+test("promptMd: a pasted block becomes one fenced code block, the wrapper gone", () => {
+  const p = promptMd('before\n<pasted_content id="x">\n> npm test\ntable row\n</pasted_content>\nafter');
+  expect(p.md).toBe("before\n\n```\n> npm test\ntable row\n```\n\nafter");
+  expect(p.code).toBe(1);
+  expect(p.md).not.toContain("pasted_content");
+  // The label is not Markdown text; the fence carries the block. An unclosed paste is
+  // fenced too (its body to the end of the text).
+  const u = promptMd('note\n<pasted_content>\nalpha\nbeta');
+  expect(u.md).toBe("note\n\n```\nalpha\nbeta\n```");
+  expect(u.code).toBe(1);
+  // A paste that is the whole prompt is one code block and nothing else.
+  const o = promptMd('<pasted_content id="o">\nonly body\n</pasted_content>');
+  expect(o.md).toBe("```\nonly body\n```");
+  expect(o.quotes).toBe(0);
+  // A body that itself holds a fence gets a longer one, so nothing after it turns into code.
+  const inner = promptMd('before\n<pasted_content>\nfoo\n```ts\nconst x = 1\n```\nbar\n</pasted_content>\nafter');
+  expect(inner.md).toBe("before\n\n````\nfoo\n```ts\nconst x = 1\n```\nbar\n````\n\nafter");
+  expect(inner.code).toBe(1);
+});
+
 test("promptMd reads 32,000 characters by default, more with max, and says what it leaves out", () => {
   const long = "a ".repeat(25004);
   const d = promptMd(long);

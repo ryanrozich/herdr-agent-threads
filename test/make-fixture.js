@@ -35,6 +35,9 @@
 //   --quotes     add prompts that quote the reply above in Markdown ("> "): quote only,
 //                comment only, quote then comment, comment then quote, interleaved, ">"
 //                with no space, nested "> >", a ">" line inside a fence, and a 40-line quote
+//   --paste      add prompts with pasted output (issue 93): the example table under a
+//                comment, a paste whose body lines start with ">", a plain multi-line
+//                message, a paste that is the whole prompt, and an unclosed paste
 //   --links      add a turn whose prompt and reply hold ACME-123, #45, a fence holding
 //                ACME-9, an existing link, a URL with ACME-2 in it and a #123456 colour
 //   --hostile    add a turn whose reply holds an ESC[201~, a CR and a command (for the
@@ -73,6 +76,7 @@ const subagents = bool("--subagents");
 const latestFx = bool("--latest");
 const long = bool("--long");
 const quotes = bool("--quotes");
+const pasteFx = bool("--paste");
 const linksFx = bool("--links");
 const hostile = bool("--hostile");
 const edge = bool("--edge");
@@ -460,6 +464,33 @@ if (quotes) {
     prompt(q);
     assistant([{ type: "text", text: `Done with quote case ${i + 1}. The backoff now starts at 200 ms.` }], { out: 60 });
     end(7000 + i * 1000);
+  });
+}
+
+if (pasteFx) {
+  // Issue 93's own example plus the shapes around it: a paste whose body lines start with
+  // ">" (a shell transcript), a plain multi-line message, a paste that is the whole prompt,
+  // and one a clip left unclosed.
+  const table = [
+    "Jobs over the last hour:",
+    "┌──────────┬────────┬───────┐",
+    "│ job      │ runs   │ p95   │",
+    "├──────────┼────────┼───────┤",
+    "│ build    │ 12     │ 4m 10s│",
+    "│ e2e      │ 9      │ 2m 05s│",
+    "└──────────┴────────┴───────┘",
+  ].join("\n");
+  const P = [
+    `How did the build get so slow? Output below.\n\n<pasted_content id="example">\n${table}\n</pasted_content>`,
+    `<pasted_content id="shell">\n> npm test\n> jest --ci\n</pasted_content>\n\nWhich of these failed?`,
+    "First point.\nSecond point.\n\nThird point after a blank line.",
+    `<pasted_content id="only">\n${table}\n</pasted_content>`,
+    "Unclosed paste below\n<pasted_content id=\"clip\">\nalpha\nbeta\ngamma",
+  ];
+  P.forEach((p, i) => {
+    prompt(p);
+    assistant([{ type: "text", text: `Paste case ${i + 1} noted. The table keeps its columns.` }], { out: 40 });
+    end(6000 + i * 500);
   });
 }
 

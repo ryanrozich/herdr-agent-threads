@@ -1675,6 +1675,71 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   v.full.clear();
 });
 
+test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono paste rows", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--paste"));
+  v.width = 380;
+  draw(v, cx);
+  const snap = () => state.shared["threads.debug"].t4;
+  const turn = (n) => snap().detail.find((d) => d.startsWith(`turn#${n} `));
+  const rowsText = () => snap().detail.filter((d) => /^turn#\d /.test(d)).join("\n");
+  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  // The issue's example: the label row, then the table's own lines, no wrapper anywhere.
+  const d1 = turn(1);
+  expect(d1).toMatch(/^turn#1 p10\/r\d h\d+ /);
+  expect(d1).toContain("Pasted · 7 lines");
+  expect(d1).toContain("│ job      │ runs   │ p95   │");
+  expect(rowsText()).not.toContain("pasted_content");
+  // A plain multi-line message keeps its line breaks and its blank row.
+  expect(turn(3)).toContain("First point. ⏎ Second point. ⏎  ⏎ Third point after a blank line.");
+  // ">" inside a paste stays a body row, not a quote.
+  expect(turn(2)).toContain("> npm test");
+  expect(turn(2)).not.toContain("▎");
+  // Heights match a fresh rowShape for the pasted turn and the plain multi-line one.
+  const { rowShape } = await import("../mods/agent-threads/ui.js");
+  for (const t of [v.current().turns[0], v.current().turns[2]]) {
+    expect(v.shape(t).height).toBe(rowShape({ prompt: t.prompt, reply: v.shape(t).reply.join(" "), width: 380, promptLines: 100000, replyLines: 100000 }).height);
+    expect(v.shape(t).p).toBe(v.shape(t).prompt.length);
+  }
+  // Shorten long messages on: label and paste rows count against Prompt lines, cut, with
+  // Show more under the bubble.
+  v.prefs = { ...v.prefs, truncate: true, promptLines: 4 };
+  draw(v, cx);
+  const t1 = v.current().turns[0];
+  expect(turn(1)).toMatch(/^turn#1 p4\/r\d /);
+  expect(v.shape(t1).pMore).toBe(true);
+  const row = () => v.rows().find((r) => r.turn === t1 && r.kind === "turn");
+  expect(strings(() => v.rowItem(theme, row(), false))).toContain("Show more");
+  v.prefs = { ...v.prefs, truncate: false };
+  draw(v, cx);
+  // The plain look draws the open card's prompt as Markdown: one fenced block, wrapper gone.
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" };
+  mdSources.length = 0;
+  v.open = new Set(["0:1"]);
+  draw(v, cx);
+  const you = mdSources.find(([id]) => id === "th-you-you:0:1");
+  expect(you[1]).toContain("```\nJobs over the last hour:");
+  expect(you[1]).not.toContain("pasted_content");
+  expect(snap().detail.find((d) => d.startsWith("you#1"))).toMatch(/^you#1 USER md q0 code1 links0 h\d+/);
+  v.open.clear();
+  // Turn 2's paste holds ">" body lines: code inside the fence, never a quote.
+  v.open = new Set(["0:2"]);
+  draw(v, cx);
+  const you2 = mdSources.find(([id]) => id === "th-you-you:0:2");
+  expect(you2[1]).toContain("```\n> npm test\n> jest --ci\n```");
+  expect(snap().detail.find((d) => d.startsWith("you#2"))).toMatch(/^you#2 USER md q0 code1 links0 h\d+/);
+  v.open.clear();
+  // The default coloured bubble draws the paste as a mono block under the quiet label,
+  // with no Markdown view and no wrapper text.
+  v.prefs = { ...v.prefs, bubbleColor: "blue", agentBubbleColor: "amber" };
+  mdSources.length = 0;
+  v.open = new Set(["0:1"]);
+  const kids = strings(() => draw(v, cx));
+  expect(mdSources.some(([id]) => id === "th-you-you:0:1")).toBe(false);
+  expect(kids).toContain("Pasted · 7 lines");
+  expect(kids.join(" ")).not.toContain("pasted_content");
+  v.open.clear();
+});
+
 test("link rules in a coloured bubble: the open turn lists the prompt's links under the bubble (issue 116)", async () => {
   const { v, cx } = await pane(fixture("--only", "0", "--links"));
   v.width = 380;
