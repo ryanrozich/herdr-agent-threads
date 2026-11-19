@@ -269,3 +269,20 @@ test("2.x level 3: calls carry their ids, and calls.sh reads each one's input, o
   expect(() => execFileSync("sh", [script, "calls", o.path, SID, "call'1"], { stdio: "pipe" })).toThrow();
   expect(() => execFileSync("sh", [script, "calls", o.path, "ses'x", "call_1"], { stdio: "pipe" })).toThrow();
 });
+
+test("2.x: calls.sh gives the panel a result's first 24 KB, and the ATIF export (THREADS_WHOLE=1) the whole of it up to 4,194,304 characters, then a marker", () => {
+  const o = open({ old: true });
+  user(o, "msg_u1", "Read the logs", 0);
+  const mid = `${"m".repeat(29990)}\nexit 1`;
+  const huge = "h".repeat(4194404);
+  const call = (id, out, at) => ({ type: "tool", id, name: "shell", state: { input: { command: `cat ${id}.log` }, status: "completed", content: [text(out)] }, time: { created: T0 + at, completed: T0 + at + 50 } });
+  assistant(o, "msg_a1", 100, [call("call_mid", mid, 100), call("call_huge", huge, 200)], { finish: "tool-calls" });
+  o.db.close();
+  const outs = (env) => Object.fromEntries(execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), `${o.path}#${SID}`, "opencode", "call_mid", "call_huge"], { encoding: "utf8", maxBuffer: 1 << 26, env: { ...process.env, ...env } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.k === "out").map((x) => [x.id, x.out]));
+  const panel = outs({});
+  expect([panel.call_mid.length, panel.call_huge.length]).toEqual([24576, 24576]);
+  const whole = outs({ THREADS_WHOLE: "1" });
+  expect(whole.call_mid).toBe(mid);
+  expect(whole.call_huge).toBe(`${"h".repeat(4194304)}\n\n… (cut at 4,194,304 characters of 4194404)`);
+});

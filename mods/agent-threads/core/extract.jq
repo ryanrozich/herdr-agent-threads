@@ -79,6 +79,18 @@ def brief:
 def results($l; $c):
   $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
   | {k: "x", id: .tool_use_id, ts: $l.timestamp, f: (.is_error == true)};
+# In a subagent's own transcript (THREADS_SIDECHAIN=1, the ATIF export only), the result of
+# a subagent it started has no toolUseResult: the started one's id is only a line of the
+# result text, "agentId: <id>". Letters, digits, "-" and "_" only; core/atif.js checks the
+# file it names again.
+def side_launch($c):
+  if ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
+  else $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
+    | .tool_use_id as $id
+    | (.content | if type == "string" then . elif type == "array" then [.[]? | select(type == "object" and .type == "text") | (.text // "") | tostring] | join("\n") else "" end) as $t
+    | ($t | capture("(?:^|\n)agentId: (?<a>[A-Za-z0-9_-]{1,80})(?![A-Za-z0-9_-])")? | .a) as $a
+    | {k: "r", id: $id, a: $a, m: null, st: null}
+  end;
 # A short result line: one call, or several with one error flag between them (which of them
 # failed is not known then).
 def short_results:
@@ -97,7 +109,7 @@ def user_event:
   . as $l
   | ($l.message.content) as $c
   | if $l.toolUseResult != null then launch($l; $c), results($l; $c)
-    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then results($l; $c)
+    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then side_launch($c), results($l; $c)
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.
