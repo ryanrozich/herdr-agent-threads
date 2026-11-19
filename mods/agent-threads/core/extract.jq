@@ -114,7 +114,13 @@ def user_event:
   . as $l
   | ($l.message.content) as $c
   | if $l.toolUseResult != null then launch($l; $c), results($l; $c)
-    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then side_launch($c), results($l; $c)
+    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then
+      # A fork's own transcript, read after the records it copied from its caller (THREADS_FORK=1,
+      # the ATIF export only): its first record carries the fork call's result and, beside it,
+      # the fork's prompt as text blocks.
+      (if ($ENV.THREADS_FORK // "") == "1" and any($c[]?; type == "object" and .type == "text")
+       then {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)} else empty end),
+      side_launch($c), results($l; $c)
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.

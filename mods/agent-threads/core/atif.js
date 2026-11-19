@@ -133,6 +133,7 @@ function turnSteps(turn, tr, next, results) {
         extra: clean({
           subagent_transcript: got?.subMissing ? "not found" : undefined,
           subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
+          subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end),
           failed: c.result?.failed ?? undefined,
           no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
@@ -271,7 +272,7 @@ async function main(argv) {
     } catch { return null; } finally { if (fd != null) fs.closeSync(fd); }
   };
 
-  const read = (path, env) => {
+  const read = (path, env, from = 0) => {
     let s;
     if (agent === "opencode") {
       const [db, sid] = path.split("#");
@@ -290,6 +291,7 @@ async function main(argv) {
     }
     s = newSession(basename(path).replace(/\.jsonl$/, ""), path);
     s.keepWakes = true;
+    s.offset = from;
     const base = 1 << 20;
     let chunk = base;
     for (let guard = 0; guard < 100000 && chunk; guard++) {
@@ -372,12 +374,12 @@ async function main(argv) {
 
   // A subagent transcript's first prompt: its first user line that is not bookkeeping (isMeta),
   // as text, from the first 256 KB; null when that line carries no text.
-  const firstPrompt = (f) => {
+  const firstPrompt = (f, from = 0) => {
     let fd = null;
     try {
       fd = fs.openSync(f, "r");
       const b = Buffer.alloc(262144);
-      const n = fs.readSync(fd, b, 0, b.length, 0);
+      const n = fs.readSync(fd, b, 0, b.length, from);
       for (const l of b.subarray(0, n).toString("utf8").split("\n")) {
         let x = null;
         try { x = JSON.parse(l); } catch { continue; }
@@ -392,9 +394,58 @@ async function main(argv) {
   };
   // Each subagent file is attached to one call only: the first that names it.
   const attached = new Map();
+  // A file's lines, 4 MB at a time, with the byte offset after each.
+  const eachLine = (f, fn) => {
+    let fd = null;
+    try {
+      fd = fs.openSync(f, "r");
+      const b = Buffer.alloc(4 << 20);
+      let at = 0;
+      let rest = Buffer.alloc(0);
+      for (;;) {
+        const n = fs.readSync(fd, b, 0, b.length, null);
+        if (n <= 0) return;
+        let buf = Buffer.concat([rest, b.subarray(0, n)]);
+        let i;
+        while ((i = buf.indexOf(10)) >= 0) {
+          at += i + 1;
+          if (fn(buf.subarray(0, i).toString("utf8"), at) === false) return;
+          buf = buf.subarray(i + 1);
+        }
+        rest = Buffer.from(buf);
+      }
+    } catch { return; } finally { if (fd != null) fs.closeSync(fd); }
+  };
+  const UUID = /"uuid":"([^"\\]{1,80})"/;
+  const uuidSets = new Map();
+  const uuidsOf = (f) => {
+    if (!uuidSets.has(f)) { const set = new Set(); eachLine(f, (l) => { const m = UUID.exec(l); if (m) set.add(m[1]); }); uuidSets.set(f, set); }
+    return uuidSets.get(f);
+  };
+  // A forked subagent's file starts with copies of its caller's records (the same uuids). The
+  // byte offset after the last of them, where the subagent's own records start; 0 for none.
+  const copiedPrefix = (f, caller) => {
+    const theirs = uuidsOf(caller);
+    let end = 0;
+    eachLine(f, (l, at) => {
+      const m = UUID.exec(l);
+      if (!m) return true;
+      if (!theirs.has(m[1])) return false;
+      end = at;
+      return true;
+    });
+    return end;
+  };
+  // A Skill call that forked a subagent: its launch record (status "forked") names the id.
+  const forkedSkill = (s, call) => {
+    const a = s.agents?.get(call);
+    if (a?.st !== "forked") return null;
+    for (const [id, v] of s.agentIds ?? []) if (v === a) return id;
+    return null;
+  };
 
   const build = (path, opts, depth, seen) => {
-    const s = read(path, opts.env);
+    const s = read(path, opts.env, opts.from ?? 0);
     if (!s) return null;
     const results = fill(s, path);
     const meta = agent === "codex" ? head(path) : null;
@@ -406,8 +457,9 @@ async function main(argv) {
       if (c.kind !== "tool" || !c.call) continue;
       const r = results.get(c.call) ?? {};
       let child = null;
-      if (agent === "claude" && c.subagent) {
-        const a = c.subagent.agent;
+      const skill = agent === "claude" && !c.subagent && c.tool === "Skill" ? forkedSkill(s, c.call) : null;
+      if (agent === "claude" && (c.subagent || skill)) {
+        const a = skill ?? c.subagent.agent;
         // Claude Code writes every subagent, a subagent's own included, flat in the session's
         // one subagents folder; a folder beside a subagent's file is only the fallback. Either
         // way the file must resolve inside the session's subagents folder.
@@ -416,7 +468,7 @@ async function main(argv) {
           const flat = join(subs, `agent-${a}.jsonl`);
           const beside = join(path.replace(/\.jsonl$/, ""), "subagents", `agent-${a}.jsonl`);
           const f = resolveInside(subs, fs.existsSync(flat) ? flat : beside);
-          if (f) child = { file: f, id: a, env: { THREADS_SIDECHAIN: "1" } };
+          if (f) child = { file: f, id: a, env: { THREADS_SIDECHAIN: "1" }, from: copiedPrefix(f, path) };
         }
       } else if (agent === "codex" && /^spawn_agent$/.test(c.tool)) {
         let task = null;
@@ -425,17 +477,32 @@ async function main(argv) {
         const k = task ? kids.get(task) : null;
         if (k) child = { file: k.file, id: k.thread, env: Number.isInteger(k.from) ? { THREADS_FROM_ORDINAL: String(k.from) } : {} };
       } else continue;
-      // A Claude Code subagent named by text could be any subagent of the session: its file must
-      // start with the call's own prompt, and no other call may have it already.
+      // A Claude Code subagent named by text could be any subagent of the session: its own first
+      // prompt (after any records copied from the caller) must be the call's prompt, or end with
+      // it for a fork, and no other call may have it already. A Skill call's subagent is named by
+      // its launch record, not by text: it is attached, and when its first prompt does not hold
+      // the call's args, extra says the link rests on the id alone.
       if (child && agent === "claude") {
-        const want = typeof r.args?.prompt === "string" ? r.args.prompt.trim() : null;
-        const got = want != null ? firstPrompt(child.file)?.trim() ?? null : null;
+        const got = firstPrompt(child.file, child.from)?.trim() ?? null;
         if (attached.has(child.file)) { r.subReason = `already attached to ${attached.get(child.file)}`; child = null; }
-        else if (want != null && got != null && want !== got) { r.subReason = "its first prompt is not the call's prompt"; child = null; }
-        else attached.set(child.file, c.call);
+        else if (skill) {
+          const args = typeof r.args?.args === "string" ? r.args.args.trim() : "";
+          if (!args) r.subLink = "id only: the Skill call has no args to look for in the subagent's first prompt";
+          else if (got == null || !got.includes(args)) r.subLink = "id only: the subagent's first prompt does not hold the Skill call's args";
+          attached.set(child.file, c.call);
+        } else {
+          const want = typeof r.args?.prompt === "string" ? r.args.prompt.trim() : null;
+          const fork = r.args?.subagent_type === "fork";
+          if (want != null && got != null && !(fork ? got.endsWith(want) : got === want)) { r.subReason = "its first prompt is not the call's prompt"; child = null; }
+          else {
+            attached.set(child.file, c.call);
+            // Read after its copied records, a fork's prompt sits beside the call's result.
+            if (fork && child.from > 0) child.env = { ...child.env, THREADS_FORK: "1" };
+          }
+        }
       }
       const t = child && depth < SUB_DEPTH && !seen.has(child.file) && fs.existsSync(child.file)
-        ? build(child.file, { env: child.env, root, id: root, trajectoryId: child.id, subs: opts.subs ?? (agent === "claude" ? join(path.replace(/\.jsonl$/, ""), "subagents") : undefined) }, depth + 1, new Set([...seen, child.file]))
+        ? build(child.file, { env: child.env, from: child.from ?? 0, root, id: root, trajectoryId: child.id, subs: opts.subs ?? (agent === "claude" ? join(path.replace(/\.jsonl$/, ""), "subagents") : undefined) }, depth + 1, new Set([...seen, child.file]))
         : null;
       if (t) r.sub = t; else r.subMissing = true;
       results.set(c.call, r);
@@ -446,6 +513,32 @@ async function main(argv) {
   if (agent !== "opencode" && !fs.existsSync(file)) { console.error("no transcript"); return 3; }
   const t = build(file, {}, 0, new Set([file]));
   if (!t) { console.error("no turns"); return 1; }
+  // Claude Code subagent transcripts in the session's subagents folder that no call names. They
+  // happened, so they are written, but attached to no call: extra.subagents_no_call_names, each
+  // with a promptId it shares with the session as a hint, never a link. Same id and path checks.
+  if (agent === "claude") {
+    const subs = join(file.replace(/\.jsonl$/, ""), "subagents");
+    let names = [];
+    try { names = fs.lstatSync(subs).isSymbolicLink() ? [] : fs.readdirSync(subs).sort(); } catch { names = []; }
+    let rootText = null;
+    const unnamed = [];
+    for (const n of names) {
+      const m = /^agent-([A-Za-z0-9_-]{1,80})\.jsonl$/.exec(n);
+      const f = m ? resolveInside(subs, join(subs, n)) : null;
+      if (!f || attached.has(f)) continue;
+      attached.set(f, "no call");
+      const tr = build(f, { env: { THREADS_SIDECHAIN: "1" }, root: t.session_id, id: t.session_id, trajectoryId: m[1], subs }, 1, new Set([file, f]));
+      if (!tr) continue;
+      const pid = head(f)?.promptId;
+      rootText ??= (() => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } })();
+      const shared = typeof pid === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(pid) && rootText.includes(`"promptId":"${pid}"`) ? pid : null;
+      unnamed.push({ hint: { note: "a hint, not a link: no call in the session names this transcript", shared_prompt_id: shared }, trajectory: tr });
+    }
+    if (unnamed.length) {
+      t.extra = { ...(t.extra ?? {}), subagents_no_call_names: unnamed };
+      t.notes = `${t.notes} ${unnamed.length} subagent ${unnamed.length === 1 ? "transcript" : "transcripts"} in the session's subagents folder that no call names ${unnamed.length === 1 ? "is" : "are"} in extra.subagents_no_call_names, attached to no call and not counted in final_metrics.`;
+    }
+  }
   process.stdout.write(`${JSON.stringify(t, null, 1)}\n`);
   return 0;
 }
