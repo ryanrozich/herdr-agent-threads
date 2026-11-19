@@ -64,6 +64,8 @@ Pull requests merge to main through Mergify's merge queue (`.mergify.yml`), and 
 
 A pull request opened before the switch with a plain-sentence title, such as "Link rules: one slow run no longer turns a plain rule off", cannot be queued until it is retitled in this form: `fix(links): one slow run no longer turns a plain rule off`. Retitle it when it is next worked on. GitHub's Revert button titles its pull request `Revert "feat: ..."`, which the queue refuses. Retitle it `revert: feat: ...`, the original title after `revert: `.
 
+**Releases.** Merging to main does not release. The Release workflow (`.github/workflows/release.yml`) keeps one release pull request open with the next version and its changelog, and updates it after each merge. It stays open between releases; that is normal. It is merged only when the repo's owner asks for a release: an agent never marks it ready, labels it `queue` or merges it on its own judgement, and a green `check` is not a reason to. Nothing queues it on its own: the `queue` label (or `@mergifyio queue`) is the only way into the queue.
+
 When one pull request has to land after another, put a `Depends-On:` line in the later one's description, with the reference alone on the line:
 
 ```text

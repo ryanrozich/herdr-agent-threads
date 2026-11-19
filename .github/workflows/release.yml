@@ -5,6 +5,8 @@ name: Release
 # through the queue (label queue) makes the tag (v1.0.1) and the GitHub release on the next
 # run. The pieces: release-please-config.json, .release-please-manifest.json, CHANGELOG.md,
 # and mods/agent-threads/version.js, the version the settings card shows.
+# Merging to main does not release: it only updates that pull request, which stays open
+# between releases. It is merged only when the repo's owner asks for a release.
 on:
   push:
     branches: [main]
