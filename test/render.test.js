@@ -10635,6 +10635,28 @@ test("a drag that selects text in an open turn stops following: the newest reply
   cx.flush();
   expect(scrolls).not.toContain("bottom");
   v.click(md.key, cx);
+  // The hold is counted, not timed (the review of 6224a42). A clock that steps back after a
+  // hold, or a hold and a request in the same millisecond, must not drop a later request.
+  const realNow = Date.now;
+  try {
+    const t = realNow();
+    Date.now = () => t;
+    v.follow = true;
+    v.holdForSelect();
+    v.follow = true;
+    v.toBottom = true;
+    scrolls.length = 0;
+    frame(v, cx);
+    cx.flush();
+    expect(scrolls).toContain("bottom");
+    Date.now = () => t - 60000;
+    v.follow = true;
+    v.toBottom = true;
+    scrolls.length = 0;
+    frame(v, cx);
+    cx.flush();
+    expect(scrolls).toContain("bottom");
+  } finally { Date.now = realNow; }
   // A double press (a word) stops following straight away, before any move.
   v.follow = true;
   atBottom(v, cx);
