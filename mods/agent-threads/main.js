@@ -4104,6 +4104,8 @@ export default class Threads extends View {
   holdForSelect() {
     this.openWait = null;
     if (!this.follow && !this.toBottom) return;
+    // A scroll to the bottom a frame already queued (16 ms, below) checks this and does not run.
+    this.heldAt = Date.now();
     this.follow = false;
     this.toBottom = false;
     this.pinningUntil = 0;
@@ -6754,7 +6756,12 @@ export default class Threads extends View {
       this.pinningUntil = Date.now() + 1000;
       this.upAt = 0;
       this.downAt = 0;
-      cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
+      const asked = Date.now();
+      cx.timer.after(16, (cx) => {
+        if ((this.heldAt ?? 0) >= asked) return; // a highlight started meanwhile (holdForSelect)
+        this.scroll.scroll_to_bottom();
+        cx.notify();
+      });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
       // A return waits for the card's parts to be measured: estimates can be off by 100 px,
       // and the list keeps its offset in px, so it would land away from the place.
