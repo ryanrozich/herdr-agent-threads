@@ -48,6 +48,9 @@ export function newSession(id, file) {
     // Lines the reader skipped (noteSkip): before the first turn, and in all for the debug
     // report. Here so that a session read again from the top (main.js restart) starts at none.
     skippedHead: null, skipped: null,
+    // Calls waiting for their result ("x"), by call id: the call's record (a group's info) and
+    // its turn.
+    calls: new Map(),
   };
 }
 
@@ -68,6 +71,15 @@ function clockEnd(s, turn, e) {
   if (c.end == null && typeof e.at === "number") c.end = e.at;
   if (c.end != null) { turn.durationMs = Math.max(0, c.end - c.start); turn.endTs = c.end; }
 }
+
+// An event's time in ms, or null.
+const ms = (ts) => {
+  const n = typeof ts === "string" ? Date.parse(ts) : Number.NaN;
+  return Number.isFinite(n) ? n : null;
+};
+
+// How many calls wait for a result at most: past it the waiting list starts again.
+const CALLS_KEEP = 5000;
 
 // A tag's attribute value, or null: attr('<hc from="t7 review">', "from") is "t7 review".
 // One pattern per attribute name, made once.
@@ -245,6 +257,8 @@ function newTurn(s, e) {
     // the tool calls in a row between texts, each call by its tool name and its id (ids). The
     // reply is the text after the last group, so it is not a step.
     steps: [],
+    // When the text after the last call began (the reply's or the next text step's start).
+    afterAt: null,
     usage: {},
     // Codex names the model before the prompt it applies to (a "ctx" event).
     model: s.ctx?.m ?? null,
@@ -277,16 +291,21 @@ function newTurn(s, e) {
 // names and counts the rest. Past STEP_MAX steps, later text is dropped (counted) and
 // calls join the last group, so a turn of thousands of calls stays small. STEP_TEXT is under
 // ui.js MD_MAX, the size the reply's Markdown blocks are cut to.
+//
+// Times: a text step's at is when its first text was written. A group with a call that has an
+// input summary or a time keeps a record per call (info, beside ids): in, the input in up to
+// 120 characters; at, when the call was made; rt, when its result was written; f, whether it
+// failed (null when the result does not say). A result ("x") fills rt and f by the call's id.
 export const STEP_TEXT = 3400;
 export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
 const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
-function addStep(turn, name, id = null) {
+function addStep(s, turn, name, id = null, e = null) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   if (text) {
-    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT });
+    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
     else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
@@ -302,6 +321,18 @@ function addStep(turn, name, id = null) {
     const ok = typeof id === "string" && /^[0-9A-Za-z_.:|-]{1,200}$/.test(id);
     if (ok && !g.ids) g.ids = g.calls.slice(0, -1).map(() => null);
     if (g.ids) g.ids.push(ok ? id : null);
+    const input = typeof e?.in === "string" && e.in ? e.in.slice(0, 120) : null;
+    const at = ms(e?.ts);
+    if ((input || at != null) && !g.info) g.info = g.calls.slice(0, -1).map(() => null);
+    if (g.info) {
+      const info = input || at != null ? { in: input, at, rt: null, f: null } : null;
+      g.info.push(info);
+      if (info && ok) {
+        s.calls ??= new Map();
+        if (s.calls.size >= CALLS_KEEP) s.calls.clear();
+        s.calls.set(id, { info, turn });
+      }
+    }
   }
   g.count++;
 }
@@ -379,6 +410,7 @@ export function apply(s, e) {
   applyOne(s, e);
   const v = s.version;
   if (e.k === "r" || e.k === "n") { s.agentVer = v; return; }
+  if (e.k === "x") { if (s.xTurn) s.xTurn.v = v; s.xTurn = null; return; }
   if (NO_TURN.has(e.k)) return;
   if (cur) cur.v = v;
   const last = s.turns[s.turns.length - 1];
@@ -395,7 +427,7 @@ function applyOne(s, e) {
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
-  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n") s.pendingCmd = null;
+  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
     case "p": {
@@ -430,8 +462,10 @@ function applyOne(s, e) {
     }
     case "t":
       if (!cur || !e.t) return;
-      if (s.seg === "own") cur.after.push(e.t);
-      else {
+      if (s.seg === "own") {
+        if (!cur.after.length) cur.afterAt = ms(e.ts);
+        cur.after.push(e.t);
+      } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
@@ -442,7 +476,7 @@ function applyOne(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") { addStep(cur, e.n, e.id); cur.after = []; }
+      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; }
       else cur.latestParts = [];
       return;
     case "m":
@@ -526,6 +560,16 @@ function applyOne(s, e) {
     case "c":
       if (cur) cur.compactions++;
       return;
+    case "x": {
+      // A call's result: when it was written and whether it failed. Only its own turn changes.
+      const c = typeof e.id === "string" ? s.calls?.get(e.id) : null;
+      if (!c) return;
+      s.calls.delete(e.id);
+      c.info.rt = ms(e.ts);
+      c.info.f = typeof e.f === "boolean" ? e.f : null;
+      s.xTurn = c.turn;
+      return;
+    }
     case "title":
       if (e.t) s.title = e.t;
       return;

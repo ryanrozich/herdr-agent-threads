@@ -30,6 +30,7 @@
       "kind": "tool",
       "tool": "Read",
       "call": null,
+      "input": null,
       "result": null,
       "start": null,
       "end": null
@@ -38,6 +39,7 @@
       "kind": "tool",
       "tool": "Edit",
       "call": null,
+      "input": null,
       "result": null,
       "start": null,
       "end": null

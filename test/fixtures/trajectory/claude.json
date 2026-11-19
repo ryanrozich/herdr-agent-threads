@@ -23,7 +23,7 @@
      {
       "kind": "message",
       "text": "It fires when a test skips logout, so the mock session outlives the test. It is harmless: every suite resets the mock in `beforeEach`.",
-      "start": null,
+      "start": 1793524354000,
       "end": 1793524354000
      }
     ]
@@ -54,38 +54,47 @@
      {
       "kind": "message",
       "text": "Let me look at the test first.",
-      "start": null,
+      "start": 1793524388000,
       "end": null
      },
      {
       "kind": "tool",
       "tool": "Read",
       "call": "toolu_000002_Read",
+      "input": "tests/login.spec.ts",
       "result": {
-       "call": "toolu_000002_Read"
+       "call": "toolu_000002_Read",
+       "end": 1793524394000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524392000,
+      "end": 1793524394000
      },
      {
       "kind": "tool",
       "tool": "Bash",
       "call": "toolu_000003_Bash",
+      "input": "bun test login",
       "result": {
-       "call": "toolu_000003_Bash"
+       "call": "toolu_000003_Bash",
+       "end": 1793524400000,
+       "failed": true
       },
-      "start": null,
-      "end": null
+      "start": 1793524398000,
+      "end": 1793524400000
      },
      {
       "kind": "tool",
       "tool": "Edit",
       "call": "toolu_000004_Edit",
+      "input": "tests/login.spec.ts",
       "result": {
-       "call": "toolu_000004_Edit"
+       "call": "toolu_000004_Edit",
+       "end": 1793524406000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524404000,
+      "end": 1793524406000
      }
     ]
    },
@@ -95,7 +104,7 @@
      {
       "kind": "message",
       "text": "The test raced the redirect. It now waits for the session response instead of sleeping 2 s:\n\n```ts\nawait page.waitForResponse(\n  (r) => r.url().endsWith('/session'),\n)\nexpect(await cookie()).toBeTruthy()\n```\n\nRan the suite 20 times locally with no failures. One unrelated warning remains in the auth mock.",
-      "start": null,
+      "start": 1793524412000,
       "end": 1793524436000
      }
     ]
@@ -139,11 +148,14 @@
       "kind": "tool",
       "tool": "Bash",
       "call": "toolu_000007_Bash",
+      "input": "bun run e2e",
       "result": {
-       "call": "toolu_000007_Bash"
+       "call": "toolu_000007_Bash",
+       "end": 1793524472000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524470000,
+      "end": 1793524472000
      }
     ]
    }
@@ -174,21 +186,27 @@
       "kind": "tool",
       "tool": "Grep",
       "call": "toolu_000008_Grep",
+      "input": "waitForURL",
       "result": {
-       "call": "toolu_000008_Grep"
+       "call": "toolu_000008_Grep",
+       "end": 1793524559000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524557000,
+      "end": 1793524559000
      },
      {
       "kind": "tool",
       "tool": "Read",
       "call": "toolu_000009_Read",
+      "input": "src/auth/flow.ts",
       "result": {
-       "call": "toolu_000009_Read"
+       "call": "toolu_000009_Read",
+       "end": 1793524565000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524563000,
+      "end": 1793524565000
      }
     ]
    },
@@ -198,7 +216,7 @@
      {
       "kind": "message",
       "text": "The login spec waited on a URL that the new auth flow never visits.\n\nParagraph 1: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 2: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 3: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 4: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 5: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 6: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\n```ts\nexport async function waitForSession(page: Page) {\n  const step0 = await runStep(0, { retries: 2, timeoutMs: 15_000, label: \"step-0-with-a-long-label-that-scrolls\" })\n  const step1 = await runStep(1, { retries: 2, timeoutMs: 15_000, label: \"step-1-with-a-long-label-that-scrolls\" })\n  const step2 = await runStep(2, { retries: 2, timeoutMs: 15_000, label: \"step-2-with-a-long-label-that-scrolls\" })\n  const step3 = await runStep(3, { retries: 2, timeoutMs: 15_000, label: \"step-3-with-a-long-label-that-scrolls\" })\n  const step4 = await runStep(4, { retries: 2, timeoutMs: 15_000, label: \"step-4-with-a-long-label-that-scrolls\" })\n  const step5 = await runStep(5, { retries: 2, timeoutMs: 15_000, label: \"step-5-with-a-long-label-that-scrolls\" })\n  const step6 = await runStep(6, { retries: 2, timeoutMs: 15_000, label: \"step-6-with-a-long-label-that-scrolls\" })\n  const step7 = await runStep(7, { retries: 2, timeoutMs: 15_000, label: \"step-7-with-a-long-label-that-scrolls\" })\n  const step8 = await runStep(8, { retries: 2, timeoutMs: 15_000, label: \"step-8-with-a-long-label-that-scrolls\" })\n  const step9 = await runStep(9, { retries: 2, timeoutMs: 15_000, label: \"step-9-with-a-long-label-that-scrolls\" })\n  const step10 = await runStep(10, { retries: 2, timeoutMs: 15_000, label: \"step-10-with-a-long-label-that-scrolls\" })\n  const step11 = await runStep(11, { retries: 2, timeoutMs: 15_000, label: \"step-11-with-a-long-label-that-scrolls\" })\n  const step12 = await runStep(12, { retries: 2, timeoutMs: 15_000, label: \"step-12-with-a-long-label-that-scrolls\" })\n  const step13 = await runStep(13, { retries: 2, timeoutMs: 15_000, label: \"step-13-with-a-long-label-that-scrolls\" })\n  const step14 = await runStep(14, { retries: 2, timeoutMs: 15_000, label: \"step-14-with-a-long-label-that-scrolls\" })\n  const step15 = await runStep(15, { retries: 2, timeoutMs: 15_000, label: \"step-15-with-a-long-label-that-scrolls\" })\n  const step16 = await runStep(16, { retries: 2, timeoutMs: 15_000, label: \"step-16-with-a-long-label-that-scrolls\" })\n  const step17 = await runStep(17, { retries: 2, timeoutMs: 15_000, label: \"step-17-with-a-long-label-that-scrolls\" })\n  const step18 = await runStep(18, { retries: 2, timeoutMs: 15_000, label: \"step-18-with-a-long-label-that-scrolls\" })\n  const step19 = await runStep(19, { retries: 2, timeoutMs: 15_000, label: \"step-19-with-a-long-label-that-scrolls\" })\n  const step20 = await runStep(20, { retries: 2, timeoutMs: 15_000, label: \"step-20-with-a-long-label-that-scrolls\" })\n  const step21 = await runStep(21, { retries: 2, timeoutMs: 15_000, label: \"step-21-with-a-long-label-that-scrolls\" })\n  const step22 = await runStep(22, { retries: 2, timeoutMs: 15_000, label: \"step-22-with-a-long-label-that-scrolls\" })\n  const step23 = await runStep(23, { retries: 2, timeoutMs: 15_000, label: \"step-23-with-a-long-label-that-scrolls\" })\n}\n```\n\nThen I ran the suite 20 times locally with no failures.",
-      "start": null,
+      "start": 1793524577000,
       "end": 1793524577000
      }
     ]
@@ -230,11 +248,14 @@
       "kind": "tool",
       "tool": "Edit",
       "call": "toolu_000011_Edit",
+      "input": "README.md",
       "result": {
-       "call": "toolu_000011_Edit"
+       "call": "toolu_000011_Edit",
+       "end": 1793524616000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524614000,
+      "end": 1793524616000
      }
     ]
    },
@@ -244,7 +265,7 @@
      {
       "kind": "message",
       "text": "Documented the retry flag under **Testing**.",
-      "start": null,
+      "start": 1793524620000,
       "end": 1793524620000
      }
     ]
@@ -276,11 +297,14 @@
       "kind": "tool",
       "tool": "Bash",
       "call": "toolu_000013_Bash",
+      "input": "git diff --stat",
       "result": {
-       "call": "toolu_000013_Bash"
+       "call": "toolu_000013_Bash",
+       "end": 1793524656000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524654000,
+      "end": 1793524656000
      }
     ]
    },
@@ -291,11 +315,14 @@
       "kind": "tool",
       "tool": "Agent",
       "call": "toolu_000014_Agent",
+      "input": "Review range math",
       "result": {
-       "call": "toolu_000014_Agent"
+       "call": "toolu_000014_Agent",
+       "end": 1793524662000,
+       "failed": false
       },
-      "start": null,
-      "end": null,
+      "start": 1793524660000,
+      "end": 1793524662000,
       "subagent": {
        "agent": "a0000000000000014",
        "state": "completed",
@@ -308,11 +335,14 @@
       "kind": "tool",
       "tool": "Agent",
       "call": "toolu_000015_Agent",
+      "input": "Check time zones",
       "result": {
-       "call": "toolu_000015_Agent"
+       "call": "toolu_000015_Agent",
+       "end": 1793524668000,
+       "failed": false
       },
-      "start": null,
-      "end": null,
+      "start": 1793524666000,
+      "end": 1793524668000,
       "subagent": {
        "agent": "a0000000000000015",
        "state": "completed",
@@ -325,11 +355,14 @@
       "kind": "tool",
       "tool": "Agent",
       "call": "toolu_000016_Agent",
+      "input": "Audit the tests",
       "result": {
-       "call": "toolu_000016_Agent"
+       "call": "toolu_000016_Agent",
+       "end": 1793524674000,
+       "failed": false
       },
-      "start": null,
-      "end": null,
+      "start": 1793524672000,
+      "end": 1793524674000,
       "subagent": {
        "agent": "a0000000000000016",
        "state": "failed",
@@ -347,11 +380,14 @@
       "kind": "tool",
       "tool": "Bash",
       "call": "toolu_000017_Bash",
+      "input": "bun test calendar",
       "result": {
-       "call": "toolu_000017_Bash"
+       "call": "toolu_000017_Bash",
+       "end": 1793524680000,
+       "failed": false
       },
-      "start": null,
-      "end": null
+      "start": 1793524678000,
+      "end": 1793524680000
      }
     ]
    },
@@ -361,7 +397,7 @@
      {
       "kind": "message",
       "text": "All three reviews are back: the range math and time zones are right, and two tests need a fixed clock.",
-      "start": null,
+      "start": 1793524744000,
       "end": 1793524744000
      }
     ]

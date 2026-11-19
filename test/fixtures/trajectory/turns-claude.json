@@ -18,6 +18,7 @@
   "wakeTools": 0,
   "toolNames": {},
   "steps": [],
+  "afterAt": 1793524354000,
   "usage": {
    "msg_000001": {
     "i": 6,
@@ -44,7 +45,7 @@
  },
  {
   "n": 2,
-  "v": 27,
+  "v": 30,
   "ts": 1793524384000,
   "origin": "human",
   "prompt": "Fix the flaky login test so it stops timing out in CI",
@@ -68,7 +69,8 @@
    {
     "k": "text",
     "t": "Let me look at the test first.",
-    "cut": false
+    "cut": false,
+    "at": 1793524388000
    },
    {
     "k": "group",
@@ -82,9 +84,30 @@
      "toolu_000002_Read",
      "toolu_000003_Bash",
      "toolu_000004_Edit"
+    ],
+    "info": [
+     {
+      "in": "tests/login.spec.ts",
+      "at": 1793524392000,
+      "rt": 1793524394000,
+      "f": false
+     },
+     {
+      "in": "bun test login",
+      "at": 1793524398000,
+      "rt": 1793524400000,
+      "f": true
+     },
+     {
+      "in": "tests/login.spec.ts",
+      "at": 1793524404000,
+      "rt": 1793524406000,
+      "f": false
+     }
     ]
    }
   ],
+  "afterAt": 1793524412000,
   "usage": {
    "msg_000002": {
     "i": 6,
@@ -143,7 +166,7 @@
  },
  {
   "n": 3,
-  "v": 32,
+  "v": 36,
   "ts": 1793524466000,
   "origin": "human",
   "prompt": "Run the full e2e suite and summarise the failures",
@@ -168,9 +191,18 @@
     "count": 1,
     "ids": [
      "toolu_000007_Bash"
+    ],
+    "info": [
+     {
+      "in": "bun run e2e",
+      "at": 1793524470000,
+      "rt": 1793524472000,
+      "f": false
+     }
     ]
    }
   ],
+  "afterAt": null,
   "usage": {
    "msg_000008": {
     "i": 6,
@@ -197,7 +229,7 @@
  },
  {
   "n": 4,
-  "v": 42,
+  "v": 48,
   "ts": 1793524553000,
   "origin": "human",
   "prompt": "Why does CI fail here? Log below:\n\nTimeoutError: waitForURL 30000ms\n    at step0 (tests/login.spec.ts:40:5)\n    at step1 (tests/login.spec.ts:41:5)\n    at step2 (tests/login.spec.ts:42:5)\n    at step3 (tests/login.spec.ts:43:5)\n    at step4 (tests/login.spec.ts:44:5)\n    at step5 (tests/login.spec.ts:45:5)\n    at step6 (tests/login.spec.ts:46:5)\n    at step7 (tests/login.spec.ts:47:5)\n    at step8 (tests/login.spec.ts:48:5)\n    at step9 (tests/login.spec.ts:49:5)\n    at step10 (tests/login.spec.ts:50:5)\n    at step11 (tests/login.spec.ts:51:5)\n    at step12 (tests/login.spec.ts:52:5)\n    at step13 (tests/login.spec.ts:53:5)\n    at step14 (tests/login.spec.ts:54:5)\n    at step15 (tests/login.spec.ts:55:5)\n    at step16 (tests/login.spec.ts:56:5)\n    at step17 (tests/login.spec.ts:57:5)\n    at step18 (tests/login.spec.ts:58:5)\n    at step19 (tests/login.spec.ts:59:5)\n    at step20 (tests/login.spec.ts:60:5)\n    at step21 (tests/login.spec.ts:61:5)\n    at step22 (tests/login.spec.ts:62:5)\n    at step23 (tests/login.spec.ts:63:5)\n    at step24 (tests/login.spec.ts:64:5)\n    at step25 (tests/login.spec.ts:65:5)\n    at step26 (tests/login.spec.ts:66:5)\n    at step27 (tests/login.spec.ts:67:5)\n    at step28 (tests/login.spec.ts:68:5)\n    at step29 (tests/login.spec.ts:69:5)\n    at step30 (tests/login.spec.ts:70:5)\n    at step31 (tests/login.spec.ts:71:5)\n    at step32 (tests/login.spec.ts:72:5)\n    at step33 (tests/login.spec.ts:73:5)\n    at step34 (tests/login.spec.ts:74:5)\n    at step35 (tests/login.spec.ts:75:5)\n    at step36 (tests/login.spec.ts:76:5)\n    at step37 (tests/login.spec.ts:77:5)\n    at step38 (tests/login.spec.ts:78:5)\n    at step39 (tests/login.spec.ts:79:5)",
@@ -227,9 +259,24 @@
     "ids": [
      "toolu_000008_Grep",
      "toolu_000009_Read"
+    ],
+    "info": [
+     {
+      "in": "waitForURL",
+      "at": 1793524557000,
+      "rt": 1793524559000,
+      "f": false
+     },
+     {
+      "in": "src/auth/flow.ts",
+      "at": 1793524563000,
+      "rt": 1793524565000,
+      "f": false
+     }
     ]
    }
   ],
+  "afterAt": 1793524577000,
   "usage": {
    "msg_000009": {
     "i": 6,
@@ -268,7 +315,7 @@
  },
  {
   "n": 5,
-  "v": 52,
+  "v": 59,
   "ts": 1793524607000,
   "origin": "human",
   "prompt": "Add a retry note to the README",
@@ -295,9 +342,18 @@
     "count": 1,
     "ids": [
      "toolu_000011_Edit"
+    ],
+    "info": [
+     {
+      "in": "README.md",
+      "at": 1793524614000,
+      "rt": 1793524616000,
+      "f": false
+     }
     ]
    }
   ],
+  "afterAt": 1793524620000,
   "usage": {
    "msg_000012": {
     "i": 6,
@@ -332,7 +388,7 @@
  },
  {
   "n": 6,
-  "v": 75,
+  "v": 87,
   "ts": 1793524650000,
   "origin": "human",
   "prompt": "Review the calendar code three ways",
@@ -360,6 +416,14 @@
     "count": 1,
     "ids": [
      "toolu_000013_Bash"
+    ],
+    "info": [
+     {
+      "in": "git diff --stat",
+      "at": 1793524654000,
+      "rt": 1793524656000,
+      "f": false
+     }
     ]
    },
    {
@@ -375,6 +439,26 @@
      "toolu_000014_Agent",
      "toolu_000015_Agent",
      "toolu_000016_Agent"
+    ],
+    "info": [
+     {
+      "in": "Review range math",
+      "at": 1793524660000,
+      "rt": 1793524662000,
+      "f": false
+     },
+     {
+      "in": "Check time zones",
+      "at": 1793524666000,
+      "rt": 1793524668000,
+      "f": false
+     },
+     {
+      "in": "Audit the tests",
+      "at": 1793524672000,
+      "rt": 1793524674000,
+      "f": false
+     }
     ]
    },
    {
@@ -385,9 +469,18 @@
     "count": 1,
     "ids": [
      "toolu_000017_Bash"
+    ],
+    "info": [
+     {
+      "in": "bun test calendar",
+      "at": 1793524678000,
+      "rt": 1793524680000,
+      "f": false
+     }
     ]
    }
   ],
+  "afterAt": 1793524744000,
   "usage": {
    "msg_000014": {
     "i": 6,
