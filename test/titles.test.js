@@ -10,8 +10,8 @@ const root = join(import.meta.dir, "..");
 const mergify = readFileSync(join(root, ".mergify.yml"), "utf8");
 const workflow = readFileSync(join(root, ".github", "workflows", "pr-title.yml"), "utf8");
 
-// The queue's condition line, as YAML holds it: "title ~= <pattern>", backslashes doubled.
-const queued = /^\s+- "title ~= (.+)"$/m.exec(mergify)?.[1]?.replace(/\\\\/g, "\\");
+// The queue's condition line, as YAML holds it: "title~=<pattern>", backslashes doubled.
+const queued = /^\s+- "title~=(.+)"$/m.exec(mergify)?.[1]?.replace(/\\\\/g, "\\");
 const checked = /^\s+PATTERN: '(.+)'$/m.exec(workflow)?.[1];
 
 test("the queue and the title check use one pattern", () => {
@@ -51,4 +51,29 @@ test("the title check skips Mergify's own batch pull requests and reads the titl
   // The title goes in through env, never pasted into the script, so a title cannot run code.
   expect(workflow).toMatch(/TITLE: \$\{\{ github\.event\.pull_request\.title \}\}/);
   expect(workflow.split("run:")[1]).not.toContain("${{");
+});
+
+// Catalyst's reader of this file matches each condition as attribute, operator, value with
+// nothing between them, and refuses the whole file on one it cannot read. Mergify reads both
+// spellings the same, so every condition list (queue_conditions, merge_conditions and each
+// rule's conditions) is written compact. A space inside a value, as in the title pattern, is
+// part of the value.
+test("the queue's conditions put no space around the operator", () => {
+  const conditions = [];
+  let list = null;
+  for (const line of mergify.split("\n")) {
+    const head = /^\s+(queue_conditions|merge_conditions|conditions):\s*$/.exec(line);
+    if (head) { list = head[1]; continue; }
+    if (!list) continue;
+    const item = /^\s+- (.+)$/.exec(line);
+    if (item) { conditions.push([list, item[1].replace(/^"(.*)"$/, "$1")]); continue; }
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    list = null;
+  }
+  expect(conditions.length).toBeGreaterThanOrEqual(8);
+  expect(conditions.map(([list]) => list)).toContain("conditions");
+  for (const [list, c] of conditions) {
+    const compact = /^-?#?[a-z][a-z-]*(?:(?:=|!=|~=|>=|<=|<|>)[^\s=~<>!].*)?$/.test(c);
+    expect([list, c, compact]).toEqual([list, c, true]);
+  }
 });
