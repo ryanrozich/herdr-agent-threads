@@ -8,20 +8,20 @@ A status line at the foot of the pane, prompts that keep their line breaks, and 
 
 ### The chat view
 
-- Your prompts keep their line breaks. A closed bubble draws each line on its own row, where 1.0.0 ran them together into one paragraph.
+- Your prompts keep their line breaks. A closed bubble draws each line on its own row, where 1.0.0 ran them together into one paragraph. With Shorten long messages off (the default), a closed bubble is as tall as the prompt's lines, so a pasted list makes a taller bubble than before.
 - Pasted terminal output reads as a block: a quiet "Pasted · 12 lines" label, then each line in a fixed-width font. Lines are cut at the bubble's edge, not wrapped, so a table's columns stay lined up. Open the turn to see the paste as one code block.
 - A transcript line too long to read (over 64 MB) now leaves a dim line in the list where it was, such as "A line of 70 MB was left out here, too long to read". Before, nothing showed.
 
 ### The status line
 
-- A slim line at the bottom of the pane shows the session's turns, hidden turns and tool calls. For agents that record usage (Claude Code, Codex, OpenCode, Pi and Antigravity) it also shows tokens, the cache hit and how much context the newest reply used.
+- A slim line at the bottom of the pane shows the session's turns, hidden turns and tool calls. For agents that record usage (Claude Code, Codex, OpenCode, Pi and Antigravity) it also shows tokens, the cache hit and how much context the newest reply used. It is on by default. To turn it off, open Settings and switch off "Chat stats at the bottom" under Layout.
 - For Codex, which says how large its model's context window is, a small ring shows how much of the window is used: "◔ 51.7k context · 20%".
 
 ### Settings and keys
 
 - The foot of the settings card shows the version you are running, such as "Agent Threads 1.1.0", so you can compare it with the latest release. Nothing checks for updates.
 - When a link rule cannot be saved, the open rule says why under its buttons. Before, the reason showed only on the File line at the bottom of the page, which could be out of view.
-- In the keys sheet (`?`), "Scroll it a page" fits PgUp, PgDn and Space on one line, and a scrollbar shows whenever there is more below.
+- In the keys sheet (`?`), "Scroll it a page" fits PgUp, PgDn and Space on one line in a pane at least 520 px wide. In a Herdr that can keep a scrollbar drawn, the sheet shows one whenever there is more below; otherwise it shows while you scroll.
 
 ### Save a session as ATIF
 
@@ -36,7 +36,7 @@ For another agent, put its name after the path: `codex`, `pi`, `cursor` or `anti
 ### Fixes
 
 - A double press on a word in a closed turn selects the word, where it used to open the turn.
-- The list no longer jumps when you start a highlight just as a reply grows.
+- The list no longer jumps in the rare case where you start a highlight at the same moment a reply grows.
 - Characters such as an em dash or a box-drawing line no longer turn into "��" partway through a long prompt, reply or tool output.
 - On some Linux systems (Ubuntu 26.04 among them), a prompt or reply of several megabytes no longer goes missing or shows empty.
 - The settings card stays inside a short pane with its foot in view, and it no longer grows when you make the pane smaller.

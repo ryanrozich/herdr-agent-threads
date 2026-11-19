@@ -43,7 +43,8 @@ test("AGENTS.md and the release skill say a release needs the owner's own words,
   // Exactly one step marks the release pull request ready, and it is the one gated on the
   // owner's own request.
   const steps = [...skill.matchAll(/^\d+\. \*\*(.+)$/gm)].map((m) => m[1]);
-  const releasing = steps.filter((s) => s.includes("gh pr ready"));
+  // A step that readies the release pull request, by the command or in words.
+  const releasing = steps.filter((s) => s.includes("gh pr ready") || /\bmark (it|the release pull request) ready\b/i.test(s));
   expect(releasing).toHaveLength(1);
   expect(releasing[0]).toMatch(/^Release, on the owner's own request\.\*\*/);
   expect(releasing[0]).toContain("is not enough");
