@@ -24,8 +24,11 @@
       "kind": "tool",
       "tool": "grep_search",
       "call": "s1.0",
+      "input": null,
       "result": {
-       "call": "s1.0"
+       "call": "s1.0",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null
@@ -34,8 +37,11 @@
       "kind": "tool",
       "tool": "view_file",
       "call": "s3.0",
+      "input": null,
       "result": {
-       "call": "s3.0"
+       "call": "s3.0",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null
@@ -80,8 +86,11 @@
       "kind": "tool",
       "tool": "replace_file_content",
       "call": "s7.0",
+      "input": null,
       "result": {
-       "call": "s7.0"
+       "call": "s7.0",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null

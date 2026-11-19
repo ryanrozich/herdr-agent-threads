@@ -35,6 +35,7 @@
     "count": 2
    }
   ],
+  "afterAt": null,
   "usage": {},
   "model": null,
   "effort": null,
@@ -71,6 +72,7 @@
   "wakeTools": 0,
   "toolNames": {},
   "steps": [],
+  "afterAt": null,
   "usage": {},
   "model": null,
   "effort": null,

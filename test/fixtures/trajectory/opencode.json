@@ -24,8 +24,11 @@
       "kind": "tool",
       "tool": "grep",
       "call": "call_grep",
+      "input": null,
       "result": {
-       "call": "call_grep"
+       "call": "call_grep",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null
@@ -34,8 +37,11 @@
       "kind": "tool",
       "tool": "edit",
       "call": "call_edit",
+      "input": null,
       "result": {
-       "call": "call_edit"
+       "call": "call_edit",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null
@@ -80,8 +86,11 @@
       "kind": "tool",
       "tool": "edit",
       "call": "call_edit",
+      "input": null,
       "result": {
-       "call": "call_edit"
+       "call": "call_edit",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null

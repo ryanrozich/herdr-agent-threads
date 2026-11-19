@@ -30,8 +30,11 @@
       "kind": "tool",
       "tool": "bash",
       "call": "c1",
+      "input": null,
       "result": {
-       "call": "c1"
+       "call": "c1",
+       "end": null,
+       "failed": null
       },
       "start": null,
       "end": null

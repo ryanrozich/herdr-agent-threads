@@ -1,7 +1,7 @@
 [
  {
   "n": 1,
-  "v": 9,
+  "v": 11,
   "ts": 1793523600000,
   "origin": "human",
   "prompt": "Why is the order total a cent off when there are three or more items?",
@@ -23,7 +23,8 @@
    {
     "k": "text",
     "t": "Checking how the cart adds up tax.",
-    "cut": false
+    "cut": false,
+    "at": 1793523604000
    },
    {
     "k": "group",
@@ -31,9 +32,28 @@
      "exec_command",
      "exec_command"
     ],
-    "count": 2
+    "count": 2,
+    "ids": [
+     "call_c1",
+     "call_c2"
+    ],
+    "info": [
+     {
+      "in": "rg -n lineTax cart",
+      "at": 1793523606000,
+      "rt": 1793523607000,
+      "f": false
+     },
+     {
+      "in": "bun test cart/total.test.ts",
+      "at": 1793523608000,
+      "rt": 1793523609000,
+      "f": true
+     }
+    ]
    }
   ],
+  "afterAt": 1793523617000,
   "usage": {
    "t48820": {
     "i": 7200,
@@ -61,7 +81,7 @@
  },
  {
   "n": 2,
-  "v": 14,
+  "v": 18,
   "ts": 1793523687000,
   "origin": "human",
   "prompt": "Yes, and add a test with three items at $3.33",
@@ -87,9 +107,28 @@
      "apply_patch",
      "exec_command"
     ],
-    "count": 2
+    "count": 2,
+    "ids": [
+     "call_p1",
+     "call_c3"
+    ],
+    "info": [
+     {
+      "in": "cart/total.ts, cart/total.test.ts",
+      "at": 1793523689000,
+      "rt": 1793523690000,
+      "f": false
+     },
+     {
+      "in": "bun test",
+      "at": 1793523691000,
+      "rt": 1793523692000,
+      "f": false
+     }
+    ]
    }
   ],
+  "afterAt": 1793523705000,
   "usage": {
    "t53010": {
     "i": 5100,
