@@ -1,0 +1,15 @@
+[project]
+linear_team = "TRD"
+
+[project.linear.states]
+dispatch = "Todo"
+intake = "Intake"
+research = "Research"
+plan = "Plan"
+implement = "Implement"
+remediate = "Remediate"
+verify = "Validate"
+review = "Validate"
+pr = "PR"
+done = "Done"
+canceled = "Canceled"
