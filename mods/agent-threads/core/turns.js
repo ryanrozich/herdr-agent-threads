@@ -563,7 +563,7 @@ export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
   if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
-  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
