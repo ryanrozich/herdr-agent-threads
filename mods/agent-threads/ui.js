@@ -101,7 +101,8 @@ export function statusGroups(s, width) {
     { key: "tokens", icon: "database", text: [on.tokens ? `${fmtTokens(s.tokens)} tokens` : null, on.tokens && on.cache ? `${fmtPct(s.cachePct)} cache hit` : null].filter(Boolean).join(" · ") },
     { key: "context", icon: "cpu", text: on.context ? `${fmtTokens(s.context)} context` : "" },
     // Codex states its window: a ring filled to the share used, and the percent, last.
-    { key: "ring", icon: `ring-${ringStep(s.contextPct)}`, text: on.ring ? `${s.contextPct}%` : "" },
+    // Shown up to 999%: only a crafted transcript states a window so small that it goes past.
+    { key: "ring", icon: `ring-${ringStep(s.contextPct)}`, text: on.ring ? `${Math.min(999, s.contextPct)}%` : "" },
   ].filter((g) => g.text);
   // The context's count goes first and its ring next, before the other stats.
   const steps = [() => { on.context = false; }, () => { on.ring = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];

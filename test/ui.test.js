@@ -1186,6 +1186,10 @@ test("statusGroups: Codex's ring and percent come last, and go right after the c
   }
   // No window stated: no ring, the line as before.
   expect(text(statusGroups({ ...full, contextPct: null }, 2000)).at(-1)).toBe("cpu: 142k context");
+  // A tiny stated window (a crafted transcript): shown as 999% at most, with a full ring.
+  expect(text(statusGroups({ ...full, contextPct: 14200000 }, 2000)).at(-1)).toBe("ring-8: 999%");
+  expect(text(statusGroups({ ...full, contextPct: 999 }, 2000)).at(-1)).toBe("ring-8: 999%");
+  expect(text(statusGroups({ ...full, contextPct: 101 }, 2000)).at(-1)).toBe("ring-8: 101%");
   // 0% is a real share, so it shows, with an empty ring.
   expect(text(statusGroups({ ...full, context: 300, contextPct: 0 }, 2000)).at(-1)).toBe("ring-0: 0%");
 });
