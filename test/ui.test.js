@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
+  statusGroups, statusWidth, ringStep,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
@@ -1273,4 +1274,78 @@ test("cardKey: the keys that scroll the settings card; cardScroll: where each ta
   expect(up.y).toBe(560);
   expect(cardScroll("pageup", 100, 1000, 400)).toEqual({ y: 0, mark: 0 });
   expect(cardScroll("sideways", 0, 1000, 400)).toBe(null);
+});
+
+// The owner (TRD-17): the number of tokens in the context window always shows, with the
+// percent where the agent states its window. So the context count is the last to go.
+test("statusGroups: the status line's groups, and what gives way first in a narrow pane", () => {
+  const full = { turns: 12, hidden: 3, tools: 41, tokens: 1234567, cachePct: 87.4, context: 142000 };
+  const text = (gs) => gs.map((g) => `${g.icon}: ${g.text}`);
+  expect(text(statusGroups(full, 2000))).toEqual(["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens · 87.4% cache hit", "cpu: 142k context"]);
+  // Narrower and narrower: the cache hit, the hidden count and the tokens go; then "tool
+  // calls" shortens, the tool count goes, and the turns go; the context count stays.
+  const steps = [
+    ["12 turns · 3 hidden · 41 tool calls", "1.2M tokens", "142k context"],
+    ["12 turns · 41 tool calls", "1.2M tokens", "142k context"],
+    ["12 turns · 41 tool calls", "142k context"],
+    ["12 turns · 41 tools", "142k context"],
+    ["12 turns", "142k context"],
+    ["142k context"],
+  ];
+  let w = statusWidth(statusGroups(full, 2000));
+  for (const want of steps) {
+    // The widest pane where the step before no longer fits.
+    while (statusGroups(full, w).map((g) => g.text).join("|") !== want.join("|") && w > 0) w--;
+    expect(statusGroups(full, w).map((g) => g.text)).toEqual(want);
+    expect(statusWidth(statusGroups(full, w))).toBeLessThanOrEqual(w);
+    w--;
+  }
+  // Even the context count alone wider than the pane: it stays, and the row truncates it.
+  expect(text(statusGroups(full, 10))).toEqual(["cpu: 142k context"]);
+  // Cursor: no tokens, so no token group and no context, never "0 tokens"; the turns stay.
+  const cursor = { turns: 1, hidden: 0, tools: 1, tokens: null, cachePct: null, context: null };
+  expect(text(statusGroups(cursor, 2000))).toEqual(["messages: 1 turn · 1 tool call"]);
+  expect(text(statusGroups(cursor, 10))).toEqual(["messages: 1 turn"]);
+  // No tool calls: the count is left out, and 0% cache hit is a real number, so it shows.
+  expect(statusGroups({ turns: 2, hidden: 0, tools: 0, tokens: 900, cachePct: 0, context: 450 }, 2000).map((g) => g.text)).toEqual(["2 turns", "900 tokens · 0% cache hit", "450 context"]);
+});
+
+test("statusGroups: with a stated window the context reads its count and percent behind the ring, and the count goes last", () => {
+  const full = { turns: 12, hidden: 3, tools: 41, tokens: 1234567, cachePct: 87.4, context: 142000, contextPct: 55 };
+  const text = (gs) => gs.map((g) => `${g.icon}: ${g.text}`);
+  expect(text(statusGroups(full, 2000))).toEqual(["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens · 87.4% cache hit", "ring-4: 142k context · 55%"]);
+  // The other stats go first, as without a window; then the ring and percent (the count keeps
+  // the chip icon), then the turns; the count stays.
+  const steps = [
+    ["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tool calls", "database: 1.2M tokens", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tool calls", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tools", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns", "cpu: 142k context"],
+    ["cpu: 142k context"],
+  ];
+  let w = statusWidth(statusGroups(full, 2000));
+  for (const want of steps) {
+    while (text(statusGroups(full, w)).join("|") !== want.join("|") && w > 0) w--;
+    expect(text(statusGroups(full, w))).toEqual(want);
+    expect(statusWidth(statusGroups(full, w))).toBeLessThanOrEqual(w);
+    w--;
+  }
+  expect(text(statusGroups(full, 10))).toEqual(["cpu: 142k context"]);
+  // No window stated: the count alone, behind the chip icon.
+  expect(text(statusGroups({ ...full, contextPct: null }, 2000)).at(-1)).toBe("cpu: 142k context");
+  // A tiny stated window (a crafted transcript): shown as 999% at most, with a full ring.
+  expect(text(statusGroups({ ...full, contextPct: 14200000 }, 2000)).at(-1)).toBe("ring-8: 142k context · 999%");
+  expect(text(statusGroups({ ...full, contextPct: 999 }, 2000)).at(-1)).toBe("ring-8: 142k context · 999%");
+  expect(text(statusGroups({ ...full, contextPct: 101 }, 2000)).at(-1)).toBe("ring-8: 142k context · 101%");
+  // 0% is a real share, so it shows, with an empty ring.
+  expect(text(statusGroups({ ...full, context: 300, contextPct: 0 }, 2000)).at(-1)).toBe("ring-0: 300 context · 0%");
+});
+
+test("ringStep: the ring's eighths, empty only at 0% and full only at 100%", () => {
+  expect([0, 1, 6, 7, 19, 25, 50, 62, 75, 93, 94, 99, 100, 130].map(ringStep)).toEqual([0, 1, 1, 1, 2, 2, 4, 5, 6, 7, 7, 7, 8, 8]);
+  expect([null, undefined, -5, Number.NaN].map(ringStep)).toEqual([0, 0, 0, 0]);
+  // Each step has its icon.
+  for (let k = 0; k <= 8; k++) expect(existsSync(join(import.meta.dir, `../mods/agent-threads/ring-${k}.svg`))).toBe(true);
 });

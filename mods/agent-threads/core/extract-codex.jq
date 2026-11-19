@@ -1,11 +1,12 @@
-# agent-threads extractor for Codex rollout files: lines in (jq -R, whole lines only), the same
+# agent-threads extractor for Codex rollout files: lines in (one JSON string each, from lines.sh; whole lines only), the same
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model and effort of the turn about to start  {m, e}
 #   p      a prompt   {o: "human", ts, t}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
 #                     a subagent's message  {o: "peer", ts, t, n: its name}
 #   t      assistant text (commentary and the final answer)  {t}
 #   u      tool call  {n: tool name}
-#   m      token use of one model response  {id, u: {i,o,cr,cc}, ts}
+#   m      token use of one model response  {id, u: {i,o,cr,cc}, ts}, and w: the model's context
+#          window, when the count states it (model_context_window)
 #   e      error message  {t}
 #   d      end of a turn  {ms, ts}
 #   i      an interrupted turn  {ts}
@@ -56,6 +57,9 @@ def event_msg($l; $p):
   elif $p.type == "token_count" and ($p.info | type) == "object" and ($p.info.last_token_usage | type) == "object" then
     # A rate-limit update repeats the last count: the running total names the response.
     {k: "m", id: "t\($p.info.total_token_usage.total_tokens // $l.timestamp)", ts: $l.timestamp, u: ($p.info.last_token_usage | usage)}
+    # Each count states the window of the model that answered, so a model changed mid-session
+    # (or the same model with another window) shows from its first count on.
+    + (if ($p.info.model_context_window | type) == "number" and $p.info.model_context_window > 0 then {w: $p.info.model_context_window} else {} end)
   elif $p.type == "task_complete" then {k: "d", ms: ($p.duration_ms // 0), ts: $l.timestamp}
   elif $p.type == "turn_aborted" then {k: "i", ts: $l.timestamp}
   elif $p.type == "error" then {k: "e", t: (($p.message // "") | tostring | cap)}

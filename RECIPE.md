@@ -6,7 +6,7 @@ Agent Threads opens a pane beside your agent's terminal that shows the session a
 
 ## What you see
 
-Every surface the pane draws is described in [docs/reference.md](https://github.com/ryanrozich/herdr-agent-threads/blob/main/docs/reference.md#what-you-see), with its sizes, colours and the code that draws it: Floating top, Header, Settings card, Link rules page, Filter field, Banners, Width, Wide tables, Collapsed reply, Highlight by drag, Day bands, Turn list, Command rows, Agent messages, Open turn, Image viewer, Running turn, Dividers, Footer, Rail, Jump to latest pill, Toasts, Times, Cache hit % and Other states. It moved there so this file stays under the 64 KB that the herdr.dev/mods index reads.
+Every surface the pane draws is described in [docs/reference.md](https://github.com/ryanrozich/herdr-agent-threads/blob/main/docs/reference.md#what-you-see), with its sizes, colours and the code that draws it: Floating top, Header, Settings card, Link rules page, Filter field, Banners, Width, Wide tables, Collapsed reply, Highlight by drag, Day bands, Turn list, Command rows, Agent messages, Open turn, Image viewer, Running turn, Dividers, Footer, Status line, Rail, Jump to latest pill, Toasts, Times, Cache hit % and Other states. It moved there so this file stays under the 64 KB that the herdr.dev/mods index reads.
 
 No cost is shown. The agents' session records hold no per-turn cost that Threads shows, and Threads does not estimate one.
 

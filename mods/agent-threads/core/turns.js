@@ -45,6 +45,9 @@ export function newSession(id, file) {
     // launch result ("r") and its task notification ("n"): running, completed, failed,
     // stopped or killed, with the notification's time and tokens.
     agents: new Map(), agentIds: new Map(),
+    // Lines the reader skipped (noteSkip): before the first turn, and in all for the debug
+    // report. Here so that a session read again from the top (main.js restart) starts at none.
+    skippedHead: null, skipped: null,
   };
 }
 
@@ -353,8 +356,9 @@ function closeOpen(s, cur, end, e) {
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
-    // Answered together with a later prompt: its reply is on that row.
-    if (t !== cur && !t.after.length) t.answeredBy = cur.n;
+    // Answered together with a later prompt: its reply is on that row. Not a turn with a line
+    // left out (noteSkip): its reply may be the line itself.
+    if (t !== cur && !t.after.length && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
@@ -443,7 +447,8 @@ function applyOne(s, e) {
       return;
     case "m":
       if (!cur) return;
-      cur.usage[e.id] = e.u;
+      // w: the context window the agent stated with this count (Codex only), kept beside it.
+      cur.usage[e.id] = e.w > 0 ? { ...e.u, w: e.w } : e.u;
       if (e.m) cur.model = e.m;
       if (e.e) cur.effort = e.e;
       if (typeof e.a === "string" && e.a) cur.by = e.a;
@@ -542,6 +547,25 @@ function applyOne(s, e) {
 // OpenCode rewrites its last turn in place while it streams, so a read gets that turn again
 // each time: rows after the last settled one are dropped before the new events apply. The
 // turn numbers come out the same.
+// A line the reader skipped (extract.sh's line_max): counted on the newest turn read so far,
+// or on the session's head before the first turn, so the pane can say where in byte order a
+// line was left out. Only by turn: the line's own type and time are not read.
+export function noteSkip(s, bytes) {
+  if (!(bytes > 0)) return;
+  const t = s.turns[s.turns.length - 1];
+  const at = t ?? s;
+  const key = t ? "skipped" : "skippedHead";
+  at[key] = { lines: (at[key]?.lines ?? 0) + 1, bytes: (at[key]?.bytes ?? 0) + bytes };
+  s.version++;
+}
+
+// The note for skipped lines: "A line of 300 MB was left out here, too long to read". From
+// 1 GB up the size is in GB with one decimal.
+export function skipNote(k) {
+  const size = k.bytes >= 1073741824 ? `${(k.bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(k.bytes / 1048576))} MB`;
+  return k.lines === 1 ? `A line of ${size} was left out here, too long to read` : `${k.lines} lines, ${size} in all, were left out here, too long to read`;
+}
+
 export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
   s.open = [];
@@ -563,7 +587,7 @@ export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
   if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
-  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
@@ -599,6 +623,42 @@ export function stats(turn) {
     tokens: fresh,
     cachePct: cachePct(cacheRead, prompt),
   };
+}
+
+// The status line's sums over one session's turns: tool calls; tokens, counted as the reply
+// stats count them (new input, cache writes and output); the share of the prompt read from
+// cache; and context, the prompt of the newest model response (its input, cache reads and
+// cache writes). With no usage in any turn (Cursor records none) the three are null, never 0.
+export function sessionStats(turns) {
+  return sumsStats(turnSums(turns));
+}
+
+// sessionStats in two steps, so the pane sums the done turns once and only the newest again:
+// turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
+export function turnSums(turns, from = 0, to = turns.length, base = null) {
+  const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null, window: null };
+  for (let k = from; k < to; k++) {
+    const t = turns[k];
+    a.tools += t.tools ?? 0;
+    for (const u of Object.values(t.usage ?? {})) {
+      a.any = true;
+      a.input += u.i ?? 0;
+      a.output += u.o ?? 0;
+      a.cacheRead += u.cr ?? 0;
+      a.cacheWrite += u.cc ?? 0;
+      a.context = (u.i ?? 0) + (u.cr ?? 0) + (u.cc ?? 0);
+      // The window stated with the same count, or none: never one from an earlier count.
+      a.window = u.w > 0 ? u.w : null;
+    }
+  }
+  return a;
+}
+export function sumsStats(a) {
+  if (!a.any) return { tools: a.tools, tokens: null, cachePct: null, context: null, contextPct: null };
+  const context = a.context > 0 ? a.context : null;
+  // The context as a whole percent of the window, only where the transcript states the window.
+  const contextPct = context != null && a.window > 0 ? Math.round((context * 100) / a.window) : null;
+  return { tools: a.tools, tokens: a.input + a.cacheWrite + a.output, cachePct: cachePct(a.cacheRead, a.input + a.cacheWrite + a.cacheRead), context, contextPct };
 }
 
 // Share of the prompt read from cache, floored to one decimal: 100 only when every prompt

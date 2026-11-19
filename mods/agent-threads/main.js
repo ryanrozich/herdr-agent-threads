@@ -50,7 +50,8 @@ import {
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
-  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
+  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
+  noteSkip, skipNote,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
@@ -60,7 +61,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -186,18 +187,26 @@ const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
 // How far above the pane's bottom the card ends at the least, so a strip of the list stays
-// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
-// where under that the card takes the height. 0 makes the card take the height everywhere.
+// in view under it (the owner's call): 160 in a pane at least CARD_STRIP_MIN tall. Under that
+// the strip shrinks a pixel for each pixel the pane loses, so the card keeps its height until
+// the strip is down to the foot's space, and then takes the height: shrinking the pane never
+// grows the card (TRD-6). 0 makes the card take the height everywhere.
 const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
 // The strip at the card's right edge that holds its always-drawn scrollbar.
 const CARD_BAR_W = 10;
+// The keys sheet's key column: wide enough for its widest row's chips (PgUp, PgDn, Space) on
+// one line, in a pane at least KEYS_COL_MIN wide. A narrower pane keeps the narrow column,
+// where those chips wrap, so the descriptions do not wrap more than they did.
+const KEYS_COL = 128;
+const KEYS_COL_NARROW = 92;
+const KEYS_COL_MIN = 520;
 // The card's one page: its sections in order, each with its rows in order (settingsRows draws
 // each row from its key). Moving a row or renaming a section is a change to this list alone.
 const CARD_SECTIONS = [
   ["Messages", ["textSize", "userColor", "truncate", "time"]],
   ["Agent messages", ["agents", "agentRail", "agentColor"]],
-  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints", "statusLine"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
@@ -212,7 +221,9 @@ const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey and links are never reset.
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+// The status line's height (statusRow).
+const STATUS_H = 24;
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The rule editor's fields: key, label, placeholder, the most it takes.
@@ -257,6 +268,13 @@ const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU b
 const YOU_LINK_GAP = 4;
 const YOU_LINK_LINE = 18;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
+// A press on a closed turn selects it at once and opens it this long after the release,
+// unless a second press comes first: the first press of a double press (to select a word in
+// the reply) must not open the turn, which would redraw the reply under the pointer as other
+// views and send the second press to whatever text took its place (issue 131). A press only
+// reports its click count, not where its text lies, so the mod cannot tell a press on the
+// reply's words from one beside them.
+const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -891,7 +909,7 @@ export default class Threads extends View {
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
-      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null })),
+      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null })),
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -908,6 +926,7 @@ export default class Threads extends View {
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
+      statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -923,6 +942,8 @@ export default class Threads extends View {
       senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
+      // perl was not found, so a character across a 4 KB piece of a line can show as U+FFFD.
+      noPerl: Boolean(this.noPerl),
     };
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
@@ -1954,6 +1975,11 @@ export default class Threads extends View {
             // From here until the offset moves, s holds part of this chunk.
             s.partial = true;
             if (c.rewind) rewindTail(s);
+            // No perl on this machine: the reader fell back to jq's raw read (core/lines.sh).
+            if (c.noPerl) this.noPerl = true;
+            // A line too long to read (extract.sh's line_max) was skipped: counted for the debug report,
+            // and noted in the list after the turn it fell in (noteSkip).
+            if (c.skipped) { s.skipped = { lines: (s.skipped?.lines ?? 0) + 1, bytes: (s.skipped?.bytes ?? 0) + c.skipped }; noteSkip(s, c.skipped); }
             // Once read in full, a prompt or end of turn that turns up was seen as it happened.
             if (s.clock && s.loaded) {
               const at = Date.now();
@@ -2451,6 +2477,8 @@ export default class Threads extends View {
       const t0 = first ? from.ti : 0;
       if (!first && si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
+      // A line skipped before the first turn (noteSkip).
+      if (!first && s.skippedHead && !outline && !q) out.push({ kind: "note", key: `skip:${si}:head`, text: skipNote(s.skippedHead) });
       // The live newest turn (isLive), found once for the session.
       const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
@@ -2511,6 +2539,8 @@ export default class Threads extends View {
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
+        // A line skipped while this turn was the newest one read (noteSkip): one dim line after it.
+        if (turn.skipped && !q) out.push({ kind: "note", key: `skip:${key}`, text: skipNote(turn.skipped) });
       }
       flush();
       // Built from inside a day band: the band's day item, kept, counts its turns again.
@@ -3649,6 +3679,34 @@ export default class Threads extends View {
     return true;
   }
 
+  // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
+  // comes first: a second press (on_mouse_down with a click count over 1), a drag
+  // (holdForSelect), any key (key), or a search starting. A press on another closed turn
+  // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
+  // then is not opened.
+  openAfterPress(key, cx) {
+    const w = this.openWait;
+    if (w && w.key !== key) { this.openWait = null; if (this.mayOpen(w)) this.toggle(w.key, cx); }
+    this.sel = key;
+    this.follow = false;
+    const gen = (this.openGen = (this.openGen ?? 0) + 1);
+    this.openWait = { key, gen, filtering: Boolean(this.filtering) };
+    cx.timer.after(OPEN_WAIT_MS, (cx) => {
+      const w = this.openWait;
+      if (w?.gen !== gen) return;
+      this.openWait = null;
+      if (this.mayOpen(w)) this.toggle(key, cx);
+    });
+    cx.notify();
+  }
+  // Whether a pending open still applies: the turn is closed and on the list, and no search
+  // started since the press (a press in the search field or its button takes no key here).
+  mayOpen(w) {
+    if (this.open.has(w.key) || !this.findTurn(w.key)) return false;
+    if (this.filtering && !w.filtering) return false;
+    return this.rows().some((r) => r.key === w.key);
+  }
+
   toggle(key, cx) {
     if (this.open.has(key)) {
       this.open.delete(key);
@@ -3661,8 +3719,10 @@ export default class Threads extends View {
     this.sel = key;
     this.follow = false;
     // Opening shows the whole card when it fits (seen drawn: its chips and buttons were
-    // left under the footer); closing keeps the row in view.
-    this.scrollTo = { key, how: this.open.has(key) ? "card" : "top" };
+    // left under the footer); closing keeps the row in view. Opening waits for the card's
+    // parts to be measured (until), as a return to a pin does: worked out from estimates,
+    // the view landed and then moved again as the measures came in (issue 131).
+    this.scrollTo = this.open.has(key) ? { key, how: "card", until: Date.now() + 400 } : { key, how: "top" };
     cx.notify();
   }
 
@@ -4039,7 +4099,10 @@ export default class Threads extends View {
   // the newest reply growing during the drag, or a new turn, pulled the view to the bottom and
   // carried the text under the pointer off the top of the pane (issue 131). Scrolling back down
   // to the end follows again (stickCheck).
+  // A press that becomes a selection also keeps closed the turn an earlier press was about
+  // to open (OPEN_WAIT_MS).
   holdForSelect() {
+    this.openWait = null;
     if (!this.follow && !this.toBottom) return;
     this.follow = false;
     this.toBottom = false;
@@ -4389,6 +4452,7 @@ export default class Threads extends View {
         this.full.has(k) ? this.full.delete(k) : this.full.add(k);
         return cx.notify();
       }
+      if (!this.open.has(key)) return this.openAfterPress(key, cx);
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -4557,6 +4621,9 @@ export default class Threads extends View {
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
   // ("agent-threads.next" and so on), delivered through nextCommand().
   key(e, cx) {
+    // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
+    // after a click acts on its own, and the turn is not opened behind it.
+    this.openWait = null;
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
@@ -4658,6 +4725,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
+      case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
@@ -4826,10 +4894,17 @@ export default class Threads extends View {
         const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
         const mains = threads.filter((p) => !pinnedIds.has(p.pane));
         if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
-          if (this.action(c, cx)) cx.notify();
+          this.command(c, cx);
         }
       }
     });
+  }
+
+  // A command bound in keys.json (next, previous and the like) is a key by another road: like
+  // key(), it wins over a press's pending open (OPEN_WAIT_MS).
+  command(name, cx) {
+    this.openWait = null;
+    if (this.action(name, cx)) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.
@@ -5443,6 +5518,7 @@ export default class Threads extends View {
       .child(this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .when(Boolean(this.prefs.keyHints), (el) => el.child(this.footer(t)))
+      .when(this.statusShown(), (el) => el.child(this.statusRow(t)))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
@@ -5960,14 +6036,18 @@ export default class Threads extends View {
   settingsCard(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
-    const top = this.floating() ? TOP_BAND : 46;
     const h = this.rootH || 600;
-    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
-    const room = Math.max(180, h - top - under);
+    const fixed = CARD_HEAD + CARD_FOOT + 2;
+    // Under the icons at the top, unless the pane is too short for the head and foot there:
+    // then the card moves up, so they stay inside the pane (TRD-7).
+    const top = Math.max(0, Math.min(this.floating() ? TOP_BAND : 46, h - CARD_GAP - fixed));
+    const under = Math.max(this.footSpace() + CARD_GAP, Math.min(CARD_STRIP, h - (CARD_STRIP_MIN - CARD_STRIP)));
+    // At least 180 px, over the key hints if it must, but never past the pane's bottom (less
+    // the gap): in a very short pane the rows shrink first, to nothing if need be.
+    const room = Math.max(Math.min(180, h - top - CARD_GAP), h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
-    const fixed = CARD_HEAD + CARD_FOOT + 2;
-    const bodyMax = Math.max(60, room - fixed);
+    const bodyMax = Math.max(0, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
     const key = links ? "links" : "main";
     const rowsH = this.cardBody?.key === key ? this.cardBody.h : null;
@@ -6052,8 +6132,8 @@ export default class Threads extends View {
 
   // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
   // the way to every key while the key hints are off. The chat's agent, counts and title
-  // (aboutRow) were here with the floating top; the owner wants the version here and the
-  // chat's stats elsewhere, not yet chosen.
+  // were here with the floating top; the owner wants the version here, and the chat's stats
+  // are now the status line at the pane's foot (statusRow).
   cardFoot(t, pad) {
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
       .child(this.versionRow(t))
@@ -6165,6 +6245,7 @@ export default class Threads extends View {
       keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      statusLine: () => [sw("th-set-status", "Chat stats at the bottom", P.statusLine !== false, "statusLine")],
       linkRules: () => [linkRules()],
       quoteKey: () => [v_flex().gap(4)
         .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
@@ -6490,22 +6571,6 @@ export default class Threads extends View {
     return out;
   }
 
-  // The agent, the turn and hidden counts and the session's title, which the header row shows.
-  // It was the settings card's foot with the floating top, until the version took that row; it
-  // is kept for the chat's stats' next place (not yet chosen). Its tooltip names the terminal
-  // and session.
-  aboutRow(t) {
-    const agent = this.agent();
-    const s = this.current();
-    const c = s?.loaded ? this.counts() : null;
-    const text = [c ? plural(c.shownCur, "turn") : this.headerText(), c?.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null, s?.title].filter(Boolean).join(" · ");
-    return h_flex().id("th-about").flex_1().min_w(0).gap(6).items_center().tooltip(this.bindingTip())
-      .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted))
-      .child(div().flex_none().text_size(12).text_color(t.foreground).child(agent.name))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(text))
-      .when(this.debug && Boolean(this.timing), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)));
-  }
-
   // The text the list is filtered by: none while the field holds a "#12" jump.
   filterText() { return jumpTarget(this.query) == null ? this.query.trim() : ""; }
 
@@ -6798,7 +6863,8 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
-        // A double or triple press selects a word or a paragraph straight away.
+        // A double or triple press selects a word or a paragraph straight away, and the turn
+        // its first press was about to open stays closed (OPEN_WAIT_MS).
         if (this.pressCount > 1) { this.holdForSelect(); this.liftFill(this.sel, cx); }
         this.notePress(cx);
       })
@@ -8618,8 +8684,46 @@ export default class Threads extends View {
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
-  // The room the key hints take at the pane's foot: none while they are off (settings keyHints).
-  footSpace() { return this.prefs.keyHints ? (this.footerH ?? 38) : 0; }
+  // The room the key hints and the status line take at the pane's foot: none for either while
+  // it is off (settings keyHints and statusLine).
+  footSpace() { return (this.prefs.keyHints ? (this.footerH ?? 38) : 0) + (this.statusShown() ? STATUS_H : 0); }
+
+  // The status line: the chat's stats for the session the pane reads, once it is read (the
+  // owner, 2026-11-19: a slim line at the very bottom). Only what the transcript records:
+  // turns, hidden turns and tool calls for every agent; tokens, cache hit and context for
+  // the agents that record usage (sessionStats). It takes no click and shows no tooltip.
+  statusShown() { return this.prefs.statusLine !== false && Boolean(this.current()?.loaded); }
+  // Summed again only when the session changes, and then only from the newest done turn on,
+  // as bindingTip's totals are: a sum over every turn on every draw is too slow in a long
+  // session (Herdr stops a draw past about 50 ms).
+  statusStats() {
+    const c = this.counts();
+    const s = this.current();
+    if (!s) return { turns: c.shownCur, hidden: c.hiddenCur, ...sumsStats(turnSums([])) };
+    // The session's own objects are part of the key: a session read again from the start gets
+    // a new turns list, so the same id and counts can never bring back the old line.
+    const v = `${s.id}|${s.version}|${s.turns.length}`;
+    const u = this.statusMemo;
+    if (u?.v !== v || u.s !== s || u.list !== s.turns) {
+      const keep = u && u.s === s && u.list === s.turns && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+      let k = keep ? u.stable : 0;
+      const from = k;
+      while (k < s.turns.length - 1 && s.turns[k].done) k++;
+      const base = turnSums(s.turns, from, k, keep ? u.base : null);
+      this.statusMemo = { v, s, list: s.turns, stable: k, mark: s.turns[k - 1] ?? null, base, stats: sumsStats(turnSums(s.turns, k, s.turns.length, base)) };
+    }
+    return { turns: c.shownCur, hidden: c.hiddenCur, ...this.statusMemo.stats };
+  }
+  statusGroupsShown() { return statusGroups(this.statusStats(), this.pw()); }
+  statusRow(t) {
+    const groups = this.statusGroupsShown();
+    return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
+      .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
+        // The ring takes the text's colour: in dim its arc barely parts from its faint track on a
+        // dark theme (rig stills).
+        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.icon.startsWith("ring-") ? t.muted : t.dim))
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(g.text))));
+  }
 
   footer(t) {
     const hint = (k, label) => (k === "?"
@@ -8638,36 +8742,49 @@ export default class Threads extends View {
   // The sheet's card: as tall as its keys (a 36 px title, 10 px padding above and below, each
   // group's 16 px name, 25 px a key row, 6 px gaps inside a group and 12 px between groups),
   // and no taller than the room between the header and the footer, where its list scrolls.
-  keySheetH(groups) {
+  keySheetWant(groups) {
     const rows = groups.reduce((n, [, items]) => n + items.length, 0);
-    const want = 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+    return 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+  }
+  keySheetH(groups) {
     const room = (this.rootH || 600) - 46 - this.footSpace() - 6;
-    return Math.max(120, Math.min(want, room));
+    return Math.max(120, Math.min(this.keySheetWant(groups), room));
   }
 
   // ?: every key, grouped (ui.js keySheet), over the list between the header and the footer.
   // Esc, ?, the close button or a click outside the card closes it.
   keySheetView(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.keysOpen = false; cx.notify(); };
+    // The key column fits the widest row's chips on one line where the pane has room (TRD-8).
+    const col = this.pw() >= KEYS_COL_MIN ? KEYS_COL : KEYS_COL_NARROW;
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
-      .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
+      .child(h_flex().flex_none().w(col).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
     const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
+    const sheetH = this.keySheetH(groups);
+    // Taller than its room: the list scrolls, and where Herdr has Scrollbar and its mode the bar
+    // is drawn all the time, in a strip at the right edge, so the sheet shows there is more.
+    const bar = this.cardBar && this.keySheetWant(groups) > sheetH;
+    const list = v_flex().id("th-keys-list").flex_1().min_h(0)
+      .when(bar, (el) => el.overflow_y_scroll().pr(12 + CARD_BAR_W)).when(!bar, (el) => el.overflow_y_scrollbar().pr(12)).pl(12).py(10).gap(12)
+      .children(groups.map(([group, items]) => v_flex().gap(6)
+        .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
+        .children(items.map(row))));
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
       // Nothing under the sheet takes the wheel (covered()).
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
-      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
+      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(sheetH)
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
           .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child("Keys"))
           .child(this.kbd(t, "?"))
           .child(this.iconButton(t, "th-keys-close", "x", "Close (Esc)", close)))
-        .child(v_flex().id("th-keys-list").flex_1().min_h(0).overflow_y_scrollbar().px(12).py(10).gap(12)
-          .children(groups.map(([group, items]) => v_flex().gap(6)
-            .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
-            .children(items.map(row))))));
+        .child(bar
+          ? div().relative().flex_1().min_h(0).flex().flex_col().child(list)
+            .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical("th-keys-list").mode("always").absolute().top(0).bottom(0).left(0).right(0)))
+          : list));
   }
 
   // i: the Turn card, with the selected turn's numbers and what each means (detailRows). It

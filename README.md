@@ -38,7 +38,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Every message shows in full unless you turn on Shorten long messages in the settings. Point at a message for its time, and select a turn for the copy, pin and quote icons. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted. A code block wraps and shows its first 12 rows, with Show all under it for the rest. A Mermaid block has View diagram under it, which opens the diagram drawn as text in a viewer over the window.
 
-On Herdr 0.1.13 or newer, drag across any turn's text, open or closed, to highlight it, and press `Cmd-C` to copy it. A drag never opens or closes a turn; only a click that does not move does.
+On Herdr 0.1.13 or newer, drag across any turn's text, open or closed, to highlight it, and press `Cmd-C` to copy it. A drag or a double press never opens or closes a turn; only a click that does not move does. A click on a closed turn opens it after 0.3 s, so a double press can select a word first.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
@@ -106,7 +106,7 @@ A table in a reply can run wider than the reading line when the pane has room be
 
 ### Make it yours
 
-Press `,` for settings, a card over the list with one page: text size, your message color, Shorten long messages and its lines, and the time; agent messages, their rail ticks and their color; the reading width (Comfortable, Wide or Full, which `Shift w` also steps), the rail's side and the key hints; link rules and the quote key; and the file. A change shows in the list behind the card as you make it. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with one page: text size, your message color, Shorten long messages and its lines, and the time; agent messages, their rail ticks and their color; the reading width (Comfortable, Wide or Full, which `Shift w` also steps), the rail's side, the key hints and the status line, the chat's turns, tool calls, tokens, cache hit and context in one row at the pane's foot; link rules and the quote key; and the file. A change shows in the list behind the card as you make it. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 

@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false };
+const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -141,6 +141,13 @@ test("keyHints is a boolean, false by default: no key row at the pane's foot", (
   expect(v({})).toBe(false);
   expect(v({ keyHints: true })).toBe(true);
   expect(v({ keyHints: "yes" })).toBe(false);
+});
+
+test("statusLine is a boolean, true by default: the chat's stats at the pane's very bottom", () => {
+  const v = (j) => parseSettings(JSON.stringify(j)).values.statusLine;
+  expect(v({})).toBe(true);
+  expect(v({ statusLine: false })).toBe(false);
+  expect(v({ statusLine: "no" })).toBe(true);
 });
 
 test("the card's quote key is written as an extra: the values and every other key stay as they were", async () => {
