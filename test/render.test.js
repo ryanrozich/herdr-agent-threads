@@ -2008,11 +2008,23 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = () => { if (deadNow) { deadNow = false; return never(); } return new Promise((r) => setTimeout(r, 0)); }; }, 0);
   const tick = cx.everies.find((x) => x.ms === 1000).fn;
   const real = Date.now;
+  // The 1 s timer, on a clock the test moves: one tick a second from now until the watcher
+  // judges the hung read (readGen moves), as the real timer would. Real time between the
+  // two stalls (the restarted read reaching its dead step, slow on a busy machine) is then
+  // never a gap between ticks, so the watcher cannot take it for a sleep (TICK_GAP) and
+  // pass over the stall. The bounds only end a run that never gets there.
   const stall = async () => {
     deadNow = true;
-    await until(() => !deadNow, "the dead step");
-    await new Promise((r) => setTimeout(r, 30));
-    try { Date.now = () => real() + 11000; tick(cx); } finally { Date.now = real; }
+    await until(() => !deadNow, "the dead step", 6000);
+    const gen = v.readGen ?? 0;
+    const base = real();
+    try {
+      for (let s = 1; (v.readGen ?? 0) === gen; s++) {
+        if (s > 40) throw new Error("the watcher never judged the read stalled");
+        Date.now = () => base + s * 1000;
+        tick(cx);
+      }
+    } finally { Date.now = real; }
     dead--;
   };
   // The first read dies before its first chunk is in, then the restarted one does too.
@@ -2037,7 +2049,9 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   expect(v.current().turns.length).toBe(1305);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).not.toBe("Read failed");
-});
+  // Three reads of a 1305-turn session: more than bun's 5 s default on a busy machine. The
+  // limit only ends a hung run; every wait above ends on what it checks.
+}, 60000);
 
 // F1: a stall in the middle of applying a chunk, twice. The session must not keep the
 // half-applied events, or the next read (a poll, the 5 s timer) applies them again.
@@ -7537,7 +7551,11 @@ test("level 3: a group claims no check or red mark until its calls are read; onc
 test("level 3 while a turn runs: the running group names what runs now; an open call read before its output reads it again once the session grows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
   const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
-  const ts = (s) => new Date(Date.now() - 60000 + s * 1000).toISOString();
+  // One base time for every stamp: taken from the clock at each call, the 19 s between the
+  // call and its output grew by however long the test took between the two, and a slow run
+  // read 20 s.
+  const t0 = Date.now() - 60000;
+  const ts = (s) => new Date(t0 + s * 1000).toISOString();
   const use = { type: "assistant", timestamp: ts(1), message: { id: "msg_b1", role: "assistant", content: [{ type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "bun run e2e" } }] } };
   writeFileSync(file, `${JSON.stringify(use)}\n`);
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
