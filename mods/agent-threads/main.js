@@ -267,6 +267,13 @@ const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU b
 const YOU_LINK_GAP = 4;
 const YOU_LINK_LINE = 18;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
+// A press on a closed turn selects it at once and opens it this long after the release,
+// unless a second press comes first: the first press of a double press (to select a word in
+// the reply) must not open the turn, which would redraw the reply under the pointer as other
+// views and send the second press to whatever text took its place (issue 131). A press only
+// reports its click count, not where its text lies, so the mod cannot tell a press on the
+// reply's words from one beside them.
+const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -3666,6 +3673,34 @@ export default class Threads extends View {
     return true;
   }
 
+  // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
+  // comes first: a second press (on_mouse_down with a click count over 1), a drag
+  // (holdForSelect), any key (key), or a search starting. A press on another closed turn
+  // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
+  // then is not opened.
+  openAfterPress(key, cx) {
+    const w = this.openWait;
+    if (w && w.key !== key) { this.openWait = null; if (this.mayOpen(w)) this.toggle(w.key, cx); }
+    this.sel = key;
+    this.follow = false;
+    const gen = (this.openGen = (this.openGen ?? 0) + 1);
+    this.openWait = { key, gen, filtering: Boolean(this.filtering) };
+    cx.timer.after(OPEN_WAIT_MS, (cx) => {
+      const w = this.openWait;
+      if (w?.gen !== gen) return;
+      this.openWait = null;
+      if (this.mayOpen(w)) this.toggle(key, cx);
+    });
+    cx.notify();
+  }
+  // Whether a pending open still applies: the turn is closed and on the list, and no search
+  // started since the press (a press in the search field or its button takes no key here).
+  mayOpen(w) {
+    if (this.open.has(w.key) || !this.findTurn(w.key)) return false;
+    if (this.filtering && !w.filtering) return false;
+    return this.rows().some((r) => r.key === w.key);
+  }
+
   toggle(key, cx) {
     if (this.open.has(key)) {
       this.open.delete(key);
@@ -3678,8 +3713,10 @@ export default class Threads extends View {
     this.sel = key;
     this.follow = false;
     // Opening shows the whole card when it fits (seen drawn: its chips and buttons were
-    // left under the footer); closing keeps the row in view.
-    this.scrollTo = { key, how: this.open.has(key) ? "card" : "top" };
+    // left under the footer); closing keeps the row in view. Opening waits for the card's
+    // parts to be measured (until), as a return to a pin does: worked out from estimates,
+    // the view landed and then moved again as the measures came in (issue 131).
+    this.scrollTo = this.open.has(key) ? { key, how: "card", until: Date.now() + 400 } : { key, how: "top" };
     cx.notify();
   }
 
@@ -4056,7 +4093,10 @@ export default class Threads extends View {
   // the newest reply growing during the drag, or a new turn, pulled the view to the bottom and
   // carried the text under the pointer off the top of the pane (issue 131). Scrolling back down
   // to the end follows again (stickCheck).
+  // A press that becomes a selection also keeps closed the turn an earlier press was about
+  // to open (OPEN_WAIT_MS).
   holdForSelect() {
+    this.openWait = null;
     if (!this.follow && !this.toBottom) return;
     this.follow = false;
     this.toBottom = false;
@@ -4406,6 +4446,7 @@ export default class Threads extends View {
         this.full.has(k) ? this.full.delete(k) : this.full.add(k);
         return cx.notify();
       }
+      if (!this.open.has(key)) return this.openAfterPress(key, cx);
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -4574,6 +4615,9 @@ export default class Threads extends View {
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
   // ("agent-threads.next" and so on), delivered through nextCommand().
   key(e, cx) {
+    // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
+    // after a click acts on its own, and the turn is not opened behind it.
+    this.openWait = null;
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
@@ -4844,10 +4888,17 @@ export default class Threads extends View {
         const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
         const mains = threads.filter((p) => !pinnedIds.has(p.pane));
         if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
-          if (this.action(c, cx)) cx.notify();
+          this.command(c, cx);
         }
       }
     });
+  }
+
+  // A command bound in keys.json (next, previous and the like) is a key by another road: like
+  // key(), it wins over a press's pending open (OPEN_WAIT_MS).
+  command(name, cx) {
+    this.openWait = null;
+    if (this.action(name, cx)) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.
@@ -6805,7 +6856,8 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
-        // A double or triple press selects a word or a paragraph straight away.
+        // A double or triple press selects a word or a paragraph straight away, and the turn
+        // its first press was about to open stays closed (OPEN_WAIT_MS).
         if (this.pressCount > 1) { this.holdForSelect(); this.liftFill(this.sel, cx); }
         this.notePress(cx);
       })

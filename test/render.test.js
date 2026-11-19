@@ -195,6 +195,14 @@ function fixture(...flags) {
   return file;
 }
 
+// A press on a closed turn opens it OPEN_WAIT_MS (300) after the release, unless a second
+// press comes first (issue 131). This runs that wait and nothing else.
+function afterPress(cx) {
+  const due = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  for (const x of due) x.fn(cx);
+}
+
 function makeCx() {
   const cx = {
     focus_handle: () => ({ focus() { focusCalls++; }, is_focused: () => true }),
@@ -1474,9 +1482,10 @@ test("a closed turn's message and reply start select by drag, a click that does 
   v.key(keyEv("q"), cx);
   await settleCx(cx);
   expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
-  // A click that does not move opens it.
+  // A click that does not move opens it, once the wait for a second press is over.
   v.pressMoved = 0; v.pressCount = 1;
   v.click(k, cx);
+  afterPress(cx);
   expect(v.open.has(k)).toBe(true);
   // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
   // agent's message, a stop's reason) stays a plain line, in its own colour.
@@ -2892,6 +2901,14 @@ test("opening a card brings its last part on screen, then its head; closing scro
   calls.length = 0;
   const key = v.turnKeys(v.rows()).at(-3);
   v.toggle(key, cx);
+  // The scroll waits while the card's parts are still to be measured (issue 131)...
+  expect(v.probeDue().length).toBeGreaterThan(0);
+  v.render(cx);
+  cx.flush();
+  expect(calls).toEqual([]);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  // ...and runs once they are.
+  v.probeDue = () => [];
   v.render(cx);
   cx.flush();
   const rows = v.rows();
@@ -4279,6 +4296,7 @@ test("a compact pin opens as a card with Enter, a click or its digit, and closes
   v.key(keyEv("escape"), cx);
   expect(kinds(k[2])).toEqual(["pin"]);
   v.click(k[4], cx);
+  afterPress(cx);
   expect(v.open.has(k[4])).toBe(true);
   expect(kinds(k[4])).toContain("head");
   v.click(k[4], cx);
@@ -5078,6 +5096,8 @@ test("a 10,000-word reply with no code fence opens whole as Markdown, lands on i
   cx.flush();
   v.sel = key;
   calls.length = 0;
+  // Every part measured, so the scroll does not wait for the probe.
+  v.probeDue = () => [];
   v.key(keyEv("enter"), cx);
   v.render(cx);
   cx.flush();
@@ -6444,7 +6464,144 @@ test("a drag that selects text never closes or collapses anything; a click that 
   gesture(v, cx, key, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
   expect(v.open.has(key)).toBe(false);
   gesture(v, cx, key);
+  afterPress(cx);
   expect(v.open.has(key)).toBe(true);
+});
+
+// Issue 131: the first press of a double press on a closed turn's reply opened the turn, so
+// the second press landed on whatever text took the reply's place, often the turn above.
+test("a press on a closed turn selects it at once and opens it after the wait; a second press or a drag keeps it closed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const closed = keys.filter((k) => !v.open.has(k) && v.rows().find((r) => r.key === k)?.kind === "turn");
+  expect(closed.length).toBeGreaterThanOrEqual(3);
+  const [a, b, c] = closed;
+  v.sel = keys.find((k) => !closed.includes(k)) ?? null;
+  // A single press: selected now, opened only once the wait is over.
+  cx.timers = [];
+  gesture(v, cx, a);
+  expect([v.sel, v.open.has(a)]).toEqual([a, false]);
+  expect(cx.timers.map((x) => x.ms)).toContain(300);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(true);
+  // A double press: the first release would open it, the second press keeps it closed, and the
+  // second release selects the turn under it, as a selection does.
+  cx.timers = [];
+  gesture(v, cx, b);
+  gesture(v, cx, b, { count: 2 });
+  afterPress(cx);
+  expect([v.sel, v.open.has(b)]).toEqual([b, false]);
+  // The second press lands on the turn above after all: nothing opens, that turn is selected.
+  cx.timers = [];
+  gesture(v, cx, c);
+  gesture(v, cx, b, { count: 2 });
+  afterPress(cx);
+  expect([v.sel, v.open.has(b), v.open.has(c)]).toEqual([b, false, false]);
+  // A press, then a drag before the wait is over: nothing opens.
+  cx.timers = [];
+  gesture(v, cx, c);
+  gesture(v, cx, c, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+  afterPress(cx);
+  expect(v.open.has(c)).toBe(false);
+  // A press on another closed turn during the wait opens the first at once; the second
+  // follows after its own wait.
+  cx.timers = [];
+  gesture(v, cx, b);
+  gesture(v, cx, c);
+  expect([v.open.has(b), v.open.has(c), v.sel]).toEqual([true, false, c]);
+  afterPress(cx);
+  expect(v.open.has(c)).toBe(true);
+  // Enter opens at once: only the pointer waits.
+  v.toggle(c, cx);
+  v.toggle(b, cx);
+  v.sel = b;
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(b)).toBe(true);
+});
+
+// From the review of #172: a key or a search after a press wins over the pending open.
+test("a key or a search after a press on a closed turn wins: the turn is not opened behind it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const closed = keys.filter((k) => !v.open.has(k) && v.rows().find((r) => r.key === k)?.kind === "turn");
+  const [a, b] = closed;
+  // Press, then j: j moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("j"), cx);
+  const moved = v.sel;
+  expect(moved).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, moved]);
+  // Press, Enter, Enter: opened by the first Enter, closed by the second, and left closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(true);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then Esc: closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("escape"), cx);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then a command bound in keys.json (it comes through nextCommand, not key()): it
+  // moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.command("next", cx);
+  const next = v.sel;
+  expect(next).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, next]);
+  // Press, then a search started from its button (no key reaches the panel): closed.
+  cx.timers = [];
+  gesture(v, cx, b);
+  v.action("filter", cx);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+  v.filtering = false;
+  // Press, then the turn is hidden by a search kept from before: not opened.
+  v.filtering = true;
+  cx.timers = [];
+  gesture(v, cx, b);
+  const other = v.findTurn(a).prompt.split(/\s+/).find((w) => w.length > 4 && !v.findTurn(b).prompt.includes(w) && !v.replyText(v.findTurn(b)).includes(w));
+  v.query = other;
+  v.rowsKey = null;
+  expect(v.rows().some((r) => r.key === b)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+});
+
+test("opening a turn scrolls to its card once its parts are measured, or after 400 ms when they never are", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--latest", "--langs"));
+  const calls = [];
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { calls.push([i, how]); } };
+  v.render(cx);
+  cx.flush();
+  const key = v.turnKeys(v.rows()).at(-3);
+  v.toggle(key, cx);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  expect(v.scrollTo.until).toBeGreaterThan(Date.now());
+  // Still measuring: no scroll, and the pane looks again in 60 ms.
+  calls.length = 0;
+  cx.timers = [];
+  v.render(cx);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  expect(cx.timers.map((x) => x.ms)).toContain(60);
+  cx.flush();
+  expect(calls).toEqual([]);
+  // A measure that never comes: once the wait is over it scrolls anyway, from the estimates.
+  v.scrollTo.until = Date.now() - 1;
+  v.render(cx);
+  cx.flush();
+  expect(v.scrollTo).toBe(null);
+  expect(calls.at(-1)).toEqual([v.rows().findIndex((r) => r.key === key), "top"]);
 });
 
 test("a drag ending on Collapse under a long reply or on the strip under it does nothing; a click on Collapse closes the turn", async () => {
