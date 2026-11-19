@@ -86,15 +86,26 @@ const many = (x, w) => `${n(x)} ${w}${x === 1 ? "" : "s"}`;
 export function statusWidth(groups) {
   return groups.reduce((sum, g) => sum + STATUS.icon + Math.ceil(g.text.length * STATUS.char), 0) + STATUS.gap * Math.max(0, groups.length - 1) + STATUS.pad;
 }
+// The ring's fill in eighths (ring-0.svg to ring-8.svg): empty only at 0% and full only at
+// 100% or more, so a little used shows a little and nearly full is not full.
+export function ringStep(pct) {
+  if (!(pct > 0)) return 0;
+  if (pct >= 100) return 8;
+  return Math.max(1, Math.min(7, Math.round(pct / 12.5)));
+}
 export function statusGroups(s, width) {
-  const on = { hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, context: s.context != null };
+  const on = { hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, context: s.context != null, ring: s.contextPct != null };
   let short = false;
   const build = () => [
     { key: "turns", icon: "messages", text: [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") },
     { key: "tokens", icon: "database", text: [on.tokens ? `${fmtTokens(s.tokens)} tokens` : null, on.tokens && on.cache ? `${fmtPct(s.cachePct)} cache hit` : null].filter(Boolean).join(" · ") },
     { key: "context", icon: "cpu", text: on.context ? `${fmtTokens(s.context)} context` : "" },
+    // Codex states its window: a ring filled to the share used, and the percent, last.
+    // Shown up to 999%: only a crafted transcript states a window so small that it goes past.
+    { key: "ring", icon: `ring-${ringStep(s.contextPct)}`, text: on.ring ? `${Math.min(999, s.contextPct)}%` : "" },
   ].filter((g) => g.text);
-  const steps = [() => { on.context = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];
+  // The context's count goes first and its ring next, before the other stats.
+  const steps = [() => { on.context = false; }, () => { on.ring = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];
   let out = build();
   for (const step of steps) {
     if (statusWidth(out) <= width) break;

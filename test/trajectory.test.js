@@ -146,3 +146,15 @@ test("context: each agent's newest prompt size, from its own token fields", () =
   expect(ctx(readFile(cursor, "cursor"))).toBe(null);
   expect(ctx(readFile(agy, "antigravity"))).toBe(2800 + 10600);
 });
+
+// The ring's percent: only where the transcript states the model's window, which only Codex
+// does (model_context_window on each count). No agent gets a window guessed from its model.
+test("contextPct: Codex's context as a share of its stated window, and none for the others", () => {
+  const pct = (s) => sessionStats(s.turns).contextPct;
+  expect(pct(readFile(codex, "codex"))).toBe(Math.round((52100 * 100) / 258400)); // 20
+  expect(pct(readFile(claude, "claude"))).toBe(null);
+  expect(pct(readOpencode(oc))).toBe(null);
+  expect(pct(readFile(pi, "pi"))).toBe(null);
+  expect(pct(readFile(cursor, "cursor"))).toBe(null);
+  expect(pct(readFile(agy, "antigravity"))).toBe(null);
+});

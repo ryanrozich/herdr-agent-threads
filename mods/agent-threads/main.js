@@ -8651,7 +8651,9 @@ export default class Threads extends View {
     const groups = this.statusGroupsShown();
     return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
       .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
-        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(t.dim))
+        // The ring takes the text's colour: in dim its arc barely parts from its faint track on a
+        // dark theme (rig stills).
+        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.key === "ring" ? t.muted : t.dim))
         .child(div().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(g.text))));
   }
 
