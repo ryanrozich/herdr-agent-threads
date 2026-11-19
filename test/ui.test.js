@@ -443,6 +443,9 @@ test("pin and outline prompts drop the paste wrapper", () => {
   // A paste that is the whole prompt: its body is the fallback, never the tag.
   expect(pinPromptText('<pasted_content id="o">\nonly\n</pasted_content>')).toBe("only");
   expect(outlineText('<pasted_content id="o">\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
+  // A paste body that starts with a blank line (npm test output often does): the first
+  // text line is the fallback, as fenced code already skips blanks, never an empty row.
+  expect(outlineText('<pasted_content id="o">\n\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
   // A wrapper inside a fenced code block stays text: the outline keeps looking for the
   // person's own words past it.
   expect(outlineText("```\n<pasted_content>\n```\nWhat went wrong here?")).toBe("What went wrong here?");

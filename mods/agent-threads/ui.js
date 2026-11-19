@@ -142,7 +142,7 @@ export function outlineText(prompt, q = "") {
   for (const raw of text.split("\n")) {
     const l = raw.trim();
     // A pasted block is passed over like fenced code, its first body line the fallback.
-    if (paste) { if (PASTE_CLOSE.test(l)) paste = false; else code ??= l; continue; }
+    if (paste) { if (PASTE_CLOSE.test(l)) paste = false; else if (l) code ??= l; continue; }
     if (/^(```|~~~)/.test(l)) { fence = !fence; continue; }
     if (!l) continue;
     if (fence) { code ??= l; continue; }
