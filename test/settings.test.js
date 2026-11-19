@@ -34,6 +34,12 @@ test("invalid JSON keeps the defaults with a one-line note", () => {
   expect(parseSettings("[1,2]").error).toContain("not a JSON object");
 });
 
+test("the Trajectory's own key, trajectory, is no chat setting and a chat save keeps it as written", () => {
+  const text = '{"agentTurns": false, "trajectory": {"by": "clock"}}';
+  expect(parseSettings(text).values.trajectory).toBeUndefined();
+  expect(JSON.parse(settingsText({ agentTurns: true }, text)).trajectory).toEqual({ by: "clock" });
+});
+
 test("the file text keeps unknown keys and clamps what it writes", () => {
   const t = settingsText({ promptLines: 14 }, '{"replyLines": 5, "future": "x"}');
   expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...CHAT, look: 3 });

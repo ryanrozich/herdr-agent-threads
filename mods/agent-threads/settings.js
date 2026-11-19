@@ -29,6 +29,10 @@
 // quoteKey: the key that quotes a reply into the terminal. links: text patterns shown as
 // links in open cards ($0 to $9 the match and its groups; {repo} and {owner} from the
 // terminal's git remote). No link rules ship.
+// Every key above is the chat's. The Trajectory (y) reads none of them: it always shows agent
+// messages, marked apart, whatever agentTurns says. Its own settings, when it has some, go
+// under one key of their own, "trajectory" (an object); it has none yet, and a save from the
+// chat keeps the object as written, like any key this version does not know.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
