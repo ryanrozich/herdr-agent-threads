@@ -400,29 +400,39 @@ function linkFault(r, i) {
   const lit = (/^(?:[A-Za-z0-9_-]|\\.)+/.exec(pattern)?.[0] ?? "").replace(/\\(.)/g, "$1").slice(0, 8) || "a";
   for (let len = 12; len <= 32; len += 2) {
     for (const probe of [`${"a".repeat(len)}!`, `${"1".repeat(len)}!`, `${lit.repeat(Math.ceil(len / lit.length))}!`, `${"#".repeat(len)}!`, `${" ".repeat(len)}!`]) {
-      const t0 = now();
-      re.lastIndex = 0;
-      re.exec(probe);
-      if (now() - t0 > 5) return "too slow on a short test text; disabled";
+      if (runTime(re, probe, 5) > 5) return "too slow on a short test text; disabled";
     }
   }
   // Long runs of one kind of character: quantifiers side by side that can take the same
   // characters ("\s*\s*Q", "\w+\w+X") cost polynomial time on a near miss, which the short
   // probes miss and nested-group shapes do not show. Lengths grow by half from 16 to 2,048,
   // stopping at the first probe over 3 ms (each step costs at most a few times the last),
-  // and the whole check stops at 100 ms. A plain pattern runs these in about a millisecond.
+  // and the whole check stops at 100 ms of run time (1 s on the clock, for a machine that
+  // is very busy). A plain pattern runs these in about a millisecond.
   const start = now();
+  let spent = 0;
   for (const unit of [" ", "a", "1", "a1 _-.", "#", lit]) {
     for (let len = 16; len <= LONG_PROBE; len = Math.ceil(len * 1.5)) {
       const probe = `${unit.repeat(Math.ceil(len / unit.length)).slice(0, len)}!`;
-      const t0 = now();
-      re.lastIndex = 0;
-      re.exec(probe);
-      const t1 = now();
-      if (t1 - t0 > 3 || t1 - start > 100) return SLOW_LONG;
+      const t = runTime(re, probe, 3);
+      spent += t;
+      if (t > 3 || spent > 100 || now() - start > 1000) return SLOW_LONG;
     }
   }
   return null;
+}
+// How long one search of probe takes, in ms. A run over limit is timed twice more and the
+// fastest counts: a pause from the machine's load or a garbage collection lands on one run,
+// while a slow pattern is slow every time.
+function runTime(re, probe, limit) {
+  let best = Number.POSITIVE_INFINITY;
+  for (let k = 0; k < 3 && best > limit; k++) {
+    const t0 = now();
+    re.lastIndex = 0;
+    re.exec(probe);
+    best = Math.min(best, now() - t0);
+  }
+  return best;
 }
 const LONG_PROBE = 2048;
 export const SLOW_LONG = "too slow on long text; disabled";
