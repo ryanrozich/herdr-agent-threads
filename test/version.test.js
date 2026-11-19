@@ -23,13 +23,19 @@ test("version.js holds one plain version, the name matches mod.json's title, and
 
 test("the line: a release, a later commit, local changes, an older or newer tag, and no build at all", () => {
   expect(versionLine("1.0.0", "v1.0.0-0-gd7c9cfb")).toEqual({ text: "Agent Threads 1.0.0", tip: null, commit: "d7c9cfb", later: 0, dirty: false, known: true });
-  expect(versionLine("1.0.0", "v1.0.0-3-gabc1234").text).toBe("Agent Threads 1.0.0, 3 commits later (abc1234)");
-  expect(versionLine("1.0.0", "v1.0.0-1-gabc1234").text).toBe("Agent Threads 1.0.0, 1 commit later (abc1234)");
-  expect(versionLine("1.0.0", "v1.0.0-0-gd7c9cfb-dirty").text).toBe("Agent Threads 1.0.0 (d7c9cfb, with local changes)");
-  expect(versionLine("1.0.0", "v1.0.0-2-gabc1234-dirty").text).toBe("Agent Threads 1.0.0, 2 commits later (abc1234, with local changes)");
+  // Past the release: the commit, labelled, and no count on the line (the owner, 2026-11-19:
+  // "commit: and the hash there for brevity"); the tooltip keeps the count.
+  expect(versionLine("1.0.0", "v1.0.0-3-gabc1234")).toEqual({ text: "Agent Threads 1.0.0, commit: abc1234", tip: "Agent Threads 1.0.0, commit: abc1234, 3 commits after the 1.0.0 release", commit: "abc1234", later: 3, dirty: false, known: true });
+  expect(versionLine("1.0.0", "v1.0.0-1-gabc1234").tip).toBe("Agent Threads 1.0.0, commit: abc1234, 1 commit after the 1.0.0 release");
+  // Local changes: the commit shows even on the release's own commit, since the copy is not it.
+  expect(versionLine("1.0.0", "v1.0.0-0-gd7c9cfb-dirty").text).toBe("Agent Threads 1.0.0, commit: d7c9cfb, with local changes");
+  expect(versionLine("1.0.0", "v1.0.0-0-gd7c9cfb-dirty").tip).toBe(null);
+  expect(versionLine("1.0.0", "v1.0.0-2-gabc1234-dirty").text).toBe("Agent Threads 1.0.0, commit: abc1234, with local changes");
+  expect(versionLine("1.0.0", "v1.0.0-2-gabc1234-dirty").tip).toBe("Agent Threads 1.0.0, commit: abc1234, with local changes, 2 commits after the 1.0.0 release");
   // The tag git found is not this version (a release PR's branch, a clone with old tags):
   // the version file wins and the commit says where the copy came from.
-  expect(versionLine("1.1.0", "v1.0.0-5-gabc1234").text).toBe("Agent Threads 1.1.0 (abc1234)");
+  expect(versionLine("1.1.0", "v1.0.0-5-gabc1234").text).toBe("Agent Threads 1.1.0, commit: abc1234");
+  expect(versionLine("1.1.0", "v1.0.0-5-gabc1234").tip).toBe(null);
   // No build: the repo's own build.js, or a copy made without install.sh.
   const none = versionLine("1.0.0", null);
   expect(none.text).toBe("Agent Threads 1.0.0 (commit not known)");

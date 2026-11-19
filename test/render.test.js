@@ -8888,9 +8888,9 @@ test("the card's foot: the mod's name and version as a plain line, with the comm
   line = own(cardOf(v), "th-set-version");
   expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION}`);
   v.build = `v${VERSION}-3-gabc1234-dirty`;
-  expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`);
-  // A narrow card cuts the line short, so its tooltip is the whole line.
-  expect(tooltips(v, cx)).toContain(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`);
+  expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, commit: abc1234, with local changes`);
+  // A narrow card cuts the line short, so its tooltip is the whole line, with the count.
+  expect(tooltips(v, cx)).toContain(`Agent Threads ${VERSION}, commit: abc1234, with local changes, 3 commits after the ${VERSION} release`);
   // It is the card's last row: in the foot under the scroll, after Reset, before "? keys",
   // and it truncates rather than pushing the keys out at a narrow card.
   const c = cardOf(v);
@@ -8898,7 +8898,7 @@ test("the card's foot: the mod's name and version as a plain line, with the comm
   expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
   expect(ids.indexOf("th-set-version")).toBeLessThan(ids.indexOf("th-set-keys"));
   const gs = strsOf(c);
-  expect(gs.indexOf("Reset to defaults")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`));
+  expect(gs.indexOf("Reset to defaults")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, commit: abc1234, with local changes`));
   expect(own(c, "th-set-version").some((e) => e[0] === "truncate")).toBe(true);
   draw(v, cx);
 });
