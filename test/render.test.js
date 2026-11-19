@@ -9038,7 +9038,7 @@ test("key hints at the bottom are off by default; the switch brings the row back
   await new Promise((r) => setTimeout(r, 20));
 });
 
-test("the card leaves a 160 px strip of the list under it, except in a pane under 514 px tall", async () => {
+test("the card leaves a 160 px strip of the list under it from 514 px up; under that the strip shrinks with the pane", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.width = 545; v.paneW = 573;
   v.action("settings", cx);
@@ -9049,9 +9049,45 @@ test("the card leaves a 160 px strip of the list under it, except in a pane unde
   expect(bodyH()).toBe(800 - 32 - 160 - (40 + 40 + 2));
   v.rootH = 514;
   expect(bodyH()).toBe(514 - 32 - 160 - (40 + 40 + 2));
-  // Under 514 px the card takes the height, 12 px above the bottom.
+  // TRD-6 (#141): under 514 px the strip shrinks a pixel for each pixel the pane loses, so the
+  // card keeps its height, down to 12 px above the bottom (at 366 px). Under that the card
+  // takes the height.
   v.rootH = 513;
-  expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
+  expect(bodyH()).toBe(513 - 32 - 159 - (40 + 40 + 2));
+  v.rootH = 366;
+  expect(bodyH()).toBe(366 - 32 - 12 - (40 + 40 + 2));
+  v.rootH = 365;
+  expect(bodyH()).toBe(365 - 32 - 12 - (40 + 40 + 2));
+});
+
+// TRD-6 (#141): at 514 px the strip used to drop from 160 px to the foot's space at once, so a
+// pane going from 514 to 513 px made the card about 147 px taller.
+test("the card never grows when the pane shrinks, with the key hints on or off", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  const box = () => {
+    const c = cardOf(v);
+    const card = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card");
+    const top = c.slice(card).find((e) => e[0] === "top")[1];
+    const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+    return { top, height: 40 + 40 + 2 + c.slice(at).find((e) => e[0] === "h")[1] };
+  };
+  for (const hints of [false, true]) {
+    v.prefs = { ...v.prefs, keyHints: hints };
+    if (hints) v.footerH = 38;
+    let last = Infinity;
+    // Down to 94 px, the head and foot (82 px) and the gap: under that the card cannot fit.
+    for (let h = 900; h >= 94; h--) {
+      v.rootH = h;
+      const { top, height } = box();
+      // A pixel less of pane is never a taller card, and the card stays inside the pane.
+      expect([hints, h, height <= last]).toEqual([hints, h, true]);
+      expect([hints, h, top + height <= h - 12]).toEqual([hints, h, true]);
+      last = height;
+    }
+  }
 });
 
 // TRD-7 (#142): in a pane under about 224 px the card ran past the bottom, cutting off its foot.
@@ -9092,10 +9128,11 @@ test("in a very short pane the card stays inside it: the rows shrink first, then
 
 test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 573; v.rootH = 400;
+  // 360 px: under the strip's ramp (TRD-6), so the card ends 12 px above the bottom.
+  v.width = 545; v.paneW = 573; v.rootH = 360;
   v.action("settings", cx);
   const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
-  const room = 400 - 32 - 12 - (40 + 40 + 2);
+  const room = 360 - 32 - 12 - (40 + 40 + 2);
   expect(bodyH()).toBe(room);
   // Measured shorter than the room: the card is as tall as its rows.
   const c = cardOf(v);
