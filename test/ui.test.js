@@ -369,6 +369,61 @@ test("promptParts: inside a paste, the closing tag closes it wherever it is on i
   expect(runs(`${open}</pasted_content> see </pasted_content>`)).toEqual([["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["c", ["see </pasted_content>"]]]);
 });
 
+test("promptParts: a closing tag alone on its line wins over one the pasted text mentions", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  // The pasted text names the tag mid-line; the paste ends at the tag alone on its line.
+  expect(runs("<pasted_content>\nthe tag</pasted_content> closes it\nmore pasted\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["the tag</pasted_content> closes it", "more pasted"]],
+    ["c", ["Why?"]],
+  ]);
+  // The same inside a fenced block within the paste.
+  expect(runs("<pasted_content>\n```\nx = '</pasted_content>'\n```\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["```", "x = '</pasted_content>'", "```"]],
+    ["c", ["Why?"]],
+  ]);
+  // The search stops at the next opener: a first paste whose tag ends its last line does not
+  // run on to a second paste's closing line.
+  expect(runs("A:\n<pasted_content>\none</pasted_content>\nB:\n<pasted_content>\ntwo\n</pasted_content>\nWhy?")).toEqual([
+    ["c", ["A:"]], ["p", ["one"]], ["c", ["B:"]], ["p", ["two"]], ["c", ["Why?"]],
+  ]);
+  // A paste with no closing tag before the next opener line: as on main, the next closing
+  // line closes it, and the opener line in between is pasted text.
+  expect(runs("<pasted_content>\none\n<pasted_content>\ntwo\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["one", "<pasted_content>", "two"]],
+    ["c", ["Why?"]],
+  ]);
+});
+
+test("pasted prompts: an opener right after a closing tag opens a paste in the pin and the outline too", () => {
+  const p = "A:\n<pasted_content>\none\n</pasted_content><pasted_content>\ntwo\n</pasted_content>\nWhy?";
+  // After a tag, what follows on its line is read as a line: here a second paste's opener.
+  expect(promptParts(p).map((r) => [r.paste ? "p" : "c", r.lines])).toEqual([["c", ["A:"]], ["p", ["one"]], ["p", ["two"]], ["c", ["Why?"]]]);
+  expect(pinPromptText(p)).toBe("A: one two Why?");
+  expect(outlineText(p)).toBe("A:");
+  expect(outlineText("<pasted_content>\none\n</pasted_content><pasted_content>\ntwo\n</pasted_content>")).toBe("one");
+  expect(pinPromptText("<pasted_content>\nthe tag</pasted_content> closes it\n</pasted_content>\nWhy?")).toBe("the tag</pasted_content> closes it Why?");
+  // Two pastes on lines of their own, one straight after the other, are two runs (two labels).
+  expect(promptParts("<pasted_content>\none\n</pasted_content>\n<pasted_content>\ntwo\n</pasted_content>").map((r) => r.lines)).toEqual([["one"], ["two"]]);
+});
+
+test("pasted prompts: the text after a closing tag is carried, never spliced into the line list", () => {
+  // Splicing each tail back into the list of lines made a prompt of many closing tags read in
+  // quadratic time (755 ms for 80,000 in the review, against 4 ms before the change). This
+  // checks for the splice, not a time: in Catalyst's runner image at 1 CPU, the one-pass
+  // code's time for eight times the pastes ran 6 to 62 times as long inside bun test, which
+  // overlaps the spliced code's 58 to 71, so no time bound can tell them apart there.
+  const p = Array.from({ length: 50 }, () => "<pasted_content>\nx</pasted_content> > y").join("\n");
+  const splice = Array.prototype.splice;
+  let calls = 0;
+  Array.prototype.splice = function (...a) { calls++; return splice.apply(this, a); };
+  try {
+    outlineText(p);
+    pinPromptText(p);
+    promptParts(p); // the bubble and the open bubble (promptMd) read it
+  } finally { Array.prototype.splice = splice; }
+  expect(calls).toBe(0);
+});
+
 test("rowShape: a closed row keeps source line breaks for every prompt", () => {
   const multi = "First point.\nSecond point.\n\nThird after a blank.";
   for (const w of [240, 380, 545]) {
