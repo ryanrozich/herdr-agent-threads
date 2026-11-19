@@ -1,0 +1,29 @@
+name: PR title
+
+# Each pull request's title becomes its squash commit's title on main, and the release tool
+# reads those, so it must be a Conventional Commit: "feat: ...", "fix(links): ...", "feat!: ...".
+# The merge queue holds the same rule (.mergify.yml); this check says so as soon as a title
+# is written or edited. Mergify's own batch pull requests are skipped.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  title:
+    if: ${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: The title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          PATTERN: '^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9][a-z0-9-]*\))?!?: [^ ]'
+        run: |
+          if printf '%s' "$TITLE" | grep -Eq -- "$PATTERN"; then
+            echo "ok: $TITLE"
+          else
+            echo "::error::The title must be a Conventional Commit, such as \"fix(links): one slow run no longer turns a rule off\". Types: feat, fix, perf, refactor, docs, test, build, ci, chore, revert, style. It becomes the squash commit's title on main."
+            exit 1
+          fi
