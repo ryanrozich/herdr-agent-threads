@@ -51,6 +51,7 @@ import {
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
+  noteSkip, skipNote,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
@@ -1958,8 +1959,9 @@ export default class Threads extends View {
             if (c.rewind) rewindTail(s);
             // No perl on this machine: the reader fell back to jq's raw read (core/lines.sh).
             if (c.noPerl) this.noPerl = true;
-            // A line too long to read (extract.sh's line_max) was skipped: counted for the debug report.
-            if (c.skipped) s.skipped = { lines: (s.skipped?.lines ?? 0) + 1, bytes: (s.skipped?.bytes ?? 0) + c.skipped };
+            // A line too long to read (extract.sh's line_max) was skipped: counted for the debug report,
+            // and noted in the list after the turn it fell in (noteSkip).
+            if (c.skipped) { s.skipped = { lines: (s.skipped?.lines ?? 0) + 1, bytes: (s.skipped?.bytes ?? 0) + c.skipped }; noteSkip(s, c.skipped); }
             // Once read in full, a prompt or end of turn that turns up was seen as it happened.
             if (s.clock && s.loaded) {
               const at = Date.now();
@@ -2457,6 +2459,8 @@ export default class Threads extends View {
       const t0 = first ? from.ti : 0;
       if (!first && si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
+      // A line skipped before the first turn (noteSkip).
+      if (!first && s.skippedHead && !outline && !q) out.push({ kind: "note", key: `skip:${si}:head`, text: skipNote(s.skippedHead) });
       // The live newest turn (isLive), found once for the session.
       const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
@@ -2517,6 +2521,8 @@ export default class Threads extends View {
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
+        // A line skipped while this turn was the newest one read (noteSkip): one dim line after it.
+        if (turn.skipped && !q) out.push({ kind: "note", key: `skip:${key}`, text: skipNote(turn.skipped) });
       }
       flush();
       // Built from inside a day band: the band's day item, kept, counts its turns again.
