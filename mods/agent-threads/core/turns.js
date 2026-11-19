@@ -45,6 +45,9 @@ export function newSession(id, file) {
     // launch result ("r") and its task notification ("n"): running, completed, failed,
     // stopped or killed, with the notification's time and tokens.
     agents: new Map(), agentIds: new Map(),
+    // Lines the reader skipped (noteSkip): before the first turn, and in all for the debug
+    // report. Here so that a session read again from the top (main.js restart) starts at none.
+    skippedHead: null, skipped: null,
   };
 }
 
@@ -555,10 +558,11 @@ export function noteSkip(s, bytes) {
   s.version++;
 }
 
-// The note for skipped lines: "A line of 300 MB was left out here, too long to read".
+// The note for skipped lines: "A line of 300 MB was left out here, too long to read". From
+// 1 GB up the size is in GB with one decimal.
 export function skipNote(k) {
-  const mb = Math.max(1, Math.round(k.bytes / 1048576));
-  return k.lines === 1 ? `A line of ${mb} MB was left out here, too long to read` : `${k.lines} lines, ${mb} MB in all, were left out here, too long to read`;
+  const size = k.bytes >= 1073741824 ? `${(k.bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(k.bytes / 1048576))} MB`;
+  return k.lines === 1 ? `A line of ${size} was left out here, too long to read` : `${k.lines} lines, ${size} in all, were left out here, too long to read`;
 }
 
 export function rewindTail(s) {

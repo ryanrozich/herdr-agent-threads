@@ -10223,4 +10223,10 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   // The outline is one line per turn: no notes.
   v.action("outline", cx);
   expect(v.rows().some((r) => String(r.key).startsWith("skip:"))).toBe(false);
+  v.action("outline", cx);
+  // A restart (the session read again from the top) clears the head note and the debug count,
+  // so the re-read counts the line once.
+  s.skipped = { lines: 1, bytes: 70 * 1048576 };
+  v.restart(s);
+  expect([s.skippedHead, s.skipped]).toEqual([null, null]);
 });

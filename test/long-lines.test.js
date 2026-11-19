@@ -43,8 +43,7 @@ function session(mb, at = 5) {
 }
 
 // A first read as the panel makes it (main.js: 2 MB chunks and nextChunk).
-function read(f, env = process.env) {
-  const s = newSession("s", f);
+function read(f, env = process.env, s = newSession("s", f)) {
   let chunk = CHUNK;
   let calls = 0;
   let skipped = 0;
@@ -101,7 +100,7 @@ test("a line longer than the ceiling is skipped to its end, counted, and the tur
   // Its reply may be the line left out: the next turn's reply is not taken for its own.
   expect(s.turns[4].answeredBy).toBe(null);
   expect(skipNote(s.turns[4].skipped)).toBe("A line of 3 MB was left out here, too long to read");
-  expect(s.skippedHead).toBe(undefined);
+  expect(s.skippedHead).toBe(null);
 });
 
 test("a line skipped before the first prompt is noted at the session's head", () => {
@@ -110,6 +109,15 @@ test("a line skipped before the first prompt is noted at the session's head", ()
   expect(s.turns.some((t) => t.skipped)).toBe(false);
   expect(s.skippedHead).toEqual({ lines: 1, bytes: skipped });
   expect(skipNote({ lines: 2, bytes: 140 * 1048576 })).toBe("2 lines, 140 MB in all, were left out here, too long to read");
+  // From 1 GB up, in GB with one decimal.
+  expect(skipNote({ lines: 1, bytes: 1023 * 1048576 })).toBe("A line of 1023 MB was left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 1073741824 })).toBe("A line of 1.0 GB was left out here, too long to read");
+  expect(skipNote({ lines: 3, bytes: 5 * 1073741824 + 300 * 1048576 })).toBe("3 lines, 5.3 GB in all, were left out here, too long to read");
+  // Read again from the top (main.js restart puts a new session's fields over the old): the
+  // same line is counted once, not twice.
+  Object.assign(s, newSession(s.id, s.file));
+  const again = read(s.file, { ...process.env, THREADS_LINE_MAX: String(1 << 20) }, s);
+  expect(again.s.skippedHead).toEqual({ lines: 1, bytes: skipped });
 });
 
 test("ends.pl and its stand-ins without perl say where lines end", () => {
