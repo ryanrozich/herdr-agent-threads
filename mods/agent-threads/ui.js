@@ -1,6 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
 import { harnessOf } from "./harness.js";
+import { fmtTokens, fmtPct } from "./core/turns.js";
 
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
@@ -71,6 +72,35 @@ export function fitHints(hints, width, gap = 10, pad = 26) {
   const out = [...hints];
   const total = () => out.reduce((sum, h) => sum + hintWidth(h), 0) + gap * Math.max(0, out.length - 1) + pad;
   while (out.length > 1 && total() > width) out.splice(out.length - 2, 1);
+  return out;
+}
+
+// The status line at the pane's foot: up to three groups, each an icon and its text, that fit
+// in width px. Turns, the hidden count and tool calls; tokens and the cache hit; context.
+// A number the session did not record (Cursor's tokens) is left out, never shown as 0. In a
+// narrow pane, what gives way first: context, the cache hit, the hidden count, the tokens;
+// then "tool calls" shortens to "tools", then the tool count goes. The turns always stay.
+const STATUS = { char: 6.3, icon: 17, gap: 18, pad: 24 };
+const n = (x) => x.toLocaleString();
+const many = (x, w) => `${n(x)} ${w}${x === 1 ? "" : "s"}`;
+export function statusWidth(groups) {
+  return groups.reduce((sum, g) => sum + STATUS.icon + Math.ceil(g.text.length * STATUS.char), 0) + STATUS.gap * Math.max(0, groups.length - 1) + STATUS.pad;
+}
+export function statusGroups(s, width) {
+  const on = { hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, context: s.context != null };
+  let short = false;
+  const build = () => [
+    { key: "turns", icon: "messages", text: [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") },
+    { key: "tokens", icon: "database", text: [on.tokens ? `${fmtTokens(s.tokens)} tokens` : null, on.tokens && on.cache ? `${fmtPct(s.cachePct)} cache hit` : null].filter(Boolean).join(" · ") },
+    { key: "context", icon: "cpu", text: on.context ? `${fmtTokens(s.context)} context` : "" },
+  ].filter((g) => g.text);
+  const steps = [() => { on.context = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];
+  let out = build();
+  for (const step of steps) {
+    if (statusWidth(out) <= width) break;
+    step();
+    out = build();
+  }
   return out;
 }
 

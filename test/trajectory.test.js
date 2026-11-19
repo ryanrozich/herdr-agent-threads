@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail, sessionStats } from "../mods/agent-threads/core/turns.js";
 import { trajectory, trajectories } from "../mods/agent-threads/core/trajectory.js";
 
 const root = join(import.meta.dir, "..");
@@ -130,4 +130,19 @@ test("stable ids: a session read again from the top, or whose tail is rewritten,
   rewindTail(s);
   for (const e of events.slice(6)) apply(s, e);
   expect(ids(s)).toEqual(first);
+});
+
+// The status line's context figure, from each agent's own token fields, as each fixture writes
+// them: the newest response's whole prompt. Claude Code's is input, cache reads and cache
+// writes. Codex's input_tokens already counts the cached tokens. OpenCode (tokens.input,
+// cache.read), Pi (input, cacheRead) and Antigravity (input_tokens, cache_read_tokens) count
+// them apart, so the reader adds them. Cursor records no tokens.
+test("context: each agent's newest prompt size, from its own token fields", () => {
+  const ctx = (s) => sessionStats(s.turns).context;
+  expect(ctx(readFile(claude, "claude"))).toBe(6 + 42000 + 1800); // input, cache reads, cache writes
+  expect(ctx(readFile(codex, "codex"))).toBe(52100); // input_tokens 52100, of them cached 47000
+  expect(ctx(readOpencode(oc))).toBe(31800 + 30000);
+  expect(ctx(readFile(pi, "pi"))).toBe(10400 + 9500);
+  expect(ctx(readFile(cursor, "cursor"))).toBe(null);
+  expect(ctx(readFile(agy, "antigravity"))).toBe(2800 + 10600);
 });
