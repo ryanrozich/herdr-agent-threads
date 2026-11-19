@@ -10590,3 +10590,54 @@ test("the status line ends with Codex's context ring and percent, and has none w
   expect(rings()).toEqual([]);
   expect(texts().at(-1)).toBe("52k context");
 });
+
+// TRD-31: a line the reader skipped shows as one dim note after the turn it fell in, or at the
+// session's head before the first turn, and nowhere in the outline or a search.
+test("a skipped line shows as one dim note after its turn, or at the head", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const s = v.current();
+  const turn = s.turns[1];
+  const keyOf = `${v.sessions.indexOf(s)}:${turn.n}`;
+  const base = v.rows().filter((r) => r.kind === "note").length;
+  turn.skipped = { lines: 1, bytes: 300 * 1048576 };
+  s.version++;
+  let rows = v.rows();
+  const at = rows.findIndex((r) => r.key === `skip:${keyOf}`);
+  expect(at).toBeGreaterThan(0);
+  expect(rows[at]).toMatchObject({ kind: "note", text: "A line of 300 MB was left out here, too long to read" });
+  // After the turn's own rows and before the next turn.
+  expect(rows.slice(0, at).some((r) => r.key === keyOf)).toBe(true);
+  const next = `${v.sessions.indexOf(s)}:${s.turns[2].n}`;
+  expect(rows.slice(at).some((r) => r.key === next)).toBe(true);
+  expect(rows.filter((r) => r.kind === "note").length).toBe(base + 1);
+  // Drawn as the other notes are: dim text, and not a turn the keys stop on.
+  rec = [];
+  v.item(theme, rows[at], false);
+  const c = rec;
+  rec = null;
+  expect(c).toContainEqual(["text_color", theme.dim]);
+  expect(v.turnKeys(rows)).not.toContain(`skip:${keyOf}`);
+  // Before the first turn: at the head.
+  s.skippedHead = { lines: 1, bytes: 70 * 1048576 };
+  s.version++;
+  rows = v.rows();
+  const head = rows.findIndex((r) => r.key === `skip:${v.sessions.indexOf(s)}:head`);
+  expect(head).toBeGreaterThanOrEqual(0);
+  expect(head).toBeLessThan(rows.findIndex((r) => r.kind === "turn" && r.s === s));
+  // A search shows matching turns only: no notes.
+  v.query = s.turns[1].prompt.slice(0, 12);
+  expect(v.filterText()).not.toBe("");
+  expect(v.rows().some((r) => r.key === keyOf)).toBe(true);
+  expect(v.rows().some((r) => String(r.key).startsWith("skip:"))).toBe(false);
+  v.query = "";
+  // The outline is one line per turn: no notes.
+  v.action("outline", cx);
+  expect(v.rows().some((r) => String(r.key).startsWith("skip:"))).toBe(false);
+  v.action("outline", cx);
+  // A restart (the session read again from the top) clears the head note and the debug count,
+  // so the re-read counts the line once.
+  s.skipped = { lines: 1, bytes: 70 * 1048576 };
+  v.restart(s);
+  expect([s.skippedHead, s.skipped]).toEqual([null, null]);
+});

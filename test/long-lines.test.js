@@ -7,13 +7,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, existsSync, chmodSync, openSync, writeSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, noteSkip, skipNote } from "../mods/agent-threads/core/turns.js";
 
 const core = join(import.meta.dir, "../mods/agent-threads/core");
 const CHUNK = 2 * 1024 * 1024; // main.js
 
-// A Claude Code session of 9 turns; turn 5's reply line is <mb> MB of text.
-function session(mb) {
+// A Claude Code session of 9 turns; turn 5's reply line is <mb> MB of text. at: "head" puts the
+// long line before the first prompt instead.
+function session(mb, at = 5) {
   const d = mkdtempSync(join(tmpdir(), "threads-long-"));
   const f = join(d, "s.jsonl");
   const fd = openSync(f, "w");
@@ -21,8 +22,15 @@ function session(mb) {
   const rec = (o) => ({ parentUuid: null, isSidechain: false, userType: "external", cwd: "/Users/dev/acme-web", sessionId: "s-long", version: "2.1.0", uuid: `00000000-0000-4000-9400-${String(++n).padStart(12, "0")}`, timestamp: new Date(Date.parse("2026-11-01T10:00:00Z") + n * 1000).toISOString(), ...o });
   const said = (text) => rec({ type: "assistant", message: { id: `msg_${n}`, model: "claude-sonnet-5-5", role: "assistant", type: "message", content: [{ type: "text", text }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } } });
   for (let t = 1; t <= 9; t++) {
+    if (at === "head" && t === 1) {
+      const [a, b] = JSON.stringify(said("@@")).split("@@");
+      writeSync(fd, a);
+      const piece = "Notes from an earlier run, kept in the session. ".repeat(2000);
+      for (let done = 0; done < mb * 1048576; done += piece.length) writeSync(fd, piece);
+      writeSync(fd, `${b}\n`);
+    }
     writeSync(fd, `${JSON.stringify(rec({ type: "user", message: { role: "user", content: `Turn ${t}: check month ${t}.` } }))}\n`);
-    if (t === 5) {
+    if (t === at) {
       const [a, b] = JSON.stringify(said("@@")).split("@@");
       writeSync(fd, a);
       const piece = "Build output from the range helper, month by month. ".repeat(2000);
@@ -35,8 +43,7 @@ function session(mb) {
 }
 
 // A first read as the panel makes it (main.js: 2 MB chunks and nextChunk).
-function read(f, env = process.env) {
-  const s = newSession("s", f);
+function read(f, env = process.env, s = newSession("s", f)) {
   let chunk = CHUNK;
   let calls = 0;
   let skipped = 0;
@@ -44,7 +51,8 @@ function read(f, env = process.env) {
     const c = parseChunk(spawnSync("sh", [join(core, "extract.sh"), f, String(s.offset), String(chunk)], { encoding: "utf8", env, maxBuffer: 1 << 28 }).stdout);
     s.size = c.size;
     for (const e of c.events) apply(s, e);
-    if (c.skipped) skipped += c.skipped;
+    // As main.js does: counted, and noted on the newest turn read so far.
+    if (c.skipped) { skipped += c.skipped; noteSkip(s, c.skipped); }
     s.offset += c.used;
     calls++;
     chunk = nextChunk(s, c.used, chunk, CHUNK);
@@ -86,6 +94,30 @@ test("a line longer than the ceiling is skipped to its end, counted, and the tur
   // The reads stop growing at the ceiling: one read of the turns before, one of 1 MB that
   // finds no end and skips, one of the rest.
   expect(calls).toBe(3);
+  // The note goes after turn 5, the turn the line fell in, and nowhere else.
+  expect(s.turns.map((t) => Boolean(t.skipped))).toEqual([false, false, false, false, true, false, false, false, false]);
+  expect(s.turns[4].skipped).toEqual({ lines: 1, bytes: skipped });
+  // Its reply may be the line left out: the next turn's reply is not taken for its own.
+  expect(s.turns[4].answeredBy).toBe(null);
+  expect(skipNote(s.turns[4].skipped)).toBe("A line of 3 MB was left out here, too long to read");
+  expect(s.skippedHead).toBe(null);
+});
+
+test("a line skipped before the first prompt is noted at the session's head", () => {
+  const { s, skipped } = read(session(3, "head"), { ...process.env, THREADS_LINE_MAX: String(1 << 20) });
+  expect(s.turns.length).toBe(9);
+  expect(s.turns.some((t) => t.skipped)).toBe(false);
+  expect(s.skippedHead).toEqual({ lines: 1, bytes: skipped });
+  expect(skipNote({ lines: 2, bytes: 140 * 1048576 })).toBe("2 lines, 140 MB in all, were left out here, too long to read");
+  // From 1 GB up, in GB with one decimal.
+  expect(skipNote({ lines: 1, bytes: 1023 * 1048576 })).toBe("A line of 1023 MB was left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 1073741824 })).toBe("A line of 1.0 GB was left out here, too long to read");
+  expect(skipNote({ lines: 3, bytes: 5 * 1073741824 + 300 * 1048576 })).toBe("3 lines, 5.3 GB in all, were left out here, too long to read");
+  // Read again from the top (main.js restart puts a new session's fields over the old): the
+  // same line is counted once, not twice.
+  Object.assign(s, newSession(s.id, s.file));
+  const again = read(s.file, { ...process.env, THREADS_LINE_MAX: String(1 << 20) }, s);
+  expect(again.s.skippedHead).toEqual({ lines: 1, bytes: skipped });
 });
 
 test("ends.pl and its stand-ins without perl say where lines end", () => {
