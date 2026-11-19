@@ -8653,7 +8653,7 @@ export default class Threads extends View {
       .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
         // The ring takes the text's colour: in dim its arc barely parts from its faint track on a
         // dark theme (rig stills).
-        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.key === "ring" ? t.muted : t.dim))
+        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.icon.startsWith("ring-") ? t.muted : t.dim))
         .child(div().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(g.text))));
   }
 

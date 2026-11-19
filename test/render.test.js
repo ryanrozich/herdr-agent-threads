@@ -10416,12 +10416,17 @@ test("the status line ends with Codex's context ring and percent, and has none w
   last.usage = { ...last.usage, zz: { i: 51680, o: 4, cr: 0, cc: 0, w: 258400 } };
   s.version++;
   expect(rings()).toEqual(["ring-2.svg"]);
-  expect(texts().at(-1)).toBe("20%");
+  // The count and the percent in one group, behind the ring (TRD-17: the count always shows).
+  expect(texts().at(-1)).toBe("51.7k context · 20%");
   // In the text's colour, where the other icons are dim.
   const r = row();
   const at = r.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("/ring-2.svg"));
   expect(r.slice(at, at + 4)).toContainEqual(["text_color", theme.muted]);
-  expect(texts().at(-2)).toBe("51.7k context");
+  // At 360 px the count and percent still show, with the turns.
+  v.paneW = 360;
+  expect(rings()).toEqual(["ring-2.svg"]);
+  expect(texts().at(-1)).toBe("51.7k context · 20%");
+  v.paneW = 900;
   // A newer count with no window: the ring goes, the context count stays.
   last.usage = { ...last.usage, zzz: { i: 52000, o: 4, cr: 0, cc: 0 } };
   s.version++;

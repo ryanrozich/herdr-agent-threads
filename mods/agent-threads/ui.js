@@ -94,18 +94,20 @@ export function ringStep(pct) {
   return Math.max(1, Math.min(7, Math.round(pct / 12.5)));
 }
 export function statusGroups(s, width) {
-  const on = { hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, context: s.context != null, ring: s.contextPct != null };
+  const context = s.context != null;
+  const on = { turns: true, hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, ring: context && s.contextPct != null };
   let short = false;
   const build = () => [
-    { key: "turns", icon: "messages", text: [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") },
+    { key: "turns", icon: "messages", text: on.turns ? [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") : "" },
     { key: "tokens", icon: "database", text: [on.tokens ? `${fmtTokens(s.tokens)} tokens` : null, on.tokens && on.cache ? `${fmtPct(s.cachePct)} cache hit` : null].filter(Boolean).join(" · ") },
-    { key: "context", icon: "cpu", text: on.context ? `${fmtTokens(s.context)} context` : "" },
-    // Codex states its window: a ring filled to the share used, and the percent, last.
-    // Shown up to 999%: only a crafted transcript states a window so small that it goes past.
-    { key: "ring", icon: `ring-${ringStep(s.contextPct)}`, text: on.ring ? `${Math.min(999, s.contextPct)}%` : "" },
+    // The tokens in the context window, for every agent that records them. Where the count
+    // states the window (Codex), the percent too, behind a ring filled to that share: shown up
+    // to 999%, since only a crafted transcript states a window so small that it goes past.
+    { key: "context", icon: on.ring ? `ring-${ringStep(s.contextPct)}` : "cpu", text: context ? [`${fmtTokens(s.context)} context`, on.ring ? `${Math.min(999, s.contextPct)}%` : null].filter(Boolean).join(" · ") : "" },
   ].filter((g) => g.text);
-  // The context's count goes first and its ring next, before the other stats.
-  const steps = [() => { on.context = false; }, () => { on.ring = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];
+  // The owner (TRD-17): the count in the context window always shows. So the other stats go
+  // first, then the ring and percent, then the turns (only when a count is left to show).
+  const steps = [() => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }, () => { on.ring = false; }, () => { on.turns = !context; }];
   let out = build();
   for (const step of steps) {
     if (statusWidth(out) <= width) break;
