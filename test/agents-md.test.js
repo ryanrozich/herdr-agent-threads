@@ -29,3 +29,20 @@ test("the files AGENTS.md names exist", () => {
     expect([p, existsSync(join(root, p))]).toEqual([p, true]);
   }
 });
+
+// The release is the owner's call alone. These lines keep that from being dropped quietly.
+test("AGENTS.md and the release skill say a release needs the owner's own words, and nothing else will do", () => {
+  const skill = readFileSync(join(root, ".claude", "skills", "cut-a-release", "SKILL.md"), "utf8");
+  for (const text of [agents, skill]) {
+    expect(text).toContain("in their own words");
+    expect(text).toMatch(/never mark it ready, label it `queue` or merge it on your own judgement/i);
+    expect(text).toMatch(/a green `check`[^.]*(is not a reason|as a reason)/);
+    expect(text).toMatch(/relay's say-so[^.]*is not enough/);
+    expect(text).toContain("draft");
+  }
+  // Step 4, the only step that releases, is gated on the owner's own request.
+  const step4 = /^4\. \*\*(.+)$/m.exec(skill)?.[1] ?? "";
+  expect(step4).toMatch(/^Release, on the owner's own request\.\*\*/);
+  expect(step4).toContain("is not enough");
+  expect(step4).toContain("gh pr ready");
+});
