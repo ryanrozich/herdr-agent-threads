@@ -272,8 +272,10 @@ function withClock(step, fn) {
 }
 test("a plain rule is not turned off by one slow run under load, in the short or the long probes", () => {
   const rules = [LINK_TEMPLATES.ticket.rule, LINK_TEMPLATES["pull-request"].rule, { name: "k", pattern: "\\b[A-Z]{2,10}-\\d+\\b", url: "https://x.example/$0" }];
-  // Read 2 ends the first short probe's run; read 120 falls in the long probes.
-  for (const at of [2, 9, 120, 160]) {
+  // Read 2 ends the first short probe's run, and reads 113 and 119 end runs in the long
+  // probes: before the retry a jump at any of the three turned the rule off (the review of
+  // 5a450a8). Reads 9, 116, 120 and 160 fall between runs and pass either way.
+  for (const at of [2, 9, 113, 116, 119, 120, 160]) {
     const l = withClock((n) => (n === at ? 10 : 0), () => parseLinks(rules));
     expect(l.list.map((r) => r.why)).toEqual([null, null, null]);
   }
