@@ -40,11 +40,14 @@ test("AGENTS.md and the release skill say a release needs the owner's own words,
     expect(text).toMatch(/relay's say-so[^.]*is not enough/);
     expect(text).toContain("draft");
   }
-  // Step 4, the only step that releases, is gated on the owner's own request.
-  const step4 = /^4\. \*\*(.+)$/m.exec(skill)?.[1] ?? "";
-  expect(step4).toMatch(/^Release, on the owner's own request\.\*\*/);
-  expect(step4).toContain("is not enough");
-  expect(step4).toContain("gh pr ready");
+  // Exactly one step marks the release pull request ready, and it is the one gated on the
+  // owner's own request.
+  const steps = [...skill.matchAll(/^\d+\. \*\*(.+)$/gm)].map((m) => m[1]);
+  // A step that readies the release pull request, by the command or in words.
+  const releasing = steps.filter((s) => s.includes("gh pr ready") || /\bmark (it|the release pull request) ready\b/i.test(s));
+  expect(releasing).toHaveLength(1);
+  expect(releasing[0]).toMatch(/^Release, on the owner's own request\.\*\*/);
+  expect(releasing[0]).toContain("is not enough");
 });
 
 test("verify-a-change lists CI's own checks, in CI's order", () => {
