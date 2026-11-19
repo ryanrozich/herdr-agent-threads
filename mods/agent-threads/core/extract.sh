@@ -23,6 +23,15 @@ threads_core=$here
 # shellcheck source=lines.sh
 . "$here/lines.sh"
 limit=6291456
+# A line longer than this (64 MB, as the ATIF export) is skipped, not read: reading a 300 MB
+# line whole took chunks of 128 and 512 MB and jq held it (about 1.3 GB at its peak). A line
+# just under it costs one read of about 2 s. The chunk line counts the bytes skipped, for the
+# pane's debug report. THREADS_LINE_MAX sets it for tests; the pane never does.
+# Cursor has neither the ceiling nor the skip, as before it: its settle mark reads the chunk's
+# own bytes, so a skipped line would leave nothing to read, and a ceiling with no skip would
+# stop the session at a line longer than it for good.
+line_max=${THREADS_LINE_MAX:-67108864}
+if [ "$harness" != cursor ] && [ "$max" -gt "$line_max" ]; then max=$line_max; fi
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
 # The first line uuid (a Codex file: its first timestamp, a Pi file: its header's id, an
@@ -61,14 +70,16 @@ while :; do
   # starts with the <pre> bytes before the offset (Cursor only).
   { dd bs=1 skip=$((offset - pre)) count=0 2>/dev/null; head -c $((pre + max)); } < "$file" > "$tmp"
   got=$(($(wc -c < "$tmp" | tr -d ' ') - pre))
-  # Bytes after the last newline belong to a line that is still being written.
-  if [ "$got" -gt 0 ] && [ "$(tail -c 1 "$tmp" | od -An -c | tr -d ' ')" != '\n' ]; then
-    partial=$(tail -n 1 "$tmp" | wc -c | tr -d ' ')
-  else
-    partial=0
-  fi
-  used=$((got - partial))
+  # The chunk's whole lines (whole, in lines.sh): bytes after its last newline belong to a line
+  # that is still being written, or one longer than the chunk.
+  used=$(($(whole "$tmp" "$pre") - pre))
   [ "$used" -ge 0 ] || used=0
+  # A line with no end within line_max bytes: skipped to its end, when it has one.
+  skipped=0
+  if [ "$used" -eq 0 ] && [ "$got" -ge "$line_max" ] && [ "$harness" != cursor ]; then
+    e=$(line_end "$file" "$offset")
+    [ "$e" -gt "$offset" ] && skipped=$((e - offset))
+  fi
   if [ "$used" -gt 0 ]; then
     if [ "$harness" = cursor ]; then
       tail -c +$((pre + 1)) "$tmp" | head -c "$used" | lines | jq -c -f "$here/extract-cursor.jq" > "$out"
@@ -112,6 +123,8 @@ while :; do
   [ "$(wc -c < "$out" | tr -d ' ')" -gt "$limit" ] && [ "$max" -gt 65536 ] || break
   max=$((max / 2))
 done
+skip_note=
+if [ "$skipped" -gt 0 ]; then used=$skipped; skip_note=",\"skipped\":$skipped"; fi
 if [ "$harness" = cursor ]; then
   end=$((pre + used))
   n=$((end < 4096 ? end : 4096))
@@ -121,12 +134,12 @@ if [ "$harness" = cursor ]; then
     printf '{"k":"file","size":%s,"head":""}\n' "$size"
   fi
   # shellcheck disable=SC2154 # lines_note is set by lines.sh
-  printf '{"k":"chunk","used":%s%s}\n' "$used" "$lines_note"
+  printf '{"k":"chunk","used":%s%s%s}\n' "$used" "$lines_note" "$skip_note"
   cat "$out"
   printf '{"k":"settle","id":"%s"}\n' "$(sum $((end - n)) "$n" < "$tmp")"
   exit 0
 fi
 printf '{"k":"file","size":%s,"head":"%s"}\n' "$size" "$head"
 # shellcheck disable=SC2154 # lines_note is set by lines.sh
-printf '{"k":"chunk","used":%s%s}\n' "$used" "$lines_note"
+printf '{"k":"chunk","used":%s%s%s}\n' "$used" "$lines_note" "$skip_note"
 cat "$out"

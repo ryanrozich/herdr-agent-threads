@@ -891,7 +891,7 @@ export default class Threads extends View {
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
-      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null })),
+      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null })),
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -1958,6 +1958,8 @@ export default class Threads extends View {
             if (c.rewind) rewindTail(s);
             // No perl on this machine: the reader fell back to jq's raw read (core/lines.sh).
             if (c.noPerl) this.noPerl = true;
+            // A line too long to read (extract.sh's line_max) was skipped: counted for the debug report.
+            if (c.skipped) s.skipped = { lines: (s.skipped?.lines ?? 0) + 1, bytes: (s.skipped?.bytes ?? 0) + c.skipped };
             // Once read in full, a prompt or end of turn that turns up was seen as it happened.
             if (s.clock && s.loaded) {
               const at = Date.now();
