@@ -1700,6 +1700,13 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
     expect(v.shape(t).height).toBe(rowShape({ prompt: t.prompt, reply: v.shape(t).reply.join(" "), width: 380, promptLines: 100000, replyLines: 100000 }).height);
     expect(v.shape(t).p).toBe(v.shape(t).prompt.length);
   }
+  // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
+  // open turn's label and docs/reference.md say.
+  rec = [];
+  v.promptBlock(theme, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
+  const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
+  rec = null;
+  expect(pasteSizes).toEqual([12.5, 12.5]);
   // Shorten long messages on: label and paste rows count against Prompt lines, cut, with
   // Show more under the bubble.
   v.prefs = { ...v.prefs, truncate: true, promptLines: 4 };

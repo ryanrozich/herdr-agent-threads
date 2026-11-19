@@ -7944,7 +7944,7 @@ export default class Threads extends View {
         if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl(i, [l], color, size));
         if (k === "p") return h_flex().h(lh).min_w(0).items_center()
           .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_family(this.mono()).text_color(color).child(l || " "));
-        if (k === "pl") return h_flex().h(lh).min_w(0).items_center().child(sl(i, [l], t.muted, rt.small));
+        if (k === "pl") return h_flex().h(lh).min_w(0).items_center().child(sl(i, [l], t.muted, 12.5));
         return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
