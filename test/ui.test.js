@@ -11,7 +11,7 @@ import {
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
-  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
+  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -314,6 +314,144 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
   expect(rowHeight(1, 1, 0, 25)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
   expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
+});
+
+// ---- pasted output and line breaks in closed rows (TRD-10, issue 93) ----
+
+// The issue's own example: a sentence, a blank line, then a wrapper holding a 7-line table.
+const PASTE_TABLE = [
+  "Jobs over the last hour:",
+  "┌──────────┬────────┬───────┐",
+  "│ job      │ runs   │ p95   │",
+  "├──────────┼────────┼───────┤",
+  "│ build    │ 12     │ 4m 10s│",
+  "│ e2e      │ 9      │ 2m 05s│",
+  "└──────────┴────────┴───────┘",
+].join("\n");
+const ISSUE_PROMPT = `How did the build get so slow? Output below.\n\n<pasted_content id="example">\n${PASTE_TABLE}\n</pasted_content>`;
+
+test("promptParts: a pasted block is a verbatim paste run, its wrapper lines gone", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  expect(runs('a\n<pasted_content id="x">\n> npm test\nb  c\n</pasted_content>\nd')).toEqual([
+    ["c", ["a"]],
+    ["p", ["> npm test", "b  c"]],
+    ["c", ["d"]],
+  ]);
+  // An unclosed paste runs to the end of the text (a prompt the reader clipped).
+  expect(runs("note\n<pasted_content>\nbody")).toEqual([["c", ["note"]], ["p", ["body"]]]);
+  // A stray closing line is dropped, not shown as text.
+  expect(runs("before\n</pasted_content>\nafter")).toEqual([["c", ["before", "after"]]]);
+  // A wrapper inside a fenced code block stays literal text (the fence wins).
+  expect(runs("```\n<pasted_content>\n```")).toEqual([["c", ["```", "<pasted_content>", "```"]]]);
+  // An empty paste leaves nothing to draw.
+  expect(runs('<pasted_content id="e">\n</pasted_content>')).toEqual([]);
+  // Any or no attributes, up to three leading spaces.
+  expect(runs("   <pasted_content>\nline\n   </pasted_content>")).toEqual([["p", ["line"]]]);
+});
+
+test("rowShape: a closed row keeps source line breaks for every prompt", () => {
+  const multi = "First point.\nSecond point.\n\nThird after a blank.";
+  for (const w of [240, 380, 545]) {
+    const sh = rowShape({ prompt: multi, reply: "Done.", width: w, promptLines: 1000, replyLines: 3 });
+    expect(sh.kinds, `at ${w}`).toBe(null);
+    expect(sh.prompt, `at ${w}`).toEqual(["First point.", "Second point.", "", "Third after a blank."]);
+    expect(sh.p, `at ${w}`).toBe(4);
+    expect(sh.pMore, `at ${w}`).toBe(false);
+    expect(sh.height, `at ${w}`).toBe(rowHeight(sh.p, sh.r, 0));
+    // Leading and trailing blank lines drop; a run of blanks is one row.
+    const edge = rowShape({ prompt: `\n\n${multi}\n\n\n`, reply: "x", width: w, promptLines: 1000, replyLines: 1 });
+    expect(edge.prompt, `at ${w}`).toEqual(sh.prompt);
+  }
+  // A long line still word-wraps with the greedy logic, each wrapped row its own row.
+  const long = "Why does the checkout job fail when the staging deploy runs after the nightly migration and the cache is cold, and what would make it pass?";
+  const sh = rowShape({ prompt: `${long}\nshort`, reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(sh.prompt.length).toBeGreaterThanOrEqual(4);
+  expect(sh.prompt[sh.prompt.length - 1]).toBe("short");
+  expect(sh.prompt.slice(0, -1).join(" ")).toBe(long);
+  expect(sh.p).toBe(sh.prompt.length);
+});
+
+test("rowShape: a pasted block is one quiet label row plus one mono row per body line", () => {
+  for (const w of [380, 545]) {
+    const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "Done.", width: w, promptLines: 1000, replyLines: 3 });
+    const at = sh.kinds.indexOf("pl");
+    expect(at, `at ${w}`).toBeGreaterThan(0);
+    expect(sh.prompt[at], `at ${w}`).toBe("Pasted · 7 lines");
+    expect(sh.kinds.slice(at + 1), `at ${w}`).toEqual(["p", "p", "p", "p", "p", "p", "p"]);
+    // Each source line its own row, its inner spacing kept, no wrapper anywhere.
+    expect(sh.prompt.slice(at + 1), `at ${w}`).toEqual(PASTE_TABLE.split("\n"));
+    expect(sh.prompt.join("\n"), `at ${w}`).not.toContain("pasted_content");
+    expect(sh.p, `at ${w}`).toBe(sh.prompt.length);
+    expect(sh.bubbleW, `at ${w}`).toBeLessThanOrEqual(bubbleMax(w));
+    expect(sh.height, `at ${w}`).toBe(rowHeight(sh.p, sh.r, 0));
+  }
+  // A row wider than the widest bubble clips with a trailing ellipsis, never wraps.
+  const wide = `<pasted_content>\n${"x".repeat(200)} tail\n</pasted_content>`;
+  const clip = rowShape({ prompt: wide, reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(clip.kinds).toEqual(["pl", "p"]);
+  expect(clip.prompt[1].endsWith("…")).toBe(true);
+  expect(clip.prompt[1].length).toBeLessThanOrEqual(Math.floor(rowTextWidth(380) / (MONO_EM * 12.5)) + 1);
+  expect(clip.prompt[1]).not.toContain("\n");
+  // A paste that is the whole prompt: the label, then the rows, and no other text.
+  const only = rowShape({ prompt: `<pasted_content id="only">\n${PASTE_TABLE}\n</pasted_content>`, reply: "x", width: 545, promptLines: 1000, replyLines: 1 });
+  expect(only.kinds).toEqual(["pl", ...Array(7).fill("p")]);
+  // An unclosed paste runs to the end: label plus body rows, no closing tag anywhere.
+  const unclosed = rowShape({ prompt: "head\n<pasted_content id=\"c\">\nalpha\nbeta", reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(unclosed.kinds).toEqual(["c", "pl", "p", "p"]);
+  expect(unclosed.prompt.join("\n")).not.toContain("pasted_content");
+});
+
+test("rowShape: '>' lines inside a paste are body rows, not quotes", () => {
+  const sh = rowShape({ prompt: '<pasted_content id="s">\n> npm test\n> jest --ci\n</pasted_content>\n\nWhich failed?', reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(sh.kinds).toEqual(["pl", "p", "p", "c"]);
+  expect(sh.prompt[1]).toBe("> npm test");
+  expect(sh.prompt[2]).toBe("> jest --ci");
+  expect(sh.q).toBe(0);
+  expect(sh.pMore).toBe(false);
+});
+
+test("rowShape: heights stay arithmetic over paste rows at many widths, sizes and budgets", () => {
+  for (const w of [320, 380, 545, 700]) {
+    for (const size of [12, 18]) {
+      for (const promptLines of [4, 1000]) {
+        const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "Done.", width: w, promptLines, replyLines: 3, size });
+        const where = `${w} px, size ${size}, ${promptLines} lines`;
+        expect(sh.p, where).toBe(sh.prompt.length);
+        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), readType(size).line));
+      }
+    }
+  }
+});
+
+test("rowShape: the Prompt lines budget counts label and paste rows", () => {
+  for (const promptLines of [1, 2, 4]) {
+    const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "x", width: 380, promptLines, replyLines: 1 });
+    expect(sh.prompt.length, `${promptLines} lines`).toBeLessThanOrEqual(promptLines);
+    expect(sh.p, `${promptLines} lines`).toBe(Math.max(1, sh.prompt.length));
+    expect(sh.pMore, `${promptLines} lines`).toBe(true);
+    expect(sh.prompt[sh.prompt.length - 1].endsWith("…"), `${promptLines} lines`).toBe(true);
+  }
+  // Shorten long messages off: the whole prompt shows, no Show more anywhere.
+  const all = rowShape({ prompt: ISSUE_PROMPT, reply: "x", width: 380, promptLines: 100000, replyLines: 1 });
+  expect(all.pMore).toBe(false);
+  expect(all.prompt.length).toBe(10);
+});
+
+test("pin and outline prompts drop the paste wrapper", () => {
+  const withPaste = `See this:\n<pasted_content id="t">\nalpha\nbeta\n</pasted_content>`;
+  expect(pinPromptText(withPaste)).toBe("See this: alpha beta");
+  expect(outlineText(withPaste)).toBe("See this:");
+  // A paste that is the whole prompt: its body is the fallback, never the tag.
+  expect(pinPromptText('<pasted_content id="o">\nonly\n</pasted_content>')).toBe("only");
+  expect(outlineText('<pasted_content id="o">\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
+  // A paste body that starts with a blank line (npm test output often does): the first
+  // text line is the fallback, as fenced code already skips blanks, never an empty row.
+  expect(outlineText('<pasted_content id="o">\n\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
+  // A wrapper inside a fenced code block stays text: the outline keeps looking for the
+  // person's own words past it.
+  expect(outlineText("```\n<pasted_content>\n```\nWhat went wrong here?")).toBe("What went wrong here?");
+  expect(pinPromptText("plain prompt")).toBe("plain prompt");
+  expect(outlineText("plain prompt")).toBe("plain prompt");
 });
 
 test("reading type: 14 px on 22 px lines by default, and a line of about 70 characters at any width", () => {
