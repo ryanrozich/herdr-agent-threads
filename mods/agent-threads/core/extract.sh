@@ -64,6 +64,7 @@ while :; do
     partial=0
   fi
   used=$((got - partial))
+  [ -n "${THREADS_PROBE:-}" ] && echo "XPROBE off=$offset max=$max got=$got partial=$partial last=$(tail -c 1 "$tmp" | od -An -c | tr -d ' ') tailn=$(tail -n 1 "$tmp" | wc -c) nl=$(tr -cd '\n' < "$tmp" | wc -c) dd=$(dd --version 2>&1 | head -n 1) tail=$(tail --version 2>&1 | head -n 1) head=$(head --version 2>&1 | head -n 1)" >&2
   [ "$used" -ge 0 ] || used=0
   if [ "$used" -gt 0 ]; then
     if [ "$harness" = cursor ]; then

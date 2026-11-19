@@ -843,8 +843,8 @@ test("atif: a transcript line longer than the ceiling is skipped, the rest is re
   // A record of 3 MB before the first prompt, with a 2 MB ceiling.
   lines.splice(at, 0, { ...lines[at], type: "system", uuid: "00000000-0000-4000-e200-000000000001", content: "x".repeat(3000000) });
   save(lines);
-  const probe = spawnSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", maxBuffer: 1 << 28, env: { ...process.env, THREADS_LINE_MAX: "2000000" } });
-  console.log("PROBE stderr", probe.stderr.slice(0, 3000));
+  const probe = spawnSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", maxBuffer: 1 << 28, env: { ...process.env, THREADS_LINE_MAX: "2000000", THREADS_PROBE: "1" } });
+  console.log("PROBE stderr", probe.stderr.slice(0, 4000));
   console.log("PROBE head", JSON.stringify(readFileSync(f, "utf8").split("\n").map((l) => l.length).slice(0, 8)));
   const t = JSON.parse(probe.stdout);
   expect(problems(t)).toEqual([]);
