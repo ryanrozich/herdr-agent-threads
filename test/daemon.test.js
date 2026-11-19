@@ -165,6 +165,30 @@ test("locate.sh finds a Codex session in either mode: held by the terminal's pro
   // more than bun's 5 s default for the whole test. The limit only ends a hung run.
 }, 60000);
 
+// A launcher runs the real program as a child (npm's codex is node running the binary): the
+// launcher holds no session file, its child does, and codex-open is given the launcher's pid,
+// the one in the terminal. Without the child lookup (pgrep -P) it finds nothing.
+test("locate.sh codex-open finds the session file a launcher's child holds", async () => {
+  const sessions = tmp("threads-codex-launch-");
+  const mine = rollout(sessions, ID2, "/home/dev/shop", "2026-11-12T15:25:46Z", { originator: "codex-tui" });
+  const launcher = spawn("bash", ["-c", `trap 'kill $! 2>/dev/null; exit 0' TERM INT HUP; bash -c 'exec 3<"${mine}"; exec -a codex-real sleep 30' & wait`], { cwd: sessions, stdio: "ignore" });
+  try {
+    // Until the child runs under its new name (it has then opened the file), read from ps.
+    // The bound only ends a run whose child never starts.
+    let child = null;
+    for (let i = 0; !child; i++) {
+      if (i >= 600) throw new Error("the launcher's child never started");
+      const kids = (run(["-c", `pgrep -P ${launcher.pid}`]) ?? "").split("\n").filter(Boolean);
+      child = kids.find((k) => (run(["-c", `ps -o args= -p ${k}`]) ?? "").startsWith("codex-real")) ?? null;
+      if (!child) await wait(25);
+    }
+    expect(run([locator, "codex-open", String(launcher.pid)])).toBe(mine);
+  } finally {
+    launcher.kill();
+  }
+  // ps, pgrep and lsof take a while on a busy or slow machine. The limit only ends a hung run.
+}, 60000);
+
 test("locate.sh claude-bg names a live claude --bg session by id start, then name, then one name holding the words", () => {
   const dir = tmp("threads-claude-sessions-");
   const live = process.pid;

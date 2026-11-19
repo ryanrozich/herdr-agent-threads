@@ -2060,18 +2060,31 @@ test("S1: before the first chunk the header says Reading… with no percentage, 
 test("S1: a read that dies mid-step restarts after 4 s, with no duplicate turns", async () => {
   let dead = 1;
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = () => (dead-- > 0 ? never() : new Promise((r) => setTimeout(r, 0))); }, 0);
-  await until(() => dead < 0 || (v.reading && dead === 0), "the dead step");
+  await until(() => dead < 0 || (v.reading && dead === 0), "the dead step", 6000);
   await new Promise((r) => setTimeout(r, 50));
   expect(v.reading).toBe(true);
   expect(v.current().loaded).toBeFalsy();
   const before = v.current().turns.length;
-  // The 1 s timer at 3 s does nothing; at 5 s it restarts the read.
+  // The 1 s timer, on a clock the test moves from the hung read's last beat: at 1, 2 and 3 s
+  // it does nothing, at 4 s (READ_STALL) it restarts the read. Ticks taken from the real
+  // clock counted the test's own run time too: on a slow machine the "3 s" tick already
+  // restarted the read, and the "5 s" one then judged the restarted read a second stall.
   const tick = cx.everies.find((x) => x.ms === 1000).fn;
   const real = Date.now;
+  const beat = v.readBeat;
+  const gen = v.readGen ?? 0;
   try {
-    Date.now = () => real() + 3000; tick(cx);
+    for (let s = 1; s <= 3; s++) {
+      Date.now = () => beat + s * 1000;
+      tick(cx);
+      expect(v.readGen ?? 0).toBe(gen);
+    }
     expect(v.reading).toBe(true);
-    Date.now = () => real() + 5000; tick(cx);
+    Date.now = () => beat + 4000;
+    tick(cx);
+    // Judged once (readGen moves, and again when the new read starts), a first stall.
+    expect(v.readGen ?? 0).toBeGreaterThan(gen);
+    expect(v.readStalls).toBe(1);
   } finally { Date.now = real; }
   await settle(v, 1000);
   const turns = v.current().turns;
@@ -2081,7 +2094,9 @@ test("S1: a read that dies mid-step restarts after 4 s, with no duplicate turns"
   expect(before).toBeLessThan(1305);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).toMatch(/^1,?\d{3} turns|^\d+ turns/);
-});
+  // Two reads of a 1305-turn session: more than bun's 5 s default on a slow machine. The
+  // limit only ends a hung run; every wait above ends on what it checks.
+}, 60000);
 
 test("S1: a second stall shows Read failed with Retry, and Retry reads the session", async () => {
   let dead = 2;
@@ -2153,11 +2168,24 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
     }, 0);
     const tick = cx.everies.find((x) => x.ms === 1000).fn;
     const real = Date.now;
+    // The 1 s timer, on a clock the test moves, one tick a second until the watcher judges
+    // the hung read (readGen moves), as the real timer would. One tick 5 s ahead of the real
+    // clock per stall left the real time between the stalls as the gap between two ticks;
+    // on a slow machine that passed TICK_GAP, the watcher took it for a sleep and never
+    // judged the second stall. The bounds only end a run that never gets there.
     const stall = async (n) => {
-      await until(() => kills >= n, `stall ${n}`);
+      await until(() => kills >= n, `stall ${n}`, 6000);
       await new Promise((r) => setTimeout(r, 30));
       expect(v.current().partial).toBe(true);
-      try { Date.now = () => real() + 5000; tick(cx); } finally { Date.now = real; }
+      const gen = v.readGen ?? 0;
+      const base = real();
+      try {
+        for (let s = 1; (v.readGen ?? 0) === gen; s++) {
+          if (s > 40) throw new Error("the watcher never judged the read stalled");
+          Date.now = () => base + s * 1000;
+          tick(cx);
+        }
+      } finally { Date.now = real; }
     };
     await stall(1);
     expect(v.current().partial).toBe(false); // started over
@@ -2175,7 +2203,9 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
     expect(turns.map((t) => t.n)).toEqual(turns.map((_, i) => i + 1));
     expect(v.current().error).toBe(null);
   } finally { performance.now = realPerf; }
-});
+  // Three reads of a 1305-turn session, two of them cut short: more than bun's 5 s default
+  // on a slow machine. The limit only ends a hung run.
+}, 60000);
 
 // F1, the other path: apply throws midway. The error shows, and no later read repeats events.
 test("S1: a throw mid-apply drops the half-applied chunk", async () => {
@@ -2194,7 +2224,7 @@ test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   };
   try {
     v.retryRead(cx);
-    await until(() => !v.reading, "the failed read");
+    await until(() => !v.reading, "the failed read", 6000);
   } finally { performance.now = realPerf; }
   expect(thrown).toBe(true);
   expect(v.current().error).toBe("synthetic failure");
@@ -2204,7 +2234,9 @@ test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   await settle(v, 1000);
   expect(v.current().turns.length).toBe(1305);
   expect(v.current().error).toBe(null);
-});
+  // Three reads of a 1305-turn session, one cut short: more than bun's 5 s default on a slow
+  // machine. The limit only ends a hung run.
+}, 60000);
 
 // F4: a loaded session whose extractor call is slow, or a computer that slept, keeps its turns.
 test("S1: a slow extractor call or a sleep never wipes a loaded session", async () => {
