@@ -186,8 +186,10 @@ const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
 // How far above the pane's bottom the card ends at the least, so a strip of the list stays
-// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
-// where under that the card takes the height. 0 makes the card take the height everywhere.
+// in view under it (the owner's call): 160 in a pane at least CARD_STRIP_MIN tall. Under that
+// the strip shrinks a pixel for each pixel the pane loses, so the card keeps its height until
+// the strip is down to the foot's space, and then takes the height: shrinking the pane never
+// grows the card (TRD-6). 0 makes the card take the height everywhere.
 const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
 // The strip at the card's right edge that holds its always-drawn scrollbar.
@@ -5975,7 +5977,7 @@ export default class Threads extends View {
     // Under the icons at the top, unless the pane is too short for the head and foot there:
     // then the card moves up, so they stay inside the pane (TRD-7).
     const top = Math.max(0, Math.min(this.floating() ? TOP_BAND : 46, h - CARD_GAP - fixed));
-    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
+    const under = Math.max(this.footSpace() + CARD_GAP, Math.min(CARD_STRIP, h - (CARD_STRIP_MIN - CARD_STRIP)));
     // At least 180 px, over the key hints if it must, but never past the pane's bottom (less
     // the gap): in a very short pane the rows shrink first, to nothing if need be.
     const room = Math.max(Math.min(180, h - top - CARD_GAP), h - top - under);
