@@ -53,7 +53,10 @@ test("verify-a-change lists CI's own checks, in CI's order", () => {
   // The table's command column, with the escaped pipe back to a plain one.
   const cmds = [...skill.matchAll(/^\| [^|]+ \| `(.+?)` \| /gm)].map((m) => m[1].replace(/\\\|/g, "|"));
   expect(cmds).toHaveLength(4);
-  const at = cmds.map((c) => ci.indexOf(c));
+  // Each is a whole CI line (CI's test line adds only the JUnit report for the upload), so a
+  // flag CI gains is a difference too.
+  const lines = ci.split("\n").map((l) => l.trim().replace(/^run: /, "").replace(/ --reporter=junit --reporter-outfile=junit\.xml$/, ""));
+  const at = cmds.map((c) => lines.indexOf(c));
   expect(at.every((i) => i >= 0)).toBe(true);
   expect(at).toEqual([...at].sort((a, b) => a - b));
 });
