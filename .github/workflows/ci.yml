@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml starts this on the release pull request's branch. That pull request is opened
+  # with the Actions token, so its own pull_request run waits for someone to approve it.
+  workflow_dispatch:
 
 permissions:
   contents: read
