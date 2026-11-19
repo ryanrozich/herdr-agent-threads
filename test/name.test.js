@@ -24,3 +24,17 @@ test("the mod's folder, name.js and the keys.json chord name the same mod", asyn
   const { settingsDir } = await import(join(root, "mods", MOD, "settings.js"));
   expect(settingsDir("/h")).toBe(`/h/data/${MOD}`);
 });
+
+// rename.sh rewrites the mod's paths only in the files it lists. Every tracked file that
+// names one (mods/<name>, data/<name>, mod.open:<name>) must be on that list, or a rename
+// leaves it pointing at a folder that is gone.
+test("rename.sh's file list covers every tracked file that names the mod's paths", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { MOD } = await import(join(root, "mods", "agent-threads", "name.js"));
+  const git = (...a) => spawnSync("git", a, { cwd: root, encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean);
+  const naming = git("grep", "-l", "-I", "-e", `mods/${MOD}`, "-e", `data/${MOD}`, "-e", `mod.open:${MOD}`);
+  const line = /^files=\$\(git ls-files (.+)\)$/m.exec(readFileSync(join(root, "rename.sh"), "utf8"))[1];
+  const specs = line.match(/'[^']+'|"[^"]+"|\S+/g).map((s) => s.replace(/^['"]|['"]$/g, "").replace("$new", MOD));
+  const listed = new Set(git("ls-files", ...specs));
+  expect(naming.filter((f) => !listed.has(f))).toEqual([]);
+});
