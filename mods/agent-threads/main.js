@@ -923,6 +923,8 @@ export default class Threads extends View {
       senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
+      // perl was not found, so a character across a 4 KB piece of a line can show as U+FFFD.
+      noPerl: Boolean(this.noPerl),
     };
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
@@ -1954,6 +1956,8 @@ export default class Threads extends View {
             // From here until the offset moves, s holds part of this chunk.
             s.partial = true;
             if (c.rewind) rewindTail(s);
+            // No perl on this machine: the reader fell back to jq's raw read (core/lines.sh).
+            if (c.noPerl) this.noPerl = true;
             // Once read in full, a prompt or end of turn that turns up was seen as it happened.
             if (s.clock && s.loaded) {
               const at = Date.now();

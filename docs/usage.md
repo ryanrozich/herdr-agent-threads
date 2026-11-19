@@ -4,7 +4,7 @@ Every behaviour of the pane in detail. The [README](../README.md) is the short g
 
 ## Install in detail
 
-Agent Threads needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and at least one of Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity. Codex also needs `lsof`. OpenCode needs `sqlite3`, `pgrep` and `lsof`. Pi, Cursor and Antigravity need `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
+Agent Threads needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, `perl` (macOS has it), and at least one of Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity. Codex also needs `lsof`. OpenCode needs `sqlite3`, `pgrep` and `lsof`. Pi, Cursor and Antigravity need `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules). Without `perl`, Claude Code's chats and every agent's tool output do not show. The other agents' chats still show, but a non-ASCII character in a long line can show as two or three �.
 
 `./install.sh` copies `mods/agent-threads` to `~/.config/herdr-app/mods/`, notes the commit it copied from in the copy's `build.js` (for the version line on the settings card), and runs `herdr-app check`. You can also copy `mods/agent-threads/` there yourself. Then merge [keys.json](../keys.json) into `~/.config/herdr-app/keys.json` for the `Cmd-Shift-T` chord. Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 

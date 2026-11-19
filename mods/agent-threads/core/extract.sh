@@ -18,6 +18,10 @@ offset=$2
 max=$3
 harness=${4:-claude}
 here=$(dirname "$0")
+# shellcheck disable=SC2034 # read by lines.sh, which also sets lines_note
+threads_core=$here
+# shellcheck source=lines.sh
+. "$here/lines.sh"
 limit=6291456
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
@@ -67,19 +71,19 @@ while :; do
   [ "$used" -ge 0 ] || used=0
   if [ "$used" -gt 0 ]; then
     if [ "$harness" = cursor ]; then
-      tail -c +$((pre + 1)) "$tmp" | head -c "$used" | jq -Rc -f "$here/extract-cursor.jq" > "$out"
+      tail -c +$((pre + 1)) "$tmp" | head -c "$used" | lines | jq -c -f "$here/extract-cursor.jq" > "$out"
     elif [ "$harness" = pi ]; then
       # Tool results and system prompts (with every tool's schema) are most of a Pi file. A
       # quote inside a string is escaped, so these patterns only match a message's own role.
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '"role":"(toolResult|system|bashExecution)"' \
-        | jq -Rc -f "$here/extract-pi.jq" > "$out"
+        | lines | jq -c -f "$here/extract-pi.jq" > "$out"
     elif [ "$harness" = antigravity ]; then
       # Tool output (GENERIC steps) is most of an Antigravity file. A quote inside a string is
       # escaped, so this pattern only matches a step's own type.
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -v -F '"type":"GENERIC"' \
-        | jq -Rc -f "$here/extract-agy.jq" > "$out"
+        | lines | jq -c -f "$here/extract-agy.jq" > "$out"
     elif [ "$harness" = codex ]; then
       # Tool output, reasoning and finished commands are most of a Codex file. A quote inside
       # a string is escaped, so these patterns only match a line's own type. extract-codex.jq
@@ -89,7 +93,7 @@ while :; do
       { [ -z "$nick" ] || jq -cn --arg t "$nick" '{k: "an", t: $t[0:80]}'
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '"type":"(session_meta|world_state|token_usage_record|reasoning|function_call_output|custom_tool_call_output|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"' \
-        | jq -Rc -f "$here/extract-codex.jq"; } > "$out"
+        | lines | jq -c -f "$here/extract-codex.jq"; } > "$out"
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
       # type except user, assistant, attachment, system, custom-title and agent-name, every attachment but
@@ -100,7 +104,7 @@ while :; do
       head -c "$used" "$tmp" \
         | LC_ALL=C grep -E -v '^\{"type":"([^uasc]|u[^s]|a[^gst]|ag[^e]|s[^y]|c[^u])|"attachment":\{"type":"([^q]|q[^u])' \
         | LC_ALL=C perl -ne 'print if index($_, q("type":"tool_result")) < 0 || index($_, q("agentId":")) != -1' \
-        | jq -Rc -f "$here/extract.jq" > "$out"
+        | lines | jq -c -f "$here/extract.jq" > "$out"
     fi
   else
     : > "$out"
@@ -116,11 +120,13 @@ if [ "$harness" = cursor ]; then
   else
     printf '{"k":"file","size":%s,"head":""}\n' "$size"
   fi
-  printf '{"k":"chunk","used":%s}\n' "$used"
+  # shellcheck disable=SC2154 # lines_note is set by lines.sh
+  printf '{"k":"chunk","used":%s%s}\n' "$used" "$lines_note"
   cat "$out"
   printf '{"k":"settle","id":"%s"}\n' "$(sum $((end - n)) "$n" < "$tmp")"
   exit 0
 fi
 printf '{"k":"file","size":%s,"head":"%s"}\n' "$size" "$head"
-printf '{"k":"chunk","used":%s}\n' "$used"
+# shellcheck disable=SC2154 # lines_note is set by lines.sh
+printf '{"k":"chunk","used":%s%s}\n' "$used" "$lines_note"
 cat "$out"
