@@ -184,14 +184,30 @@ export function outlineText(prompt, q = "") {
   let paste = false;
   let own = null;
   let code = null;
-  for (const raw of text.split("\n")) {
+  let end = null;
+  let carry = null;
+  const lines = text.split("\n");
+  for (let li = 0; li < lines.length || carry != null;) {
+    const at = carry != null ? -1 : li;
+    const raw = carry ?? lines[li++];
+    carry = null;
     const l = raw.trim();
-    // A pasted block is passed over like fenced code, its first body line the fallback.
-    if (paste) { if (PASTE_CLOSE.test(l)) paste = false; else if (l) code ??= l; continue; }
+    // A pasted block is passed over like fenced code, its first body line the fallback. Text
+    // after its closing tag on the same line is read as the next line.
+    if (paste) {
+      if (end && at === end.j) {
+        const { head, tail } = pasteSplit(raw.replace(/\r$/, ""), end.at);
+        paste = false;
+        end = null;
+        if (head) code ??= head.trim();
+        carry = tail;
+      } else if (l) code ??= l;
+      continue;
+    }
     if (/^(```|~~~)/.test(l)) { fence = !fence; continue; }
     if (!l) continue;
     if (fence) { code ??= l; continue; }
-    if (PASTE_OPEN.test(l)) { paste = true; continue; }
+    if (PASTE_OPEN.test(l)) { paste = true; end = pasteEnd(lines, li); continue; }
     if (!l.startsWith(">")) { own = l; break; }
     code ??= l.replace(/^(>\s?)+/, "");
   }
@@ -1117,9 +1133,44 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const QUOTE_LINE = /^ {0,3}>/;
 // A pasted block's wrapper (issue 93): "<pasted_content …>" alone on its line opens one,
-// "</pasted_content>" alone on its line closes it. Any or no attributes.
+// with any or no attributes; where it ends is pasteEnd's. Outside a paste, a closing tag
+// alone on its line is dropped (PASTE_CLOSE).
 const PASTE_OPEN = /^ {0,3}<pasted_content\b[^>]*>$/;
 const PASTE_CLOSE = /^ {0,3}<\/pasted_content>$/;
+const PASTE_END = "</pasted_content>";
+const PASTE_END_LINE = /^\s*<\/pasted_content>\s*$/;
+// Where a paste opened just before lines[from] ends: { j, at }, its closing tag at
+// lines[j][at], or null when it runs to the end of the text. Up to the next opener line, a
+// closing tag alone on its line wins (any spaces around it), or one followed on its line by
+// an opener (two pastes with no line break between them), so pasted text that names the
+// tag mid-line stays pasted; with none, the first tag anywhere, for a paste that did not end
+// in a line break (the tag ends its last line) or has the person's words after the tag on
+// its line. With no tag before the next opener, the next closing line after it, as before
+// (the opener line is then pasted text). Each line is read at most twice per paste, and a
+// later paste's search starts after this one's end, so a prompt reads in linear time.
+function pasteEnd(lines, from) {
+  let any = null;
+  let j = from;
+  for (; j < lines.length; j++) {
+    const l = lines[j].replace(/\r$/, "");
+    if (PASTE_OPEN.test(l)) break;
+    if (PASTE_END_LINE.test(l)) return { j, at: l.indexOf(PASTE_END) };
+    const at = l.indexOf(PASTE_END);
+    if (at >= 0 && PASTE_OPEN.test(l.slice(at + PASTE_END.length).trim())) return { j, at };
+    if (!any && at >= 0) any = { j, at };
+  }
+  if (any) return any;
+  for (; j < lines.length; j++) if (PASTE_END_LINE.test(lines[j].replace(/\r$/, ""))) return { j, at: lines[j].indexOf(PASTE_END) };
+  return null;
+}
+// The closing line of a paste split at its tag: { head, tail }, the body before the tag
+// (null when only spaces, its trailing spaces dropped) and the text after it (null when only
+// spaces, its leading spaces dropped), which is read as a line of its own.
+function pasteSplit(line, at) {
+  const head = line.slice(0, at);
+  const tail = line.slice(at + PASTE_END.length).replace(/^\s+/, "");
+  return { head: head.trim() ? head.replace(/\s+$/, "") : null, tail: tail.trim() ? tail : null };
+}
 function closesFence(line, fence) {
   const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
   return Boolean(m) && m[1][0] === fence[0] && m[1].length >= fence.length;
@@ -1142,23 +1193,41 @@ export function promptParts(text, max = 1200) {
   const runs = [];
   let fence = null;
   let paste = false;
-  for (const line of src.split("\n")) {
+  let end = null; // the open paste's closing tag (pasteEnd)
+  let carry = null; // the text after a closing tag, read next as a line of its own
+  let fresh = false; // a paste just opened: its first line begins a new paste in runs
+  const lines = src.split("\n");
+  for (let li = 0; li < lines.length || carry != null;) {
     let quote = false;
-    let body = line.replace(/\r$/, "");
+    const at = carry != null ? -1 : li;
+    let body = carry ?? lines[li++].replace(/\r$/, "");
+    carry = null;
     if (paste) {
-      if (PASTE_CLOSE.test(body)) { paste = false; continue; }
+      if (end && at === end.j) {
+        const { head, tail } = pasteSplit(body, end.at);
+        paste = false;
+        end = null;
+        carry = tail;
+        if (!head) continue;
+        const last = runs[runs.length - 1];
+        if (last?.paste && !fresh) last.lines.push(head);
+        else runs.push({ quote: false, paste: true, lines: [head] });
+        fresh = false;
+        continue;
+      }
     } else if (fence) {
       if (closesFence(body, fence)) fence = null;
     } else {
       const f = FENCE_OPEN.exec(body);
       if (f) fence = f[1];
-      else if (PASTE_OPEN.test(body)) { paste = true; continue; }
+      else if (PASTE_OPEN.test(body)) { paste = true; fresh = true; end = pasteEnd(lines, li); continue; }
       else if (PASTE_CLOSE.test(body)) continue;
       else if (QUOTE_LINE.test(body)) { quote = true; body = body.replace(/^(?: {0,3}> ?)+/, ""); }
     }
     const last = runs[runs.length - 1];
-    if (last && last.quote === quote && Boolean(last.paste) === paste) last.lines.push(body);
+    if (last && last.quote === quote && Boolean(last.paste) === paste && !(paste && fresh)) last.lines.push(body);
     else runs.push(paste ? { quote, paste: true, lines: [body] } : { quote, lines: [body] });
+    fresh = false;
   }
   const blank = (l) => l.trim() === "";
   for (const r of runs) {
@@ -2325,7 +2394,27 @@ export function pinRowHeight(p) {
 // wrapper's tag lines are not words: they are dropped before the quote filter (the body
 // stays flat text; a pin is one run by design).
 export function pinPromptText(prompt) {
-  const lines = String(prompt ?? "").split("\n").filter((l) => !PASTE_OPEN.test(l) && !PASTE_CLOSE.test(l));
+  // The wrapper read as the bubble reads it (pasteEnd), the text after a closing tag on its
+  // line read as a line of its own, so an opener there opens a paste too.
+  const lines = [];
+  const src = String(prompt ?? "").split("\n");
+  let paste = false;
+  let end = null;
+  let carry = null;
+  for (let li = 0; li < src.length || carry != null;) {
+    const at = carry != null ? -1 : li;
+    const l = carry ?? src[li++].replace(/\r$/, "");
+    carry = null;
+    if (paste) {
+      if (!end || at !== end.j) { lines.push(l); continue; }
+      const { head, tail } = pasteSplit(l, end.at);
+      paste = false;
+      end = null;
+      if (head) lines.push(head);
+      carry = tail;
+    } else if (PASTE_OPEN.test(l)) { paste = true; end = pasteEnd(src, li); }
+    else if (!PASTE_CLOSE.test(l)) lines.push(l);
+  }
   const quote = (l) => /^ {0,3}>/.test(l);
   const own = lines.filter((l) => !quote(l) && l.trim());
   const keep = own.length ? own : lines.map((l) => l.replace(/^ {0,3}>\s?/, ""));
