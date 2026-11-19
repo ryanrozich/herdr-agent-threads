@@ -146,6 +146,10 @@ test("promptMd: a pasted block becomes one fenced code block, the wrapper gone",
   const inner = promptMd('before\n<pasted_content>\nfoo\n```ts\nconst x = 1\n```\nbar\n</pasted_content>\nafter');
   expect(inner.md).toBe("before\n\n````\nfoo\n```ts\nconst x = 1\n```\nbar\n````\n\nafter");
   expect(inner.code).toBe(1);
+  // The closing tag at the end of the paste's last line, and text after it on its line.
+  const end = promptMd('before\n<pasted_content id="x">\nalpha\nbeta</pasted_content> after');
+  expect(end.md).toBe("before\n\n```\nalpha\nbeta\n```\n\nafter");
+  expect(end.md).not.toContain("pasted_content");
 });
 
 test("promptMd reads 32,000 characters by default, more with max, and says what it leaves out", () => {
