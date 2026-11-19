@@ -181,13 +181,17 @@ export function outlineText(prompt, q = "") {
   const text = String(prompt ?? "");
   if (q) return around(text.replace(/\s+/g, " ").trim(), q).slice(0, 240);
   let fence = false;
+  let paste = false;
   let own = null;
   let code = null;
   for (const raw of text.split("\n")) {
     const l = raw.trim();
+    // A pasted block is passed over like fenced code, its first body line the fallback.
+    if (paste) { if (PASTE_CLOSE.test(l)) paste = false; else if (l) code ??= l; continue; }
     if (/^(```|~~~)/.test(l)) { fence = !fence; continue; }
     if (!l) continue;
     if (fence) { code ??= l; continue; }
+    if (PASTE_OPEN.test(l)) { paste = true; continue; }
     if (!l.startsWith(">")) { own = l; break; }
     code ??= l.replace(/^(>\s?)+/, "");
   }
@@ -1080,7 +1084,7 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
     chip = commandLayout(cmd.name, cmd.args, width, promptLines, agent, size, chars);
     pr = { lines: chip.lines, rows: chip.rows, cut: chip.cut, hard: chip.hard };
   } else {
-    pr = quotes ? quoteRows(prompt, promptLines, tw, agent, size) : null;
+    pr = quotes ? promptRows(prompt, promptLines, tw, agent, size) : null;
     if (!pr) {
       // A task notification that opens a session carries no text: the sender label names it.
       const l = rowLines(prompt || (agent ? "(no message text)" : "(empty prompt)"), promptLines, tw / (agent ? rt.agent : rt.prompt));
@@ -1092,10 +1096,13 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
   const pMore = Boolean(pr.cut);
   const rMore = Boolean(rl.cut) && (replyLimit ?? replyLines) > 1;
   // The bubble is as wide as its widest line (a command's chip and arguments side by side),
-  // and wide enough for "Show more".
+  // and wide enough for "Show more". A pasted row counts at the mono width (PASTE_MONO).
   const ch = agent ? rt.agent : rt.prompt;
   const widest = chip ? chip.chipW + 6 + Math.max(0, ...pr.lines.map((l) => units(l))) * ch
-    : Math.max(0, ...pr.lines.map((l, i) => units(l) * ch + (pr.kinds && pr.kinds[i] !== "c" ? QUOTE_INSET : 0)));
+    : Math.max(0, ...pr.lines.map((l, i) => {
+      if (pr.kinds?.[i] === "p") return units(l) * MONO_EM * PASTE_MONO;
+      return units(l) * ch + (pr.kinds && (pr.kinds[i] === "q" || pr.kinds[i] === "qonly") ? QUOTE_INSET : 0);
+    }));
   const bubbleW = Math.min(bubbleMax(width, size, chars), Math.ceil(Math.max(pMore ? 96 : 40, widest + 4) + 2 * ROW.BUBBLE_PX));
   return {
     p: pr.rows, r, prompt: pr.lines, reply: rl.lines, chip, kinds: pr.kinds ?? null, q: pr.q ?? 0, pMore, rMore, bubbleW,
@@ -1109,37 +1116,53 @@ export function rowShape({ prompt, reply, cmd, width, promptLines, replyLines, a
 
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 const QUOTE_LINE = /^ {0,3}>/;
+// A pasted block's wrapper (issue 93): "<pasted_content …>" alone on its line opens one,
+// "</pasted_content>" alone on its line closes it. Any or no attributes.
+const PASTE_OPEN = /^ {0,3}<pasted_content\b[^>]*>$/;
+const PASTE_CLOSE = /^ {0,3}<\/pasted_content>$/;
 function closesFence(line, fence) {
   const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
   return Boolean(m) && m[1][0] === fence[0] && m[1].length >= fence.length;
 }
 
-// A prompt as runs in source order: [{ quote: true, lines }, { quote: false, lines }, …].
-// A quote line is up to 3 spaces then ">" (the space after it is optional); nested "> >"
-// is one level, and a bare ">" is a blank quote line. Lines inside a fenced code block are
-// never quote lines. There is no lazy continuation: a line without ">" ends the quote, so
+// A prompt as runs in source order: [{ quote: true, lines }, { quote: false, lines },
+// { paste: true, lines }, …]. A quote line is up to 3 spaces then ">" (the space after it
+// is optional); nested "> >" is one level, and a bare ">" is a blank quote line. Lines
+// inside a fenced code block are never quote lines, and a paste wrapper inside one stays
+// text. A pasted block's body is verbatim: while inside one no quote, fence or second
+// opener applies, so a shell transcript's ">" lines stay body lines; the wrapper lines
+// themselves are dropped (a stray closing line too), and one left unclosed runs to the
+// end of the text. There is no lazy continuation: a line without ">" ends the quote, so
 // a comment written straight under a quote stays a comment. Blank lines at either end of
-// a run are dropped, then runs left empty. Reads at most max * 8 characters.
+// a run are dropped (a paste's body keeps them), then runs left empty. Reads at most
+// max * 8 characters.
 export function promptParts(text, max = 1200) {
   const raw = String(text ?? "");
   const src = raw.length > max * 8 ? raw.slice(0, max * 8) : raw;
   const runs = [];
   let fence = null;
+  let paste = false;
   for (const line of src.split("\n")) {
     let quote = false;
     let body = line.replace(/\r$/, "");
-    if (fence) { if (closesFence(body, fence)) fence = null; }
-    else {
+    if (paste) {
+      if (PASTE_CLOSE.test(body)) { paste = false; continue; }
+    } else if (fence) {
+      if (closesFence(body, fence)) fence = null;
+    } else {
       const f = FENCE_OPEN.exec(body);
       if (f) fence = f[1];
+      else if (PASTE_OPEN.test(body)) { paste = true; continue; }
+      else if (PASTE_CLOSE.test(body)) continue;
       else if (QUOTE_LINE.test(body)) { quote = true; body = body.replace(/^(?: {0,3}> ?)+/, ""); }
     }
     const last = runs[runs.length - 1];
-    if (last && last.quote === quote) last.lines.push(body);
-    else runs.push({ quote, lines: [body] });
+    if (last && last.quote === quote && Boolean(last.paste) === paste) last.lines.push(body);
+    else runs.push(paste ? { quote, paste: true, lines: [body] } : { quote, lines: [body] });
   }
   const blank = (l) => l.trim() === "";
   for (const r of runs) {
+    if (r.paste) continue;
     while (r.lines.length && blank(r.lines[0])) r.lines.shift();
     while (r.lines.length && blank(r.lines[r.lines.length - 1])) r.lines.pop();
   }
@@ -1202,6 +1225,97 @@ export function quoteRows(prompt, budget, tw, agent = false, size = TEXT_SIZE) {
   }
   if (cut && lines.length) lines[lines.length - 1] = withEllipsis(lines[lines.length - 1], lastPer);
   return { lines, rows: Math.max(1, lines.length), kinds, q: kinds.filter((k) => k === "q").length, cut };
+}
+
+// The mono face a pasted block draws in, and its quiet label row (PASTE_LABEL): the label
+// marks where the paste starts once the wrapper tag is gone.
+export const PASTE_MONO = 12.5;
+export function pasteLabel(n) { return `Pasted · ${n} ${n === 1 ? "line" : "lines"}`; }
+
+// A collapsed row's prompt rows, walking the prompt's runs (promptParts) in source order
+// under the Prompt lines budget: each text source line word-wraps on its own (rowLines,
+// so the spaces inside one line still collapse) and a run of blank lines is one blank row;
+// a quote run keeps quoteRows' rules (one truncated line, the last line held for the first
+// comment, a quote-only prompt filled as "qonly"); a pasted block is one label row "pl"
+// then one mono row "p" per body source line, each clipped, never wrapped, so a wide table
+// keeps its first columns instead of losing its alignment to a wrap. kinds is null for a
+// prompt with neither a quote nor a paste. Returns null for an empty prompt, so rowShape
+// can say "(empty prompt)". Every row is one reading line high, so `rows` is what rowHeight
+// counts. Subsumes quoteRows' budget walk (which stays exported for it).
+export function promptRows(prompt, budget, tw, agent = false, size = TEXT_SIZE) {
+  const parts = promptParts(prompt, Math.max(1200, budget));
+  if (!parts.length) return null;
+  const quotes = parts.some((r) => r.quote);
+  const pastes = parts.some((r) => r.paste);
+  const rt = readType(size);
+  const max = Math.max(1, Math.floor(budget));
+  const per = tw / (agent ? rt.agent : rt.prompt);
+  const qper = (tw - QUOTE_INSET) / rt.agent;
+  const pastePer = Math.max(8, Math.floor(tw / (MONO_EM * PASTE_MONO)));
+  const kinds = quotes || pastes ? [] : null;
+  const lines = [];
+  const hard = [];
+  let left = max;
+  let comment = false;
+  let cut = false;
+  let lastPer = per;
+  // A prompt that is only a quote fills the budget with it, as quoteRows does (its own walk).
+  if (quotes && !parts.some((r) => !r.quote)) return quoteRows(prompt, budget, tw, agent, size);
+  for (const r of parts) {
+    if (left <= 0) { cut = true; break; }
+    if (r.paste) {
+      lines.push(pasteLabel(r.lines.length));
+      kinds.push("pl");
+      left--;
+      lastPer = per;
+      for (const b of r.lines) {
+        if (left <= 0) { cut = true; break; }
+        lines.push(units(b) > pastePer ? withEllipsis(b, pastePer) : b.replace(/\s+$/, ""));
+        kinds.push("p");
+        left--;
+        lastPer = pastePer;
+      }
+      if (cut) break;
+    } else if (r.quote) {
+      // Keep the last line for the first comment while none has shown.
+      if (!comment && left <= 1) continue;
+      const l = rowLines(r.lines.join(" "), 1, qper);
+      if (!l.lines.length) continue;
+      lines.push(l.lines[0]);
+      kinds.push("q");
+      left--;
+      lastPer = qper;
+    } else {
+      let blankRun = false;
+      for (const src of r.lines) {
+        if (!src.trim()) {
+          if (blankRun) continue;
+          blankRun = true;
+          if (left <= 0) { cut = true; break; }
+          lines.push("");
+          if (kinds) kinds.push("c");
+          left--;
+          lastPer = per;
+          continue;
+        }
+        blankRun = false;
+        if (left <= 0) { cut = true; break; }
+        const at = lines.length;
+        const l = rowLines(src, left, per);
+        lines.push(...l.lines);
+        if (kinds) kinds.push(...l.lines.map(() => "c"));
+        else for (const h of l.hard ?? []) hard.push(at + h);
+        left -= l.lines.length;
+        comment = true;
+        lastPer = per;
+        if (l.cut) { cut = true; break; }
+      }
+      if (cut) break;
+    }
+  }
+  if (cut && lines.length) lines[lines.length - 1] = withEllipsis(lines[lines.length - 1], lastPer);
+  const base = { lines, rows: Math.max(1, lines.length), kinds, q: kinds ? kinds.filter((k) => k === "q").length : 0, cut };
+  return hard.length ? { ...base, hard } : base;
 }
 
 // The open card's YOU block text, clipped: each quote run at most `quoteLines` lines and
@@ -1589,6 +1703,20 @@ export function promptMd(text, { links: rules = [], repo = null, owner = null, h
       const groups = [[]];
       for (const l of r.lines) { if (l.trim() === "") groups.push([]); else groups[groups.length - 1].push(l); }
       blocks.push(groups.filter((g) => g.length).map((g) => para(g, "> ")).join("\n>\n"));
+      continue;
+    }
+    if (r.paste) {
+      // The wrapper is gone; the body is one fenced block (no language), so it draws in the
+      // mono face and counts in `code`, the card's per-code-block estimate applying to it.
+      // The fence is longer than any backtick run in the body, so a paste that itself holds
+      // a fence never opens one inside the block.
+      code++;
+      let fence = "```";
+      for (const l of r.lines) {
+        const m = /^ {0,3}(`{3,})/.exec(l);
+        if (m && m[1].length >= fence.length) fence = "`".repeat(m[1].length + 1);
+      }
+      blocks.push(`${fence}\n${r.lines.join("\n")}\n${fence}`);
       continue;
     }
     let buf = [];
@@ -2193,9 +2321,11 @@ export function pinRowHeight(p) {
     + PIN_ROW.GAP + PIN_ROW.REPLY + PIN_ROW.PAD_B;
 }
 // The prompt as a compact row shows it: the person's own words without the lines they
-// quoted (the quote's text when it is the whole prompt), on one run of text.
+// quoted (the quote's text when it is the whole prompt), on one run of text. A paste
+// wrapper's tag lines are not words: they are dropped before the quote filter (the body
+// stays flat text; a pin is one run by design).
 export function pinPromptText(prompt) {
-  const lines = String(prompt ?? "").split("\n");
+  const lines = String(prompt ?? "").split("\n").filter((l) => !PASTE_OPEN.test(l) && !PASTE_CLOSE.test(l));
   const quote = (l) => /^ {0,3}>/.test(l);
   const own = lines.filter((l) => !quote(l) && l.trim());
   const keep = own.length ? own : lines.map((l) => l.replace(/^ {0,3}>\s?/, ""));
