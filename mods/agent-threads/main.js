@@ -3656,22 +3656,32 @@ export default class Threads extends View {
     return true;
   }
 
-  // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless a second press
-  // (on_mouse_down with a click count over 1) or a drag (holdForSelect) comes first. A press
-  // on another closed turn meanwhile opens the first one straight away, so no open is lost.
+  // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
+  // comes first: a second press (on_mouse_down with a click count over 1), a drag
+  // (holdForSelect), any key (key), or a search starting. A press on another closed turn
+  // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
+  // then is not opened.
   openAfterPress(key, cx) {
     const w = this.openWait;
-    if (w && w.key !== key) { this.openWait = null; if (!this.open.has(w.key) && this.findTurn(w.key)) this.toggle(w.key, cx); }
+    if (w && w.key !== key) { this.openWait = null; if (this.mayOpen(w)) this.toggle(w.key, cx); }
     this.sel = key;
     this.follow = false;
     const gen = (this.openGen = (this.openGen ?? 0) + 1);
-    this.openWait = { key, gen };
+    this.openWait = { key, gen, filtering: Boolean(this.filtering) };
     cx.timer.after(OPEN_WAIT_MS, (cx) => {
-      if (this.openWait?.gen !== gen) return;
+      const w = this.openWait;
+      if (w?.gen !== gen) return;
       this.openWait = null;
-      if (!this.open.has(key) && this.findTurn(key)) this.toggle(key, cx);
+      if (this.mayOpen(w)) this.toggle(key, cx);
     });
     cx.notify();
+  }
+  // Whether a pending open still applies: the turn is closed and on the list, and no search
+  // started since the press (a press in the search field or its button takes no key here).
+  mayOpen(w) {
+    if (this.open.has(w.key) || !this.findTurn(w.key)) return false;
+    if (this.filtering && !w.filtering) return false;
+    return this.rows().some((r) => r.key === w.key);
   }
 
   toggle(key, cx) {
@@ -4588,6 +4598,9 @@ export default class Threads extends View {
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
   // ("agent-threads.next" and so on), delivered through nextCommand().
   key(e, cx) {
+    // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
+    // after a click acts on its own, and the turn is not opened behind it.
+    this.openWait = null;
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);

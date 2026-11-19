@@ -6518,6 +6518,55 @@ test("a press on a closed turn selects it at once and opens it after the wait; a
   expect(v.open.has(b)).toBe(true);
 });
 
+// From the review of #172: a key or a search after a press wins over the pending open.
+test("a key or a search after a press on a closed turn wins: the turn is not opened behind it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const closed = keys.filter((k) => !v.open.has(k) && v.rows().find((r) => r.key === k)?.kind === "turn");
+  const [a, b] = closed;
+  // Press, then j: j moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("j"), cx);
+  const moved = v.sel;
+  expect(moved).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, moved]);
+  // Press, Enter, Enter: opened by the first Enter, closed by the second, and left closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(true);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then Esc: closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("escape"), cx);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then a search started from its button (no key reaches the panel): closed.
+  cx.timers = [];
+  gesture(v, cx, b);
+  v.action("filter", cx);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+  v.filtering = false;
+  // Press, then the turn is hidden by a search kept from before: not opened.
+  v.filtering = true;
+  cx.timers = [];
+  gesture(v, cx, b);
+  const other = v.findTurn(a).prompt.split(/\s+/).find((w) => w.length > 4 && !v.findTurn(b).prompt.includes(w) && !v.replyText(v.findTurn(b)).includes(w));
+  v.query = other;
+  v.rowsKey = null;
+  expect(v.rows().some((r) => r.key === b)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+});
+
 test("opening a turn scrolls to its card once its parts are measured, or after 400 ms when they never are", async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--latest", "--langs"));
   const calls = [];
