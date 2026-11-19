@@ -714,10 +714,10 @@ test("sessionStats: the status line's sums over a session, and nothing for what 
   // The newest response's prompt: its input, cache reads and cache writes.
   expect(st.context).toBe(20 + 1500 + 100);
   // Antigravity records no cache writes: the same sums, with writes 0.
-  expect(sessionStats([{ tools: 1, usage: { s1: { i: 300, o: 20, cr: 700, cc: 0 } } }])).toEqual({ tools: 1, tokens: 320, cachePct: 70, context: 1000 });
+  expect(sessionStats([{ tools: 1, usage: { s1: { i: 300, o: 20, cr: 700, cc: 0 } } }])).toEqual({ tools: 1, tokens: 320, cachePct: 70, context: 1000, contextPct: null });
   // Cursor records no tokens: tool calls only, and null for the rest, never 0.
-  expect(sessionStats([{ tools: 4, usage: {} }, { tools: 1, usage: {} }])).toEqual({ tools: 5, tokens: null, cachePct: null, context: null });
-  expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null });
+  expect(sessionStats([{ tools: 4, usage: {} }, { tools: 1, usage: {} }])).toEqual({ tools: 5, tokens: null, cachePct: null, context: null, contextPct: null });
+  expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null, contextPct: null });
   // A turn with no usage after one with usage leaves the context at the last response.
   expect(sessionStats([b, { tools: 0, usage: {} }]).context).toBe(1620);
 });

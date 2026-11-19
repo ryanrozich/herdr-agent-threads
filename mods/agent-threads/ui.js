@@ -76,25 +76,40 @@ export function fitHints(hints, width, gap = 10, pad = 26) {
 }
 
 // The status line at the pane's foot: up to three groups, each an icon and its text, that fit
-// in width px. Turns, the hidden count and tool calls; tokens and the cache hit; context.
-// A number the session did not record (Cursor's tokens) is left out, never shown as 0. In a
-// narrow pane, what gives way first: context, the cache hit, the hidden count, the tokens;
-// then "tool calls" shortens to "tools", then the tool count goes. The turns always stay.
+// in width px. Turns, the hidden count and tool calls; tokens and the cache hit; the count in
+// the context window, with the percent where the window is stated. A number the session did
+// not record (Cursor's tokens) is left out, never shown as 0. In a narrow pane, what gives way
+// first: the cache hit, the hidden count, the tokens; then "tool calls" shortens to "tools",
+// then the tool count goes, then the ring and percent, then the turns. The context count
+// always stays, and without one the turns do.
 const STATUS = { char: 6.3, icon: 17, gap: 18, pad: 24 };
 const n = (x) => x.toLocaleString();
 const many = (x, w) => `${n(x)} ${w}${x === 1 ? "" : "s"}`;
 export function statusWidth(groups) {
   return groups.reduce((sum, g) => sum + STATUS.icon + Math.ceil(g.text.length * STATUS.char), 0) + STATUS.gap * Math.max(0, groups.length - 1) + STATUS.pad;
 }
+// The ring's fill in eighths (ring-0.svg to ring-8.svg): empty only at 0% and full only at
+// 100% or more, so a little used shows a little and nearly full is not full.
+export function ringStep(pct) {
+  if (!(pct > 0)) return 0;
+  if (pct >= 100) return 8;
+  return Math.max(1, Math.min(7, Math.round(pct / 12.5)));
+}
 export function statusGroups(s, width) {
-  const on = { hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, context: s.context != null };
+  const context = s.context != null;
+  const on = { turns: true, hidden: s.hidden > 0, tools: s.tools > 0, tokens: s.tokens != null, cache: s.cachePct != null, ring: context && s.contextPct != null };
   let short = false;
   const build = () => [
-    { key: "turns", icon: "messages", text: [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") },
+    { key: "turns", icon: "messages", text: on.turns ? [many(s.turns, "turn"), on.hidden ? `${n(s.hidden)} hidden` : null, on.tools ? many(s.tools, short ? "tool" : "tool call") : null].filter(Boolean).join(" · ") : "" },
     { key: "tokens", icon: "database", text: [on.tokens ? `${fmtTokens(s.tokens)} tokens` : null, on.tokens && on.cache ? `${fmtPct(s.cachePct)} cache hit` : null].filter(Boolean).join(" · ") },
-    { key: "context", icon: "cpu", text: on.context ? `${fmtTokens(s.context)} context` : "" },
+    // The tokens in the context window, for every agent that records them. Where the count
+    // states the window (Codex), the percent too, behind a ring filled to that share: shown up
+    // to 999%, since only a crafted transcript states a window so small that it goes past.
+    { key: "context", icon: on.ring ? `ring-${ringStep(s.contextPct)}` : "cpu", text: context ? [`${fmtTokens(s.context)} context`, on.ring ? `${Math.min(999, s.contextPct)}%` : null].filter(Boolean).join(" · ") : "" },
   ].filter((g) => g.text);
-  const steps = [() => { on.context = false; }, () => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }];
+  // The owner (TRD-17): the count in the context window always shows. So the other stats go
+  // first, then the ring and percent, then the turns (only when a count is left to show).
+  const steps = [() => { on.cache = false; }, () => { on.hidden = false; }, () => { on.tokens = false; }, () => { short = true; }, () => { on.tools = false; }, () => { on.ring = false; }, () => { on.turns = !context; }];
   let out = build();
   for (const step of steps) {
     if (statusWidth(out) <= width) break;
