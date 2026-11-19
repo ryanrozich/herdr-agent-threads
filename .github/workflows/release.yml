@@ -6,7 +6,8 @@ name: Release
 # run. The pieces: release-please-config.json, .release-please-manifest.json, CHANGELOG.md,
 # and mods/agent-threads/version.js, the version the settings card shows.
 # Merging to main does not release: it only updates that pull request, which stays open
-# between releases. It is merged only when the repo's owner asks for a release.
+# between releases. It opens as a draft, which the queue refuses, and is marked ready and
+# merged only when the repo's owner asks for a release.
 on:
   push:
     branches: [main]

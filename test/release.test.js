@@ -24,6 +24,11 @@ test("one version: the manifest says what version.js says, and release-please bu
   expect(read("CHANGELOG.md")).toMatch(/^# Changelog\n/);
 });
 
+test("the release pull request opens as a draft, which the queue refuses, so only the owner's ready lets it merge", () => {
+  expect(config["draft-pull-request"]).toBe(true);
+  expect(read(".mergify.yml")).toMatch(/^\s*- -draft$/m);
+});
+
 test("tags read v1.0.1, and the first run starts after the commit v1.0.0 tags", () => {
   expect(config["include-component-in-tag"]).toBe(false);
   expect(config["include-v-in-tag"] ?? true).toBe(true);
