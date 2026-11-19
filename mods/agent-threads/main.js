@@ -199,7 +199,7 @@ const CARD_SECTIONS = [
   ["Agent messages", ["agents", "agentRail", "agentColor"]],
   ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
-  ["File", ["file", "version"]],
+  ["File", ["file"]],
 ];
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
@@ -6049,12 +6049,13 @@ export default class Threads extends View {
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
   }
 
-  // The card's foot, under the scroll: the agent, the turn count and the session's title (the
-  // floating top has no header to hold them), and "? keys", the way to every key while the key
-  // hints are off.
+  // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
+  // the way to every key while the key hints are off. The chat's agent, counts and title
+  // (aboutRow) were here with the floating top; the owner wants the version here and the
+  // chat's stats elsewhere, not yet chosen.
   cardFoot(t, pad) {
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
-      .child(this.floating() ? this.aboutRow(t) : div().flex_1())
+      .child(this.versionRow(t))
       .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
         .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
@@ -6170,7 +6171,6 @@ export default class Threads extends View {
           .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
         .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
-      version: () => [this.versionRow(t)],
     };
     return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
   }
@@ -6241,12 +6241,13 @@ export default class Threads extends View {
       .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
   }
 
-  // Under the file: the mod's name and version (version.js), with the commit install.sh
+  // The card's last row: the mod's name and version (version.js), with the commit install.sh
   // found. A plain line, not a control; a copy without a build says the commit is not known,
-  // and its tooltip says why.
+  // and its tooltip says why. It takes the room "? keys" leaves and truncates in a narrow card,
+  // so otherwise its tooltip is the whole line.
   versionRow(t) {
     const line = versionLine(VERSION, this.build === undefined ? built : this.build);
-    return div().id("th-set-version").text_size(11.5).text_color(t.muted).when(Boolean(line.tip), (el) => el.tooltip(line.tip)).child(line.text);
+    return div().id("th-set-version").flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).tooltip(line.tip ?? line.text).child(line.text);
   }
 
   // The quote key field's note: a letter that cannot be the quote key, and why it stays.
@@ -6488,8 +6489,10 @@ export default class Threads extends View {
     return out;
   }
 
-  // The settings card's foot with the floating top: the agent, the turn and hidden counts and
-  // the session's title, which the header row showed. Its tooltip names the terminal and session.
+  // The agent, the turn and hidden counts and the session's title, which the header row shows.
+  // It was the settings card's foot with the floating top, until the version took that row; it
+  // is kept for the chat's stats' next place (not yet chosen). Its tooltip names the terminal
+  // and session.
   aboutRow(t) {
     const agent = this.agent();
     const s = this.current();

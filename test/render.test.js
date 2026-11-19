@@ -7616,15 +7616,17 @@ test("the floating top: no header row, the state top left at every width, icons 
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
   v.h.is_focused = () => false;
-  // Settings open: a card over the list, not in its flow (the list does not move), with the
-  // agent, the counts and the title at its foot.
+  // Settings open: a card over the list, not in its flow (the list does not move). Its foot
+  // holds the version line, not the chat's agent, counts and title (the owner, 2026-11-19:
+  // the version belongs at the bottom of the settings, the chat's stats somewhere else).
   v.settingsOpen = true;
   calls = drawn();
   ids = idsOf(calls);
   expect(ids).not.toContain("th-top");
   expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
-  expect(ids.indexOf("th-about")).toBeGreaterThan(ids.indexOf("th-set-card"));
-  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
+  expect(ids).not.toContain("th-about");
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(false);
   v.settingsOpen = false;
   // A search field opens under the band too.
   v.filtering = true;
@@ -8750,7 +8752,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color"]],
     ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
     ["Links and keys", ["Link rules", "Quote key"]],
-    ["File", ["Copy path", "Agent Threads 1.0.0 (commit not known)"]],
+    ["File", ["Copy path"]],
   ];
   const heads = PAGE.map(([name]) => gs.indexOf(name));
   expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
@@ -8870,7 +8872,7 @@ test("the file: its path with Copy path, which says Copied in its own place with
   expect(v.action("openSettingsFile", cx)).toBe(false);
 });
 
-test("under the file: the mod's name and version as a plain line, with the commit when install.sh found one; not a control", async () => {
+test("the card's foot: the mod's name and version as a plain line, with the commit when install.sh found one, then ? keys; not a control", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const { VERSION } = await import("../mods/agent-threads/version.js");
   v.action("settings", cx);
@@ -8887,10 +8889,17 @@ test("under the file: the mod's name and version as a plain line, with the commi
   expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION}`);
   v.build = `v${VERSION}-3-gabc1234-dirty`;
   expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`);
-  // It sits after the path row, and Reset stays last.
-  const gs = strsOf(cardOf(v));
-  expect(gs.indexOf("Copy path")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`));
-  expect(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`)).toBeLessThan(gs.indexOf("Reset to defaults"));
+  // A narrow card cuts the line short, so its tooltip is the whole line.
+  expect(tooltips(v, cx)).toContain(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`);
+  // It is the card's last row: in the foot under the scroll, after Reset, before "? keys",
+  // and it truncates rather than pushing the keys out at a narrow card.
+  const c = cardOf(v);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  expect(ids.indexOf("th-set-version")).toBeLessThan(ids.indexOf("th-set-keys"));
+  const gs = strsOf(c);
+  expect(gs.indexOf("Reset to defaults")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, 3 commits later (abc1234, with local changes)`));
+  expect(own(c, "th-set-version").some((e) => e[0] === "truncate")).toBe(true);
   draw(v, cx);
 });
 
