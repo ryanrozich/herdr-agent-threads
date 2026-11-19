@@ -10,7 +10,7 @@ const skills = readdirSync(join(root, ".claude", "skills"));
 
 test("CLAUDE.md points at AGENTS.md, which names each skill by its path", () => {
   expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
-  expect(skills.sort()).toEqual(["cut-a-release", "open-a-pr"]);
+  expect(skills.sort()).toEqual(["cut-a-release", "open-a-pr", "verify-a-change"]);
   for (const s of skills) expect(agents).toContain(`.claude/skills/${s}/SKILL.md`);
 });
 
@@ -45,4 +45,18 @@ test("AGENTS.md and the release skill say a release needs the owner's own words,
   expect(step4).toMatch(/^Release, on the owner's own request\.\*\*/);
   expect(step4).toContain("is not enough");
   expect(step4).toContain("gh pr ready");
+});
+
+test("verify-a-change lists CI's own checks, in CI's order", () => {
+  const ci = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8");
+  const skill = readFileSync(join(root, ".claude", "skills", "verify-a-change", "SKILL.md"), "utf8");
+  // The table's command column, with the escaped pipe back to a plain one.
+  const cmds = [...skill.matchAll(/^\| [^|]+ \| `(.+?)` \| /gm)].map((m) => m[1].replace(/\\\|/g, "|"));
+  expect(cmds).toHaveLength(4);
+  // Each is a whole CI line (CI's test line adds only the JUnit report for the upload), so a
+  // flag CI gains is a difference too.
+  const lines = ci.split("\n").map((l) => l.trim().replace(/^run: /, "").replace(/ --reporter=junit --reporter-outfile=junit\.xml$/, ""));
+  const at = cmds.map((c) => lines.indexOf(c));
+  expect(at.every((i) => i >= 0)).toBe(true);
+  expect(at).toEqual([...at].sort((a, b) => a - b));
 });
