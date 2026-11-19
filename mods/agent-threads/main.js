@@ -5965,14 +5965,18 @@ export default class Threads extends View {
   settingsCard(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     const links = this.setPage === "links";
-    const top = this.floating() ? TOP_BAND : 46;
     const h = this.rootH || 600;
+    const fixed = CARD_HEAD + CARD_FOOT + 2;
+    // Under the icons at the top, unless the pane is too short for the head and foot there:
+    // then the card moves up, so they stay inside the pane (TRD-7).
+    const top = Math.max(0, Math.min(this.floating() ? TOP_BAND : 46, h - CARD_GAP - fixed));
     const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
-    const room = Math.max(180, h - top - under);
+    // At least 180 px, over the key hints if it must, but never past the pane's bottom (less
+    // the gap): in a very short pane the rows shrink first, to nothing if need be.
+    const room = Math.max(Math.min(180, h - top - CARD_GAP), h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
-    const fixed = CARD_HEAD + CARD_FOOT + 2;
-    const bodyMax = Math.max(60, room - fixed);
+    const bodyMax = Math.max(0, room - fixed);
     // The rows' own height, as last drawn on this page and tab, up to the room left.
     const key = links ? "links" : "main";
     const rowsH = this.cardBody?.key === key ? this.cardBody.h : null;
