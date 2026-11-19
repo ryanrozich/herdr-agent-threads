@@ -443,7 +443,8 @@ function applyOne(s, e) {
       return;
     case "m":
       if (!cur) return;
-      cur.usage[e.id] = e.u;
+      // w: the context window the agent stated with this count (Codex only), kept beside it.
+      cur.usage[e.id] = e.w > 0 ? { ...e.u, w: e.w } : e.u;
       if (e.m) cur.model = e.m;
       if (e.e) cur.effort = e.e;
       if (typeof e.a === "string" && e.a) cur.by = e.a;
@@ -612,7 +613,7 @@ export function sessionStats(turns) {
 // sessionStats in two steps, so the pane sums the done turns once and only the newest again:
 // turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
 export function turnSums(turns, from = 0, to = turns.length, base = null) {
-  const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null };
+  const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null, window: null };
   for (let k = from; k < to; k++) {
     const t = turns[k];
     a.tools += t.tools ?? 0;
@@ -623,13 +624,18 @@ export function turnSums(turns, from = 0, to = turns.length, base = null) {
       a.cacheRead += u.cr ?? 0;
       a.cacheWrite += u.cc ?? 0;
       a.context = (u.i ?? 0) + (u.cr ?? 0) + (u.cc ?? 0);
+      // The window stated with the same count, or none: never one from an earlier count.
+      a.window = u.w > 0 ? u.w : null;
     }
   }
   return a;
 }
 export function sumsStats(a) {
-  if (!a.any) return { tools: a.tools, tokens: null, cachePct: null, context: null };
-  return { tools: a.tools, tokens: a.input + a.cacheWrite + a.output, cachePct: cachePct(a.cacheRead, a.input + a.cacheWrite + a.cacheRead), context: a.context > 0 ? a.context : null };
+  if (!a.any) return { tools: a.tools, tokens: null, cachePct: null, context: null, contextPct: null };
+  const context = a.context > 0 ? a.context : null;
+  // The context as a whole percent of the window, only where the transcript states the window.
+  const contextPct = context != null && a.window > 0 ? Math.round((context * 100) / a.window) : null;
+  return { tools: a.tools, tokens: a.input + a.cacheWrite + a.output, cachePct: cachePct(a.cacheRead, a.input + a.cacheWrite + a.cacheRead), context, contextPct };
 }
 
 // Share of the prompt read from cache, floored to one decimal: 100 only when every prompt
