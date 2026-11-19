@@ -1,4 +1,4 @@
-# agent-threads extractor: transcript lines in (jq -R, whole lines only), compact events
+# agent-threads extractor: transcript lines in (one JSON string each, from lines.sh; whole lines only), compact events
 # out, one JSON object per line, in file order:
 #   p  prompt                           {o: origin kind, ts, t: text}; t only for own origins;
 #                                       a peer's origin name as n ("general-purpose");

@@ -1,5 +1,5 @@
 # agent-threads extractor for Cursor agent transcripts (~/.cursor/projects/<folder>/
-# agent-transcripts/<id>/<id>.jsonl): lines in (jq -R, whole lines only), the same compact
+# agent-transcripts/<id>/<id>.jsonl): lines in (one JSON string each, from lines.sh; whole lines only), the same compact
 # events as extract.jq out, one JSON object per line, in file order:
 #   p      a prompt  {o: "human", ts, t}
 #   t      assistant text  {t}

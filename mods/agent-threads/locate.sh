@@ -206,8 +206,12 @@ cursor-peers)
   printf '%s\n' "$n" ;;
 cursor-label)
   # The first prompt as typed, 100 characters, read as the pane reads it.
+  # shellcheck disable=SC2034 # read by lines.sh
+  threads_core=$(dirname "$0")/core
+  # shellcheck source=core/lines.sh
+  . "$threads_core/lines.sh"
   LC_ALL=C grep -m 1 -F '"role":"user"' "$1" 2>/dev/null \
-    | jq -Rc -f "$(dirname "$0")/core/extract-cursor.jq" 2>/dev/null \
+    | lines | jq -c -f "$(dirname "$0")/core/extract-cursor.jq" 2>/dev/null \
     | jq -r 'select(.k == "p") | .t | gsub("\\s+"; " ") | .[0:100]' 2>/dev/null ;;
 agy-dir)
   printf '%s\n' "${AGY_DATA_DIR:-$HOME/.gemini/antigravity-cli}" ;;

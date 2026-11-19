@@ -1,4 +1,4 @@
-# agent-threads extractor for Codex rollout files: lines in (jq -R, whole lines only), the same
+# agent-threads extractor for Codex rollout files: lines in (one JSON string each, from lines.sh; whole lines only), the same
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model and effort of the turn about to start  {m, e}
 #   p      a prompt   {o: "human", ts, t}, with pasted images {img: [media types], u: "<turn id>_<ordinal>"}
