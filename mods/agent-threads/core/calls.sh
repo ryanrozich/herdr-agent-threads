@@ -6,6 +6,7 @@
 # "out","lines"} for its result (at most 24 KB of text, and its whole line count). The panel
 # keeps these in memory only: nothing is written here, and nothing is saved.
 # --tail reads only the transcript's last 4 MB, for the newest call of a group still running.
+# With THREADS_WHOLE=1 (the ATIF export) a result is not cut: an eval reader needs all of it.
 # With THREADS_ARGS=1 (the ATIF export, core/atif.js) it also prints each call's whole input
 # as {"id","k":"args","args"}: an object, a JSON value that is not one as {"value"}, a Codex
 # custom tool's text as {"input"}, or {"id","k":"args","unread":true} when it is not JSON.
@@ -54,7 +55,7 @@ case $harness in
           (select($ENV.THREADS_ARGS == "1") | {id: .id, k: "args", args: ((.input // {}) | if type == "object" then . else {value: .} end)})
         elif .type == "tool_result" and (.tool_use_id as $i | $want | index($i)) != null then
           (.content | text) as $o
-          | {id: .tool_use_id, k: "out", ts: $l.timestamp, err: (.is_error == true), out: $o[0:24576], lines: ($o | split("\n") | length)}
+          | {id: .tool_use_id, k: "out", ts: $l.timestamp, err: (.is_error == true), out: $o[0:(if $ENV.THREADS_WHOLE == "1" then null else 24576 end)], lines: ($o | split("\n") | length)}
         else empty end'
     ;;
   codex)
@@ -100,7 +101,7 @@ case $harness in
           | (if ($o | type) == "object" and ($o | has("output")) then ($o.output | text) else ($o | text) end) as $t
           | ((($o | type) == "object" and ((($o.metadata.exit_code? // 0) != 0) or $o.success? == false))
              or ($t | split("\n") | .[0:8] | any(test("^(Script failed|aborted)|tool failed|^Process exited with code [1-9]|^Exit code: [1-9]|^\\{\"chunk_id\".*\"exit_code\":[1-9]")))) as $err
-          | {id: $p.call_id, k: "out", ts: $l.timestamp, err: $err, out: $t[0:24576], lines: ($t | split("\n") | length)}
+          | {id: $p.call_id, k: "out", ts: $l.timestamp, err: $err, out: $t[0:(if $ENV.THREADS_WHOLE == "1" then null else 24576 end)], lines: ($t | split("\n") | length)}
         else empty end'
     ;;
   pi)
@@ -121,7 +122,7 @@ case $harness in
                  | if . == "\u0000unread" then {unread: true} elif type == "object" then {args: .} else {args: {value: .}} end))
         elif $m.role == "toolResult" and (($m.toolCallId // "") as $i | $want | index($i)) != null then
           ($m.content | text) as $o
-          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: ($m.isError == true), out: $o[0:24576], lines: ($o | split("\n") | length)}
+          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: ($m.isError == true), out: $o[0:(if $ENV.THREADS_WHOLE == "1" then null else 24576 end)], lines: ($o | split("\n") | length)}
             + (if ($m.durationMs | type) == "number" then {ms: $m.durationMs} else {} end)
         else empty end'
     ;;
@@ -146,7 +147,7 @@ case $harness in
           | ([$lines | to_entries[] | select(.value | test("^(Created|Completed) At: ") | not) | .key] | first // ($lines | length)) as $body
           | ($lines[$body:] | join("\n")) as $o
           | {id: $w.id, k: "out", ts: (($lines[:$body] | head("Completed") | last) // $l.created_at),
-             err: ($l.status == "ERROR"), out: $o[0:24576], lines: ($o | split("\n") | length)}
+             err: ($l.status == "ERROR"), out: $o[0:(if $ENV.THREADS_WHOLE == "1" then null else 24576 end)], lines: ($o | split("\n") | length)}
         else empty end' -n
     ;;
   *) echo "not read for $harness yet" >&2; exit 4 ;;
