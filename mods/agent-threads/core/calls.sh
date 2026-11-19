@@ -27,9 +27,11 @@ fi
 case $file in /*) ;; *) file=./$file ;; esac
 [ -f "$file" ] || { echo "no transcript" >&2; exit 3; }
 ids=$(printf '%s ' "$@")
-# lines.pl gives jq each line as a JSON string: jq's -R decodes in pieces of about 4 KB and
-# split a character that crossed one.
-quote=$(dirname "$0")/lines.pl
+# lines (lines.sh) gives jq each line as a JSON string, so no character is split.
+# shellcheck disable=SC2034 # read by lines.sh
+threads_core=$(dirname "$0")
+# shellcheck source=lines.sh
+. "$threads_core/lines.sh"
 case $harness in
   claude)
     # One pass over the file for every id, then the blocks that carry them, on the
@@ -37,7 +39,7 @@ case $harness in
     # not grep: macOS grep takes about 4 s a pattern over a 600 MB transcript, perl 0.25 s
     # for any number of them.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | perl "$quote" | jq -c --arg ids "$ids" '
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" '
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
       ($ids | split(" ") | map(select(. != ""))) as $want
       | (fromjson? // empty) | select(type == "object" and (.type == "assistant" or .type == "user")) | . as $l
@@ -59,7 +61,7 @@ case $harness in
     # its history, so only response_item lines count. A call failed when its script failed, it
     # was aborted, or a command it ran (a chunk line of its exec tool) exited with a code.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | perl "$quote" | jq -c --arg ids "$ids" '
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" '
       def argv: if type == "array" then (if .[2] != null and (.[1] | tostring | test("^-l?c$")) then .[2] else map(tostring) | join(" ") end) else . end;
       def firstline: tostring | split("\n") | map(select(test("\\S"))) | (.[0] // "");
       def input:
@@ -92,7 +94,7 @@ case $harness in
     # Pi: an assistant message's toolCall parts (id, name, arguments) and the toolResult
     # message for each (toolCallId, isError, durationMs, text parts).
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | perl "$quote" | jq -c --arg ids "$ids" '
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" '
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
       ($ids | split(" ") | map(select(. != ""))) as $want
       | (fromjson? // empty) | select(type == "object" and .type == "message") | . as $l | ($l.message // {}) as $m
@@ -111,7 +113,7 @@ case $harness in
     # Antigravity: calls have no ids. "s<step>.<i>" is the planner step's i-th tool call, and
     # its result is the GENERIC step at <step> + 1 + i, whose text starts with "Created At:" and
     # "Completed At:" lines (the times; left out of the output).
-    perl "$quote" < "$file" | jq -c --arg ids "$ids" '
+    lines < "$file" | jq -c --arg ids "$ids" '
       def head($k): [.[] | select(startswith($k + " At: ")) | .[($k | length) + 5:]];
       ($ids | split(" ") | map(select(. != "") | match("^s([0-9]+)\\.([0-9]+)$") | .captures | {id: "s\(.[0].string).\(.[1].string)", s: (.[0].string | tonumber), i: (.[1].string | tonumber)})) as $want
       | (reduce $want[] as $w ({}; .[$w.s | tostring] += [$w])) as $calls

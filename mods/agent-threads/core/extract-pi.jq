@@ -1,4 +1,4 @@
-# agent-threads extractor for Pi session files: lines in (jq -R, whole lines only), the same
+# agent-threads extractor for Pi session files: lines in (one JSON string each, from lines.sh; whole lines only), the same
 # compact events as extract.jq out, one JSON object per line, in file order:
 #   ctx    the model chosen for the turns after it  {m, e}
 #   p      a prompt  {o: "human", ts, t}, with pasted images {img: [media types], ids, src, u: "<entry id>"}
