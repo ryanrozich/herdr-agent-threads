@@ -398,3 +398,20 @@ test("atif: a subagent id with folder steps, odd characters, or a file linked fr
     .map((c) => st.observation.results.find((r) => r.source_call_id === c.tool_call_id)));
   expect(agentResults.map((r) => r.extra.subagent_transcript)).toEqual(["not found", "not found", "not found"]);
 });
+
+test("atif: a subagents folder that is itself a link is not read", () => {
+  const d = mkdtempSync(join(tmpdir(), "threads-atif-link-"));
+  const f = join(d, "00000000-0000-4000-8000-000000000050.jsonl");
+  execFileSync("bun", [join(root, "test/make-fixture.js"), f, "00000000-0000-4000-8000-000000000050", "/Users/dev/acme-web", "--subagents"]);
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const a = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  // The real folder is elsewhere; the session's subagents folder only links to it.
+  const elsewhere = join(d, "elsewhere");
+  mkdirSync(elsewhere);
+  writeFileSync(join(elsewhere, `agent-${a}.jsonl`), `${JSON.stringify({ isSidechain: true, agentId: a, sessionId: "x", type: "user", uuid: "00000000-0000-4000-b000-000000000002", timestamp: "2026-11-01T10:00:00Z", message: { role: "user", content: "LINKED-FOLDER" } })}\n`);
+  mkdirSync(f.replace(/\.jsonl$/, ""));
+  symlinkSync(elsewhere, join(f.replace(/\.jsonl$/, ""), "subagents"));
+  const out = execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("LINKED-FOLDER");
+  expect(JSON.parse(out).subagent_trajectories).toBeUndefined();
+});
