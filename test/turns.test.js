@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -699,4 +699,25 @@ test("a turn's version moves only when an event may change it", () => {
   apply(s, { k: "s", ts: ts(4) });
   expect(t2.v).toBeGreaterThan(v3);
   expect(t1.v).toBe(v1);
+});
+
+test("sessionStats: the status line's sums over a session, and nothing for what no turn recorded", () => {
+  // Two turns with usage, as Claude Code, Codex, OpenCode and Pi record it.
+  const a = { tools: 3, usage: { m1: { i: 100, o: 50, cr: 0, cc: 900 }, m2: { i: 10, o: 40, cr: 1000, cc: 0 } } };
+  const b = { tools: 2, usage: { m3: { i: 20, o: 30, cr: 1500, cc: 100 } } };
+  const st = sessionStats([a, b]);
+  expect(st.tools).toBe(5);
+  // New input, cache writes and output, as the reply stats count tokens.
+  expect(st.tokens).toBe(100 + 10 + 20 + 900 + 100 + 50 + 40 + 30);
+  // Cache reads over the whole prompt: 2500 of 3630.
+  expect(st.cachePct).toBe(68.8);
+  // The newest response's prompt: its input, cache reads and cache writes.
+  expect(st.context).toBe(20 + 1500 + 100);
+  // Antigravity records no cache writes: the same sums, with writes 0.
+  expect(sessionStats([{ tools: 1, usage: { s1: { i: 300, o: 20, cr: 700, cc: 0 } } }])).toEqual({ tools: 1, tokens: 320, cachePct: 70, context: 1000 });
+  // Cursor records no tokens: tool calls only, and null for the rest, never 0.
+  expect(sessionStats([{ tools: 4, usage: {} }, { tools: 1, usage: {} }])).toEqual({ tools: 5, tokens: null, cachePct: null, context: null });
+  expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null });
+  // A turn with no usage after one with usage leaves the context at the last response.
+  expect(sessionStats([b, { tools: 0, usage: {} }]).context).toBe(1620);
 });

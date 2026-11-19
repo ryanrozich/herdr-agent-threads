@@ -601,6 +601,37 @@ export function stats(turn) {
   };
 }
 
+// The status line's sums over one session's turns: tool calls; tokens, counted as the reply
+// stats count them (new input, cache writes and output); the share of the prompt read from
+// cache; and context, the prompt of the newest model response (its input, cache reads and
+// cache writes). With no usage in any turn (Cursor records none) the three are null, never 0.
+export function sessionStats(turns) {
+  return sumsStats(turnSums(turns));
+}
+
+// sessionStats in two steps, so the pane sums the done turns once and only the newest again:
+// turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
+export function turnSums(turns, from = 0, to = turns.length, base = null) {
+  const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null };
+  for (let k = from; k < to; k++) {
+    const t = turns[k];
+    a.tools += t.tools ?? 0;
+    for (const u of Object.values(t.usage ?? {})) {
+      a.any = true;
+      a.input += u.i ?? 0;
+      a.output += u.o ?? 0;
+      a.cacheRead += u.cr ?? 0;
+      a.cacheWrite += u.cc ?? 0;
+      a.context = (u.i ?? 0) + (u.cr ?? 0) + (u.cc ?? 0);
+    }
+  }
+  return a;
+}
+export function sumsStats(a) {
+  if (!a.any) return { tools: a.tools, tokens: null, cachePct: null, context: null };
+  return { tools: a.tools, tokens: a.input + a.cacheWrite + a.output, cachePct: cachePct(a.cacheRead, a.input + a.cacheWrite + a.cacheRead), context: a.context > 0 ? a.context : null };
+}
+
 // Share of the prompt read from cache, floored to one decimal: 100 only when every prompt
 // token was a cache read, so 99.96% shows as 99.9, never as 100.
 export function cachePct(cacheRead, prompt) {

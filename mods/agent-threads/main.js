@@ -50,7 +50,7 @@ import {
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders,
-  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
+  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
@@ -60,7 +60,7 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -197,7 +197,7 @@ const CARD_BAR_W = 10;
 const CARD_SECTIONS = [
   ["Messages", ["textSize", "userColor", "truncate", "time"]],
   ["Agent messages", ["agents", "agentRail", "agentColor"]],
-  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints", "statusLine"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
@@ -212,7 +212,9 @@ const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey and links are never reset.
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+// The status line's height (statusRow).
+const STATUS_H = 24;
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The rule editor's fields: key, label, placeholder, the most it takes.
@@ -908,6 +910,7 @@ export default class Threads extends View {
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
+      statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -4658,6 +4661,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
+      case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
@@ -5442,6 +5446,7 @@ export default class Threads extends View {
       .child(this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .when(Boolean(this.prefs.keyHints), (el) => el.child(this.footer(t)))
+      .when(this.statusShown(), (el) => el.child(this.statusRow(t)))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
@@ -6051,8 +6056,8 @@ export default class Threads extends View {
 
   // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
   // the way to every key while the key hints are off. The chat's agent, counts and title
-  // (aboutRow) were here with the floating top; the owner wants the version here and the
-  // chat's stats elsewhere, not yet chosen.
+  // were here with the floating top; the owner wants the version here, and the chat's stats
+  // are now the status line at the pane's foot (statusRow).
   cardFoot(t, pad) {
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
       .child(this.versionRow(t))
@@ -6164,6 +6169,7 @@ export default class Threads extends View {
       keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      statusLine: () => [sw("th-set-status", "Chat stats at the bottom", P.statusLine !== false, "statusLine")],
       linkRules: () => [linkRules()],
       quoteKey: () => [v_flex().gap(4)
         .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
@@ -6487,22 +6493,6 @@ export default class Threads extends View {
     }
     this.ruleExMemo.set(r, out);
     return out;
-  }
-
-  // The agent, the turn and hidden counts and the session's title, which the header row shows.
-  // It was the settings card's foot with the floating top, until the version took that row; it
-  // is kept for the chat's stats' next place (not yet chosen). Its tooltip names the terminal
-  // and session.
-  aboutRow(t) {
-    const agent = this.agent();
-    const s = this.current();
-    const c = s?.loaded ? this.counts() : null;
-    const text = [c ? plural(c.shownCur, "turn") : this.headerText(), c?.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null, s?.title].filter(Boolean).join(" · ");
-    return h_flex().id("th-about").flex_1().min_w(0).gap(6).items_center().tooltip(this.bindingTip())
-      .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted))
-      .child(div().flex_none().text_size(12).text_color(t.foreground).child(agent.name))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(text))
-      .when(this.debug && Boolean(this.timing), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)));
   }
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
@@ -8608,8 +8598,42 @@ export default class Threads extends View {
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
-  // The room the key hints take at the pane's foot: none while they are off (settings keyHints).
-  footSpace() { return this.prefs.keyHints ? (this.footerH ?? 38) : 0; }
+  // The room the key hints and the status line take at the pane's foot: none for either while
+  // it is off (settings keyHints and statusLine).
+  footSpace() { return (this.prefs.keyHints ? (this.footerH ?? 38) : 0) + (this.statusShown() ? STATUS_H : 0); }
+
+  // The status line: the chat's stats for the session the pane reads, once it is read (the
+  // owner, 2026-11-19: a slim line at the very bottom). Only what the transcript records:
+  // turns, hidden turns and tool calls for every agent; tokens, cache hit and context for
+  // the agents that record usage (sessionStats). It takes no click and shows no tooltip.
+  statusShown() { return this.prefs.statusLine !== false && Boolean(this.current()?.loaded); }
+  // Summed again only when the session changes, and then only from the newest done turn on,
+  // as bindingTip's totals are: a sum over every turn on every draw is too slow in a long
+  // session (Herdr stops a draw past about 50 ms).
+  statusStats() {
+    const c = this.counts();
+    const s = this.current();
+    if (!s) return { turns: c.shownCur, hidden: c.hiddenCur, ...sumsStats(turnSums([])) };
+    const v = `${s.id}|${s.version}|${s.turns.length}`;
+    if (this.statusMemo?.v !== v) {
+      const u = this.statusMemo;
+      const keep = u && u.s === s && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+      let k = keep ? u.stable : 0;
+      const from = k;
+      while (k < s.turns.length - 1 && s.turns[k].done) k++;
+      const base = turnSums(s.turns, from, k, keep ? u.base : null);
+      this.statusMemo = { v, s, stable: k, mark: s.turns[k - 1] ?? null, base, stats: sumsStats(turnSums(s.turns, k, s.turns.length, base)) };
+    }
+    return { turns: c.shownCur, hidden: c.hiddenCur, ...this.statusMemo.stats };
+  }
+  statusGroupsShown() { return statusGroups(this.statusStats(), this.pw()); }
+  statusRow(t) {
+    const groups = this.statusGroupsShown();
+    return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
+      .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
+        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(t.dim))
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(g.text))));
+  }
 
   footer(t) {
     const hint = (k, label) => (k === "?"

@@ -24,6 +24,7 @@
 // railSide: the side of the list the turn rail sits on, "right" (the default) or "left".
 // keyHints: the row of key hints at the pane's foot (false, the default: "? keys" at the
 // settings card's foot and ? still show every key).
+// statusLine: the chat's stats in one row at the pane's very bottom (true, the default).
 // width: how long a reading line may be, "comfortable" (70 characters, the default), "wide"
 // (90) or "full" (no limit; a bubble still stops at 90). One value for every pane.
 // readingWidth: keep the Threads pane at the width's column (true, the default): a pane that
@@ -49,7 +50,7 @@ import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "
 import { MOD, PREVIOUS } from "./name.js";
 import { RULE_TEXT } from "./core/turns.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -96,6 +97,7 @@ export function parseSettings(text) {
       truncate: typeof raw.truncate === "boolean" ? raw.truncate : DEFAULTS.truncate,
       railSide: raw.railSide === "left" || raw.railSide === "right" ? raw.railSide : DEFAULTS.railSide,
       keyHints: typeof raw.keyHints === "boolean" ? raw.keyHints : DEFAULTS.keyHints,
+      statusLine: typeof raw.statusLine === "boolean" ? raw.statusLine : DEFAULTS.statusLine,
     },
     error: null,
   };
