@@ -415,3 +415,111 @@ test("atif: a subagents folder that is itself a link is not read", () => {
   expect(out).not.toContain("LINKED-FOLDER");
   expect(JSON.parse(out).subagent_trajectories).toBeUndefined();
 });
+
+// ---- found on real sessions by an eval reader, reproduced here on made-up ones ----
+
+// A Claude Code session whose fixture is fresh, in a folder of its own.
+function freshClaude(name) {
+  const d = mkdtempSync(join(tmpdir(), "threads-atif-fix-"));
+  const f = join(d, `${name}.jsonl`);
+  execFileSync("bun", [join(root, "test/make-fixture.js"), f, name, "/Users/dev/acme-web", "--subagents"]);
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  return { d, f, lines, save: (ls) => writeFileSync(f, `${ls.map((l) => JSON.stringify(l)).join("\n")}\n`) };
+}
+const sideUsage = { input_tokens: 4, output_tokens: 50, cache_read_input_tokens: 9000, cache_creation_input_tokens: 600 };
+// One subagent's transcript: every line isSidechain, as Claude Code writes them.
+function sidechain(agent, sid, k, rows) {
+  let n = 0;
+  let clock = Date.parse("2026-11-01T10:00:00Z") + k * 600000;
+  const b = (sec) => ({ isSidechain: true, agentId: agent, sessionId: sid, userType: "external", cwd: "/Users/dev/acme-web", version: "2.1.0", uuid: `00000000-0000-4000-a${k}00-${String(++n).padStart(12, "0")}`, timestamp: new Date((clock += sec * 1000)).toISOString() });
+  const said = (content, stop) => ({ ...b(3), type: "assistant", message: { id: `msg_${agent}_${n}`, model: "claude-sonnet-5-5", role: "assistant", type: "message", content, stop_reason: stop, usage: sideUsage } });
+  return `${rows(b, said).map((l) => JSON.stringify(l)).join("\n")}\n`;
+}
+
+test("atif: a subagent's own subagent is found in the session's one subagents folder, where Claude Code writes every one", () => {
+  const { f, lines } = freshClaude("00000000-0000-4000-8000-000000000044");
+  const A = lines.find((l) => typeof l?.toolUseResult?.agentId === "string").toolUseResult.agentId;
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const B = "b00000000000000nest";
+  writeFileSync(join(subs, `agent-${A}.jsonl`), sidechain(A, sid, 1, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Review range math in src/calendar." } },
+    said([{ type: "tool_use", id: "toolu_A_Agent", name: "Agent", input: { description: "Check DST", prompt: "Check DST edges." } }], "tool_use"),
+    { ...b(9), type: "user", toolUseResult: { status: "completed", agentId: B, content: [{ type: "text", text: "DST is fine." }] }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_A_Agent", content: [{ type: "text", text: "DST is fine." }] }] } },
+    said([{ type: "text", text: "The range math is right, and DST is fine." }], "end_turn"),
+  ]));
+  // B sits beside A, not in a folder of A's own.
+  writeFileSync(join(subs, `agent-${B}.jsonl`), sidechain(B, sid, 2, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: "Check DST edges." } },
+    said([{ type: "tool_use", id: "toolu_B_Read", name: "Read", input: { file_path: "src/calendar/dst.ts" } }], "tool_use"),
+    { ...b(2), type: "user", toolUseResult: { stdout: "export const DST = true;" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_B_Read", content: "export const DST = true;" }] } },
+    said([{ type: "text", text: "DST is fine." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const a = t.subagent_trajectories.find((x) => x.trajectory_id === A);
+  expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  const res = a.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_A_Agent");
+  expect(res.subagent_trajectory_ref[0].trajectory_id).toBe(B);
+  expect(res.extra?.subagent_transcript).toBeUndefined();
+  expect(a.subagent_trajectories[0].steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.function_name)).toEqual(["Read"]);
+});
+
+test("atif: the work after a background notice wakes the agent is kept, call by call, and the panel's reader still only counts it", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000045");
+  const ref = lines.find((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const note = lines.find((l) => l.type === "user" && l.origin?.kind === "task-notification");
+  const last = lines.findLast((l) => typeof l.timestamp === "string").timestamp;
+  let clock = Date.parse(last) + 60000;
+  const at = (sec) => new Date((clock += sec * 1000)).toISOString();
+  const usage = { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 };
+  const said = (k, content, stop) => ({ ...ref, uuid: `00000000-0000-4000-f000-0000000000${k}`, timestamp: at(3), message: { ...ref.message, id: `msg_wake${k}`, content, stop_reason: stop, usage } });
+  const result = (k, id, text, err) => ({ ...ref, type: "user", uuid: `00000000-0000-4000-f000-0000000001${k}`, timestamp: at(2), toolUseResult: { stdout: text }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text, ...(err ? { is_error: true } : {}) }] } });
+  // The turn has ended; a late notice wakes the agent, which says something, runs two
+  // commands (the second fails) and answers.
+  save([...lines,
+    { ...note, uuid: "00000000-0000-4000-f000-000000000000", timestamp: at(0) },
+    said(10, [{ type: "text", text: "A late report came in; checking the tests." }, { type: "tool_use", id: "toolu_wake1", name: "Bash", input: { command: "bun test test/range.test.ts" } }], "tool_use"),
+    result(10, "toolu_wake1", "2 fail"),
+    said(11, [{ type: "tool_use", id: "toolu_wake2", name: "Bash", input: { command: "bun run build" } }], "tool_use"),
+    result(11, "toolu_wake2", "exit 1", true),
+    said(12, [{ type: "text", text: "Fixed the clock in two tests; the build still exits 1." }], "end_turn"),
+  ]);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const wake = t.steps.filter((st) => st.extra?.kind === "background_update");
+  // Both wake-ups, each with its own steps: the fixture's earlier one (its text only), then
+  // this one's text with its two calls (no text between them, so one step, as in the prompt's
+  // own work), then its answer.
+  expect(wake.map((st) => [st.message, (st.tool_calls ?? []).map((c) => c.tool_call_id)])).toEqual([
+    ["The background build finished cleanly.", []],
+    ["A late report came in; checking the tests.", ["toolu_wake1", "toolu_wake2"]],
+    ["Fixed the clock in two tests; the build still exits 1.", []],
+  ]);
+  const results = wake.flatMap((st) => st.observation?.results ?? []);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.failed ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
+  expect(wake[1].tool_calls[1].arguments).toEqual({ command: "bun run build" });
+  expect(wake[1].timestamp).toBeDefined();
+  // The panel's reader is unchanged: the wake-up's calls are counted, not kept as steps.
+  const s = readFile(f, "claude");
+  const turn = s.turns.at(-1);
+  expect(turn.wakeTools).toBe(2);
+  expect(turn.steps.flatMap((st) => st.ids ?? []).filter((id) => /^toolu_wake/.test(id ?? ""))).toEqual([]);
+});
+
+test("atif: a result is whole in the export; the panel's calls.sh still cuts it at 24 KB", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000046");
+  const at = lines.findIndex((l) => l.type === "user" && Array.isArray(l.message?.content) && l.message.content[0]?.type === "tool_result" && typeof l.message.content[0].content === "string");
+  const id = lines[at].message.content[0].tool_use_id;
+  const long = `${"x".repeat(29990)}\nexit 1`;
+  lines[at] = { ...lines[at], toolUseResult: { stdout: long }, message: { ...lines[at].message, content: [{ ...lines[at].message.content[0], content: long }] } };
+  save(lines);
+  const out = (env) => execFileSync("sh", [join(core, "calls.sh"), f, "claude", id], { encoding: "utf8", env: { ...process.env, ...env } })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((x) => x.k === "out").out;
+  expect(out({}).length).toBe(24576);
+  expect(out({ THREADS_WHOLE: "1" })).toBe(long);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  const r = t.steps.flatMap((st) => st.observation?.results ?? []).find((x) => x.source_call_id === id);
+  expect(r.content).toBe(long);
+});

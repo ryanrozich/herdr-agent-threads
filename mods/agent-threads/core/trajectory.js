@@ -16,7 +16,9 @@
 // - Every cell has a start and an end: a time in ms where the transcript gives one, else
 //   null, never made up. A text starts when its first line was written; a call starts when
 //   it was made and ends when its result was written.
-// - A background update after the reply is a context cell in a group of its own.
+// - A background update after the reply is a context cell in a group of its own. With the
+//   reader's keepWakes (the ATIF export only), each wake-up's texts and calls are "Update"
+//   groups of their own, then its last text.
 // - A turn carries its stable id (ids.js) when the caller gives it; trajectories(s) does.
 
 import { reply } from "./turns.js";
@@ -36,12 +38,14 @@ function agentId(s, a) {
 export function trajectory(s, turn, id = null) {
   const groups = [{ title: "Message", cells: [{ kind: "user", text: turn.prompt, start: at(turn.ts), end: null }] }];
   let step = null;
+  let title = null;
   const open = () => {
-    step = { title: `Step ${groups.length}`, cells: [] };
+    step = { title: title ?? `Step ${groups.length}`, cells: [] };
     groups.push(step);
     return step;
   };
-  for (const st of turn.steps ?? []) {
+  const addSteps = (list) => {
+  for (const st of list ?? []) {
     if (st.k === "text") {
       open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
       continue;
@@ -64,9 +68,20 @@ export function trajectory(s, turn, id = null) {
     // Calls past STEP_CALLS are counted, not named.
     if (st.count > st.calls.length) step.cells.push({ kind: "more", count: st.count - st.calls.length, start: null, end: null });
   }
+  };
+  addSteps(turn.steps);
   const text = reply(turn);
   if (text) open().cells.push({ kind: "message", text, start: at(turn.afterAt), end: at(turn.endTs) });
-  if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
+  if (turn.wakes) {
+    // The ATIF export's reader (keepWakes): each wake-up's steps, then its last text.
+    title = "Update";
+    for (const w of turn.wakes) {
+      step = null;
+      addSteps(w.steps);
+      const last = w.after.join("\n\n").trim();
+      if (last) groups.push({ title, cells: [{ kind: "context", text: last, start: at(w.afterAt), end: null }] });
+    }
+  } else if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
   return {
     id,
     n: turn.n,
