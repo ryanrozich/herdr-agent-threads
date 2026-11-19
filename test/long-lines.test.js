@@ -4,7 +4,7 @@
 // ceiling instead of reading it in ever larger chunks.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readdirSync, symlinkSync, existsSync, chmodSync, openSync, writeSync, closeSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, existsSync, chmodSync, openSync, writeSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
@@ -103,4 +103,34 @@ test("ends.pl and its stand-ins without perl say where lines end", () => {
     expect([sh("whole", 0, env), sh("whole", 3, env), sh("whole", 8, env), sh("whole", 9, env)]).toEqual([8, 8, 8, 9]);
     expect([sh("line_end", 0, env), sh("line_end", 3, env), sh("line_end", 8, env)]).toEqual([3, 8, -1]);
   }
+});
+
+// From the review of eece24a: Cursor never skips a line, so a ceiling on its reads stopped the
+// session for good at a line longer than it (every read used nothing). Its reads grow as before.
+test("a Cursor line longer than the ceiling is read whole, and the session goes on past it", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "threads-long-cursor-")), "projects", "home-dev-shop", "agent-transcripts", "00000000-0000-4000-8000-0000000000c3");
+  mkdirSync(dir, { recursive: true });
+  const f = join(dir, "00000000-0000-4000-8000-0000000000c3.jsonl");
+  const user = (t) => `${JSON.stringify({ role: "user", message: { content: [{ type: "text", text: `<user_query>\n${t}\n</user_query>` }] } })}\n`;
+  const said = (t) => `${JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: t }] } })}\n`;
+  const ended = `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`;
+  writeFileSync(f, [user("Turn 1: check the cart."), said("Turn 1 is done."), ended, user("Turn 2: print the log."), said("Build output, line by line. ".repeat(110000)), ended, user("Turn 3: and now?"), said("Turn 3 is done."), ended].join(""));
+  const env = { ...process.env, THREADS_LINE_MAX: String(1 << 20) };
+  const s = newSession("c", f);
+  let chunk = CHUNK / 2;
+  let calls = 0;
+  let skipped = 0;
+  while (chunk && calls < 40) {
+    const c = parseChunk(spawnSync("sh", [join(core, "extract.sh"), f, String(s.offset), String(chunk), "cursor"], { encoding: "utf8", env, maxBuffer: 1 << 28 }).stdout);
+    s.size = c.size;
+    for (const e of c.events) apply(s, e);
+    if (c.skipped) skipped += c.skipped;
+    s.offset += c.used;
+    calls++;
+    chunk = nextChunk(s, c.used, chunk, CHUNK / 2);
+  }
+  expect(s.offset).toBe(s.size);
+  expect(skipped).toBe(0);
+  expect(s.turns.map((t) => t.prompt)).toEqual(["Turn 1: check the cart.", "Turn 2: print the log.", "Turn 3: and now?"]);
+  expect(s.turns[2].after.join("")).toBe("Turn 3 is done.");
 });

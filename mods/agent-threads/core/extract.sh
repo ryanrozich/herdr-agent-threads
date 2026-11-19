@@ -26,10 +26,12 @@ limit=6291456
 # A line longer than this (64 MB, as the ATIF export) is skipped, not read: reading a 300 MB
 # line whole took chunks of 128 and 512 MB and jq held it (about 1.3 GB at its peak). A line
 # just under it costs one read of about 2 s. The chunk line counts the bytes skipped, for the
-# pane's debug report. Cursor's lines are never skipped (its
-# settle mark reads the chunk's own bytes). THREADS_LINE_MAX sets it for tests; the pane never does.
+# pane's debug report. THREADS_LINE_MAX sets it for tests; the pane never does.
+# Cursor has neither the ceiling nor the skip, as before it: its settle mark reads the chunk's
+# own bytes, so a skipped line would leave nothing to read, and a ceiling with no skip would
+# stop the session at a line longer than it for good.
 line_max=${THREADS_LINE_MAX:-67108864}
-[ "$max" -gt "$line_max" ] && max=$line_max
+if [ "$harness" != cursor ] && [ "$max" -gt "$line_max" ]; then max=$line_max; fi
 [ -f "$file" ] || { echo '{"k":"missing"}'; exit 0; }
 size=$(wc -c < "$file" | tr -d ' ')
 # The first line uuid (a Codex file: its first timestamp, a Pi file: its header's id, an
