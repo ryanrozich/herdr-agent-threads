@@ -11,6 +11,8 @@
 # With THREADS_ARGS=1 (the ATIF export, core/atif.js) it also prints each call's whole input
 # as {"id","k":"args","args"}: an object, a JSON value that is not one as {"value"}, a Codex
 # custom tool's text as {"input"}, or {"id","k":"args","unread":true} when it is not JSON.
+# With THREADS_LINE_MAX=<bytes> (the ATIF export) a Claude Code, Codex or Pi line longer than that
+# is skipped, as the export's own reader skips it.
 # Claude Code: the tool_use and tool_result blocks with these ids. Codex: the calls and outputs
 # with these call ids.
 set -eu
@@ -47,7 +49,7 @@ case $harness in
     # not grep: macOS grep takes about 4 s a pattern over a 600 MB transcript, perl 0.25 s
     # for any number of them.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" "$outcap"'
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/ && length($_) <= ($ENV{THREADS_LINE_MAX} || 9e18)' | lines | jq -c --arg ids "$ids" "$outcap"'
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
       ($ids | split(" ") | map(select(. != ""))) as $want
       | (fromjson? // empty) | select(type == "object" and (.type == "assistant" or .type == "user")) | . as $l
@@ -70,7 +72,7 @@ case $harness in
     # its history, so only response_item lines count. A call failed when its script failed, it
     # was aborted, or a command it ran (a chunk line of its exec tool) exited with a code.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" "$outcap"'
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/ && length($_) <= ($ENV{THREADS_LINE_MAX} || 9e18)' | lines | jq -c --arg ids "$ids" "$outcap"'
       def argv: if type == "array" then (if .[2] != null and (.[1] | tostring | test("^-l?c$")) then .[2] else map(tostring) | join(" ") end) else . end;
       def firstline: tostring | split("\n") | map(select(test("\\S"))) | (.[0] // "");
       def input:
@@ -112,7 +114,7 @@ case $harness in
     # Pi: an assistant message's toolCall parts (id, name, arguments) and the toolResult
     # message for each (toolCallId, isError, durationMs, text parts).
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
-      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/' | lines | jq -c --arg ids "$ids" "$outcap"'
+      IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/ && length($_) <= ($ENV{THREADS_LINE_MAX} || 9e18)' | lines | jq -c --arg ids "$ids" "$outcap"'
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
       ($ids | split(" ") | map(select(. != ""))) as $want
       | (fromjson? // empty) | select(type == "object" and .type == "message") | . as $l | ($l.message // {}) as $m

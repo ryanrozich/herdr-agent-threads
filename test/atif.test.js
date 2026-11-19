@@ -659,7 +659,7 @@ test("atif: a forked subagent skips the records copied from its caller, so nothi
 });
 
 // A Skill call that forks a subagent: its launch record (status "forked") names it.
-function skillSession(name, args) {
+function skillSession(name, args, laterMeta = false) {
   const { f, lines, save } = freshClaude(name);
   const sid = lines.find((l) => l.sessionId).sessionId;
   const at = lines.findIndex((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
@@ -675,6 +675,8 @@ function skillSession(name, args) {
   writeFileSync(join(subs, `agent-${S}.jsonl`), sidechain(S, sid, 3, (b, said) => [
     // As Claude Code writes it: the one prompt is the first record, marked meta.
     { ...b(0), type: "user", isMeta: true, message: { role: "user", content: `Base directory for this skill: review-tests\n\nReview the tests.${args ? `\n\nARGUMENTS: ${args}` : ""}` } },
+    // A later meta record with no parent is bookkeeping, not a second prompt.
+    ...(laterMeta ? [{ ...b(1), type: "user", isMeta: true, message: { role: "user", content: "LATER META NOTE" } }] : []),
     said([{ type: "tool_use", id: "toolu_S_Grep", name: "Grep", input: { pattern: "Date.now" } }], "tool_use"),
     { ...b(2), type: "user", toolUseResult: { stdout: "test/range.test.ts:4" }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_S_Grep", content: "test/range.test.ts:4" }] } },
     said([{ type: "text", text: "Two tests need a fixed clock." }], "end_turn"),
@@ -791,11 +793,58 @@ test("atif: a subagent transcript no call names is written apart, attached to no
   const t = JSON.parse(out);
   expect(problems(t)).toEqual([]);
   const un = t.extra.subagents_no_call_names;
-  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "a hint, not a link: no call in the session names this transcript", shared_prompt_id: pid }]]);
+  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "hints, not links: no call in the session names this transcript; shared_prompt_id is a promptId it shares with the session, and same_prompt_calls are calls with no launch record whose prompt is its first prompt", shared_prompt_id: pid, same_prompt_calls: [] }]]);
   expect(un[0].trajectory.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_U_Bash"]);
   expect(t.notes).toContain("1 subagent transcript in the session's subagents folder that no call names is in extra.subagents_no_call_names");
   // Attached to no call and not in the totals or the standard field.
   expect(t.subagent_trajectories ?? []).toEqual(before.subagent_trajectories ?? []);
   expect(t.final_metrics).toEqual(before.final_metrics);
   expect(JSON.stringify(t.steps)).not.toContain(U);
+});
+
+test("atif: with a Skill-started subagent, only its file's first record is read as its prompt", () => {
+  const { t, S } = skillSession("00000000-0000-4000-8000-000000000063", "src/calendar and test/range", true);
+  const sub = t.subagent_trajectories.find((x) => x.trajectory_id === S);
+  expect(JSON.stringify(sub)).not.toContain("LATER META NOTE");
+  expect(sub.steps.filter((st) => st.source === "user").length).toBe(1);
+});
+
+test("atif: a transcript no call names lists, as a hint, the calls with no launch record that have its first prompt", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000064");
+  const sid = lines.find((l) => l.sessionId).sessionId;
+  const at = lines.findIndex((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
+  const ref = lines[at];
+  const prompt = "Watch the build and report.";
+  // An Agent call whose result is an error, with no launch record: Claude Code wrote a string.
+  lines.splice(at, 0,
+    { ...ref, uuid: "00000000-0000-4000-e100-000000000001", message: { ...ref.message, id: "msg_err", content: [{ type: "tool_use", id: "toolu_Err", name: "Agent", input: { description: "Watch", prompt } }], stop_reason: "tool_use" } },
+    { ...ref, type: "user", uuid: "00000000-0000-4000-e100-000000000002", toolUseResult: "Error: the agent stopped", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_Err", is_error: true, content: "Error: the agent stopped" }] } });
+  save(lines);
+  const subs = join(f.replace(/\.jsonl$/, ""), "subagents");
+  mkdirSync(subs, { recursive: true });
+  const U = "u000000000erroredx";
+  writeFileSync(join(subs, `agent-${U}.jsonl`), sidechain(U, sid, 6, (b, said) => [
+    { ...b(0), type: "user", message: { role: "user", content: prompt } },
+    said([{ type: "text", text: "The build is fine." }], "end_turn"),
+  ]));
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const un = t.extra.subagents_no_call_names;
+  expect(un.map((x) => [x.trajectory.trajectory_id, x.hint.same_prompt_calls])).toEqual([[U, ["toolu_Err"]]]);
+  // Not attached: the call's result names no subagent.
+  const res = t.steps.flatMap((st) => st.observation?.results ?? []).find((r) => r.source_call_id === "toolu_Err");
+  expect(res.subagent_trajectory_ref).toBeUndefined();
+});
+
+test("atif: a transcript line longer than the ceiling is skipped, the rest is read, and the notes say so", () => {
+  const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000065");
+  const at = lines.findIndex((l) => l.type === "user" && typeof l.message?.content === "string");
+  const before = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
+  // A record of 3 MB before the first prompt, with a 2 MB ceiling.
+  lines.splice(at, 0, { ...lines[at], type: "system", uuid: "00000000-0000-4000-e200-000000000001", content: "x".repeat(3000000) });
+  save(lines);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8", env: { ...process.env, THREADS_LINE_MAX: "2000000" } }));
+  expect(problems(t)).toEqual([]);
+  expect(t.notes).toContain("1 transcript line was skipped for being longer than 2000000 bytes");
+  expect(t.steps.length).toBe(before.steps.length);
 });
