@@ -9202,6 +9202,50 @@ test("the card's scrollbar is drawn all the time where Herdr has Scrollbar and i
   }
 });
 
+// TRD-8 (#143): the Page Up, Page Down and Space chips wrapped onto three lines in a 92 px key
+// column, and in a 1150 px window the sheet was cut with nothing to say there was more.
+test("the keys sheet: the page keys sit on one line, and a sheet taller than its room draws its scrollbar all the time", async () => {
+  const { keySheet } = await import("../mods/agent-threads/ui.js");
+  const page = keySheet("q").find(([g]) => g === "Settings card")[1].find(([, what]) => what === "Scroll it a page");
+  expect(page[0]).toEqual(["PgUp", "PgDn", "Space"]);
+  const sheet = async (h, paneW = 573) => {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.width = paneW - 28; v.paneW = paneW; v.rootH = h;
+    v.action("keys", cx);
+    // The whole frame: the sheet is the only card open, and its list is built before it.
+    return frame(v, cx);
+  };
+  // The key column: 128 px, wide enough for the three chips (about 40, 40 and 45 px, 3 px apart).
+  let c = await sheet(500);
+  expect(c).toContainEqual(["w", 128]);
+  expect(c.some((e) => e[0] === "w" && e[1] === 92)).toBe(false);
+  // A pane under 520 px keeps the 92 px column, so the descriptions do not wrap more.
+  c = await sheet(500, 519);
+  expect(c).toContainEqual(["w", 92]);
+  expect(c.some((e) => e[0] === "w" && e[1] === 128)).toBe(false);
+  c = await sheet(500, 520);
+  expect(c).toContainEqual(["w", 128]);
+  c = await sheet(500);
+  // No Scrollbar mode (Herdr before it): the list's own bar, shown while it scrolls.
+  expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  expect(c.some((e) => e[0] === "mode")).toBe(false);
+  stubHas.add("mode");
+  try {
+    // Taller than its room (a 500 px pane): the bar is drawn all the time, in a 10 px strip.
+    c = await sheet(500);
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scroll")).toBe(true);
+    expect(c).toContainEqual(["mode", "always"]);
+    expect(c).toContainEqual(["w", 10]);
+    // It fits (a 1300 px pane): no bar until it scrolls, as before.
+    c = await sheet(1300);
+    expect(c.some((e) => e[0] === "mode")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  } finally {
+    stubHas.delete("mode");
+  }
+});
+
 // The owner, 17 Nov: pointing at the settings card near the rail set the rail off under it.
 // While the card or the keys sheet is open nothing under it takes a hover, a press or the
 // wheel (settings-spacing 7). The kit has no call that blocks a hover under a layer, so the

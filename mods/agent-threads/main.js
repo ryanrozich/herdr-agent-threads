@@ -192,6 +192,12 @@ const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
 // The strip at the card's right edge that holds its always-drawn scrollbar.
 const CARD_BAR_W = 10;
+// The keys sheet's key column: wide enough for its widest row's chips (PgUp, PgDn, Space) on
+// one line, in a pane at least KEYS_COL_MIN wide. A narrower pane keeps the narrow column,
+// where those chips wrap, so the descriptions do not wrap more than they did.
+const KEYS_COL = 128;
+const KEYS_COL_NARROW = 92;
+const KEYS_COL_MIN = 520;
 // The card's one page: its sections in order, each with its rows in order (settingsRows draws
 // each row from its key). Moving a row or renaming a section is a change to this list alone.
 const CARD_SECTIONS = [
@@ -8628,36 +8634,49 @@ export default class Threads extends View {
   // The sheet's card: as tall as its keys (a 36 px title, 10 px padding above and below, each
   // group's 16 px name, 25 px a key row, 6 px gaps inside a group and 12 px between groups),
   // and no taller than the room between the header and the footer, where its list scrolls.
-  keySheetH(groups) {
+  keySheetWant(groups) {
     const rows = groups.reduce((n, [, items]) => n + items.length, 0);
-    const want = 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+    return 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+  }
+  keySheetH(groups) {
     const room = (this.rootH || 600) - 46 - this.footSpace() - 6;
-    return Math.max(120, Math.min(want, room));
+    return Math.max(120, Math.min(this.keySheetWant(groups), room));
   }
 
   // ?: every key, grouped (ui.js keySheet), over the list between the header and the footer.
   // Esc, ?, the close button or a click outside the card closes it.
   keySheetView(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.keysOpen = false; cx.notify(); };
+    // The key column fits the widest row's chips on one line where the pane has room (TRD-8).
+    const col = this.pw() >= KEYS_COL_MIN ? KEYS_COL : KEYS_COL_NARROW;
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
-      .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
+      .child(h_flex().flex_none().w(col).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
     const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
+    const sheetH = this.keySheetH(groups);
+    // Taller than its room: the list scrolls, and where Herdr has Scrollbar and its mode the bar
+    // is drawn all the time, in a strip at the right edge, so the sheet shows there is more.
+    const bar = this.cardBar && this.keySheetWant(groups) > sheetH;
+    const list = v_flex().id("th-keys-list").flex_1().min_h(0)
+      .when(bar, (el) => el.overflow_y_scroll().pr(12 + CARD_BAR_W)).when(!bar, (el) => el.overflow_y_scrollbar().pr(12)).pl(12).py(10).gap(12)
+      .children(groups.map(([group, items]) => v_flex().gap(6)
+        .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
+        .children(items.map(row))));
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
       // Nothing under the sheet takes the wheel (covered()).
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
-      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
+      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(sheetH)
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
           .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child("Keys"))
           .child(this.kbd(t, "?"))
           .child(this.iconButton(t, "th-keys-close", "x", "Close (Esc)", close)))
-        .child(v_flex().id("th-keys-list").flex_1().min_h(0).overflow_y_scrollbar().px(12).py(10).gap(12)
-          .children(groups.map(([group, items]) => v_flex().gap(6)
-            .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
-            .children(items.map(row))))));
+        .child(bar
+          ? div().relative().flex_1().min_h(0).flex().flex_col().child(list)
+            .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical("th-keys-list").mode("always").absolute().top(0).bottom(0).left(0).right(0)))
+          : list));
   }
 
   // i: the Turn card, with the selected turn's numbers and what each means (detailRows). It
