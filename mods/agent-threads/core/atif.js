@@ -364,6 +364,10 @@ async function main(argv) {
   // it names must resolve (links followed) inside the subagents folder, which must not be a
   // link itself. Else it is not found. The resolved path is the one read.
   const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+// Skill args shorter than this could be in any subagent's prompt: such a link is marked id only.
+const SKILL_ARGS_MIN = 16;
+// At most this many transcripts no call names are written; the notes count the rest.
+const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process.env.THREADS_UNNAMED_MAX) : 200;
   const resolveInside = (dir, f) => {
     try {
       if (fs.lstatSync(dir).isSymbolicLink()) return null;
@@ -374,37 +378,39 @@ async function main(argv) {
 
   // A subagent transcript's first prompt: its first user line that is not bookkeeping (isMeta),
   // as text, from the first 256 KB; null when that line carries no text.
-  const firstPrompt = (f, from = 0) => {
-    let fd = null;
-    try {
-      fd = fs.openSync(f, "r");
-      const b = Buffer.alloc(262144);
-      const n = fs.readSync(fd, b, 0, b.length, from);
-      for (const l of b.subarray(0, n).toString("utf8").split("\n")) {
-        let x = null;
-        try { x = JSON.parse(l); } catch { continue; }
-        if (x?.type !== "user" || x.isMeta === true) continue;
-        const c = x.message?.content;
-        if (typeof c === "string") return c;
-        const t = Array.isArray(c) ? c.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n") : "";
-        return t || null;
-      }
-      return null;
-    } catch { return null; } finally { if (fd != null) fs.closeSync(fd); }
+  // The text of a file's first user record, from a byte offset, read whole however long its
+  // line is; null when it has no text (an image alone) or there is none. Meta records are
+  // skipped, except with meta, a first record (no parent) that is meta: a Skill-started
+  // subagent's prompt is that record.
+  const firstPrompt = (f, from = 0, meta = false) => {
+    let got = null;
+    eachLine(f, (l) => {
+      let x = null;
+      try { x = JSON.parse(l); } catch { return true; }
+      if (x?.type !== "user") return true;
+      if (x.isMeta === true && !(meta && typeof x.parentUuid !== "string")) return true;
+      const c = x.message?.content;
+      const t = typeof c === "string" ? c : Array.isArray(c) ? c.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n") : "";
+      got = t || null;
+      return false;
+    }, from);
+    return got;
   };
   // Each subagent file is attached to one call only: the first that names it.
   const attached = new Map();
   // A file's lines, 4 MB at a time, with the byte offset after each.
-  const eachLine = (f, fn) => {
+  const eachLine = (f, fn, from = 0) => {
     let fd = null;
     try {
       fd = fs.openSync(f, "r");
       const b = Buffer.alloc(4 << 20);
-      let at = 0;
+      let at = from;
+      let pos = from;
       let rest = Buffer.alloc(0);
       for (;;) {
-        const n = fs.readSync(fd, b, 0, b.length, null);
+        const n = fs.readSync(fd, b, 0, b.length, pos);
         if (n <= 0) return;
+        pos += n;
         let buf = Buffer.concat([rest, b.subarray(0, n)]);
         let i;
         while ((i = buf.indexOf(10)) >= 0) {
@@ -416,10 +422,11 @@ async function main(argv) {
       }
     } catch { return; } finally { if (fd != null) fs.closeSync(fd); }
   };
-  const UUID = /"uuid":"([^"\\]{1,80})"/;
+  // A record's own uuid, its top-level key only.
+  const uuidOf = (l) => { try { const u = JSON.parse(l)?.uuid; return typeof u === "string" ? u : null; } catch { return null; } };
   const uuidSets = new Map();
   const uuidsOf = (f) => {
-    if (!uuidSets.has(f)) { const set = new Set(); eachLine(f, (l) => { const m = UUID.exec(l); if (m) set.add(m[1]); }); uuidSets.set(f, set); }
+    if (!uuidSets.has(f)) { const set = new Set(); eachLine(f, (l) => { const u = uuidOf(l); if (u) set.add(u); }); uuidSets.set(f, set); }
     return uuidSets.get(f);
   };
   // A forked subagent's file starts with copies of its caller's records (the same uuids). The
@@ -428,9 +435,9 @@ async function main(argv) {
     const theirs = uuidsOf(caller);
     let end = 0;
     eachLine(f, (l, at) => {
-      const m = UUID.exec(l);
-      if (!m) return true;
-      if (!theirs.has(m[1])) return false;
+      const u = uuidOf(l);
+      if (!u) return true;
+      if (!theirs.has(u)) return false;
       end = at;
       return true;
     });
@@ -468,7 +475,7 @@ async function main(argv) {
           const flat = join(subs, `agent-${a}.jsonl`);
           const beside = join(path.replace(/\.jsonl$/, ""), "subagents", `agent-${a}.jsonl`);
           const f = resolveInside(subs, fs.existsSync(flat) ? flat : beside);
-          if (f) child = { file: f, id: a, env: { THREADS_SIDECHAIN: "1" }, from: copiedPrefix(f, path) };
+          if (f) child = { file: f, id: a, env: { THREADS_SIDECHAIN: "1" }, from: 0 };
         }
       } else if (agent === "codex" && /^spawn_agent$/.test(c.tool)) {
         let task = null;
@@ -483,18 +490,30 @@ async function main(argv) {
       // its launch record, not by text: it is attached, and when its first prompt does not hold
       // the call's args, extra says the link rests on the id alone.
       if (child && agent === "claude") {
-        const got = firstPrompt(child.file, child.from)?.trim() ?? null;
         if (attached.has(child.file)) { r.subReason = `already attached to ${attached.get(child.file)}`; child = null; }
         else if (skill) {
+          // Named by its launch record. Its prompt is its first record, which Claude Code marks
+          // meta; the Skill call's args should be in it.
+          const got = firstPrompt(child.file, 0, true);
           const args = typeof r.args?.args === "string" ? r.args.args.trim() : "";
           if (!args) r.subLink = "id only: the Skill call has no args to look for in the subagent's first prompt";
-          else if (got == null || !got.includes(args)) r.subLink = "id only: the subagent's first prompt does not hold the Skill call's args";
+          else if (args.length < SKILL_ARGS_MIN) r.subLink = `id only: the Skill call's args are under ${SKILL_ARGS_MIN} characters, too short to tell one subagent from another`;
+          else if (got == null) r.subLink = "id only: the subagent's first prompt could not be read";
+          else if (!got.includes(args)) r.subLink = "id only: the subagent's first prompt does not hold the Skill call's args";
+          child.env = { ...child.env, THREADS_SKILL: "1" };
           attached.set(child.file, c.call);
         } else {
           const want = typeof r.args?.prompt === "string" ? r.args.prompt.trim() : null;
           const fork = r.args?.subagent_type === "fork";
-          if (want != null && got != null && !(fork ? got.endsWith(want) : got === want)) { r.subReason = "its first prompt is not the call's prompt"; child = null; }
+          // A fork's file starts with copies of its caller's records; its own start after them.
+          if (fork) child.from = copiedPrefix(child.file, path);
+          const got = want ? firstPrompt(child.file, child.from)?.trim() || null : null;
+          if (want === "") { r.subReason = "the call's prompt is empty"; child = null; }
+          else if (want != null && got != null && !(fork ? got.endsWith(want) : got === want)) { r.subReason = "its first prompt is not the call's prompt"; child = null; }
           else {
+            // Nothing to compare: attached on the id alone, and marked so.
+            if (want == null) r.subLink = "id only: the call has no prompt to compare";
+            else if (got == null) r.subLink = "id only: the subagent's first prompt could not be read";
             attached.set(child.file, c.call);
             // Read after its copied records, a fork's prompt sits beside the call's result.
             if (fork && child.from > 0) child.env = { ...child.env, THREADS_FORK: "1" };
@@ -520,24 +539,28 @@ async function main(argv) {
     const subs = join(file.replace(/\.jsonl$/, ""), "subagents");
     let names = [];
     try { names = fs.lstatSync(subs).isSymbolicLink() ? [] : fs.readdirSync(subs).sort(); } catch { names = []; }
-    let rootText = null;
+    let rootIds = null;
     const unnamed = [];
+    let left = 0;
     for (const n of names) {
       const m = /^agent-([A-Za-z0-9_-]{1,80})\.jsonl$/.exec(n);
       const f = m ? resolveInside(subs, join(subs, n)) : null;
       if (!f || attached.has(f)) continue;
+      if (unnamed.length >= UNNAMED_MAX) { left++; continue; }
       attached.set(f, "no call");
       const tr = build(f, { env: { THREADS_SIDECHAIN: "1" }, root: t.session_id, id: t.session_id, trajectoryId: m[1], subs }, 1, new Set([file, f]));
       if (!tr) continue;
       const pid = head(f)?.promptId;
-      rootText ??= (() => { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } })();
-      const shared = typeof pid === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(pid) && rootText.includes(`"promptId":"${pid}"`) ? pid : null;
+      // The session's promptIds, read once, each from a record's own key.
+      if (!rootIds) { rootIds = new Set(); eachLine(file, (l) => { try { const p = JSON.parse(l)?.promptId; if (typeof p === "string") rootIds.add(p); } catch { /* not JSON */ } }); }
+      const shared = typeof pid === "string" && SAFE_ID.test(pid) && rootIds.has(pid) ? pid : null;
       unnamed.push({ hint: { note: "a hint, not a link: no call in the session names this transcript", shared_prompt_id: shared }, trajectory: tr });
     }
     if (unnamed.length) {
       t.extra = { ...(t.extra ?? {}), subagents_no_call_names: unnamed };
       t.notes = `${t.notes} ${unnamed.length} subagent ${unnamed.length === 1 ? "transcript" : "transcripts"} in the session's subagents folder that no call names ${unnamed.length === 1 ? "is" : "are"} in extra.subagents_no_call_names, attached to no call and not counted in final_metrics.`;
     }
+    if (left) t.notes = `${t.notes} ${left} more that no call names ${left === 1 ? "is" : "are"} left out: at most ${UNNAMED_MAX} are written.`;
   }
   process.stdout.write(`${JSON.stringify(t, null, 1)}\n`);
   return 0;
