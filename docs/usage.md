@@ -6,7 +6,7 @@ Every behaviour of the pane in detail. The [README](../README.md) is the short g
 
 Agent Threads needs the [Herdr](https://herdr.dev) app (built on 0.1.12), `jq`, and at least one of Claude Code, Codex, OpenCode, Pi, Cursor or Antigravity. Codex also needs `lsof`. OpenCode needs `sqlite3`, `pgrep` and `lsof`. Pi, Cursor and Antigravity need `pgrep` and `lsof`. Besides those it runs its own `sh` scripts, `hc` and `git remote get-url origin` (for link rules).
 
-`./install.sh` copies `mods/agent-threads` to `~/.config/herdr-app/mods/` and runs `herdr-app check`. You can also copy `mods/agent-threads/` there yourself. Then merge [keys.json](../keys.json) into `~/.config/herdr-app/keys.json` for the `Cmd-Shift-T` chord. Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
+`./install.sh` copies `mods/agent-threads` to `~/.config/herdr-app/mods/`, notes the commit it copied from in the copy's `build.js` (for the version line on the settings card), and runs `herdr-app check`. You can also copy `mods/agent-threads/` there yourself. Then merge [keys.json](../keys.json) into `~/.config/herdr-app/keys.json` for the `Cmd-Shift-T` chord. Without the chord, `herdr-app do mod.open --name agent-threads` opens it.
 
 `Cmd-Shift-T` in an agent's terminal opens the pane to its right, at the width of a reading line and its margins (573 px at the default text size). Every terminal can have its own pane, and each pane follows only its own session.
 
@@ -86,6 +86,8 @@ OpenCode folds a paste of three lines or more, or over 150 characters, into "[Pa
 - **Layout**: Width (Comfortable, Wide or Full, with a line under it that shows the reading column in this pane and how many characters a line holds), Keep the pane at this width, Rail side (Left or Right) and Key hints at the bottom.
 - **Links and keys**: Link rules, which opens a page where you change your rules, and the Quote key, a one-letter field (a letter Threads already uses leaves the key as it was, and the line under the field says so).
 - **File**: the settings file's path, with Copy path.
+
+The card's last row, at its foot beside "? keys", is the version you are running, such as "Agent Threads 1.0.0". `./install.sh` notes the commit it copied from: a clone at a release shows the version alone, and one past it shows the commit, as in "Agent Threads 1.0.0, commit: abc1234", with ", with local changes" when the clone had uncommitted changes. The line's tooltip says how many commits after the release it is. A copy made without `./install.sh` reads "(commit not known)": it is that release or a later commit on main. Compare it with the [latest release](https://github.com/ryanrozich/herdr-agent-threads/releases/latest) to see whether there is a newer one. Threads never checks on its own.
 
 The page ends with Reset to defaults, which puts every control on the card back (faded when nothing differs) and leaves link rules and the quote key alone. `Shift w` steps the width, Comfortable, Wide, Full and round again, with a short notice naming all three, card open or shut. Changes apply at once and are saved to
 

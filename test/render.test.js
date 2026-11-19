@@ -7616,15 +7616,17 @@ test("the floating top: no header row, the state top left at every width, icons 
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
   v.h.is_focused = () => false;
-  // Settings open: a card over the list, not in its flow (the list does not move), with the
-  // agent, the counts and the title at its foot.
+  // Settings open: a card over the list, not in its flow (the list does not move). Its foot
+  // holds the version line, not the chat's agent, counts and title (the owner, 2026-11-19:
+  // the version belongs at the bottom of the settings, the chat's stats somewhere else).
   v.settingsOpen = true;
   calls = drawn();
   ids = idsOf(calls);
   expect(ids).not.toContain("th-top");
   expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
-  expect(ids.indexOf("th-about")).toBeGreaterThan(ids.indexOf("th-set-card"));
-  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
+  expect(ids).not.toContain("th-about");
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(false);
   v.settingsOpen = false;
   // A search field opens under the band too.
   v.filtering = true;
@@ -8868,6 +8870,37 @@ test("the file: its path with Copy path, which says Copied in its own place with
   expect(strsOf(cardOf(v))).toContain("Copy path");
   expect(log.filter((x) => x[0] === "open")).toEqual([]);
   expect(v.action("openSettingsFile", cx)).toBe(false);
+});
+
+test("the card's foot: the mod's name and version as a plain line, with the commit when install.sh found one, then ? keys; not a control", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const { VERSION } = await import("../mods/agent-threads/version.js");
+  v.action("settings", cx);
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  // The repo's own build.js, or a copy made without install.sh: the commit is not known, and
+  // the tooltip says what that means. (The section's heading is recorded after its rows.)
+  let line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION} (commit not known)`);
+  expect(tooltips(v, cx)).toContain("Copied without ./install.sh, so the commit is not known: this release or a later commit on main.");
+  expect(line.some((e) => e[0] === "on_click" || e[0] === "on_mouse_down")).toBe(false);
+  // Installed from the release's tag, then from three commits after it with a change.
+  v.build = `v${VERSION}-0-gd7c9cfb`;
+  line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION}`);
+  v.build = `v${VERSION}-3-gabc1234-dirty`;
+  expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, commit: abc1234, with local changes`);
+  // A narrow card cuts the line short, so its tooltip is the whole line, with the count.
+  expect(tooltips(v, cx)).toContain(`Agent Threads ${VERSION}, commit: abc1234, with local changes, 3 commits after the ${VERSION} release`);
+  // It is the card's last row: in the foot under the scroll, after Reset, before "? keys",
+  // and it truncates rather than pushing the keys out at a narrow card.
+  const c = cardOf(v);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  expect(ids.indexOf("th-set-version")).toBeLessThan(ids.indexOf("th-set-keys"));
+  const gs = strsOf(c);
+  expect(gs.indexOf("Reset to defaults")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, commit: abc1234, with local changes`));
+  expect(own(c, "th-set-version").some((e) => e[0] === "truncate")).toBe(true);
+  draw(v, cx);
 });
 
 test("a field that leaves the screen gives the keyboard back: the Link rules row, Back, or a command, after typing in the quote key field", async () => {
