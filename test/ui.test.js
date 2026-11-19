@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
+  statusGroups, statusWidth,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
@@ -1135,4 +1136,34 @@ test("cardKey: the keys that scroll the settings card; cardScroll: where each ta
   expect(up.y).toBe(560);
   expect(cardScroll("pageup", 100, 1000, 400)).toEqual({ y: 0, mark: 0 });
   expect(cardScroll("sideways", 0, 1000, 400)).toBe(null);
+});
+
+test("statusGroups: the status line's groups, and what gives way first in a narrow pane", () => {
+  const full = { turns: 12, hidden: 3, tools: 41, tokens: 1234567, cachePct: 87.4, context: 142000 };
+  const text = (gs) => gs.map((g) => `${g.icon}: ${g.text}`);
+  expect(text(statusGroups(full, 2000))).toEqual(["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens · 87.4% cache hit", "cpu: 142k context"]);
+  // Narrower and narrower: context, then the cache hit, the hidden count and the tokens go;
+  // then "tool calls" shortens, then the tool count goes; the turns stay.
+  const steps = [
+    ["12 turns · 3 hidden · 41 tool calls", "1.2M tokens · 87.4% cache hit"],
+    ["12 turns · 3 hidden · 41 tool calls", "1.2M tokens"],
+    ["12 turns · 41 tool calls", "1.2M tokens"],
+    ["12 turns · 41 tool calls"],
+    ["12 turns · 41 tools"],
+    ["12 turns"],
+  ];
+  let w = statusWidth(statusGroups(full, 2000));
+  for (const want of steps) {
+    // The widest pane where the step before no longer fits.
+    while (statusGroups(full, w).map((g) => g.text).join("|") !== want.join("|") && w > 0) w--;
+    expect(statusGroups(full, w).map((g) => g.text)).toEqual(want);
+    expect(statusWidth(statusGroups(full, w))).toBeLessThanOrEqual(w);
+    w--;
+  }
+  // Even turns alone wider than the pane: they stay, and the row truncates them.
+  expect(statusGroups(full, 10).map((g) => g.text)).toEqual(["12 turns"]);
+  // Cursor: no tokens, so no token group and no context, never "0 tokens".
+  expect(text(statusGroups({ turns: 1, hidden: 0, tools: 1, tokens: null, cachePct: null, context: null }, 2000))).toEqual(["messages: 1 turn · 1 tool call"]);
+  // No tool calls: the count is left out, and 0% cache hit is a real number, so it shows.
+  expect(statusGroups({ turns: 2, hidden: 0, tools: 0, tokens: 900, cachePct: 0, context: 450 }, 2000).map((g) => g.text)).toEqual(["2 turns", "900 tokens · 0% cache hit", "450 context"]);
 });

@@ -6,9 +6,9 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -6101,7 +6101,8 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
-  expect(tb2).toBe(38 + 6 + 28 + 10);
+  // Above the key hints and the status line (24 px).
+  expect(tb2).toBe(38 + 24 + 6 + 28 + 10);
   expect(tb).toBeGreaterThan(38);
   v.toast = null;
   // Not in the outline or the Pinned view, and never in the header.
@@ -6387,7 +6388,8 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   v.rootH = 1300;
   expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
   v.rootH = 500;
-  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
+  // Above the key hints and the status line (24 px).
+  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
 });
 
 // A press on the list, the pointer's moves while it is held, and the click the list sends on
@@ -7626,7 +7628,8 @@ test("the floating top: no header row, the state top left at every width, icons 
   expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
   expect(ids).not.toContain("th-about");
   expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
-  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(false);
+  // The turn count is in the status line at the pane's foot, not in the card.
+  expect(strs(cardOf(v)).some((x) => /^\d+ turns/.test(x))).toBe(false);
   v.settingsOpen = false;
   // A search field opens under the band too.
   v.filtering = true;
@@ -8830,12 +8833,12 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
   const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
   expect(v.prefsDiffer()).toBe(false);
   expect(reset()).toContainEqual(["opacity", 0.45]);
-  for (const a of ["agents", "keyHints", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
+  for (const a of ["agents", "keyHints", "statusLine", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
   v.prefs = { ...v.prefs, width: "wide" };
   expect(v.prefsDiffer()).toBe(true);
   expect(reset()).not.toContainEqual(["opacity", 0.45]);
   v.action("resetSettings", cx);
-  for (const k of ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
   expect(v.quoteKey).toBe("y");
   expect(v.links.length).toBe(1);
   await new Promise((r) => setTimeout(r, 20));
@@ -9022,7 +9025,8 @@ test("key hints at the bottom are off by default; the switch brings the row back
   const { v, cx } = await pane(fixture("--extra", "3"));
   expect(v.prefs.keyHints).toBe(false);
   expect(idsIn(frame(v, cx))).not.toContain("th-footer");
-  expect(v.footSpace()).toBe(0);
+  // Only the status line's 24 px.
+  expect(v.footSpace()).toBe(24);
   v.action("settings", cx);
   let c = frame(v, cx);
   onOf(c, "th-set-keys", "on_click")({}, cx);
@@ -9034,7 +9038,7 @@ test("key hints at the bottom are off by default; the switch brings the row back
   expect(v.prefs.keyHints).toBe(true);
   v.footerH = 38;
   expect(idsIn(frame(v, cx))).toContain("th-footer");
-  expect(v.footSpace()).toBe(38);
+  expect(v.footSpace()).toBe(38 + 24);
   await new Promise((r) => setTimeout(r, 20));
 });
 
@@ -9049,9 +9053,9 @@ test("the card leaves a 160 px strip of the list under it, except in a pane unde
   expect(bodyH()).toBe(800 - 32 - 160 - (40 + 40 + 2));
   v.rootH = 514;
   expect(bodyH()).toBe(514 - 32 - 160 - (40 + 40 + 2));
-  // Under 514 px the card takes the height, 12 px above the bottom.
+  // Under 514 px the card takes the height, 12 px above the status line (24 px).
   v.rootH = 513;
-  expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
+  expect(bodyH()).toBe(513 - 32 - 24 - 12 - (40 + 40 + 2));
 });
 
 // TRD-7 (#142): in a pane under about 224 px the card ran past the bottom, cutting off its foot.
@@ -9095,7 +9099,8 @@ test("the card's rows scroll inside it: as tall as they are, up to the room abov
   v.width = 545; v.paneW = 573; v.rootH = 400;
   v.action("settings", cx);
   const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
-  const room = 400 - 32 - 12 - (40 + 40 + 2);
+  // 12 px above the status line (24 px).
+  const room = 400 - 32 - 24 - 12 - (40 + 40 + 2);
   expect(bodyH()).toBe(room);
   // Measured shorter than the room: the card is as tall as its rows.
   const c = cardOf(v);
@@ -10214,4 +10219,104 @@ test("a drag that selects text in an open turn stops following: the newest reply
   handlerAfterId(calls3, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
   handlerAfterId(calls3, "threads-body", "on_mouse_move")(ev({ x: 121, y: 300 }), cx);
   expect(v.follow).toBe(true);
+});
+
+// The status line (the owner, 2026-11-19: the chat's stats in a slim line at the very bottom).
+test("the status line: the chat's stats in one row at the very bottom, on by default, under the key hints; its switch takes it and its room away", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 640;
+  expect(v.prefs.statusLine).toBe(true);
+  const row = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status");
+    if (at < 0) return null;
+    let end = c.findIndex((e, i) => i > at && e[0] === "id" && !String(e[1]).startsWith("th-status"));
+    if (end < 0) end = c.length;
+    return c.slice(at, end);
+  };
+  const c = frame(v, cx);
+  const r = row(c);
+  expect(r).not.toBe(null);
+  const s = v.current();
+  const n = v.counts();
+  const turns = `${n.shownCur} turns`;
+  const texts = r.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts[0].startsWith(turns)).toBe(true);
+  // The same numbers the reply stats use, summed over the session.
+  expect(v.statusStats()).toEqual({ turns: n.shownCur, hidden: n.hiddenCur, ...sessionStatsForTest(s.turns) });
+  // Summed once: the same object until the session changes, then the new turn counts too.
+  expect(v.statusStats().tools).toBe(v.statusStats().tools);
+  const memo = v.statusMemo;
+  v.statusStats();
+  expect(v.statusMemo).toBe(memo);
+  s.turns.push({ ...s.turns[s.turns.length - 1], tools: 5, usage: { zz: { i: 7, o: 3, cr: 0, cc: 0 } } });
+  s.version++;
+  expect(v.statusStats().tools).toBe(sessionStatsForTest(s.turns).tools);
+  expect(v.statusStats().context).toBe(7);
+  expect(v.statusStats().tokens).toBe(sessionStatsForTest(s.turns).tokens);
+  s.turns.pop();
+  s.version++;
+  expect(v.statusStats()).toEqual({ turns: v.counts().shownCur, hidden: v.counts().hiddenCur, ...sessionStatsForTest(s.turns) });
+  // One centred, small, muted row of a fixed height, and nothing in it takes a click.
+  expect(r).toContainEqual(["justify_center"]);
+  expect(r).toContainEqual(["h", 24]);
+  expect(r.some((e) => e[0] === "on_click" || e[0] === "on_mouse_down" || e[0] === "tooltip")).toBe(false);
+  expect(v.footSpace()).toBe(24);
+  // Under the list, and under the key hints when they are on.
+  let ids = idsIn(c);
+  expect(ids.indexOf("th-status")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  ids = idsIn(frame(v, cx));
+  expect(ids.indexOf("th-status")).toBeGreaterThan(ids.indexOf("th-footer"));
+  expect(v.footSpace()).toBe(38 + 24);
+  // The settings switch takes the row away, and the room it took.
+  v.action("statusLine", cx);
+  expect(v.prefs.statusLine).toBe(false);
+  expect(idsIn(frame(v, cx))).not.toContain("th-status");
+  expect(v.footSpace()).toBe(38);
+  // The card names it in Layout.
+  v.action("settings", cx);
+  expect(idsIn(frame(v, cx))).toContain("th-set-status");
+  await new Promise((res) => setTimeout(res, 20));
+});
+
+test("the status line shows nothing before the session is read, and at 360 px keeps the turns and drops the rest in order", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 360;
+  const texts = () => { const c = frame(v, cx); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status"); return at < 0 ? null : c.slice(at).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  expect(texts()[0]).toBe(statusGroupsForTest(v.statusStats(), 360)[0].text);
+  expect(v.statusGroupsShown().map((g) => g.text)).toEqual(statusGroupsForTest(v.statusStats(), 360).map((g) => g.text));
+  const s = v.current();
+  s.loaded = false;
+  expect(texts()).toBe(null);
+  expect(v.footSpace()).toBe(0);
+  s.loaded = true;
+});
+
+test("the status line's sums follow a session switch, a rewind and a session read again with the same counts", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const s = v.current();
+  const want = (x) => ({ turns: v.counts().shownCur, hidden: v.counts().hiddenCur, ...sessionStatsForTest(x.turns) });
+  expect(v.statusStats()).toEqual(want(s));
+  // Another session becomes the current one: its own sums, not the first one's.
+  const other = { ...s, id: "other-session", turns: s.turns.slice(0, 2).map((t) => ({ ...t, tools: t.tools + 4 })), version: s.version };
+  v.sessions = [...v.sessions, other];
+  expect(v.statusStats()).toEqual(want(other));
+  v.sessions = v.sessions.slice(0, -1);
+  expect(v.statusStats()).toEqual(want(s));
+  // A rewind cuts the list back to its settled turns; the turns read again differ.
+  const n = s.turns.length;
+  s.turns.length = 1;
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  while (s.turns.length < n) s.turns.push({ ...s.turns[0], done: true, tools: 9, usage: { r: { i: 11, o: 2, cr: 0, cc: 0 } } });
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(11);
+  // Read again from the start (a new turns list) to the same id, version and count.
+  const version = s.version;
+  s.turns = s.turns.map((t) => ({ ...t, tools: 1, usage: { q: { i: 3, o: 1, cr: 0, cc: 0 } } }));
+  s.version = version;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(3);
 });
