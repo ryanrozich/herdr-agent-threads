@@ -2,3 +2,6 @@
 junit.xml
 mods/agent-threads/gpui-kit.d.ts
 mods/agent-threads/jsconfig.json
+
+# Local HumanLayer notes.
+/thoughts/
