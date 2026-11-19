@@ -53,7 +53,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["c"], "Copy the reply"], [["1-9"], "Go to that image"], [["Esc", "q"], "Close"],
     ]],
     ["Settings card", [
-      [["↑", "↓", "j", "k"], "Scroll the card"], [["Page Up", "Page Down", "Space"], "Scroll it a page"], [["Home", "End"], "Its top or its end"],
+      [["↑", "↓", "j", "k"], "Scroll the card"], [["PgUp", "PgDn", "Space"], "Scroll it a page"], [["Home", "End"], "Its top or its end"],
       [["Esc", ","], "Close it"],
     ]],
     ["View", [
