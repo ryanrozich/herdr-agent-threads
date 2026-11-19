@@ -301,6 +301,15 @@ async function main(argv) {
       for (const e of r.events) apply(s, e);
       s.offset += r.used;
       chunk = nextChunk(s, r.used, chunk, base);
+      // A line that did not fit and would need more than the ceiling: step past it rather than
+      // read it whole.
+      if (r.used === 0 && chunk > LINE_MAX) {
+        const end = nextNewline(path, s.offset);
+        if (end < 0) break;
+        skipped.add(`${path}:${end}`);
+        s.offset = end;
+        chunk = base;
+      }
     }
     return s;
   };
@@ -311,7 +320,7 @@ async function main(argv) {
     const ids = s.turns.flatMap((t) => [t.steps, ...(t.wakes ?? []).map((w) => w.steps)].flatMap((l) => l.flatMap((st) => (st.ids ?? []).filter(Boolean))));
     for (let i = 0; i < ids.length; i += 200) {
       let out = "";
-      try { out = sh("calls.sh", [path, agent, ...ids.slice(i, i + 200)], { THREADS_ARGS: "1", THREADS_WHOLE: "1" }); } catch { out = ""; }
+      try { out = sh("calls.sh", [path, agent, ...ids.slice(i, i + 200)], { THREADS_ARGS: "1", THREADS_WHOLE: "1", THREADS_LINE_MAX: String(LINE_MAX) }); } catch { out = ""; }
       for (const l of out.split("\n")) {
         let x = null;
         try { x = l ? JSON.parse(l) : null; } catch { x = null; }
@@ -368,6 +377,9 @@ async function main(argv) {
 const SKILL_ARGS_MIN = 16;
 // At most this many transcripts no call names are written; the notes count the rest.
 const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process.env.THREADS_UNNAMED_MAX) : 200;
+// A transcript line longer than this is skipped, not read: one line of hundreds of MB would
+// otherwise be held whole, several times over. The notes count the lines skipped.
+const LINE_MAX = Number(process.env.THREADS_LINE_MAX) > 0 ? Number(process.env.THREADS_LINE_MAX) : 64 << 20;
   const resolveInside = (dir, f) => {
     try {
       if (fs.lstatSync(dir).isSymbolicLink()) return null;
@@ -398,6 +410,26 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
   };
   // Each subagent file is attached to one call only: the first that names it.
   const attached = new Map();
+  // Lines skipped for their size, as file:offset, so a line read twice counts once.
+  const skipped = new Set();
+  // The byte offset after the next newline from an offset, or -1 when there is none yet.
+  const nextNewline = (f, from) => {
+    let fd = null;
+    try {
+      fd = fs.openSync(f, "r");
+      const b = Buffer.alloc(1 << 20);
+      for (let pos = from; ;) {
+        const n = fs.readSync(fd, b, 0, b.length, pos);
+        if (n <= 0) return -1;
+        const i = b.subarray(0, n).indexOf(10);
+        if (i >= 0) return pos + i + 1;
+        pos += n;
+      }
+    } catch { return -1; } finally { if (fd != null) fs.closeSync(fd); }
+  };
+  // Calls that started no subagent the transcript records (no launch record, no id in the
+  // result), with their prompts: a transcript no call names may share one's prompt.
+  const unlaunched = [];
   // A file's lines, 4 MB at a time, with the byte offset after each.
   const eachLine = (f, fn, from = 0) => {
     let fd = null;
@@ -407,6 +439,7 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
       let at = from;
       let pos = from;
       let rest = Buffer.alloc(0);
+      let skip = false;
       for (;;) {
         const n = fs.readSync(fd, b, 0, b.length, pos);
         if (n <= 0) return;
@@ -415,9 +448,13 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
         let i;
         while ((i = buf.indexOf(10)) >= 0) {
           at += i + 1;
-          if (fn(buf.subarray(0, i).toString("utf8"), at) === false) return;
+          if (skip) { skip = false; skipped.add(`${f}:${at}`); }
+          else if (i > LINE_MAX) skipped.add(`${f}:${at}`);
+          else if (fn(buf.subarray(0, i).toString("utf8"), at) === false) return;
           buf = buf.subarray(i + 1);
         }
+        // A line past the ceiling: drop what there is of it and the rest up to its newline.
+        if (skip || buf.length > LINE_MAX) { skip = true; at += buf.length; buf = Buffer.alloc(0); }
         rest = Buffer.from(buf);
       }
     } catch { return; } finally { if (fd != null) fs.closeSync(fd); }
@@ -465,6 +502,8 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
       const r = results.get(c.call) ?? {};
       let child = null;
       const skill = agent === "claude" && !c.subagent && c.tool === "Skill" ? forkedSkill(s, c.call) : null;
+      if (agent === "claude" && typeof c.subagent?.agent !== "string" && (c.tool === "Agent" || c.tool === "Task") && typeof r.args?.prompt === "string" && r.args.prompt.trim())
+        unlaunched.push({ call: c.call, prompt: r.args.prompt.trim() });
       if (agent === "claude" && (c.subagent || skill)) {
         const a = skill ?? c.subagent.agent;
         // Claude Code writes every subagent, a subagent's own included, flat in the session's
@@ -500,7 +539,10 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
           else if (args.length < SKILL_ARGS_MIN) r.subLink = `id only: the Skill call's args are under ${SKILL_ARGS_MIN} characters, too short to tell one subagent from another`;
           else if (got == null) r.subLink = "id only: the subagent's first prompt could not be read";
           else if (!got.includes(args)) r.subLink = "id only: the subagent's first prompt does not hold the Skill call's args";
-          child.env = { ...child.env, THREADS_SKILL: "1" };
+          // Only the file's first record is the prompt: the reader is told its uuid.
+          let first = null;
+          eachLine(child.file, (l) => { first = uuidOf(l); return false; });
+          if (first && SAFE_ID.test(first.replace(/-/g, "_"))) child.env = { ...child.env, THREADS_SKILL: first };
           attached.set(child.file, c.call);
         } else {
           const want = typeof r.args?.prompt === "string" ? r.args.prompt.trim() : null;
@@ -554,7 +596,10 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
       // The session's promptIds, read once, each from a record's own key.
       if (!rootIds) { rootIds = new Set(); eachLine(file, (l) => { try { const p = JSON.parse(l)?.promptId; if (typeof p === "string") rootIds.add(p); } catch { /* not JSON */ } }); }
       const shared = typeof pid === "string" && SAFE_ID.test(pid) && rootIds.has(pid) ? pid : null;
-      unnamed.push({ hint: { note: "a hint, not a link: no call in the session names this transcript", shared_prompt_id: shared }, trajectory: tr });
+      // Calls with no launch record whose prompt is exactly this transcript's first prompt.
+      const own = firstPrompt(f)?.trim() || null;
+      const same = own ? unlaunched.filter((u) => u.prompt === own).map((u) => u.call) : [];
+      unnamed.push({ hint: { note: "hints, not links: no call in the session names this transcript; shared_prompt_id is a promptId it shares with the session, and same_prompt_calls are calls with no launch record whose prompt is its first prompt", shared_prompt_id: shared, same_prompt_calls: same }, trajectory: tr });
     }
     if (unnamed.length) {
       t.extra = { ...(t.extra ?? {}), subagents_no_call_names: unnamed };
@@ -562,6 +607,7 @@ const UNNAMED_MAX = Number(process.env.THREADS_UNNAMED_MAX) > 0 ? Number(process
     }
     if (left) t.notes = `${t.notes} ${left} more that no call names ${left === 1 ? "is" : "are"} left out: at most ${UNNAMED_MAX} are written.`;
   }
+  if (skipped.size) t.notes = `${t.notes} ${skipped.size} transcript ${skipped.size === 1 ? "line was" : "lines were"} skipped for being longer than ${LINE_MAX} bytes, so what ${skipped.size === 1 ? "it held is" : "they held is"} missing.`;
   process.stdout.write(`${JSON.stringify(t, null, 1)}\n`);
   return 0;
 }
