@@ -8614,15 +8614,17 @@ export default class Threads extends View {
     const c = this.counts();
     const s = this.current();
     if (!s) return { turns: c.shownCur, hidden: c.hiddenCur, ...sumsStats(turnSums([])) };
+    // The session's own objects are part of the key: a session read again from the start gets
+    // a new turns list, so the same id and counts can never bring back the old line.
     const v = `${s.id}|${s.version}|${s.turns.length}`;
-    if (this.statusMemo?.v !== v) {
-      const u = this.statusMemo;
-      const keep = u && u.s === s && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+    const u = this.statusMemo;
+    if (u?.v !== v || u.s !== s || u.list !== s.turns) {
+      const keep = u && u.s === s && u.list === s.turns && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
       let k = keep ? u.stable : 0;
       const from = k;
       while (k < s.turns.length - 1 && s.turns[k].done) k++;
       const base = turnSums(s.turns, from, k, keep ? u.base : null);
-      this.statusMemo = { v, s, stable: k, mark: s.turns[k - 1] ?? null, base, stats: sumsStats(turnSums(s.turns, k, s.turns.length, base)) };
+      this.statusMemo = { v, s, list: s.turns, stable: k, mark: s.turns[k - 1] ?? null, base, stats: sumsStats(turnSums(s.turns, k, s.turns.length, base)) };
     }
     return { turns: c.shownCur, hidden: c.hiddenCur, ...this.statusMemo.stats };
   }

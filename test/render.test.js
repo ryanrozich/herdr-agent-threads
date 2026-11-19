@@ -10256,3 +10256,31 @@ test("the status line shows nothing before the session is read, and at 360 px ke
   expect(v.footSpace()).toBe(0);
   s.loaded = true;
 });
+
+test("the status line's sums follow a session switch, a rewind and a session read again with the same counts", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const s = v.current();
+  const want = (x) => ({ turns: v.counts().shownCur, hidden: v.counts().hiddenCur, ...sessionStatsForTest(x.turns) });
+  expect(v.statusStats()).toEqual(want(s));
+  // Another session becomes the current one: its own sums, not the first one's.
+  const other = { ...s, id: "other-session", turns: s.turns.slice(0, 2).map((t) => ({ ...t, tools: t.tools + 4 })), version: s.version };
+  v.sessions = [...v.sessions, other];
+  expect(v.statusStats()).toEqual(want(other));
+  v.sessions = v.sessions.slice(0, -1);
+  expect(v.statusStats()).toEqual(want(s));
+  // A rewind cuts the list back to its settled turns; the turns read again differ.
+  const n = s.turns.length;
+  s.turns.length = 1;
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  while (s.turns.length < n) s.turns.push({ ...s.turns[0], done: true, tools: 9, usage: { r: { i: 11, o: 2, cr: 0, cc: 0 } } });
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(11);
+  // Read again from the start (a new turns list) to the same id, version and count.
+  const version = s.version;
+  s.turns = s.turns.map((t) => ({ ...t, tools: 1, usage: { q: { i: 3, o: 1, cr: 0, cc: 0 } } }));
+  s.version = version;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(3);
+});
