@@ -349,6 +349,26 @@ test("promptParts: a pasted block is a verbatim paste run, its wrapper lines gon
   expect(runs("   <pasted_content>\nline\n   </pasted_content>")).toEqual([["p", ["line"]]]);
 });
 
+test("promptParts: inside a paste, the closing tag closes it wherever it is on its line", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  const open = 'Look:\n<pasted_content id="x">\n$ make\nok 12 files';
+  const want = [["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["c", ["Why?"]]];
+  // A paste that did not end in a line break: the tag ends its last line.
+  expect(runs(`${open}</pasted_content>\nWhy?`)).toEqual(want);
+  // Text typed after the tag on the same line is the person's own line after the paste.
+  expect(runs(`${open}\n</pasted_content> Why?`)).toEqual(want);
+  expect(runs(`${open}</pasted_content>Why?`)).toEqual(want);
+  // Spaces after the tag, or more than three before it.
+  expect(runs(`${open}\n</pasted_content>  \nWhy?`)).toEqual(want);
+  expect(runs(`${open}\n      </pasted_content>\nWhy?`)).toEqual(want);
+  // What follows the tag on its line is read as a line: a quote is a quote.
+  expect(runs(`${open}</pasted_content>> said\nWhy?`)).toEqual([["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["q", ["said"]], ["c", ["Why?"]]]);
+  // The paste's last line keeps its own spaces before the tag; a body of one line works.
+  expect(runs('<pasted_content>\n  a  b  </pasted_content>')).toEqual([["p", ["  a  b"]]]);
+  // A second closing tag after the paste, in the person's text, is text.
+  expect(runs(`${open}</pasted_content> see </pasted_content>`)).toEqual([["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["c", ["see </pasted_content>"]]]);
+});
+
 test("rowShape: a closed row keeps source line breaks for every prompt", () => {
   const multi = "First point.\nSecond point.\n\nThird after a blank.";
   for (const w of [240, 380, 545]) {
@@ -441,6 +461,11 @@ test("pin and outline prompts drop the paste wrapper", () => {
   const withPaste = `See this:\n<pasted_content id="t">\nalpha\nbeta\n</pasted_content>`;
   expect(pinPromptText(withPaste)).toBe("See this: alpha beta");
   expect(outlineText(withPaste)).toBe("See this:");
+  // The tag at the end of the paste's last line, text after it, or CRLF line ends.
+  expect(pinPromptText('See this:\n<pasted_content id="t">\nalpha\nbeta</pasted_content> Why?')).toBe("See this: alpha beta Why?");
+  expect(pinPromptText('See this:\r\n<pasted_content id="t">\r\nalpha\r\n</pasted_content>\r\nWhy?')).toBe("See this: alpha Why?");
+  expect(outlineText('<pasted_content id="o">\nonly body</pasted_content>')).toBe("only body");
+  expect(outlineText('<pasted_content id="o">\nbody\n</pasted_content> Why is this slow?')).toBe("Why is this slow?");
   // A paste that is the whole prompt: its body is the fallback, never the tag.
   expect(pinPromptText('<pasted_content id="o">\nonly\n</pasted_content>')).toBe("only");
   expect(outlineText('<pasted_content id="o">\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
