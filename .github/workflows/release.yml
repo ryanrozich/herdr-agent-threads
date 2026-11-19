@@ -38,11 +38,17 @@ jobs:
       # so the queue's `check` would wait too. A dispatch with that token runs at once, so this
       # runs ci.yml on the release branch, and its `check` lands on the branch's head, which is
       # the release pull request's head.
+      # The runner evaluates a step's env before its if, and an error there fails the step. The
+      # action sets `pr` only when it opened or updated a pull request, so env takes it as a
+      # plain string (empty when unset) and the script reads the branch from it. A push that
+      # leaves the release pull request as it is then passes, and starts nothing.
       - name: Run CI on the release pull request
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          PR: ${{ steps.release.outputs.pr }}
         run: |
+          BRANCH=$(printf '%s' "$PR" | jq -r '.headBranchName // empty' 2>/dev/null || true)
+          if [ -z "$BRANCH" ]; then echo "No release pull request was opened or updated"; exit 0; fi
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
           echo "Started ci.yml on $BRANCH"
