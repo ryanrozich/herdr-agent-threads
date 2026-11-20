@@ -9601,7 +9601,9 @@ export default class Threads extends View {
         return false;
       // The few of the Chat's actions the Trajectory means. Any other (a bound pin, copy, the
       // outline) would act on the Chat's selection, which the Trajectory does not show.
-      case "focus": case "settings": case "keys": case "narrower": case "wider": return this.action(name, cx);
+      case "focus": case "settings": case "keys": return this.action(name, cx);
+      // - and = step the Trajectory pane; shown in the Chat's own pane there is none to step.
+      case "narrower": case "wider": return this.trajPane ? this.action(name, cx) : false;
       default: return false;
     }
   }
