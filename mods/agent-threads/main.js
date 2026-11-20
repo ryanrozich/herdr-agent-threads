@@ -949,7 +949,8 @@ export default class Threads extends View {
   }
 
   // props().debug (tests only): what the pane shows, as data, in shared("threads.debug")
-  // under its terminal, so a check can read it with no screenshot.
+  // under its terminal (the Pinned pane under "<terminal>:pinned", so it never replaces the
+  // Chat's entry), so a check can read it with no screenshot.
   report() {
     const s = this.current();
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
@@ -996,13 +997,15 @@ export default class Threads extends View {
       senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
+      command: this.lastCommand ?? null,
       // perl was not found, so a character across a 4 KB piece of a line can show as U+FFFD.
       noPerl: Boolean(this.noPerl),
     };
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
     this.lastReport = text;
-    setShared("threads.debug", { ...(shared("threads.debug") ?? {}), [this.terminal]: snap });
+    const key = this.pinnedPane ? `${this.terminal}:pinned` : this.terminal;
+    setShared("threads.debug", { ...(shared("threads.debug") ?? {}), [key]: snap });
   }
 
   // One row or card part as text for the debug report: "turn#3 p2/r3 h89 cmd:/review-pr",
@@ -5085,7 +5088,12 @@ export default class Threads extends View {
   // key(), it wins over a press's pending open (OPEN_WAIT_MS).
   command(name, cx) {
     this.openWait = null;
-    if (this.action(name, cx)) cx.notify();
+    const acted = this.action(name, cx);
+    // props().debug: the last command's own name (the part before any colon, so a search's
+    // text never reaches the report) and whether it acted, for test/herdr-still.sh: Herdr
+    // answers ok for any agent-threads.<name>, one we have or not.
+    if (this.debug) this.lastCommand = { n: (this.lastCommand?.n ?? 0) + 1, name: String(name).split(":")[0], acted: Boolean(acted) };
+    if (acted) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.

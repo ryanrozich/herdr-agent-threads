@@ -21,17 +21,69 @@ required_checks = ["check"]
 
 [environment]
 toolchains = [{ name = "bun", version = "1.4.2" }]
-system_packages = [
-  { name = "gitleaks" },
-  { name = "jq" },
-  { name = "lsof" },
-  { name = "perl" },
-  { name = "procps" },
-  { name = "rsync" },
-  { name = "shellcheck" },
-  { name = "sqlite3" },
-  { name = "tesseract-ocr" },
-]
+
+[[environment.system_packages]]
+name = "gitleaks"
+
+[[environment.system_packages]]
+name = "jq"
+
+[[environment.system_packages]]
+name = "lsof"
+
+[[environment.system_packages]]
+name = "perl"
+
+[[environment.system_packages]]
+name = "procps"
+
+[[environment.system_packages]]
+name = "rsync"
+
+[[environment.system_packages]]
+name = "shellcheck"
+
+[[environment.system_packages]]
+name = "sqlite3"
+
+[[environment.system_packages]]
+name = "tesseract-ocr"
+
+# A virtual display and the libraries the Herdr app loads, for test/herdr-still.sh. The app
+# loads libxkbcommon-x11 at run time, so ldd does not list it.
+[[environment.system_packages]]
+name = "xvfb"
+
+[[environment.system_packages]]
+name = "libgl1"
+
+[[environment.system_packages]]
+name = "libegl1"
+
+[[environment.system_packages]]
+name = "libgl1-mesa-dri"
+
+[[environment.system_packages]]
+name = "mesa-vulkan-drivers"
+
+[[environment.system_packages]]
+name = "fonts-dejavu-core"
+
+[[environment.system_packages]]
+name = "libxkbcommon0"
+
+[[environment.system_packages]]
+name = "libxkbcommon-x11-0"
+
+# One pinned Herdr release for test/herdr-still.sh, checked against the sha256 values in
+# test/herdr-install.sh before anything is unpacked, into .herdr-rig in this checkout (a
+# setup step's home does not reach the session). It never fails the phase: every way it can
+# fail ends in one "install-herdr: Herdr did not install" line, and the whole step stops
+# within 285 s, under its limit. The display is started only inside test/herdr-still.sh.
+[[environment.setup]]
+name = "install-herdr"
+run = ["sh", "-c", "timeout -k 5 280 sh test/herdr-install.sh; s=$?; [ $s -gt 1 ] && echo \"install-herdr: Herdr did not install: the install ended with status $s (124 is past 280 s)\" >&2; exit 0"]
+timeout_seconds = 300
 
 [[environment.verify]]
 name = "lint"
@@ -49,6 +101,11 @@ run = ["sh", "-ec", "for f in mods/*/core/extract*.jq; do echo '\"x\"' | jq -R -
 name = "tests"
 run = ["sh", "test/leftover-check.sh"]
 timeout_seconds = 600
+
+# The host install-herdr downloads from. Declared, and not enforced today: nothing limits
+# the network to it.
+[environment.container]
+egress = ["releases.herdr.dev"]
 
 [thoughts]
 repo_owner = "ryanrozich"
