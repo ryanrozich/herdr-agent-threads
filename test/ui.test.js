@@ -9,7 +9,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, trajColumn, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
@@ -815,6 +815,18 @@ test("codeRows: a code line wrapped word by word, a long word split across rows"
   expect(codeRows("aaaa bbbb cccc", 9)).toBe(2);
   expect(codeRows("x".repeat(25), 10)).toBe(3);
   expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
+});
+
+test("trajColumn: a kept Trajectory width is held to 200 px and to the Chat's width less 240 px", () => {
+  expect(trajColumn(1200, 640)).toBe(640);
+  // Kept in a wide window, asked of a narrow one: what the Chat can give.
+  expect(trajColumn(700, 2000)).toBe(460);
+  expect(trajColumn(480, 900)).toBe(240);
+  // Too small or not a number: the floor, or nothing kept.
+  expect(trajColumn(1200, 40)).toBe(200);
+  expect(trajColumn(1200, null)).toBeNull();
+  expect(trajColumn(1200, Number.NaN)).toBeNull();
+  expect(trajColumn(1200, -5)).toBeNull();
 });
 
 test("columnResize for the Trajectory pane: the same steps and Threads' 240 px, with no 640 px cap", () => {

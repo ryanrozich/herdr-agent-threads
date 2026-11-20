@@ -13826,10 +13826,12 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   w.key(keyEv("="), cx2);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
   expect([w.toast, v.toast]).toEqual([null, null]);
-  // The next split opens at the kept width.
+  // The next split, from a Chat with room for it, opens at the kept width.
   state.panes = state.panes.filter((p) => p.pane !== "p3");
   delete state.shared["threads.trajByTerminal"];
   v.splitAsk = null;
+  v.width = 1400;
+  v.paneW = 1400;
   log = [];
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(920);
@@ -14086,4 +14088,18 @@ test("a command sent to a Trajectory pane is recorded under the terminal plus :t
   w.command("open", cx2);
   expect(last()).toEqual({ n: 3, name: "open", acted: true });
   expect(JSON.stringify(state.shared["threads.debug"].t4)).toBe(chat);
+});
+
+test("a Trajectory width kept in a wider window is held to what the Chat can give when the next split asks for it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: 2400 };
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(700 + 2 - 240);
+  v.splitAsk = null;
+  state.shared["threads.trajWidth"] = { px: 12 };
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(200);
 });
