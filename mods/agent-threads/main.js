@@ -58,7 +58,7 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
+  focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
@@ -349,6 +349,8 @@ const NOTE_LINE = 20; // the working card's 12 px note, set explicitly (about 1.
 // then given that height (measured()).
 const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "noreply", "cmd"]);
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
+// Where hlBlock cuts a line into words: after white space or a HYPHEN_BREAK.
+const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
 const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
@@ -7551,14 +7553,17 @@ export default class Threads extends View {
     return f;
   }
 
-  // Wrapped text with the filter's matches marked, word by word.
-  hlBlock(t, under, text, color) {
+  // Wrapped text with the filter's matches marked, word by word. rows: each line's spans
+  // worked out already (an open message's, ui.js breakSpans), or null to find them here.
+  // A word is one element that does not wrap inside, so a long hyphenated token is cut into
+  // words after each HYPHEN_BREAK too, where the row can wrap.
+  hlBlock(t, under, text, color, rows = null) {
     const q = this.filterText();
-    if (!q || !text.toLowerCase().includes(q.toLowerCase())) return div().text_color(color).child(text);
-    return v_flex().children(text.split("\n").map((line) => h_flex().flex_wrap().min_h(LINE).children(
-      spans(line, q).flatMap((p) => p.hit
+    if (!rows && (!q || !text.toLowerCase().includes(q.toLowerCase()))) return div().text_color(color).child(text);
+    return v_flex().children((rows ?? text.split("\n").map((line) => spans(line, q))).map((row) => h_flex().flex_wrap().min_h(LINE).children(
+      row.flatMap((p) => p.hit
         ? [div().rounded(3).bg(this.hlFill(t, under)).text_color(t.foreground).child(p.t)]
-        : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
+        : p.t.split(WORD_END).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
   }
 
   // ---- heights ----
@@ -7780,13 +7785,24 @@ export default class Threads extends View {
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
     const max = r.full ? FULL_PROMPT_CHARS / 8 : 4000;
-    const parts = plain ? promptParts(c.text, max) : null;
+    const bmax = bubbleMax(this.width, this.prefs.textSize, this.chars());
+    const yc = this.charW(YOU_CHAR);
+    // A hyphenated token longer than about 3/4 of the widest bubble's line gets HYPHEN_BREAK
+    // after its "-"s in the drawn text (ui.js hyphenBreaks); the margin is for a line of
+    // wider letters than the estimate's average. y.text stays the message itself. Only these
+    // plain lines get breaks, never the Markdown below: a plain bubble's Markdown can be
+    // selected and Herdr copies it as drawn. A pasted block gets none: it is drawn as code,
+    // and code keeps what was typed.
+    const brk = Math.max(8, Math.floor(((bmax - 2 * ROW.BUBBLE_PX) / yc) * 0.75));
+    const parts = plain ? promptParts(c.text, max).map((p) => {
+      const t = p.lines.join("\n");
+      if (p.paste) return { ...p, draw: t, rows: null };
+      return { ...p, draw: hyphenBreaks(t, brk), rows: hl && t.toLowerCase().includes(q.toLowerCase()) ? p.lines.map((l) => breakSpans(l, q, brk)) : null };
+    }) : null;
     const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
       : promptMd(c.text, { links: this.links, ...this.linkCtx(), max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
-    const bmax = bubbleMax(this.width, this.prefs.textSize, this.chars());
-    const yc = this.charW(YOU_CHAR);
     const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
     const bw = Math.min(bmax, Math.max(r.turn.agent ? 160 : 120, head, Math.ceil(widest * yc) + 2 * ROW.BUBBLE_PX + 8, m.quotes || m.code ? bmax : 0));
     const per = Math.max(8, Math.floor((bw - 2 * ROW.BUBBLE_PX) / yc));
@@ -8920,11 +8936,11 @@ export default class Threads extends View {
         const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
             ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
-              .child(this.hlBlock(bt, under, p.lines.join("\n"), bt.muted))
+              .child(this.hlBlock(bt, under, p.draw, bt.muted, p.rows))
             : p.paste
               ? v_flex().min_w(0).child(div().text_size(12.5).text_color(bt.muted).child(pasteLabel(p.lines.length)))
-                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, under, p.lines.join("\n"), bt.muted)))
-              : this.hlBlock(bt, under, p.lines.join("\n"), bt.foreground)).concat(y.cut
+                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, under, p.draw, bt.muted, p.rows)))
+              : this.hlBlock(bt, under, p.draw, bt.foreground, p.rows)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
           : this.mdView(tv(`th-you-${r.key}`), y.md, this.replySelectable());
         const cmd = commandParts(turn);
