@@ -15,6 +15,10 @@ const KEYS = {
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
 // Pinned view's header button (the list's header has no pin button).
 const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
+// Under a search, n steps to the next match back in time (older) and Shift n to the newer
+// one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
+// so a quote key someone chose keeps working.
+const SEARCH_KEYS = { n: "olderMatch" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -23,11 +27,12 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const k = e?.key ?? "";
   // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
   // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : k === "n" || k === "N" ? (filtering ? null : "newerMatch") : null;
   if (k === "G") return "latest";
   if (k === "W") return filtering ? null : "widthStep";
+  if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
@@ -37,7 +42,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
-      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
@@ -2502,8 +2507,14 @@ function rgb(color) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a ?? "");
   return m ? [1, 2, 3].map((i) => parseInt(m[i], 16)) : null;
 }
-// WCAG contrast ratio of two colours (alpha ignored), or null when one does not parse.
+// WCAG contrast ratio of two colours (alpha ignored), rounded to two decimals, or null when
+// one does not parse.
 export function contrast(a, b) {
+  const r = ratio(a, b);
+  return r == null ? null : Math.round(r * 100) / 100;
+}
+// The same ratio unrounded, for a threshold check: 4.495 is under 4.5.
+export function ratio(a, b) {
   const x = rgb(a);
   const y = rgb(b);
   if (!x || !y) return null;
@@ -2512,7 +2523,21 @@ export function contrast(a, b) {
     return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   };
   const [hi, lo] = [lum(x), lum(y)].sort((p, q) => q - p);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  return (hi + 0.05) / (lo + 0.05);
+}
+// A search match's fill: the working colour at 32%, and for the selected turn's matches
+// (strong) the strongest fill up to 60%, in 2% steps, that keeps the text on it (fg) at 4.5:1
+// unrounded. bg is the opaque colour the match is drawn over: the selected row's fill where
+// the row has one. Where even 32% does not reach 4.5:1, the selected match keeps 32%: never
+// less contrast than the others.
+export function matchFill(working, fg, bg, strong) {
+  if (!strong) return alpha(working, 0.32);
+  for (let a = 0.6; a > 0.32; a -= 0.02) {
+    const c = ratio(fg, mix(bg, working, a));
+    if (c == null) break;
+    if (c >= 4.5) return alpha(working, Math.round(a * 100) / 100);
+  }
+  return alpha(working, 0.32);
 }
 // a mixed toward b by t (0..1), as #rrggbb.
 export function mix(a, b, t) {

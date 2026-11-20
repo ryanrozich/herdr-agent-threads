@@ -1689,8 +1689,8 @@ test("a closed turn's message and reply start select by drag, a click that does 
   // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
   // agent's message, a stop's reason) stays a plain line, in its own colour.
   const v2 = views.length;
-  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
-  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-y", ["ink"], theme.foreground, 14, 22);
   expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
   // While a search marks its hits, the lines are plain, so the marks still show.
   v.query = turn.prompt.split(/\s+/)[0];
@@ -1751,16 +1751,16 @@ test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubb
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n]) => n === "bg")).toBe(false);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.muted]);
   expect(rec.find(([n]) => n === "text_size")[1]).toBe(12.5);
   rec = [];
-  v.chip(theme, "/x", 120, true);
+  v.chip(theme, theme.background, "/x", 120, true);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.foreground]);
   v.query = "review";
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n, c]) => n === "bg" && c === "#d7a00052")).toBe(true);
   v.query = "";
   rec = null;
@@ -1911,7 +1911,7 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
   // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
   // open turn's label and docs/reference.md say.
   rec = [];
-  v.promptBlock(theme, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
+  v.promptBlock(theme, theme.background, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
   const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
   rec = null;
   expect(pasteSizes).toEqual([12.5, 12.5]);
@@ -3651,8 +3651,10 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   expect(listed("marine mammal")).toEqual([1, 2]);
   expect(listed("walrus?")).toEqual([1, 2]);
   expect(listed("otter")).toEqual([3]);
+  // The count is the selection's place among the matches, from the newest (TRD-37): the
+  // answer, #2, is the newer of the two; under 420 px, the place alone.
   v.query = "marine mammal";
-  expect(v.filterCount()).toBe("2 of 3");
+  expect(v.filterCount()).toBe("1 of 2");
   v.query = "";
   draw(v, cx);
   expect(reply(answer)).toStartWith("A walrus");
@@ -6721,9 +6723,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 35 rows.
+  // Six groups (the settings card's keys among them), 36 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -11590,4 +11592,338 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   s.skipped = { lines: 1, bytes: 70 * 1048576 };
   v.restart(s);
   expect([s.skippedHead, s.skipped]).toEqual([null, null]);
+});
+
+// ---- search steps (TRD-37) ----
+// Eight turns, four of which hold "checkout test": #2, #4, #5 and #7. The search steps through
+// them newest first: n (olderMatch) back in time, Shift n (newerMatch) forward, no wrap.
+const STEPS = [2, 4, 5, 7];
+async function stepPane() {
+  const ev = [];
+  for (let n = 1; n <= 8; n++) {
+    ev.push({ k: "p", o: "human", t: STEPS.includes(n) ? `Run the checkout test again, take ${n}` : `Tidy the cart page, take ${n}`, ts: at(2 * n) });
+    ev.push({ k: "t", t: `Done with take ${n}.` }, { k: "d", ms: 1000, ts: at(2 * n + 1) });
+  }
+  const r = await scripted(ev);
+  r.v.width = 900;
+  return r;
+}
+
+test("a search starts at its newest match; n and Shift n step through the matches newest first, and stop at either end", async () => {
+  const { v, cx } = await stepPane();
+  expect(STEPS).not.toContain(Number(v.sel.split(":")[1]));
+  v.setQuery("checkout test", cx);
+  // The newest match, #7, selected and centred (the next draw scrolls there).
+  expect(v.sel).toBe("0:7");
+  expect(v.scrollTo).toEqual({ key: "0:7", how: "center" });
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("1 of 4 · newest first");
+  const step = (name) => { expect(v.action(name, cx)).toBe(true); settleRows(v, cx); return [v.sel, v.filterCount()]; };
+  expect(step("olderMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  // At the oldest, n does nothing and nothing wraps; no notice either.
+  const toasts = cx.toasts?.length ?? 0;
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  expect(cx.toasts?.length ?? 0).toBe(toasts);
+  expect(step("newerMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  // Under 420 px, the place alone, and "first" at the oldest.
+  v.width = 400;
+  expect(v.filterCount()).toBe("1 of 4");
+  v.action("first", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:2");
+  expect(v.filterCount()).toBe("4 of 4 · first");
+  // With no search, n finds nothing to step to.
+  v.setQuery("", cx);
+  settleRows(v, cx);
+  expect(v.action("olderMatch", cx)).toBe(false);
+});
+
+test("the search count: one match, none, hidden ones, no match selected, and new words that still match keep the place", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("take 5", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  // The selection left on a turn that is not a match: the count is the matches alone.
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.sel = "0:1";
+  expect(v.filterCount()).toBe("4 matches");
+  // Either step from there goes to the newest.
+  v.action("olderMatch", cx);
+  expect(v.sel).toBe("0:7");
+  // New words that the selected turn still matches keep it selected.
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  v.setQuery("checkout", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+});
+
+test("a turn that starts to match while the reader is on a match leaves them there; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("stepping away from the newest match and back leaves following off, so a newer match streaming in does not move the reader", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  // Back on the newest match, #7, the last row the search shows: a step never follows.
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  // A new last turn, #9, matches too: a step onto it does not follow either.
+  apply(s, { k: "p", o: "human", t: "One more checkout test", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  expect(v.filterCount()).toBe("2 of 5 · newest first");
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  v.scrollTo = null;
+  // A newer match streams in: the reader stays on #9 and nothing scrolls.
+  apply(s, { k: "t", t: "Done with take 9." }, { k: "d", ms: 1000, ts: at(41) });
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(42) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("2 of 6 · newest first");
+});
+
+test("a turn already in the list whose reply starts to match leaves the reader where they are; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  apply(s, { k: "p", o: "human", t: "Tidy the footer, take 9", ts: at(40) });
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect([v.sel, v.filterCount()]).toEqual(["0:5", "2 of 4 · newest first"]);
+  v.scrollTo = null;
+  // #9 was not a match; its reply streams in and names the checkout test.
+  apply(s, { k: "t", t: "The checkout test still fails on the footer." });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("in the Pinned view the search counts the pins it matches, and says No matches when it matches none of them", async () => {
+  const { v, cx } = await stepPane();
+  for (const k of ["0:1", "0:3"]) { v.sel = k; v.action("pin", cx); }
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  expect(v.matchPlace().n).toBe(0);
+  v.setQuery("", cx);
+  v.setView("all");
+  v.sel = "0:5";
+  v.action("pin", cx);
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+});
+
+test("the search field's two step buttons: up is older, down is newer, and the one with nothing left that way is dimmed and does nothing", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const drawn = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  let c = drawn();
+  const older = () => afterId(c, "th-match-older");
+  const newer = () => afterId(c, "th-match-newer");
+  expect(older()).toContainEqual(["tooltip", "Older match (n)"]);
+  // At the newest: down is dimmed and takes no press: no click, no pointer, no hover tint,
+  // and its tooltip says why.
+  expect(newer()).toContainEqual(["opacity", 0.35]);
+  expect(newer()).toContainEqual(["tooltip", "No newer match"]);
+  for (const m of ["on_click", "cursor_pointer", "hover"]) expect(newer().some((e) => e[0] === m)).toBe(false);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  expect(older().some((e) => e[0] === "cursor_pointer")).toBe(true);
+  expect(v.sel).toBe("0:7");
+  older().find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.sel).toBe("0:5");
+  c = drawn();
+  expect(newer()).toContainEqual(["tooltip", "Newer match (Shift n)"]);
+  expect(newer().some((e) => e[0] === "opacity")).toBe(false);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  // No match: no step buttons.
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  c = drawn();
+  expect(older()).toBeNull();
+  expect(newer()).toBeNull();
+});
+
+// TRD-37: a search match's fill, on every surface a match is drawn on, in a dark and a light
+// theme. The backdrop of each surface is worked out here from the theme alone (what the row
+// and the bubble paint under the text), not read from main.js, so a caller that passes the
+// wrong backdrop fails. In the selected turn the fill is the strongest that keeps the text at
+// 4.5:1 unrounded; where even 34% would not, it stays at 32%, main's floor for every match.
+// Elsewhere it is 32%. A compact pin draws no match fill at all.
+const LIGHT = { ...theme, background: "#ffffff", foreground: "#1b1b1e", muted: "#5f5f6b", dim: "#7a7a85", border: "#e3e3e8", raised: "#f5f5f7", chrome: "#f3f3f5", hover: "#0000000a", selected: "#00000012", accent: "#2563eb", popover: "#ffffff", working: "#996700" };
+test("a match's fill on every surface it is drawn on, dark and light: 4.5:1 unrounded over the real backdrop, or main's 32% floor", async () => {
+  const { mix, ratio } = await import("../mods/agent-threads/ui.js");
+  const over = (c, bg) => (c.length === 9 ? mix(bg, c.slice(0, 7), parseInt(c.slice(7), 16) / 255) : c);
+  const got = {};
+  const check = (T, name, fills, ink, under, strong) => {
+    got[`${T === theme ? "dark" : "light"} ${name}`] = fills.join(" ");
+    expect([name, fills.length > 0]).toEqual([name, true]);
+    for (const f of fills) {
+      const a = parseInt(f.slice(7), 16);
+      if (!strong) { expect([name, a]).toEqual([name, 0x52]); continue; }
+      if (a === 0x52) expect([name, ratio(ink, mix(under, T.working, 0.34)) < 4.5]).toEqual([name, true]);
+      else expect([name, ratio(ink, mix(under, T.working, a / 255)) >= 4.5]).toEqual([name, true]);
+    }
+  };
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await stepPane();
+    const fills = (r) => {
+      rec = [];
+      v.item(T, r, false, 100);
+      const c = rec;
+      rec = null;
+      return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]);
+    };
+    const row = (k, kind = "turn") => v.rows().find((r) => r.key === k && r.kind === kind);
+    const bubble = mix(T.background, T.foreground, 20 / 255); // plain: the text colour at 8%
+    // The prompts: "checkout test" is in turns 5 and 7, and 7, the newest, is selected.
+    v.setQuery("checkout test", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "prompt in a plain bubble, selected", fills(row("0:7")), T.foreground, bubble, true);
+    check(T, "prompt in a plain bubble, not selected", fills(row("0:5")), T.foreground, bubble, false);
+    v.applyPrefs(JSON.stringify({}));
+    settleRows(v, cx);
+    check(T, "prompt in the default blue bubble, selected", fills(row("0:7")), "#ffffff", "#2563EB", true);
+    check(T, "prompt in the default blue bubble, not selected", fills(row("0:5")), "#ffffff", "#2563EB", false);
+    // The open turn's message, in either bubble.
+    v.action("open", cx);
+    settleRows(v, cx);
+    const you = () => v.rows().find((r) => r.kind === "you" && r.turn.n === 7);
+    check(T, "open turn's prompt in the default blue bubble", fills(you()), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "open turn's prompt in a plain bubble", fills(you()), T.foreground, bubble, true);
+    v.action("open", cx);
+    settleRows(v, cx);
+    // Outline lines: the selected one is drawn on the selected fill.
+    v.action("outline:on", cx);
+    settleRows(v, cx);
+    check(T, "outline line, selected", fills(row("0:7", "line")), T.foreground, over(T.selected, T.background), true);
+    check(T, "outline line, not selected", fills(row("0:5", "line")), T.foreground, T.background, false);
+    v.action("outline:off", cx);
+    // Reply text, on the row's background (rows have no fill): every reply says "Done with",
+    // and turn 7 stays selected.
+    v.setQuery("Done with", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    check(T, "reply text, selected", fills(row("0:7")), T.foreground, T.background, true);
+    check(T, "reply text, not selected", fills(row("0:8")), T.foreground, T.background, false);
+  }
+  // A command's name in its bubble, the plain one and the default blue one.
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await scripted([
+      { k: "p", o: "human", t: "Tidy the cart page", ts: at(0) }, { k: "t", t: "Tidied." }, { k: "d", ms: 1000, ts: at(1) },
+      { k: "p", o: "human", cmd: true, t: "/checkout-audit now", ts: at(2) }, { k: "t", t: "Audited." }, { k: "d", ms: 1000, ts: at(3) },
+    ]);
+    v.width = 900;
+    v.setQuery("checkout", cx);
+    settleRows(v, cx);
+    const r = v.rows().find((x) => x.kind === "turn" && x.turn.cmd);
+    expect(v.sel).toBe(r.key);
+    const fills = () => { rec = []; v.item(T, r, false, 100); const c = rec; rec = null; return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]); };
+    check(T, "command name in the default blue bubble", fills(), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "command name in a plain bubble", fills(), T.foreground, mix(T.background, T.foreground, 20 / 255), true);
+  }
+  // What each surface lands on. The plain bubble is lighter than the pane in the dark theme and
+  // darker in the light one, so its fill differs from the reply text's (and from main's 32%).
+  expect(got).toEqual(EXPECTED_FILLS);
+});
+const EXPECTED_FILLS = {
+  // Dark: 52% (85) on the background, 48% (7a) on the selected fill, 46% (75) in the plain
+  // bubble, and main's 32% floor in the blue bubble, where white is under 4.5:1 even at 34%.
+  "dark reply text, selected": "#d7a00085",
+  "dark reply text, not selected": "#d7a00052",
+  "dark prompt in a plain bubble, selected": "#d7a00075",
+  "dark prompt in a plain bubble, not selected": "#d7a00052",
+  "dark prompt in the default blue bubble, selected": "#d7a00052",
+  "dark prompt in the default blue bubble, not selected": "#d7a00052",
+  "dark open turn's prompt in the default blue bubble": "#d7a00052",
+  "dark open turn's prompt in a plain bubble": "#d7a00075",
+  "dark outline line, selected": "#d7a0007a",
+  "dark outline line, not selected": "#d7a00052",
+  "dark command name in the default blue bubble": "#d7a00052",
+  "dark command name in a plain bubble": "#d7a00075",
+  // Light: 60% (99) everywhere the selected turn's text is, 32% elsewhere.
+  "light reply text, selected": "#99670099",
+  "light reply text, not selected": "#99670052",
+  "light prompt in a plain bubble, selected": "#99670099",
+  "light prompt in a plain bubble, not selected": "#99670052",
+  "light prompt in the default blue bubble, selected": "#99670099",
+  "light prompt in the default blue bubble, not selected": "#99670052",
+  "light open turn's prompt in the default blue bubble": "#99670099",
+  "light open turn's prompt in a plain bubble": "#99670099",
+  "light outline line, selected": "#99670099",
+  "light outline line, not selected": "#99670052",
+  "light command name in the default blue bubble": "#99670099",
+  "light command name in a plain bubble": "#99670099",
+};
+
+// A compact pin in the Pinned view draws its lines without marking matches, selected or not.
+test("a compact pin draws no search match fill, selected or not", async () => {
+  const { v, cx } = await stepPane();
+  // Pins are kept across panes, so pin only what is not pinned yet.
+  for (const k of ["0:5", "0:7"]) { v.sel = k; if (!v.isPinnedTurn(v.findTurn(k))) v.action("pin", cx); }
+  v.setView("pinned");
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const pins = v.rows().filter((r) => r.compact);
+  expect(pins.map((r) => r.turn.n)).toEqual(expect.arrayContaining([5, 7]));
+  expect(pins.some((r) => r.key === v.sel || r.turn === v.findTurn(v.sel))).toBe(true);
+  for (const r of pins) {
+    rec = [];
+    v.item(theme, r, false, 100);
+    const c = rec;
+    rec = null;
+    expect(c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(theme.working))).toEqual([]);
+  }
 });

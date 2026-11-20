@@ -7,7 +7,7 @@ import {
   statusGroups, statusWidth, ringStep,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
-  isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
+  isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
@@ -56,6 +56,58 @@ test("Shift w steps the reading width; plain w still fits the pane, and a filter
   // Listed under View, beside w.
   const view = keySheet().find(([g]) => g === "View")[1].map(([k, what]) => `${k.join(" ")}: ${what}`);
   expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
+});
+
+// TRD-37: n steps to the older search match and Shift n to the newer one, as in less and vim.
+// In the search field every letter types; a quote key of n keeps n, and the sheet then names
+// Shift n alone.
+test("n and Shift n step through search matches; the field types them; a quote key of n wins", () => {
+  expect(keyAction(key("n"))).toBe("olderMatch");
+  expect(keyAction(key("n", { shift: true }))).toBe("newerMatch");
+  expect(keyAction(key("N", { shift: true }))).toBe("newerMatch");
+  expect(keyAction(key("N"))).toBe("newerMatch");
+  expect(keyAction(key("n"), true)).toBe(null);
+  expect(keyAction(key("n", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("N"), true)).toBe(null);
+  expect(keyAction(key("n", { platform: true }))).toBe(null);
+  expect(keyAction(key("n"), false, "n")).toBe("quote");
+  const row = (q) => keySheet(q).find(([g]) => g === "List")[1].find(([k]) => k.includes("Shift n"));
+  expect(row("q")).toEqual([["n", "Shift n"], "Older or newer search match"]);
+  expect(row("n")).toEqual([["Shift n"], "Newer search match"]);
+});
+
+// TRD-37: the selected turn's search matches get a stronger fill than the others, but never
+// one that takes the text on it under 4.5:1. Colours read from the rig's Herdr 0.1.16 stills.
+test("matchFill: the usual 32%, and the strongest fill up to 60% that keeps the text at 4.5:1 for the selected turn", () => {
+  const drawn = (f, bg) => mix(bg, f.slice(0, 7), parseInt(f.slice(7), 16) / 255);
+  const dark = { working: "#e6c07a", fg: "#eeeeef", bg: "#17191d" };
+  const light = { working: "#996700", fg: "#1b1b1e", bg: "#ffffff" };
+  const blue = "#2563eb";
+  // Not selected: 32%, whatever the contrast.
+  expect(matchFill(dark.working, dark.fg, dark.bg, false)).toBe("#e6c07a52");
+  expect(matchFill(dark.working, "#ffffff", blue, false)).toBe("#e6c07a52");
+  // Light: 60% keeps the reply text at 7.2:1, so it is 60%; so does white in a blue bubble (5.8:1).
+  expect(matchFill(light.working, light.fg, light.bg, true)).toBe("#99670099");
+  expect(matchFill(light.working, "#ffffff", blue, true)).toBe("#99670099");
+  // Dark: 60% would take the reply text to 3.4:1; the fill stops where it still reads at 4.5:1.
+  const f = matchFill(dark.working, dark.fg, dark.bg, true);
+  expect(contrast(dark.fg, drawn(f, dark.bg))).toBeGreaterThanOrEqual(4.5);
+  expect(parseInt(f.slice(7), 16)).toBeGreaterThan(0x52);
+  expect(parseInt(f.slice(7), 16)).toBeLessThan(0x99);
+  expect(contrast(dark.fg, drawn(alpha(dark.working, 0.6), dark.bg))).toBeLessThan(4.5);
+  // White in a dark theme's blue bubble is already under 4.5:1 at 32%: no stronger fill there.
+  expect(matchFill(dark.working, "#ffffff", blue, true)).toBe("#e6c07a52");
+  // Over the selected row's fill (Herdr 0.1.16's dark #ffffff17 drawn over the background) the
+  // same text allows less: 40% (66) at 4.69:1 where the plain background allows 48% (7a).
+  expect(matchFill(dark.working, dark.fg, dark.bg, true)).toBe("#e6c07a7a");
+  expect(matchFill(dark.working, dark.fg, over("#ffffff17", dark.bg), true)).toBe("#e6c07a66");
+  // Light (#00000012): 60% still keeps 6.6:1.
+  expect(matchFill(light.working, light.fg, over("#00000012", light.bg), true)).toBe("#99670099");
+  // The threshold is unrounded: over #35373b, 38% gives 4.498:1, which rounds to 4.5 but is
+  // under it, so the fill is 36% (5c), not 38% (61).
+  expect(contrast(dark.fg, mix("#35373b", dark.working, 0.38))).toBe(4.5);
+  expect(ratio(dark.fg, mix("#35373b", dark.working, 0.38))).toBeLessThan(4.5);
+  expect(matchFill(dark.working, dark.fg, "#35373b", true)).toBe("#e6c07a5c");
 });
 
 test("alpha: every colour form", () => {
