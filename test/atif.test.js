@@ -101,7 +101,11 @@ test("atif: Claude Code's and Codex's steps keep their times, results their time
     expect(agentSteps.filter((st) => st.extra?.kind !== "background_update").every((st) => st.timestamp)).toBe(true);
     const calls = agentSteps.flatMap((st) => (st.tool_calls ?? []).map((c) => ({ c, r: st.observation.results.find((r) => r.source_call_id === c.tool_call_id) })));
     expect(calls.every(({ c, r }) => c.extra.input && r.extra.result_ts >= c.extra.started)).toBe(true);
-    expect(calls.filter(({ r }) => r.extra.tool_result_is_error).map(({ c }) => c.extra.input)).toEqual([bad]);
+    // Whether a result failed, as the reader knows it: true, false, or left out when unknown.
+    const outcome = new Map(trajectories(s).flatMap((tr) => tr.groups.flatMap((g) => g.cells.filter((c) => c.call).map((c) => [c.call, c.result?.failed ?? undefined]))));
+    expect(calls.map(({ r }) => r.extra.tool_result_is_error)).toEqual(calls.map(({ c }) => outcome.get(c.tool_call_id)));
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === true).map(({ c }) => c.extra.input)).toEqual([bad]);
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === false).length).toBeGreaterThan(0);
     expect(calls.every(({ r }) => !Object.hasOwn(r.extra, "failed"))).toBe(true);
     // Tokens: per turn on its last agent step; prompt tokens are input, cache reads and writes.
     for (const turn of s.turns) {
@@ -188,14 +192,27 @@ function claudeSubagents() {
   return agentIds;
 }
 
-test("TRD-41: the Claude CLI exports Harbor's extra fields", () => {
+test("atif: the Claude CLI exports Harbor's extra fields", () => {
   const ids = claudeSubagents();
   const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" }));
   expect(problems(t)).toEqual([]);
   const results = t.steps.flatMap((step) => step.observation?.results ?? []);
+  // A known outcome is written either way; every result here has one.
   expect(results.some((r) => r.extra?.tool_result_is_error === true)).toBe(true);
+  expect(results.some((r) => r.extra?.tool_result_is_error === false)).toBe(true);
+  expect(results.every((r) => typeof r.extra?.tool_result_is_error === "boolean")).toBe(true);
   expect(results.every((r) => !Object.hasOwn(r.extra ?? {}, "failed"))).toBe(true);
-  expect(results.some((r) => r.extra?.tool_result_is_error === undefined)).toBe(true);
+  // An unknown outcome (a call whose result is not written yet) leaves the flag out.
+  const open = join(dir, "open-call.jsonl");
+  const openEvents = [
+    { type: "user", sessionId: "open", timestamp: "2026-11-20T00:00:01.000Z", message: { role: "user", content: "Run the tests." } },
+    { type: "assistant", sessionId: "open", timestamp: "2026-11-20T00:00:02.000Z", message: { id: "msg_open", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "tool_use", id: "toolu_open", name: "Bash", input: { command: "bun test" } }], stop_reason: "tool_use" } },
+  ];
+  writeFileSync(open, `${openEvents.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const pending = JSON.parse(execFileSync("bun", [join(core, "atif.js"), open, "claude"], { encoding: "utf8" })).steps.flatMap((step) => step.observation?.results ?? []);
+  expect(pending.map((r) => [r.source_call_id, r.extra])).toEqual([["toolu_open", { no_result: true }]]);
+  // The main session's steps say they are not a helper's, as Harbor's Claude steps do.
+  expect(t.steps.every((step) => step.extra.is_sidechain === false && !Object.hasOwn(step.extra, "agent_id"))).toBe(true);
   const linked = results.find((r) => r.subagent_trajectory_ref?.[0]?.trajectory_id === ids[0]);
   const child = t.subagent_trajectories.find((c) => c.trajectory_id === ids[0]);
   expect(linked.subagent_trajectory_ref).toEqual([{ trajectory_id: ids[0], session_id: t.session_id }]);
@@ -207,7 +224,7 @@ test("TRD-41: the Claude CLI exports Harbor's extra fields", () => {
   same("claude-cli.json", t);
 });
 
-test("TRD-41: Claude raw arguments keep the transcript input value", () => {
+test("atif: Claude raw arguments keep the transcript input value", () => {
   const file = join(dir, "raw-arguments.jsonl");
   const at = (n) => `2026-11-20T00:00:${String(n).padStart(2, "0")}.000Z`;
   const values = [{ value: "nested", other: [1, 2] }, "  spaced  ", [1, 2], false, undefined, null];

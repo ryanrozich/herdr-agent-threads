@@ -16,9 +16,11 @@
 //   (metrics.extra.scope "turn").
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
-//   (result_ts). A failed result uses Harbor's tool_result_is_error. The panel's reader keeps no arguments, so arguments
-//   is {} unless the caller read them (the command line does, from calls.sh); a call whose
-//   input was not JSON, or was not read, keeps {} and says so (extra.arguments_unread).
+//   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
+//   false when the reader knows, left out when it does not). The panel's reader keeps no
+//   arguments, so arguments is {} unless the caller read them (the command line does, from
+//   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
+//   (extra.arguments_unread).
 // - A call with no result yet keeps its observation result, with no content and
 //   extra.no_result. A call the transcript gives no id has none made up for the join: its
 //   tool_call_id is "<turn id>#<step>.<call>" and tool_call.extra.id_from_reader is true.
@@ -76,9 +78,11 @@ function turnMetrics(turn) {
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
 // that its input is not JSON (unread); and for a subagent call its trajectory (sub) or that
 // its transcript was not found (subMissing).
-function turnSteps(turn, tr, next, results, helperId) {
+function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
   const steps = [];
-  const base = clean({ turn: turn.n, turn_id: tr.id, agent_id: helperId, is_sidechain: helperId ? true : undefined });
+  // Harbor marks every Claude step (claudeSteps): is_sidechain true, with agent_id, on a
+  // helper's (helperId), false on the main session's.
+  const base = clean({ turn: turn.n, turn_id: tr.id, agent_id: helperId, is_sidechain: helperId ? true : claudeSteps ? false : undefined });
   const agentStep = (fields, extra) => {
     const st = clean({
       step_id: next + steps.length,
@@ -136,7 +140,7 @@ function turnSteps(turn, tr, next, results, helperId) {
           subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end),
-          tool_result_is_error: c.result?.failed === true ? true : undefined,
+          tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : undefined,
           no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
@@ -189,7 +193,7 @@ function turnSteps(turn, tr, next, results, helperId) {
 export function atif(s, { agent = "claude", version = "unknown", results = null, id = undefined, trajectoryId = undefined, children = [], helperId = undefined } = {}) {
   const trs = trajectories(s);
   const steps = [];
-  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results, helperId)); });
+  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results, helperId, agent === "claude")); });
   if (!steps.length) return null;
   const held = steps.filter((st) => st.extra?.reasoning_withheld).length;
   // Withheld reasoning with no step after it to carry the mark (a turn that is only that).

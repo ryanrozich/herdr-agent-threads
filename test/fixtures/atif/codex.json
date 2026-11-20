@@ -52,7 +52,8 @@
      {
       "source_call_id": "call_c1",
       "extra": {
-       "result_ts": "2026-11-01T09:00:07.000Z"
+       "result_ts": "2026-11-01T09:00:07.000Z",
+       "tool_result_is_error": false
       }
      },
      {
@@ -135,13 +136,15 @@
      {
       "source_call_id": "call_p1",
       "extra": {
-       "result_ts": "2026-11-01T09:01:30.000Z"
+       "result_ts": "2026-11-01T09:01:30.000Z",
+       "tool_result_is_error": false
       }
      },
      {
       "source_call_id": "call_c3",
       "extra": {
-       "result_ts": "2026-11-01T09:01:32.000Z"
+       "result_ts": "2026-11-01T09:01:32.000Z",
+       "tool_result_is_error": false
       }
      }
     ]

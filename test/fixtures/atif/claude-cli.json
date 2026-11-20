@@ -18,7 +18,8 @@
    "message": "What does the auth mock warning in the test output mean?",
    "extra": {
     "turn": 1,
-    "turn_id": "1793524350|1858vwm|1"
+    "turn_id": "1793524350|1858vwm|1",
+    "is_sidechain": false
    }
   },
   {
@@ -31,6 +32,7 @@
    "extra": {
     "turn": 1,
     "turn_id": "1793524350|1858vwm|1",
+    "is_sidechain": false,
     "end_ts": "2026-11-01T09:12:34.000Z",
     "duration_ms": 9000
    },
@@ -52,7 +54,8 @@
    "message": "Fix the flaky login test so it stops timing out in CI",
    "extra": {
     "turn": 2,
-    "turn_id": "1793524384|1ww5af2|1"
+    "turn_id": "1793524384|1ww5af2|1",
+    "is_sidechain": false
    }
   },
   {
@@ -113,7 +116,8 @@
       "source_call_id": "toolu_000002_Read",
       "content": "…",
       "extra": {
-       "result_ts": "2026-11-01T09:13:14.000Z"
+       "result_ts": "2026-11-01T09:13:14.000Z",
+       "tool_result_is_error": false
       }
      },
      {
@@ -128,14 +132,16 @@
       "source_call_id": "toolu_000004_Edit",
       "content": "ok",
       "extra": {
-       "result_ts": "2026-11-01T09:13:26.000Z"
+       "result_ts": "2026-11-01T09:13:26.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
    },
    "extra": {
     "turn": 2,
-    "turn_id": "1793524384|1ww5af2|1"
+    "turn_id": "1793524384|1ww5af2|1",
+    "is_sidechain": false
    }
   },
   {
@@ -148,6 +154,7 @@
    "extra": {
     "turn": 2,
     "turn_id": "1793524384|1ww5af2|1",
+    "is_sidechain": false,
     "end_ts": "2026-11-01T09:13:56.000Z"
    }
   },
@@ -161,6 +168,7 @@
    "extra": {
     "turn": 2,
     "turn_id": "1793524384|1ww5af2|1",
+    "is_sidechain": false,
     "kind": "background_update",
     "duration_ms": 105000
    },
@@ -182,7 +190,8 @@
    "message": "Run the full e2e suite and summarise the failures",
    "extra": {
     "turn": 3,
-    "turn_id": "1793524466|1fsoikl|1"
+    "turn_id": "1793524466|1fsoikl|1",
+    "is_sidechain": false
    }
   },
   {
@@ -215,7 +224,8 @@
       "source_call_id": "toolu_000007_Bash",
       "content": "…",
       "extra": {
-       "result_ts": "2026-11-01T09:14:32.000Z"
+       "result_ts": "2026-11-01T09:14:32.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
@@ -223,6 +233,7 @@
    "extra": {
     "turn": 3,
     "turn_id": "1793524466|1fsoikl|1",
+    "is_sidechain": false,
     "interrupted": true,
     "compactions": 1
    },
@@ -244,7 +255,8 @@
    "message": "Why does CI fail here? Log below:\n\nTimeoutError: waitForURL 30000ms\n    at step0 (tests/login.spec.ts:40:5)\n    at step1 (tests/login.spec.ts:41:5)\n    at step2 (tests/login.spec.ts:42:5)\n    at step3 (tests/login.spec.ts:43:5)\n    at step4 (tests/login.spec.ts:44:5)\n    at step5 (tests/login.spec.ts:45:5)\n    at step6 (tests/login.spec.ts:46:5)\n    at step7 (tests/login.spec.ts:47:5)\n    at step8 (tests/login.spec.ts:48:5)\n    at step9 (tests/login.spec.ts:49:5)\n    at step10 (tests/login.spec.ts:50:5)\n    at step11 (tests/login.spec.ts:51:5)\n    at step12 (tests/login.spec.ts:52:5)\n    at step13 (tests/login.spec.ts:53:5)\n    at step14 (tests/login.spec.ts:54:5)\n    at step15 (tests/login.spec.ts:55:5)\n    at step16 (tests/login.spec.ts:56:5)\n    at step17 (tests/login.spec.ts:57:5)\n    at step18 (tests/login.spec.ts:58:5)\n    at step19 (tests/login.spec.ts:59:5)\n    at step20 (tests/login.spec.ts:60:5)\n    at step21 (tests/login.spec.ts:61:5)\n    at step22 (tests/login.spec.ts:62:5)\n    at step23 (tests/login.spec.ts:63:5)\n    at step24 (tests/login.spec.ts:64:5)\n    at step25 (tests/login.spec.ts:65:5)\n    at step26 (tests/login.spec.ts:66:5)\n    at step27 (tests/login.spec.ts:67:5)\n    at step28 (tests/login.spec.ts:68:5)\n    at step29 (tests/login.spec.ts:69:5)\n    at step30 (tests/login.spec.ts:70:5)\n    at step31 (tests/login.spec.ts:71:5)\n    at step32 (tests/login.spec.ts:72:5)\n    at step33 (tests/login.spec.ts:73:5)\n    at step34 (tests/login.spec.ts:74:5)\n    at step35 (tests/login.spec.ts:75:5)\n    at step36 (tests/login.spec.ts:76:5)\n    at step37 (tests/login.spec.ts:77:5)\n    at step38 (tests/login.spec.ts:78:5)\n    at step39 (tests/login.spec.ts:79:5)",
    "extra": {
     "turn": 4,
-    "turn_id": "1793524553|9gc6gh|1"
+    "turn_id": "1793524553|9gc6gh|1",
+    "is_sidechain": false
    }
   },
   {
@@ -291,21 +303,24 @@
       "source_call_id": "toolu_000008_Grep",
       "content": "…",
       "extra": {
-       "result_ts": "2026-11-01T09:15:59.000Z"
+       "result_ts": "2026-11-01T09:15:59.000Z",
+       "tool_result_is_error": false
       }
      },
      {
       "source_call_id": "toolu_000009_Read",
       "content": "…",
       "extra": {
-       "result_ts": "2026-11-01T09:16:05.000Z"
+       "result_ts": "2026-11-01T09:16:05.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
    },
    "extra": {
     "turn": 4,
-    "turn_id": "1793524553|9gc6gh|1"
+    "turn_id": "1793524553|9gc6gh|1",
+    "is_sidechain": false
    }
   },
   {
@@ -318,6 +333,7 @@
    "extra": {
     "turn": 4,
     "turn_id": "1793524553|9gc6gh|1",
+    "is_sidechain": false,
     "end_ts": "2026-11-01T09:16:17.000Z",
     "duration_ms": 185000
    },
@@ -339,7 +355,8 @@
    "message": "Add a retry note to the README",
    "extra": {
     "turn": 5,
-    "turn_id": "1793524607|16hagqb|1"
+    "turn_id": "1793524607|16hagqb|1",
+    "is_sidechain": false
    }
   },
   {
@@ -372,14 +389,16 @@
       "source_call_id": "toolu_000011_Edit",
       "content": "ok",
       "extra": {
-       "result_ts": "2026-11-01T09:16:56.000Z"
+       "result_ts": "2026-11-01T09:16:56.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
    },
    "extra": {
     "turn": 5,
-    "turn_id": "1793524607|16hagqb|1"
+    "turn_id": "1793524607|16hagqb|1",
+    "is_sidechain": false
    }
   },
   {
@@ -392,6 +411,7 @@
    "extra": {
     "turn": 5,
     "turn_id": "1793524607|16hagqb|1",
+    "is_sidechain": false,
     "end_ts": "2026-11-01T09:17:00.000Z",
     "duration_ms": 19000,
     "errors": [
@@ -416,7 +436,8 @@
    "message": "Review the calendar code three ways",
    "extra": {
     "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
+    "turn_id": "1793524650|5n8crn|1",
+    "is_sidechain": false
    }
   },
   {
@@ -449,14 +470,16 @@
       "source_call_id": "toolu_000013_Bash",
       "content": "3 files changed",
       "extra": {
-       "result_ts": "2026-11-01T09:17:36.000Z"
+       "result_ts": "2026-11-01T09:17:36.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
    },
    "extra": {
     "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
+    "turn_id": "1793524650|5n8crn|1",
+    "is_sidechain": false
    }
   },
   {
@@ -542,6 +565,7 @@
       ],
       "extra": {
        "result_ts": "2026-11-01T09:17:42.000Z",
+       "tool_result_is_error": false,
        "subagent": {
         "agent": "a0000000000000014",
         "state": "completed",
@@ -561,6 +585,7 @@
       ],
       "extra": {
        "result_ts": "2026-11-01T09:17:48.000Z",
+       "tool_result_is_error": false,
        "subagent": {
         "agent": "a0000000000000015",
         "state": "completed",
@@ -575,6 +600,7 @@
       "extra": {
        "subagent_transcript": "not found",
        "result_ts": "2026-11-01T09:17:54.000Z",
+       "tool_result_is_error": false,
        "subagent": {
         "agent": "a0000000000000016",
         "state": "failed",
@@ -587,7 +613,8 @@
    },
    "extra": {
     "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
+    "turn_id": "1793524650|5n8crn|1",
+    "is_sidechain": false
    }
   },
   {
@@ -620,14 +647,16 @@
       "source_call_id": "toolu_000017_Bash",
       "content": "12 pass",
       "extra": {
-       "result_ts": "2026-11-01T09:18:00.000Z"
+       "result_ts": "2026-11-01T09:18:00.000Z",
+       "tool_result_is_error": false
       }
      }
     ]
    },
    "extra": {
     "turn": 6,
-    "turn_id": "1793524650|5n8crn|1"
+    "turn_id": "1793524650|5n8crn|1",
+    "is_sidechain": false
    }
   },
   {
@@ -640,6 +669,7 @@
    "extra": {
     "turn": 6,
     "turn_id": "1793524650|5n8crn|1",
+    "is_sidechain": false,
     "end_ts": "2026-11-01T09:19:04.000Z",
     "duration_ms": 132000
    },
@@ -722,7 +752,8 @@
         "source_call_id": "toolu_s0_Grep",
         "content": "src/calendar/range.ts:12",
         "extra": {
-         "result_ts": "2026-11-01T10:00:05.000Z"
+         "result_ts": "2026-11-01T10:00:05.000Z",
+         "tool_result_is_error": false
         }
        }
       ]
@@ -823,7 +854,8 @@
         "source_call_id": "toolu_s1_Grep",
         "content": "src/calendar/range.ts:12",
         "extra": {
-         "result_ts": "2026-11-01T10:10:05.000Z"
+         "result_ts": "2026-11-01T10:10:05.000Z",
+         "tool_result_is_error": false
         }
        }
       ]
