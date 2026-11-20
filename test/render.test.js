@@ -12352,3 +12352,36 @@ test("a subagent that finishes after its turn ended changes its row: kept rows f
   expect(done.dur).toBe(90000);
   draw(v, cx);
 });
+
+test("the ledger is built newest turn first, one slice a draw: the newest turns show first, then every row", async () => {
+  const { v } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const whole = v.ledger().rows.map((r) => r.key);
+  const heads = whole.filter((k) => !k.startsWith("tr:"));
+  expect(heads.length).toBeGreaterThan(4);
+  // A fresh build with no time to spare: one turn a slice.
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  const first = v.ledger();
+  expect(first.partial).toBe(true);
+  expect(first.rows[0].key).toBe(heads.at(-1));
+  expect(first.rows.filter((r) => r.kind === "trh").length).toBe(1);
+  expect(v.ledgerJob).toBeTruthy();
+  // Inside a draw, a second ask in the same draw builds nothing more.
+  v.renderOpen = true;
+  v.renders = 1;
+  v.ledger();
+  const at = v.ledgerJob.next;
+  v.ledger();
+  expect(v.ledgerJob.next).toBe(at);
+  v.renderOpen = false;
+  let n = 0;
+  while (v.ledgerJob && n++ < 100) v.ledger();
+  const done = v.ledger();
+  expect(done.partial).toBe(false);
+  expect(done.rows.map((r) => r.key)).toEqual(whole);
+});

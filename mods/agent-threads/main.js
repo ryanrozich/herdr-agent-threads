@@ -9449,34 +9449,71 @@ export default class Threads extends View {
     });
     const key = `${this.sessions.map((x) => `${x.version}.${x.turns.length}.${x.agentVer ?? 0}`).join(",")}|${going ? 1 : 0}`;
     const m = this.ledgerMemo;
-    if (m?.key === key && m.sessions === this.sessions) return m;
+    if (m?.key === key && m.sessions === this.sessions && !m.partial) return m;
     this.turnLedger ??= new WeakMap();
-    // Whether the agent writes result times (ledger.js sessionHasEnds): Claude Code always
-    // does; another agent shows it by a result time anywhere in the session.
-    const claude = this.agent().key === "claude";
-    const endsOf = this.sessions.map((x) => claude || this.sessionEnds(x));
-    const rows = [];
-    const lastSi = this.sessions.length - 1;
-    this.sessions.forEach((x, si) => {
-      if (si > 0 && x.turns.length) rows.push({ kind: "sess", key: `sess:${si}`, si, ts: x.turns[0]?.ts ?? null });
-      x.turns.forEach((turn, ti) => {
-        const live = going && si === lastSi && ti === x.turns.length - 1;
-        // A done turn's rows are kept until the turn changes (turn.v), or, for a turn with a
-        // subagent, until a launch or notice comes (s.agentVer): a background subagent often
-        // finishes after its turn did.
-        const kept = turn.done ? this.turnLedger.get(turn) : null;
-        const fresh = kept?.si === si && kept.v === turn.v && kept.ends === endsOf[si] && (!kept.sub || kept.agentVer === x.agentVer);
-        let out = fresh ? kept.out : null;
-        if (!out) {
-          out = ledgerTurn(x, turn, si, live, { ends: endsOf[si] });
-          if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends: endsOf[si], sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
-        }
-        for (const r of out.rows) rows.push(r);
-      });
-    });
-    this.ledgerMemo = { key, sessions: this.sessions, rows, totals: ledgerTotals(rows), going };
+    // The rows are built newest turn first, one slice a draw (buildMax, as the Chat's rows):
+    // every turn of a 2,000-turn session in one draw took longer than Herdr gives a draw. Until
+    // the build is done, the rows shown before stay; with none, the newest turns built so far.
+    let job = this.ledgerJob;
+    if (!job || job.key !== key || job.sessions !== this.sessions) {
+      // Whether the agent writes result times (ledger.js sessionHasEnds): Claude Code always
+      // does; another agent shows it by a result time anywhere in the session.
+      const claude = this.agent().key === "claude";
+      const all = [];
+      this.sessions.forEach((x, si) => x.turns.forEach((turn) => all.push({ x, si, turn })));
+      job = this.ledgerJob = {
+        key, going, sessions: this.sessions, all, outs: new Array(all.length), next: all.length - 1, frame: null,
+        endsOf: this.sessions.map((x) => claude || this.sessionEnds(x)),
+      };
+    }
+    // One slice a draw: ledger() is asked for more than once in a draw.
+    if (this.renderOpen && job.frame === this.renders) return m ?? this.ledgerPart(job);
+    job.frame = this.renders;
+    const b0 = now();
+    const until = b0 + this.buildMax();
+    const last = job.all.length - 1;
+    while (job.next >= 0) {
+      const { x, si, turn } = job.all[job.next];
+      const ends = job.endsOf[si];
+      // A done turn's rows are kept until the turn changes (turn.v), or, for a turn with a
+      // subagent, until a launch or notice comes (s.agentVer): a background subagent often
+      // finishes after its turn did.
+      const kept = turn.done ? this.turnLedger.get(turn) : null;
+      const fresh = kept?.si === si && kept.v === turn.v && kept.ends === ends && (!kept.sub || kept.agentVer === x.agentVer);
+      let out = fresh ? kept.out : null;
+      if (!out) {
+        out = ledgerTurn(x, turn, si, going && job.next === last, { ends });
+        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
+      }
+      job.outs[job.next--] = out;
+      if (job.next >= 0 && now() > until) break;
+    }
+    this.buildSpent = (this.buildSpent ?? 0) + (now() - b0);
+    if (job.next >= 0) return m ?? this.ledgerPart(job);
+    this.ledgerJob = null;
+    this.ledgerMemo = { key, sessions: this.sessions, rows: this.ledgerJoin(job, 0), going, partial: false };
+    this.ledgerMemo.totals = ledgerTotals(this.ledgerMemo.rows);
     this.ledgerShown = null;
     return this.ledgerMemo;
+  }
+  // The rows of a build's turns from the i-th on, with a divider before each session after
+  // the first.
+  ledgerJoin(job, from) {
+    const rows = [];
+    for (let i = from; i < job.all.length; i++) {
+      const { x, si, turn } = job.all[i];
+      if (si > 0 && turn === x.turns[0]) rows.push({ kind: "sess", key: `sess:${si}`, si, ts: turn.ts ?? null });
+      for (const r of job.outs[i].rows) rows.push(r);
+    }
+    return rows;
+  }
+  // Before the first build is done: the newest turns its first slice built, kept until it is.
+  ledgerPart(job) {
+    if (job.part) return job.part;
+    const rows = this.ledgerJoin(job, job.next + 1);
+    job.part = { key: null, sessions: job.sessions, rows, totals: ledgerTotals(rows), going: job.going, partial: true };
+    this.ledgerShown = null;
+    return job.part;
   }
   // A session once seen with a result time keeps it; until then it is looked for again.
   sessionEnds(x) {
@@ -9568,6 +9605,11 @@ export default class Threads extends View {
     const w = this.pw();
     const cols = ledgerCols(w);
     const L = this.ledger();
+    // A rows build left for later slices (ledger): the next frame goes on with it.
+    if (this.ledgerJob && !this.buildNext) {
+      this.buildNext = true;
+      cx.timer.after(0, (cx) => { this.buildNext = false; cx.notify(); });
+    }
     const shown = this.ledgerRows();
     const i = this.ledgerSel(shown);
     const selRow = shown[i] ?? null;
@@ -9657,7 +9699,8 @@ export default class Threads extends View {
     const goTo = this.tscrollTo;
     if (goTo) {
       this.tscrollTo = null;
-      const j = shown.findIndex((r) => r.key === goTo || r.key === this.turnOfRow(goTo));
+      const head = this.turnOfRow(goTo);
+      const j = shown.findIndex((r) => r.key === goTo || r.key === head);
       // Now, and again once the list has its size (a timer asked for in a draw may not run
       // before the list is laid out at a new width).
       if (j >= 0) {
