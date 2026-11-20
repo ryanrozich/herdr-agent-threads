@@ -177,12 +177,12 @@ test("ledger line: the turn's clock with each call a stretch of it, failed ones 
   expect(coarse([[0, 0.1], [0.11, 0.2], [0.5, 0.6], [0.9, 1]], 3)).toEqual([[0, 0.2], [0.5, 0.6], [0.9, 1]]);
 });
 
-test("ledger columns: the start from 420 px, the bar from 500, the filter bar from 540, tags and the detail at the right from 900", () => {
-  expect(ledgerCols(960)).toEqual({ start: true, bar: true, filters: true, tags: true, detailRight: true });
-  expect(ledgerCols(600)).toEqual({ start: true, bar: true, filters: true, tags: false, detailRight: false });
-  expect(ledgerCols(520)).toEqual({ start: true, bar: true, filters: false, tags: false, detailRight: false });
-  expect(ledgerCols(460)).toEqual({ start: true, bar: false, filters: false, tags: false, detailRight: false });
-  expect(ledgerCols(340)).toEqual({ start: false, bar: false, filters: false, tags: false, detailRight: false });
+test("ledger columns: the start from 420 px, the bar from 500, the filter bar from 540, the detail at the right from 900", () => {
+  expect(ledgerCols(960)).toEqual({ start: true, bar: true, filters: true, detailRight: true });
+  expect(ledgerCols(600)).toEqual({ start: true, bar: true, filters: true, detailRight: false });
+  expect(ledgerCols(520)).toEqual({ start: true, bar: true, filters: false, detailRight: false });
+  expect(ledgerCols(460)).toEqual({ start: true, bar: false, filters: false, detailRight: false });
+  expect(ledgerCols(340)).toEqual({ start: false, bar: false, filters: false, detailRight: false });
 });
 
 test("ledger inks: the user blue, agents amber, the model violet, tools teal, as tints; plain is the text colour", () => {

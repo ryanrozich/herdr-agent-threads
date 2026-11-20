@@ -19,6 +19,8 @@ const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4:
 // one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
 // so a quote key someone chose keeps working.
 const SEARCH_KEYS = { n: "olderMatch" };
+// y opens the Trajectory, or goes to it, and gives way to a quote key of y as the pin keys do.
+const TRAJ_KEYS = { y: "trajectory" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -32,18 +34,43 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (k === "W") return filtering ? null : "widthStep";
   if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? TRAJ_KEYS[k] ?? null);
+}
+// The Trajectory's own keys (the ledger): moving through its rows, the detail, the next or
+// previous failure and user message. The Chat's other keys do nothing there, but for y (back
+// to the Chat), t, the settings and the key sheet. No quote: the Trajectory quotes nothing.
+const LEDGER_KEYS = {
+  up: "lprev", k: "lprev", down: "lnext", j: "lnext", home: "lfirst", end: "llast", enter: "ldetail", space: "ldetail",
+  f: "lfail", m: "luser", y: "trajectory", escape: "escape", t: "focus", ",": "settings", "?": "keys",
+};
+export function ledgerKey(e) {
+  const m = e?.modifiers ?? {};
+  if (m.platform || m.control || m.alt || m.function) return null;
+  const k = e?.key ?? "";
+  if (m.shift) return k === "f" || k === "F" ? "lfailBack" : k === "m" || k === "M" ? "luserBack" : k === "g" || k === "G" ? "llast" : k === "?" || k === "/" ? "keys" : null;
+  if (k === "F") return "lfailBack";
+  if (k === "M") return "luserBack";
+  if (k === "G") return "llast";
+  return LEDGER_KEYS[k] ?? null;
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
-export function keySheet(quoteKey = "q", { outline = true } = {}) {
+export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false } = {}) {
   const pin = (k) => quoteKey !== k;
+  if (ledger) return [
+    ["Trajectory", [
+      [["↑", "↓", "j", "k"], "Move between steps"], [["Home", "End"], "First or last step"], [["↵", "Space"], "Show or hide the detail"],
+      [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "Next or previous user message"],
+      [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
+    ]],
+    ["Pane", [[["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"]]],
+  ];
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
       ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
-      [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
+      [["a"], "Show or hide agent messages"], ...(pin("y") && outline ? [[["y"], "Open or go to the Trajectory"]] : []), [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],

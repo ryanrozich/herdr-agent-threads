@@ -95,8 +95,10 @@ mock.module("gpui-base", () => ({
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
-    lastList = { sizes: [...sizes], keys: [], draw };
-    for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
+    // One number is one height for every item (the Trajectory's list); an array is one each.
+    const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
+    lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
+    for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
@@ -6766,9 +6768,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 36 rows.
+  // Six groups (the settings card's keys among them), 37 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -8132,11 +8134,11 @@ test("the floating top: no header row, the state top left at every width, icons 
   const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-state");
   const tip = calls.slice(at, at + 14).find((e) => e[0] === "tooltip")?.[1];
   expect(tip).toMatch(/^Claude finished its newest turn · click to go to the terminal \(t\) · .*Reading t4 · session /);
-  // The pointer in the pane, or the keyboard in the panel: search, pinned and settings, in that order.
+  // The pointer in the pane, or the keyboard in the panel: search, the Trajectory, pinned and settings, in that order.
   v.paneHover = true;
   ids = idsOf(drawn());
-  expect(["th-search", "th-pinned", "th-settings"].map((id) => ids.indexOf(id)).every((x, i, a) => x > 0 && (i === 0 || x > a[i - 1]))).toBe(true);
-  expect(v.floatButtons().map((b) => [b[0], b[1], b[2].split(" (")[0]])).toEqual([["th-search", "search", "Search"], ["th-pinned", "pin", "Open the Pinned column beside Threads"], ["th-settings", "sliders-horizontal", "Settings"]]);
+  expect(["th-search", "th-traj", "th-pinned", "th-settings"].map((id) => ids.indexOf(id)).every((x, i, a) => x > 0 && (i === 0 || x > a[i - 1]))).toBe(true);
+  expect(v.floatButtons().map((b) => [b[0], b[1], b[2].split(" (")[0]])).toEqual([["th-search", "search", "Search"], ["th-traj", "list", "Open the Trajectory beside the Chat"], ["th-pinned", "pin", "Open the Pinned column beside Threads"], ["th-settings", "sliders-horizontal", "Settings"]]);
   v.paneHover = false;
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
@@ -12077,4 +12079,176 @@ test("a pasted block keeps its long hyphenated tokens as typed, while the messag
   expect(paste.draw.includes(B)).toBe(false);
   expect(paste.rows).toBeNull();
   expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+});
+
+// ---- the Trajectory pane (TRD-22) ----
+// The words a frame drew, and whether it drew an element of an id.
+const wordsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+const hasId = (calls, id) => calls.some((e) => e[0] === "id" && e[1] === id);
+
+test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map; y moves between them, and the pane closes with the Chat", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  expect(v.floatButtons().map((b) => b[0])).toEqual(["th-search", "th-traj", "th-pinned", "th-settings"]);
+  expect(v.floatButtons()[1].slice(1, 5)).toEqual(["list", "Open the Trajectory beside the Chat (y)", "trajectory", false]);
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(false);
+  const split = log.find(([, n]) => n === "pane.split");
+  expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  expect(state.shared["threads.pinnedByTerminal"]).toBeUndefined();
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 560 }]);
+  expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
+  // No notice for any of it.
+  expect(v.toast).toBeNull();
+
+  // The Trajectory pane: the ledger only, with its heading, and the Chat's selected turn.
+  const turnKey = v.turnKeys(v.rows())[1];
+  v.sel = turnKey;
+  v.poll(cx);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turnKey });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  expect([w.trajPane, w.traj, w.pinnedPane]).toEqual([true, true, false]);
+  expect(w.me().pane).toBe("p3");
+  w.width = 560;
+  w.paneW = 560;
+  const c = frame(w, cx2);
+  expect(wordsOf(c)).toContain("Trajectory");
+  expect(hasId(c, "th-traj-heading")).toBe(true);
+  expect(hasId(c, "th-traj-chat")).toBe(false); // its own pane has no Chat button
+  expect(hasId(c, "threads-list")).toBe(false); // no Chat rows drawn
+  expect(w.tsel).toBe(turnKey);
+  w.report();
+  const rep = state.shared["threads.debug"].t4.traj;
+  expect(rep).toMatchObject({ pane: true, inPane: false, sel: turnKey, cols: { start: true, bar: true, filters: true, detailRight: false } });
+  // The keys move through the ledger, and the Chat follows the turn.
+  w.key(keyEv("j"), cx2);
+  expect(w.tsel.startsWith(`tr:${turnKey}:`)).toBe(true);
+  const other = w.ledger().rows.filter((r) => r.kind === "trh").at(-1).key;
+  w.key(keyEv("End"), cx2);
+  w.key(keyEv("end"), cx2);
+  expect(w.turnOfRow(w.tsel)).toBe(other);
+  w.poll(cx2);
+  v.poll(cx);
+  expect(v.sel).toBe(other);
+  // y in the Trajectory pane goes to the Chat.
+  log = [];
+  w.key(keyEv("y"), cx2);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  // The Chat closes: the Trajectory pane closes with it.
+  log = [];
+  state.panes = state.panes.filter((p) => p.pane !== "p2");
+  w.poll(cx2);
+  expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
+});
+
+test("under 480 px y shows the Trajectory in the Chat's own pane, with no notice; its Chat button, y or Esc goes back on the turn it selected", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 460;
+  v.paneW = 460;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  expect(v.floatButtons()[1][2]).toBe("Show the Trajectory in this pane (y)");
+  const k = v.turnKeys(v.rows());
+  v.sel = k[0];
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  expect([v.traj, v.trajPane, v.toast]).toEqual([true, false, null]);
+  let c = frame(v, cx);
+  expect(hasId(c, "th-traj-chat")).toBe(true);
+  expect(wordsOf(c)).toContain("Chat");
+  // At 460 px: the start column, no bar, no filter bar, and the detail closed.
+  expect(hasId(c, "th-traj-filters")).toBe(false);
+  expect(hasId(c, "th-traj-detail")).toBe(false);
+  // Enter shows the detail under the ledger; Esc closes it, then goes back to the Chat.
+  v.key(keyEv("enter"), cx);
+  c = frame(v, cx);
+  expect(hasId(c, "th-traj-detail")).toBe(true);
+  v.key(keyEv("escape"), cx);
+  expect([v.traj, v.detailOpen()]).toEqual([true, false]);
+  v.key(keyEv("End"), cx);
+  v.key(keyEv("end"), cx);
+  const last = v.turnOfRow(v.tsel);
+  v.key(keyEv("escape"), cx);
+  expect(v.traj).toBe(false);
+  expect(v.sel).toBe(last);
+  // y in and y out.
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(true);
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(false);
+  // The Chat button.
+  v.key(keyEv("y"), cx);
+  c = frame(v, cx);
+  onOf(c, "th-traj-chat", "on_click")({}, cx);
+  expect(v.traj).toBe(false);
+  expect(v.toast).toBeNull();
+  draw(v, cx);
+});
+
+test("the Trajectory at 960 px: the filter bar with counts, the detail open at the right; f steps through failed calls and the heading counts them", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  let c = frame(v, cx);
+  expect(hasId(c, "th-traj-filters")).toBe(true);
+  expect(wordsOf(c)).toContain("Failed only");
+  expect(hasId(c, "th-traj-detail")).toBe(true);
+  const L = v.ledger();
+  expect(L.totals.failed).toBeGreaterThan(0);
+  // f: to the first failed call after the selected row; the heading says which of them.
+  v.tsel = L.rows.find((r) => r.kind === "trh").key;
+  v.key(keyEv("f"), cx);
+  const sel = L.rows.find((r) => r.key === v.tsel);
+  expect(sel.failed).toBe(true);
+  c = frame(v, cx);
+  expect(wordsOf(c)).toContain(`1 of ${L.totals.failed}`);
+  expect(v.trajReport().detail.fields).toContainEqual(["Result", "failed"]);
+  // Failed only lists only failed calls (and their headings).
+  onOf(c, "th-filter-failed", "on_click")({}, cx);
+  expect(v.ledgerRows().filter((r) => r.kind === "tr").every((r) => r.failed)).toBe(true);
+  // The status line: turns and steps, failed, tokens, time worked.
+  expect(v.trajReport().status[0]).toMatch(/^\d+ turns · \d+ steps$/);
+  draw(v, cx);
+});
+
+test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
+  const { file } = runningFixture();
+  const { v, cx } = await pane(file);
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  state.terminals[0].status = "working";
+  v.ledgerMemo = null;
+  expect(v.ledger().going).toBe(true);
+  expect(v.trajReport().heads.at(-1).total).toBe("running");
+  // The same transcript with Herdr's status idle (the agent was killed mid-turn): unknown.
+  state.terminals[0].status = "idle";
+  expect(v.ledger().going).toBe(false);
+  const h = v.trajReport().heads.at(-1);
+  expect(h.total).not.toBe("running");
+  expect(h.stale).toBe(true);
+  expect(Number.isFinite(h.lastAt)).toBe(true);
+  // The process gone: never running, whatever the status says.
+  state.terminals[0].status = "working";
+  v.res = { ...v.res, ended: "exited" };
+  expect(v.ledger().going).toBe(false);
+  draw(v, cx);
 });
