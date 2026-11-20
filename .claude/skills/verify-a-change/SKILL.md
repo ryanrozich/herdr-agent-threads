@@ -20,6 +20,8 @@ Run them in this order, the order CI runs them (`.github/workflows/ci.yml`). The
 
 `test/leftover-check.sh` runs `bun test` with `TMPDIR` set to a fresh folder. It fails, naming what it found, when anything is left in that folder after the run, whatever call made it, or when a process of the run is still alive 10 seconds after it ends. A temp folder a test made with `mkdtempSync(join(tmpdir(), ...))` and never removed is exactly such a leftover. A file written to a fixed path outside the temp folder is not seen by the check at all, so write temp files only under `tmpdir()`. Fix the test that left it; never loosen the check.
 
+A change to `mods/agent-threads/core/`, `test/atif.test.js`, `test/make-fixture.js` or `test/make-agents.js` also starts the Harbor job (`.github/workflows/harbor.yml`), which the queue does not wait for. Read its report in the run's summary, or run `sh test/harbor/run.sh` (`docs/develop.md` says what it needs), and say in the pull request what it reported.
+
 CI then scans the new commits for secrets with gitleaks 8.30.1 (`gitleaks git`). Before pushing, run the same scan in a form that also works on older versions, such as the 8.16 some distributions ship, which has no `git` subcommand. Run it from a checkout that has `origin/main`: `gitleaks detect --redact --no-banner --source . --log-opts='origin/main..HEAD'`.
 
 Before each commit, `sh test/scan-private.sh` must print "scan: clean". Never run `herdr-app check` on the repo's mod folder: `./install.sh` runs it on the installed copy.
