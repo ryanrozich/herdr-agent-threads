@@ -351,7 +351,7 @@ const PROBED = new Set(["you", "rhead", "md", "itext", "lhead", "latest", "norep
 const MD_CHAR = 6.1; // estimated width of a character of 13 px reply prose (scaled by charW())
 // Where hlBlock cuts a line into words: after white space or a HYPHEN_BREAK.
 const WORD_END = new RegExp(`(?<=[\\s${HYPHEN_BREAK}])`);
-const YOU_CHAR = 6.2;// the same for the prompt, a little wider: the YOU block clips
+const YOU_CHAR = 6.2; // the same for the prompt, a little wider: the YOU block clips
 const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "nu", "pwsh", "login", "tcsh", "ksh"]);
 const CARD = new Set(["head", "imgs", "you", "ustrip", "rhead", "itext", "grp", "call", "cout", "wspin", "noreply", "md", "codehead", "code", "fold", "lhead", "latest", "copy", "seltext", "resume"]);
 const PREVIEW_CHARS = 1200; // of a prompt or reply, enough for any row's line limit
@@ -4330,12 +4330,6 @@ export default class Threads extends View {
     cx.timer.after(60, (cx) => {
       const part = this.copiedPart(cx);
       if (!part || part.text === this.toldPart) return;
-      // Copied from an open message's Markdown, which Herdr copies as drawn: the message's
-      // own text goes back on the clipboard, without the HYPHEN_BREAKs (ui.js hyphenBreaks).
-      if (part.text.includes(`-${HYPHEN_BREAK}`)) {
-        part.text = part.text.replaceAll(`-${HYPHEN_BREAK}`, "-");
-        try { cx.write_to_clipboard(part.text); } catch (e) { console.log(`agent-threads: clipboard write failed: ${e?.message ?? e}`); }
-      }
       this.toldPart = part.text;
       this.sel = part.key;
       const words = part.text.trim().split(/\s+/).length;
@@ -7795,8 +7789,10 @@ export default class Threads extends View {
     const yc = this.charW(YOU_CHAR);
     // A hyphenated token longer than about 3/4 of the widest bubble's line gets HYPHEN_BREAK
     // after its "-"s in the drawn text (ui.js hyphenBreaks); the margin is for a line of
-    // wider letters than the estimate's average. y.text stays the message itself. A pasted
-    // block gets none: it is drawn as code, and code keeps what was typed (promptMd).
+    // wider letters than the estimate's average. y.text stays the message itself. Only these
+    // plain lines get breaks, never the Markdown below: a plain bubble's Markdown can be
+    // selected and Herdr copies it as drawn. A pasted block gets none: it is drawn as code,
+    // and code keeps what was typed.
     const brk = Math.max(8, Math.floor(((bmax - 2 * ROW.BUBBLE_PX) / yc) * 0.75));
     const parts = plain ? promptParts(c.text, max).map((p) => {
       const t = p.lines.join("\n");
@@ -7804,7 +7800,7 @@ export default class Threads extends View {
       return { ...p, draw: hyphenBreaks(t, brk), rows: hl && t.toLowerCase().includes(q.toLowerCase()) ? p.lines.map((l) => breakSpans(l, q, brk)) : null };
     }) : null;
     const m = plain ? { md: "", quotes: parts.filter((x) => x.quote).length, code: 0, links: 0, cut: Math.max(0, c.text.length - max * 8) }
-      : promptMd(c.text, { links: this.links, ...this.linkCtx(), max, per: brk });
+      : promptMd(c.text, { links: this.links, ...this.linkCtx(), max });
     const extra = 6 * m.quotes + 16 * m.code;
     // The bubble: as wide as the widest line, at most bubbleMax.
     const widest = c.text.split("\n").slice(0, 400).reduce((w, l) => Math.max(w, l.length), 0);
