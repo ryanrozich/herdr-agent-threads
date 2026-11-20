@@ -1310,6 +1310,8 @@ export default class Threads extends View {
     this.quietRail();
     this.cardOpens++;
     this.cardPlaces = {};
+    this.cardSizes = {};
+    this.cardSlots = {};
     // A handle keeps its place from the last opening: its mark at 0 (child 1) takes the view
     // back to the top, the way a new opening starts.
     for (const h of Object.values(this.cardScrolls ?? {})) h.scroll_to_item(1);
@@ -6435,7 +6437,7 @@ export default class Threads extends View {
       .child(this.cardCol(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
         .on_size_change((size, cx) => {
           const h = size.height / this.zoom();
-          if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
+          if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h, shape: this.cardRoot?.shape ?? null }; cx.notify(); }
         })
         .on_scroll_wheel(wheel("rows")), 20, 16, rows(), key))
       .children(marks.map((y) => div().absolute().top(y).left(0).w(1).h(1)));
@@ -6472,36 +6474,56 @@ export default class Threads extends View {
   }
   // A column of the card's rows whose controls the card can scroll into view for the ring.
   // Its kids (elements, or functions that build an element or a list of them) are built in
-  // order, so the ring's stops each one adds are known (from and to in cardStops), and each
-  // element's height is kept as it draws (cardSizes, by its place: the page, then each
-  // column's index). A kid that is itself a column is linked, so a control is found inside
-  // it. top is the column's padding and border above its first kid; gap the space between.
-  cardCol(el, gap, top, kids, path = this.cardKidPath ?? "card") {
-    const node = { el: null, gap, top, path, items: [] };
+  // order, so the ring's stops each one adds are known (from and to in cardStops). A kid
+  // that is itself a column is linked (cols), and its height is the sum of its parts; every
+  // other part's height is kept as it draws, by the part (cardSizes) and by its place in the
+  // column (cardSlots). A part's key is its kid's place in the list it was built from, its
+  // place in what that kid returned, and the first control it holds, so a row that comes or
+  // goes elsewhere leaves the other parts' heights right. A part that is new and not measured
+  // yet takes the height last measured in its place, which Herdr may not report again when
+  // it did not change; revealRing checks the sum against the rows' measured height. pad is
+  // the column's padding and border at the top and again at the bottom; gap the space
+  // between its parts.
+  cardCol(el, gap, pad, kids, path = this.cardKidPath ?? "card") {
+    const node = { el: null, gap, pad, path, items: [], keys: [], cols: [], shape: "" };
     const els = [];
-    for (const k of kids) {
+    const owners = [];
+    kids.forEach((k, n) => {
       const from = (this.cardStops ?? []).length;
       const at = els.length;
-      this.cardKidPath = `${path}/${at}`;
+      this.cardKidPath = `${path}/${n}`;
       this.cardColLast = null;
       const out = typeof k === "function" ? k() : k;
       const inner = this.cardColLast;
       const list = [out].flat().filter(Boolean);
-      if (!list.length) continue;
+      if (!list.length) return;
+      const to = (this.cardStops ?? []).length;
+      const first = to > from ? this.cardStops[from].id : "";
+      const col = list.length === 1 && inner?.el === list[0] ? inner : null;
+      const item = { from, to, first: at, last: at + list.length - 1, child: col };
+      list.forEach((_x, j) => { node.keys.push(`${path}/${n}.${j}:${first}`); node.cols.push(col); owners.push(item); });
       els.push(...list);
-      node.items.push({ from, to: (this.cardStops ?? []).length, first: at, last: els.length - 1, child: list.length === 1 && inner?.el === list[0] ? inner : null });
-    }
+      node.items.push(item);
+    });
     this.cardKidPath = null;
+    node.shape = node.keys.map((k, j) => (node.cols[j] ? `${k}{${node.cols[j].shape}}` : k)).join(",");
     const sizes = (this.cardSizes ??= {});
+    const slots = (this.cardSlots ??= {});
     const sized = els.map((x, i) => {
-      const k = `${path}/${i}`;
+      if (node.cols[i]) return x;
+      const k = node.keys[i];
+      const slot = `${path}#${i}`;
       const onSize = (size, cx) => {
         const h = size.height / this.zoom();
+        slots[slot] = h;
         if (Math.abs((sizes[k] ?? -1) - h) <= 0.5) return;
         sizes[k] = h;
         if (this.ringShow) cx.notify();
       };
+      // For the tests: the part's key, its place, and the controls it holds (cardItem).
       onSize.cardPath = k;
+      onSize.cardSlot = slot;
+      onSize.cardItem = owners[i];
       return x.on_size_change(onSize);
     });
     node.el = el.children(sized);
@@ -6510,24 +6532,37 @@ export default class Threads extends View {
     if (!path.includes("/") && path !== "card") this.cardRoot = node;
     return node.el;
   }
+  // The height of a column's part j, and of a whole column: null while one it needs has not
+  // been measured.
+  cardPartH(node, j) {
+    if (node.cols[j]) return this.cardColH(node.cols[j]);
+    return this.cardSizes?.[node.keys[j]] ?? this.cardSlots?.[`${node.path}#${j}`] ?? null;
+  }
+  cardColH(node) {
+    let sum = 2 * node.pad;
+    for (let j = 0; j < node.keys.length; j++) {
+      const h = this.cardPartH(node, j);
+      if (h == null) return null;
+      sum += h + (j > 0 ? node.gap : 0);
+    }
+    return sum;
+  }
   // Where the control at stop i is in the card's rows: [top, bottom] from the rows' top, or
   // null when it is not in them (the head and foot always show) or a height it needs has not
   // been measured yet.
   ringSpan(node, i, y = 0) {
     const it = node?.items.find((x) => i >= x.from && i < x.to);
     if (!it) return null;
-    const sizes = this.cardSizes ?? {};
-    let at = y + node.top;
+    let at = y + node.pad;
     for (let j = 0; j < it.first; j++) {
-      const h = sizes[`${node.path}/${j}`];
+      const h = this.cardPartH(node, j);
       if (h == null) return null;
       at += h + node.gap;
     }
-    const inner = it.child ? this.ringSpan(it.child, i, at) : null;
-    if (inner) return inner;
+    if (it.child) return this.ringSpan(it.child, i, at);
     let end = at;
     for (let j = it.first; j <= it.last; j++) {
-      const h = sizes[`${node.path}/${j}`];
+      const h = this.cardPartH(node, j);
       if (h == null) return null;
       end += h + (j < it.last ? node.gap : 0);
     }
@@ -6549,8 +6584,13 @@ export default class Threads extends View {
     const root = this.cardRoot;
     const handle = this.cardScrolls?.[key] ?? null;
     if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = null; return; }
+    // The rows' height as drawn, once it is known to fit their parts as they are now: measured
+    // since they last changed, or equal to the sum of their parts. Until then it waits, so a
+    // scroll is never worked out from a height a row that came or went has made stale.
     const h = this.cardBody?.key === key ? this.cardBody.h : null;
-    const span = h ? this.ringSpan(root, i) : null;
+    const sum = this.cardColH(root);
+    const fresh = h != null && sum != null && (Math.abs(h - sum) <= 2 || this.cardBody.shape === root.shape);
+    const span = fresh ? this.ringSpan(root, i) : null;
     if (!span) return;
     this.ringShow = null;
     const place = this.cardPlace(key);
@@ -6984,9 +7024,9 @@ export default class Threads extends View {
   // No rules: the two types that fill a rule, in dashed boxes. Use opens a new rule with that
   // type pressed.
   ruleExamples(t) {
-    return v_flex().gap(6)
-      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
-      .children(["ticket", "pull-request"].map((k) => {
+    return this.cardCol(v_flex().gap(6), 6, 0, [
+      div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"),
+      ...["ticket", "pull-request"].map((k) => () => {
         const tpl = LINK_TEMPLATES[k];
         const use = (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); };
         return h_flex().id(`th-rule-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
@@ -6995,7 +7035,7 @@ export default class Threads extends View {
             .child(div().text_size(13).font_semibold().text_color(t.foreground).child(tpl.word))
             .child(div().text_size(12).text_color(t.muted).child(tpl.line)))
           .child(this.miniStop(t, `th-rule-use-${k}`, "Use", use, `Use ${tpl.word}`));
-      }));
+      })]);
   }
 
   // The open rule: Type, then Name, Description, Finds, Opens and Example, the line that says
@@ -7224,14 +7264,14 @@ export default class Threads extends View {
 
   // No sender rules: two that fill a rule, in dashed boxes, each with Use.
   senderExamples(t) {
-    return v_flex().gap(6)
-      .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
-      .children(Object.entries(SENDER_EXAMPLES).map(([k, x]) => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+    return this.cardCol(v_flex().gap(6), 6, 0, [
+      div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"),
+      ...Object.entries(SENDER_EXAMPLES).map(([k, x]) => () => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
         .child(svg(ICON("text-cursor")).size(14).flex_none().text_color(t.dim))
         .child(v_flex().flex_1().min_w(0).gap(4)
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child(x.rule.name))
           .child(div().text_size(12).text_color(t.muted).child(x.line)))
-        .child(this.miniStop(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }, `Use ${x.rule.name}`))));
+        .child(this.miniStop(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }, `Use ${x.rule.name}`)))]);
   }
 
   // The open sender rule: Type (two rows on a new rule, else one line with Change), Name,

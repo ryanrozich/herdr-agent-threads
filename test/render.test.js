@@ -12132,28 +12132,46 @@ test("card keys: the Link rules page goes Back, Close, then each rule's Edit, De
   } finally { done(v); }
 });
 
-// The card's columns report their heights (cardCol); each handler carries its place.
+// The card's parts that are not columns report their heights (cardCol); each handler
+// carries the part's key: its column's path, a slash, its kid's place, a dot, its place in
+// what the kid returned, a colon and the first control it holds. A column that is a kid is
+// at its column's path, a slash and its kid's place.
+// A section's heading is its first part.
+const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0\./.test(s[2]) ? 16 : 28; };
 const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = rec; rec = null; return c; };
 const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
-// Heights for a frame: each part that holds no measured part is leaf(path) tall; a column is
-// its parts and its gaps (gap(path)) tall. Returns the heights, and reports them.
-// A part's key is its column's path, a slash and its place there; the parts of a column
-// that is itself a part are under that part's path (colOf).
-const colOf = (p) => p.replace(/\.\d+:[^/]*$/, "");
-const placeOf = (p) => Number.parseFloat(p.split("/").at(-1));
-function feedSizes(c, cx, leaf, gap) {
+const parentOf = (p) => p.slice(0, p.lastIndexOf("/"));
+const rankOf = (p) => { const [n, j] = p.split("/").at(-1).split(":")[0].split("."); return Number(n) * 1000 + Number(j ?? 0); };
+// The rows of a frame as drawn: each part that is not a column is leaf(key) tall, and a
+// column (the page's rows at its key included) its padding top and bottom (pad(path)), its
+// parts and its gaps (gap(path)). The parts report their heights, then the rows theirs.
+// Returns the heights by key and path, and parts(path).
+function feedSizes(c, cx, leaf, gap, pad = () => 0) {
   const fns = sizeHandlers(c);
-  const paths = Object.keys(fns);
-  const kids = (p) => paths.filter((q) => q.startsWith(`${p}/`) && !q.slice(p.length + 1).includes("/")).sort((a, b) => placeOf(a) - placeOf(b));
+  const leaves = Object.keys(fns);
+  const cols = new Set();
+  for (const l of leaves) for (let q = parentOf(l); q; q = q.includes("/") ? parentOf(q) : "") cols.add(q);
+  const parts = (P) => [...leaves.filter((l) => parentOf(l) === P), ...[...cols].filter((q) => q.includes("/") && parentOf(q) === P)].sort((a, b) => rankOf(a) - rankOf(b));
   const H = {};
   const height = (p) => {
     if (H[p] != null) return H[p];
-    const ks = kids(colOf(p));
-    H[p] = ks.length ? ks.reduce((s, k) => s + height(k), 0) + gap(p) * (ks.length - 1) : leaf(p);
-    return H[p];
+    if (!cols.has(p)) return (H[p] = leaf(p));
+    const ks = parts(p);
+    return (H[p] = 2 * pad(p) + ks.reduce((s, k) => s + height(k), 0) + gap(p) * Math.max(0, ks.length - 1));
   };
-  for (const p of paths) fns[p]({ width: 400, height: height(p) }, cx);
-  return { H, kids };
+  for (const l of leaves) fns[l]({ width: 400, height: height(l) }, cx);
+  for (const q of cols) height(q);
+  return { H, parts };
+}
+// A page's rows: 16 px above and below, sections 20 px apart; inside, gap(path).
+const rowsGap = (inner) => (p) => (p.includes("/") ? inner(p) : 20);
+const rowsPad = (inner) => (p) => (p.includes("/") ? inner(p) : 16);
+// Measures a card page with feedSizes, reports the rows' height, and draws it once more.
+function measureCard(v, cx, key, leaf, gap, pad = () => 0) {
+  const r = feedSizes(cardWithCx(v, cx), cx, leaf, rowsGap(gap), rowsPad(pad));
+  onOf(cardWithCx(v, cx), `th-set-rows-${key}`, "on_size_change")({ height: r.H[key], width: 400 }, cx);
+  cardWithCx(v, cx);
+  return { ...r, rowsH: r.H[key] };
 }
 
 test("card ring: a move to a control out of view scrolls the card to show it in full; one in view, or in the head or foot, scrolls nothing", async () => {
@@ -12162,12 +12180,8 @@ test("card ring: a move to a control out of view scrolls the card to show it in 
     v.rootH = 600;
     const handle = v.cardScrolls.main;
     // Every row 28 px and every heading 16; a section's parts 4 px apart.
-    const leaf = (p) => (p.split("/").length === 3 && p.endsWith("/0") ? 16 : 28);
-    const { H, kids } = feedSizes(cardWithCx(v, cx), cx, leaf, () => 4);
-    const top = kids("main");
-    const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
-    onOf(cardWithCx(v, cx), "th-set-rows-main", "on_size_change")({ height: rowsH, width: 400 }, cx);
-    cardWithCx(v, cx);
+    const { H, parts, rowsH } = measureCard(v, cx, "main", cardLeaf, () => 4);
+    const top = parts("main");
     const place = v.cardPlace("main");
     expect(place.viewH).toBeLessThan(rowsH);
     // By hand: Text size sits under the first heading; Copy path under the File heading, after
@@ -12210,23 +12224,17 @@ test("card ring: a move to a control out of view scrolls the card to show it in 
   } finally { done(v); }
 });
 
-// A section's heading is its first part.
-const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0(\.|$)/.test(s[2]) ? 16 : 28; };
-// The main page's top-level parts, in order.
-const rootParts = (H) => Object.keys(H).filter((p) => p.split("/").length === 2).sort((a, b) => placeOf(a) - placeOf(b));
 // A card in a 600 px pane, measured, whose ring then moves to Copy path while the height of
 // the section before it is not known: the scroll to it waits. feed() reports that height.
 async function waitingReveal() {
   const { v, cx } = await cardPane();
   v.rootH = 600;
   const handle = v.cardScrolls.main;
-  const { H } = feedSizes(cardWithCx(v, cx), cx, cardLeaf, () => 4);
-  const top = rootParts(H);
-  const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
-  onOf(cardWithCx(v, cx), "th-set-rows-main", "on_size_change")({ height: rowsH, width: 400 }, cx);
-  cardWithCx(v, cx);
-  const gone = top[3];
+  const { H, parts, rowsH } = measureCard(v, cx, "main", cardLeaf, () => 4);
+  // The Link rules row, in the fourth section.
+  const gone = parts(parts("main")[3])[1];
   delete v.cardSizes[gone];
+  delete v.cardSlots[sizeHandlers(cardWithCx(v, cx))[gone].cardSlot];
   const was = v.cardPlace("main").y;
   v.ringTo("th-set-copy");
   const asked = handle.asked.length;
@@ -12315,12 +12323,7 @@ test("card ring: on a rules page the card scrolls to a control inside an open ru
     v.rootH = 560;
     v.openRule(null);
     const handle = v.cardScrolls.links;
-    const gap = () => 10;
-    const { H } = feedSizes(cardWithCx(v, cx), cx, () => 28, gap);
-    const top = Object.keys(H).filter((p) => p.split("/").length === 2);
-    const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
-    onOf(cardWithCx(v, cx), "th-set-rows-links", "on_size_change")({ height: rowsH, width: 400 }, cx);
-    cardWithCx(v, cx);
+    const { rowsH } = measureCard(v, cx, "links", () => 28, () => 10);
     const place = v.cardPlace("links");
     const at = (id) => v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === id));
     // Keep rule is one 28 px row of the open rule, found inside it.
@@ -12340,6 +12343,131 @@ test("card ring: on a rules page the card scrolls to a control inside an open ru
     }
     expect(handle.asked.length).toBeGreaterThan(1);
   } finally { done(v); }
+});
+
+// A stand-in for Herdr's layout and size reports, for rows that change. Each part not a
+// column has a height of its own (truth, by the part, so parts differ), and a column is its
+// padding, parts and gaps, as the card lays it out. frame() draws the card; a part reports
+// its height when Herdr would: by "part", only a part new to it or whose height changed (a
+// part that moves does not report); by "place", only a place in a column whose height there
+// changed (a new part as tall as the one it replaced does not report). The rows report
+// their height when it changed. Then the scroll's timers run.
+// A part is known by its column, the first control it and the parts built with it hold,
+// and its place among those parts (a part with none, by its place in the column).
+function herdrStandIn(v, cx, key, by) {
+  const partOf = (fn) => {
+    const it = fn.cardItem;
+    const [col, at] = fn.cardSlot.split("#");
+    return it.to > it.from ? `${col}|${v.cardStops[it.from].id}|${Number(at) - it.first}` : `${col}|#${at}`;
+  };
+  const truth = (fn) => { let n = 7; for (const ch of partOf(fn)) n = (n * 31 + ch.charCodeAt(0)) % 9973; return 20 + (n % 7) * 6; };
+  let fns = {};
+  const partH = (node, j) => (node.cols[j] ? colH(node.cols[j]) : truth(fns[node.keys[j]]));
+  const colH = (node) => 2 * node.pad + node.keys.reduce((s, _k, j) => s + partH(node, j), 0) + node.gap * Math.max(0, node.keys.length - 1);
+  const span = (node, i, y = 0) => {
+    const it = node.items.find((x) => i >= x.from && i < x.to);
+    if (!it) return null;
+    let at = y + node.pad;
+    for (let j = 0; j < it.first; j++) at += partH(node, j) + node.gap;
+    if (it.child) return span(it.child, i, at);
+    let end = at;
+    for (let j = it.first; j <= it.last; j++) end += partH(node, j) + (j < it.last ? node.gap : 0);
+    return [at, end];
+  };
+  const seen = new Map();
+  let rows = null;
+  const frame = () => {
+    for (let n = 0; n < 3; n++) {
+      const c = cardWithCx(v, cx);
+      fns = sizeHandlers(c);
+      for (const fn of Object.values(fns)) {
+        const h = truth(fn);
+        const id = by === "part" ? partOf(fn) : fn.cardSlot;
+        if (seen.get(id) !== h) { seen.set(id, h); fn({ width: 400, height: h }, cx); }
+      }
+      const h = colH(v.cardRoot);
+      if (rows !== h) { rows = h; onOf(c, `th-set-rows-${key}`, "on_size_change")({ height: h, width: 400 }, cx); }
+      cx.flush(0);
+    }
+  };
+  // Where the control with the ring is in the rows as drawn.
+  const ringTruth = () => { fns = sizeHandlers(cardWithCx(v, cx)); return span(v.cardRoot, v.cardStops.findIndex((s) => s.id === v.cardRing)); };
+  return { frame, ringTruth };
+}
+
+test("card ring: after an open rule above or below the ring closes, or one opened from an example, on both rule pages, the control's place matches the rows as drawn and shows in the view", async () => {
+  for (const by of ["part", "place"]) {
+    for (const kind of ["links", "senders"]) {
+      for (const where of ["above", "below", "example"]) {
+        const { v, cx } = kind === "links" ? await rulesPane() : await sendersPane();
+        const name = `${by} ${kind} ${where}`;
+        try {
+          v.rootH = 420;
+          const edit = (n) => (kind === "links" ? `th-rule-edit-btn-${n}` : `th-sender-edit-btn-${n}`);
+          const use = kind === "links" ? "th-rule-use-ticket" : "th-sender-use-brackets";
+          const back = { above: "th-rule-add", below: edit(1), example: use }[where];
+          if (where === "example") v.applyPrefs(JSON.stringify({ textSize: 15, [kind]: [] }));
+          const { frame, ringTruth } = herdrStandIn(v, cx, kind, by);
+          frame();
+          // Above: the ring on Add rule, under the list, and the first rule opens in its place.
+          // Below: the ring on the first rule's Edit, and the second rule opens in its place.
+          // Example: no rules, the ring on the first example's Use, pressed.
+          v.ringTo(back);
+          frame();
+          if (where === "example") pressKey(v, cx, "enter");
+          else v.openRule(where === "above" ? 0 : 1, null, null, kind);
+          frame();
+          expect([name, Boolean(v.ruleEdit)]).toEqual([name, true]);
+          const place = v.cardPlace(kind);
+          const inView = () => { const s = v.cardView().ringAt; return Boolean(s) && s[0] >= place.y && s[1] <= place.y + place.viewH; };
+          expect([name, v.cardView().ringAt]).toEqual([name, ringTruth()]);
+          expect([name, inView()]).toEqual([name, true]);
+          // Down through the open rule, so the card scrolls with it.
+          for (let i = 0; i < 6; i++) { pressKey(v, cx, "tab", tabEv(false)); frame(); }
+          expect([name, v.cardView().ringAt, inView()]).toEqual([name, ringTruth(), true]);
+          v.closeRule();
+          frame();
+          expect([name, v.cardRing]).toEqual([name, back]);
+          expect([name, v.cardView().ringAt]).toEqual([name, ringTruth()]);
+          expect([name, inView()]).toEqual([name, true]);
+        } finally { done(v); }
+      }
+    }
+  }
+});
+
+test("card ring: Space on Shorten long messages adds its line steppers, and Tab goes on through them and on, each shown where it is drawn", async () => {
+  for (const by of ["part", "place"]) {
+    const { v, cx } = await cardPane();
+    try {
+      v.rootH = 600;
+      const { frame, ringTruth } = herdrStandIn(v, cx, "main", by);
+      frame();
+      const place = v.cardPlace("main");
+      const check = (what) => {
+        const s = v.cardView().ringAt;
+        expect([by, what, v.cardRing, s]).toEqual([by, what, v.cardRing, ringTruth()]);
+        if (s) expect([by, what, v.cardRing, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([by, what, v.cardRing, true]);
+      };
+      const tab = (shift = false) => { pressKey(v, cx, "tab", tabEv(shift)); frame(); check(shift ? "shift-tab" : "tab"); };
+      for (let i = 0; i < 14; i++) tab();
+      expect(v.cardRing).toBe("th-set-truncate");
+      pressKey(v, cx, "space");
+      frame();
+      check("space");
+      expect([v.prefs.truncate, v.cardRing]).toEqual([true, "th-set-truncate"]);
+      const after = ["th-promptLines-minus", "th-promptLines-plus", "th-replyLines-minus", "th-replyLines-plus", "th-set-time", "th-set-agents", "th-set-agent-rail", "th-agentBubbleColor-slate"];
+      for (const id of after) { tab(); expect(v.cardRing).toBe(id); }
+      // Back up to the switch, off again, and on down past where the steppers were.
+      for (let i = 0; i < after.length; i++) tab(true);
+      expect(v.cardRing).toBe("th-set-truncate");
+      pressKey(v, cx, "space");
+      frame();
+      check("space off");
+      expect(v.prefs.truncate).toBe(false);
+      for (const id of ["th-set-time", "th-set-agents", "th-set-agent-rail"]) { tab(); expect(v.cardRing).toBe(id); }
+    } finally { done(v); }
+  }
 });
 
 test("card keys: Tab and Shift-Tab move one ring round the card, the pane keeps the keyboard, and nothing else appears", async () => {
