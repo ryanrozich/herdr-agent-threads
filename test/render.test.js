@@ -12494,6 +12494,31 @@ test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the r
   expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
 });
 
+test("card bound keys: when init's call throws, the card's first opening installs the keys, and later openings ask nothing", async () => {
+  // A fresh copy of the mod, so its keys have not been installed by another test's pane.
+  const { default: Fresh } = await import("../mods/agent-threads/main.js?card-keys-retry");
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: fixture("--extra", "2"), debug: true }, shared: {},
+  };
+  const v = new Fresh();
+  const cx = makeCx();
+  const asked = [];
+  cx.bind_keys = (list) => { asked.push(list); if (asked.length === 1) throw new Error("not from init"); return list.length; };
+  v.init(state.props, cx);
+  await settle(v);
+  expect(asked).toEqual([CARD_BOUND]);
+  v.action("settings", cx);
+  expect(asked).toEqual([CARD_BOUND, CARD_BOUND]);
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
+  v.action("settings", cx);
+  v.action("settings", cx);
+  expect(asked).toEqual([CARD_BOUND, CARD_BOUND]);
+  done(v);
+});
+
 test("card bound keys: the pane's root is the ThreadsCard key context, with the ring's actions, only while the card is open", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   const shut = rootOf(v, cx);
