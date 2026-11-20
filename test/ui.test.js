@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import {
   statusGroups, statusWidth, ringStep,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
-  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderIcon, kindWords,
+  rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
@@ -597,6 +597,17 @@ test("sender labels, icons and kinds", () => {
   expect(senderIcon({ kind: "scheduled" })).toBe("clock");
   expect(senderIcon({ kind: "sdk" })).toBe("square-terminal");
   expect(kindWords({ kind: "peer" })).toBe("agent message");
+  // A typed prompt a sender rule matched: "matched by rule" and the tag, whatever kind.
+  const ruled = { kind: "peer", name: "build-bot", rule: 2, ruleLabel: "Hourly report" };
+  expect(senderLabel(ruled, 380)).toBe("build-bot · matched by rule");
+  expect(senderLabel(ruled, 240)).toBe("build-bot");
+  expect(senderLabel({ kind: "peer", rule: 1 }, 380)).toBe("Matched by rule");
+  expect(senderParts(ruled, 380)).toEqual({ name: "build-bot", words: "matched by rule" });
+  expect(senderParts(ruled, 240)).toEqual({ name: "build-bot", words: null });
+  expect(senderParts(hc, 380)).toEqual({ name: "t7 review", words: "hc report" });
+  expect(senderParts({ kind: "you" }, 380)).toEqual({ name: "User", words: null });
+  expect(senderIcon(ruled)).toBe("tag");
+  expect(kindWords(ruled)).toBe("matched by rule");
 });
 
 test("visible: agent turns hidden by default, shown when on, live always, numbers keep gaps", () => {
