@@ -942,6 +942,7 @@ export default class Threads extends View {
       senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
+      command: this.lastCommand ?? null,
       // perl was not found, so a character across a 4 KB piece of a line can show as U+FFFD.
       noPerl: Boolean(this.noPerl),
     };
@@ -4915,7 +4916,11 @@ export default class Threads extends View {
   // key(), it wins over a press's pending open (OPEN_WAIT_MS).
   command(name, cx) {
     this.openWait = null;
-    if (this.action(name, cx)) cx.notify();
+    const acted = this.action(name, cx);
+    // props().debug: the last command and whether it acted, in the debug report, for
+    // test/herdr-still.sh: Herdr answers ok for any agent-threads.<name>, one we have or not.
+    if (this.debug) this.lastCommand = { n: (this.lastCommand?.n ?? 0) + 1, name, acted: Boolean(acted) };
+    if (acted) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.

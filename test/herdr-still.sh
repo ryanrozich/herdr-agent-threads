@@ -7,10 +7,10 @@
 # in this checkout. Exit codes: 0 a still was written; 2 bad arguments or not Linux; 3 no
 # Herdr installed; 4 the whole run passed its deadline (HERDR_STILL_DEADLINE, 240 s); 1
 # anything else, including an overlay over the window, an error Herdr reports, or a --do
-# command that failed, so a picture of the wrong state is never a pass.
+# command that failed or that the mod did not act on, so a wrong picture is never a pass.
 # Usage: sh test/herdr-still.sh <transcript.jsonl> <out.png> [--px 500] [--theme dark|light]
 #          [--size 1460x1150] [--do <command>]...
-#   --do runs a mod command before the shot, one second apart: --do agent-threads.pin
+#   --do runs a command before the shot, one second apart: --do agent-threads.pin
 # The app gets a clean environment (env -i): its own display, home, XDG folders and temp
 # folder inside a fresh folder, no Wayland or session bus. Its proxy variables point at a
 # closed port as a courtesy to programs that read them; they are not a network limit.
@@ -167,11 +167,28 @@ TP=$(h "do" pane.split --pane "$P" --direction right --mod agent-threads --props
 h "do" layout.resize --id "$TP" --px "$PX" > /dev/null || fail "layout.resize failed"
 h "do" pane.focus --pane "$TP" > /dev/null || fail "pane.focus failed"
 sleep 3
-# A command that fails stops here: no still of the state before it.
+# A command that fails stops here: no still of the state before it. Herdr answers ok and
+# exits 0 for any agent-threads.<name>, one the mod has or not, so for those the pane's debug
+# report (props debug) says whether the mod acted on it: a new entry with that name, within
+# 6 s (the report is written once a second).
+said() { jq -r --arg t "$T" ".\"threads.debug\"[\$t].command.$1 // empty" "$A/shared.json" 2> /dev/null || true; }
 printf '%s' "$DOS" > "$R/do.txt"
 while IFS= read -r c; do
   [ -n "$c" ] || continue
-  h "do" "$c" > /dev/null 2> "$R/do.err" || fail "--do $c failed: $(tail -2 "$R/do.err")"
+  was=$(said n)
+  h "do" "$c" > "$R/do.out" 2> "$R/do.err" || fail "--do $c failed: $(tail -2 "$R/do.err") $(tail -c 300 "$R/do.out")"
+  case $c in
+    agent-threads.*)
+      i=0
+      while n=$(said n) && { [ -z "$n" ] || [ "$n" = "$was" ]; }; do
+        i=$((i + 1))
+        [ $i -le 6 ] || fail "--do $c: the Threads pane did not report it"
+        sleep 1
+      done
+      [ "$(said name)" = "${c#agent-threads.}" ] && [ "$(said acted)" = true ] \
+        || fail "--do $c: the mod did not act on it (not one of its commands, or nothing to do)"
+      ;;
+  esac
   sleep 1
 done < "$R/do.txt"
 check "before the shot"
