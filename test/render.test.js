@@ -2,7 +2,7 @@
 // error in render() fails here instead of in a window. Every element method returns the same
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
-import { test, expect, mock } from "bun:test";
+import { test, expect, mock, setSystemTime } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12137,14 +12137,18 @@ const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = r
 const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
 // Heights for a frame: each part that holds no measured part is leaf(path) tall; a column is
 // its parts and its gaps (gap(path)) tall. Returns the heights, and reports them.
+// A part's key is its column's path, a slash and its place there; the parts of a column
+// that is itself a part are under that part's path (colOf).
+const colOf = (p) => p.replace(/\.\d+:[^/]*$/, "");
+const placeOf = (p) => Number.parseFloat(p.split("/").at(-1));
 function feedSizes(c, cx, leaf, gap) {
   const fns = sizeHandlers(c);
   const paths = Object.keys(fns);
-  const kids = (p) => paths.filter((q) => q.startsWith(`${p}/`) && !q.slice(p.length + 1).includes("/")).sort((a, b) => Number(a.split("/").at(-1)) - Number(b.split("/").at(-1)));
+  const kids = (p) => paths.filter((q) => q.startsWith(`${p}/`) && !q.slice(p.length + 1).includes("/")).sort((a, b) => placeOf(a) - placeOf(b));
   const H = {};
   const height = (p) => {
     if (H[p] != null) return H[p];
-    const ks = kids(p);
+    const ks = kids(colOf(p));
     H[p] = ks.length ? ks.reduce((s, k) => s + height(k), 0) + gap(p) * (ks.length - 1) : leaf(p);
     return H[p];
   };
@@ -12204,6 +12208,75 @@ test("card ring: a move to a control out of view scrolls the card to show it in 
     v.report();
     expect(state.shared["threads.debug"].t4.settingsCard.ringAt).toBeNull();
   } finally { done(v); }
+});
+
+// A section's heading is its first part.
+const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0(\.|$)/.test(s[2]) ? 16 : 28; };
+// The main page's top-level parts, in order.
+const rootParts = (H) => Object.keys(H).filter((p) => p.split("/").length === 2).sort((a, b) => placeOf(a) - placeOf(b));
+// A card in a 600 px pane, measured, whose ring then moves to Copy path while the height of
+// the section before it is not known: the scroll to it waits. feed() reports that height.
+async function waitingReveal() {
+  const { v, cx } = await cardPane();
+  v.rootH = 600;
+  const handle = v.cardScrolls.main;
+  const { H } = feedSizes(cardWithCx(v, cx), cx, cardLeaf, () => 4);
+  const top = rootParts(H);
+  const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
+  onOf(cardWithCx(v, cx), "th-set-rows-main", "on_size_change")({ height: rowsH, width: 400 }, cx);
+  cardWithCx(v, cx);
+  const gone = top[3];
+  delete v.cardSizes[gone];
+  const was = v.cardPlace("main").y;
+  v.ringTo("th-set-copy");
+  const asked = handle.asked.length;
+  cardWithCx(v, cx);
+  cx.flush(0);
+  expect(handle.asked.length).toBe(asked);
+  expect(v.ringShow).toBeTruthy();
+  const feed = () => sizeHandlers(cardWithCx(v, cx))[gone]({ width: 400, height: H[gone] }, cx);
+  return { v, cx, handle, feed, rowsH, was };
+}
+
+test("card ring: a scroll waiting for heights is dropped by the wheel, the scroll keys, another page, closing the card, or 250 ms", async () => {
+  const drops = {
+    wheel: (v, cx) => onOf(cardWithCx(v, cx), "th-set-rows-main", "on_scroll_wheel")({ delta: { y: -40 }, position: { x: 1, y: 1 } }, cx),
+    keys: (v, cx) => v.action("settingsScroll:down", cx),
+    page: (v, cx) => { v.setPage = "links"; cardWithCx(v, cx); v.setPage = "main"; },
+    time: () => setSystemTime(new Date(Date.now() + 300)),
+  };
+  for (const [name, drop] of Object.entries(drops)) {
+    const { v, cx, handle, feed } = await waitingReveal();
+    try {
+      drop(v, cx);
+      if (name !== "page") cardWithCx(v, cx);
+      expect([name, v.ringShow]).toEqual([name, null]);
+      const asked = handle.asked.length;
+      feed();
+      cardWithCx(v, cx);
+      cx.flush(0);
+      expect([name, handle.asked.length]).toEqual([name, asked]);
+      expect(v.cardRing).toBe("th-set-copy");
+    } finally { setSystemTime(); done(v); }
+  }
+  // Closing the card drops it too.
+  const { v } = await waitingReveal();
+  try {
+    v.closeSettings();
+    expect(v.ringShow).toBeNull();
+  } finally { done(v); }
+  // Under 250 ms it still waits, and scrolls once the height comes.
+  const w = await waitingReveal();
+  try {
+    setSystemTime(new Date(Date.now() + 200));
+    cardWithCx(w.v, w.cx);
+    expect(w.v.ringShow).toBeTruthy();
+    const asked = w.handle.asked.length;
+    w.feed();
+    cardWithCx(w.v, w.cx);
+    w.cx.flush(0);
+    expect(w.handle.asked.length).toBe(asked + 1);
+  } finally { setSystemTime(); done(w.v); }
 });
 
 test("card ring: on a rules page the card scrolls to a control inside an open rule, not to the rule's top", async () => {

@@ -214,6 +214,11 @@ const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
 // The strip at the card's right edge that holds its always-drawn scrollbar.
 const CARD_BAR_W = 10;
+// How long a scroll to the ring may wait for the heights it needs (revealRing), in ms. They
+// come in the frame after the parts are drawn, so a reveal runs within a frame or two (a draw
+// takes 50 ms at the most); past this it is dropped, so it can never land after the user has
+// moved on. Time, not frames: frames come only when something redraws.
+const REVEAL_WAIT = 250;
 // The keys sheet's key column: wide enough for its widest row's chips (PgUp, PgDn, Space) on
 // one line, in a pane at least KEYS_COL_MIN wide. A narrower pane keeps the narrow column,
 // where those chips wrap, so the descriptions do not wrap more than they did.
@@ -1321,6 +1326,7 @@ export default class Threads extends View {
   closeSettings() {
     this.settingsOpen = false;
     this.cardRing = null;
+    this.ringShow = null;
     this.leaveLinks();
     this.dropField();
   }
@@ -1346,7 +1352,7 @@ export default class Threads extends View {
   ringTo(id) {
     const field = (this.cardStops ?? []).find((s) => s.id === id)?.field ?? null;
     this.cardRing = id;
-    this.ringShow = true;
+    this.askReveal();
     if (field) { this.fieldFocused = field.name; field.input.focus(); }
     else if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
   }
@@ -1359,7 +1365,7 @@ export default class Threads extends View {
     return true;
   }
   // Where the ring goes when a press takes its control away; nothing while it is not shown.
-  ringMove(id) { if (this.cardRing && id) { this.cardRing = id; this.ringShow = true; } }
+  ringMove(id) { if (this.cardRing && id) { this.cardRing = id; this.askReveal(); } }
   // A control the ring can reach, in the order drawn: what Enter and Space do (its click), and
   // for a text field its input and the name fieldFocused takes. The ring is 2 px of the accent,
   // 3 px outside the control and round its corners, over nothing, so the control does not move;
@@ -6527,20 +6533,26 @@ export default class Threads extends View {
     }
     return [at, end];
   }
+  // The ring moved: a scroll to it is pending (ringShow), for this page, from now.
+  askReveal() { this.ringShow = { key: this.cardPageKey(), at: Date.now() }; }
+  cardPageKey() { return this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main"; }
   // After the ring moves (ringShow), the card scrolls so the control with it shows in full
   // (cardReveal), by bringing one mark into view as the keys do, from the next frame. Nothing
   // moves when it shows already, or for a control in the head or foot. It waits for the
-  // heights it needs; nothing else shows.
+  // heights it needs, for REVEAL_WAIT at the most; the user's own scroll (the wheel or the
+  // keys), another page or closing the card drops it. Nothing else shows.
   revealRing(cx, key) {
-    if (!this.ringShow) return;
+    const want = this.ringShow;
+    if (!want) return;
+    if (want.key !== key || Date.now() - want.at > REVEAL_WAIT) { this.ringShow = null; return; }
     const i = this.cardRing ? this.cardStops.findIndex((s) => s.id === this.cardRing) : -1;
     const root = this.cardRoot;
     const handle = this.cardScrolls?.[key] ?? null;
-    if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = false; return; }
+    if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = null; return; }
     const h = this.cardBody?.key === key ? this.cardBody.h : null;
     const span = h ? this.ringSpan(root, i) : null;
     if (!span) return;
-    this.ringShow = false;
+    this.ringShow = null;
     const place = this.cardPlace(key);
     const r = cardReveal(span[0], span[1], place.y, h, place.viewH);
     if (!r) return;
@@ -6565,7 +6577,7 @@ export default class Threads extends View {
     const stops = this.cardStops;
     while (i < stops.length && stops[i].field) i++;
     this.cardRing = stops[i]?.id ?? [...stops].reverse().find((s) => !s.field)?.id ?? null;
-    this.ringShow = true;
+    this.askReveal();
     this.ringIds = ids;
     cx?.timer.after(0, (cx) => cx.notify());
   }
@@ -6577,7 +6589,8 @@ export default class Threads extends View {
   // (cardScroll), by bringing one mark into view. Nothing happens on a Herdr with no
   // ScrollHandle, or before the rows have been measured.
   cardScrollBy(kind) {
-    const key = this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main";
+    this.ringShow = null;
+    const key = this.cardPageKey();
     const handle = this.cardScrolls?.[key];
     const h = this.cardBody?.key === key ? this.cardBody.h : null;
     const place = this.cardPlace(key);
@@ -6593,6 +6606,7 @@ export default class Threads extends View {
   cardWheel(e, key, from) {
     const dy = Number(e?.delta?.y) || 0;
     if (!dy) return;
+    this.ringShow = null;
     const place = this.cardPlace(key);
     const k = `${e?.position?.x},${e?.position?.y},${dy},${e?.touch_phase}`;
     if (from === "area" && place.wheelKey === k) return;
