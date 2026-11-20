@@ -257,8 +257,12 @@ test("ledger: a turn with no end record that is not running says 'no result' and
   const d = detailOf(rows[3]);
   expect(d.fields).toContainEqual(["Result", "No result"]);
   expect(d.fields).toContainEqual(["Last activity", fmtTime(T0 + 3000)]);
-  expect(d.fields).toContainEqual(["Took", "no result"]);
+  // Said once: Took is left out, Result says "No result".
+  expect(d.fields.map(([k]) => k)).not.toContain("Took");
+  expect(d.fields.filter(([, v]) => /no result/i.test(v))).toEqual([["Result", "No result"]]);
   expect(detailOf(rows[0]).fields).toContainEqual(["Last activity", fmtTime(T0 + 3000)]);
+  expect(detailOf(rows[0]).fields.filter(([, v]) => /no result/i.test(v))).toEqual([["Result", "No result"]]);
+  expect(detailOf(rows[0]).fields.map(([k]) => k)).not.toContain("Took");
   // The same turn while running: "running", no last activity.
   const live = ledgerTurn(S, t, 0, true).rows;
   expect(live[3]).toMatchObject({ lk: "running", status: "running" });

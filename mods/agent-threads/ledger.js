@@ -439,7 +439,9 @@ export function detailOf(r) {
     F.push(["Calls", r.calls ? `${r.calls}${r.partial ? " (some results not kept)" : ""}` : "none"]);
     if (r.fails) F.push(["Failed", `${r.fails}${r.partial ? "+" : ""}`]);
     if (p.tokens) F.push(["Tokens", p.tokens]);
-    F.push(["Took", p.total ?? "not recorded"]);
+    // A turn cut off mid-call has no time it took: it says so once, as its calls' detail does.
+    if (r.stale) F.push(["Result", "No result"]);
+    else F.push(["Took", p.total ?? "not recorded"]);
     if (r.lastAt != null) F.push(["Last activity", fmtTime(r.lastAt)]);
     return { kind: null, tag: "Turn", title: `Turn ${r.n}`, fields: F, text: null, code: false };
   }
@@ -451,8 +453,11 @@ export function detailOf(r) {
   F.push(["Turn", `${r.turn?.n ?? "?"}`]);
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
   const call = laneOf(r.lk) === "tools" && r.lk !== "more";
-  if (call || r.lk === "reply") {
-    const took = r.dur != null ? durText(r.dur) : r.lk === "running" ? "still running" : r.lk === "noresult" ? "no result" : r.open ? (r.lastAt != null ? "no result" : "still running") : "not recorded";
+  // A call with no result took no time the transcript knows: Took is left out, and Result says
+  // "No result" once.
+  const cut = r.lk === "noresult" || r.noResult || (r.open && r.lastAt != null);
+  if ((call || r.lk === "reply") && !(cut && r.dur == null)) {
+    const took = r.dur != null ? durText(r.dur) : r.lk === "running" || r.open ? "still running" : "not recorded";
     F.push(["Took", took]);
   }
   if (call) {
