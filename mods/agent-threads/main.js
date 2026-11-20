@@ -234,6 +234,9 @@ const CARD_SECTIONS = [
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
+// Functions that each build a part of the card's rows, returned by one kid of a column
+// (cardCol), so each is a part of its own.
+class CardParts { constructor(kids) { this.kids = kids; } }
 // Its bands' side inset: 16 px, or 12 under a 320 px card.
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
@@ -6491,12 +6494,15 @@ export default class Threads extends View {
     const node = { el: null, gap, pad, path, items: [], keys: [], cols: [], shape: "" };
     const els = [];
     const owners = [];
-    kids.forEach((k, n) => {
+    // A kid that returns CardParts is several kids, each its own part (a row with controls
+    // under it, such as Shorten long messages and its line steppers).
+    const add = (k, n) => {
       const from = (this.cardStops ?? []).length;
       const at = els.length;
       this.cardKidPath = `${path}/${n}`;
       this.cardColLast = null;
       const out = typeof k === "function" ? k() : k;
+      if (out instanceof CardParts) { out.kids.forEach((x, m) => add(x, `${n}-${m}`)); return; }
       const inner = this.cardColLast;
       const list = [out].flat().filter(Boolean);
       if (!list.length) return;
@@ -6507,7 +6513,8 @@ export default class Threads extends View {
       list.forEach((_x, j) => { node.keys.push(`${path}/${n}.${j}:${first}`); node.cols.push(col); owners.push(item); });
       els.push(...list);
       node.items.push(item);
-    });
+    };
+    kids.forEach((k, n) => add(k, n));
     this.cardKidPath = null;
     node.shape = node.keys.map((k, j) => (node.cols[j] ? `${k}{${node.cols[j].shape}}` : k)).join(",");
     const sizes = (this.cardSizes ??= {});
@@ -6770,16 +6777,16 @@ export default class Threads extends View {
         return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
       },
       agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
-      truncate: () => [
-        sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
-        P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
-      ],
+      truncate: () => new CardParts([
+        () => sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
+        () => (P.truncate ? this.cardCol(v_flex().pl(16).gap(4), 4, 0, [() => stepper("promptLines", "Prompt lines"), () => stepper("replyLines", "Reply lines")]) : null),
+      ]),
       time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
-      width: () => [
-        row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
-        this.widthRuler(t, w),
-        note(this.widthNote()),
-      ],
+      width: () => new CardParts([
+        () => row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
+        () => this.widthRuler(t, w),
+        () => note(this.widthNote()),
+      ]),
       keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],

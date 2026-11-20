@@ -12141,7 +12141,7 @@ const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0\.
 const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = rec; rec = null; return c; };
 const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
 const parentOf = (p) => p.slice(0, p.lastIndexOf("/"));
-const rankOf = (p) => { const [n, j] = p.split("/").at(-1).split(":")[0].split("."); return Number(n) * 1000 + Number(j ?? 0); };
+const rankOf = (p) => { const [n, j] = p.split("/").at(-1).split(":")[0].split("."); const [a, m] = n.split("-"); return Number(a) * 1000 + Number(m ?? 0) * 10 + Number(j ?? 0); };
 // The rows of a frame as drawn: each part that is not a column is leaf(key) tall, and a
 // column (the page's rows at its key included) its padding top and bottom (pad(path)), its
 // parts and its gaps (gap(path)). The parts report their heights, then the rows theirs.
@@ -12507,7 +12507,13 @@ test("card ring: Space on Shorten long messages adds its line steppers, and Tab 
       check("space");
       expect([v.prefs.truncate, v.cardRing]).toEqual([true, "th-set-truncate"]);
       const after = ["th-promptLines-minus", "th-promptLines-plus", "th-replyLines-minus", "th-replyLines-plus", "th-set-time", "th-set-agents", "th-set-agent-rail", "th-agentBubbleColor-slate"];
-      for (const id of after) { tab(); expect(v.cardRing).toBe(id); }
+      const spans = { "th-set-truncate": v.cardView().ringAt };
+      for (const id of after) { tab(); expect(v.cardRing).toBe(id); spans[id] = v.cardView().ringAt; }
+      // Each stepper is found in its own row, 4 px under the one before.
+      expect(spans["th-promptLines-minus"][0]).toBe(spans["th-set-truncate"][1] + 4);
+      expect(spans["th-promptLines-plus"]).toEqual(spans["th-promptLines-minus"]);
+      expect(spans["th-replyLines-minus"][0]).toBe(spans["th-promptLines-minus"][1] + 4);
+      expect(spans["th-set-time"][0]).toBe(spans["th-replyLines-minus"][1] + 4);
       // Back up to the switch, off again, and on down past where the steppers were.
       for (let i = 0; i < after.length; i++) tab(true);
       expect(v.cardRing).toBe("th-set-truncate");
