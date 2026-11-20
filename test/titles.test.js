@@ -90,3 +90,58 @@ test("a hold or hold:preview label keeps any pull request out of the queue", () 
   // One queue rule, so no pull request can be queued into a rule without them.
   expect([...rules.matchAll(/^ {2}- name: /gm)]).toHaveLength(1);
 });
+
+// The one rule that queues with no person's `queue` label: Catalyst's own ticket pull
+// requests, kept off the files that define the gate. Each condition is pinned, so dropping
+// one is a visible change.
+const catalystRule = () => mergify.split(/^ {2}- name: /m).find((r) => r.startsWith("queue a Catalyst pull request"));
+const ruleConditions = (rule) => [...rule.matchAll(/^ {6}- (.+)$/gm)].map((m) => m[1].replace(/^"(.*)"$/, "$1"));
+
+test("the Catalyst rule queues only the app's own ticket branches, never a change to the gate's own files", () => {
+  const rule = catalystRule();
+  expect(rule).toBeTruthy();
+  expect(ruleConditions(rule)).toEqual([
+    "author=catalyst-cloud-connector[bot]",
+    "label=queue:ready",
+    "head-repo-full-name=ryanrozich/herdr-agent-threads",
+    "head~=^TRD-[0-9]+$",
+    "base=main",
+    "#files<=100",
+    "-files~=^\\.mergify",
+    "-files~=^\\.github/",
+    "-files~=^\\.catalyst/",
+    "-files~=^\\.(claude|agents)/",
+    "-files~=^test/leftover-check\\.sh$",
+    "-files~=^bunfig\\.toml$",
+    "-files~=^test/preload\\.js$",
+    "-files~=(^|/)(biome\\.jsonc?|\\.shellcheckrc)$",
+    "-files~=^\\.gitleaks",
+    "-files~=(^|/)\\.env",
+    "-files~=(^|/)(AGENTS|CLAUDE)\\.md$",
+  ]);
+  // The rule only queues: the queue rule's conditions (check, title, threads, holds) decide.
+  expect(rule).toMatch(/actions:\n {6}queue:\s*$/);
+});
+
+// Mergify reads a regex condition on a list as true when any item matches (a Python search),
+// and the minus negates that. This applies the rule's files lines the same way.
+test("the Catalyst rule's files lines pass an ordinary change and refuse one to the gate's files", () => {
+  const lines = ruleConditions(catalystRule()).filter((c) => c.startsWith("-files~="));
+  const res = lines.map((c) => new RegExp(c.slice("-files~=".length)));
+  const passes = (files) => res.every((re) => !files.some((f) => re.test(f)));
+  expect(passes(["mods/agent-threads/main.js", "test/render.test.js", "docs/usage.md", "README.md", "install.sh"])).toBe(true);
+  expect(passes(["docs/AGENTS.md.txt", "mods/agent-threads/claude-mark.svg", "github/notes.md"])).toBe(true);
+  expect(passes(["test/leftover-check.test.js", "test/bunfig.toml", "docs/biome.jsonc.md", "docs/gitleaks.md", "test/.gitleaks.toml"])).toBe(true);
+  expect(passes(["test/preload.test.js", "docs/biome.json.md", "mods/shellcheckrc.txt", "test/fixtures/preload.js"])).toBe(true);
+  expect(passes(["docs/env.md", "mods/agent-threads/environment.js", "test/fixtures/dotenv.txt", "docs/x.env.md"])).toBe(true);
+  const gate = [
+    ".mergify.yml", ".mergify/config.yml", ".github/workflows/ci.yml", ".github/mergify.yml", ".catalyst/catalyst.toml",
+    ".claude/skills/cut-a-release/SKILL.md", ".agents/skills/x/SKILL.md", "AGENTS.md", "CLAUDE.md", "mods/agent-threads/AGENTS.md", "test/CLAUDE.md",
+    "test/leftover-check.sh", "bunfig.toml", "biome.jsonc", ".gitleaks.toml", ".gitleaksignore",
+    "test/preload.js", "biome.json", "mods/biome.json", "mods/agent-threads/biome.jsonc", ".shellcheckrc", "test/.shellcheckrc",
+    ".env", ".env.local", ".env.test", ".envrc", "test/.env", "mods/agent-threads/.env.production",
+  ];
+  for (const f of gate) expect([f, passes(["mods/agent-threads/main.js", f])]).toEqual([f, false]);
+  // A gate file moved elsewhere counts at both paths, so it does not pass.
+  expect(passes([".mergify.yml", "docs/mergify.yml"])).toBe(false);
+});
