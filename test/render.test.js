@@ -14176,3 +14176,24 @@ test("while the ledger's build is unfinished, each draw asks for the next; once 
   expect(draws).toBeGreaterThan(2);
   expect(v.buildNext).toBe(false);
 });
+
+test("in the Trajectory shown in the Chat's own pane, - and = do nothing and pass on, even with a Pinned column open", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 440;
+  v.paneW = 440;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p5" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.width"] = { p2: 438, p5: 300 };
+  expect(Boolean(v.pinnedPaneOpen())).toBe(true);
+  v.key(keyEv("y"), cx);
+  expect([v.traj, v.trajPane]).toEqual([true, false]);
+  let stops = 0;
+  cx.stop_propagation = () => { stops++; };
+  log = [];
+  v.key(keyEv("-"), cx);
+  v.key(keyEv("="), cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect(stops).toBe(0);
+  expect(v.toast).toBe(null);
+});
