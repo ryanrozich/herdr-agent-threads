@@ -15,6 +15,10 @@ const KEYS = {
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
 // Pinned view's header button (the list's header has no pin button).
 const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
+// Under a search, n steps to the next match back in time (older) and Shift n to the newer
+// one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
+// so a quote key someone chose keeps working.
+const SEARCH_KEYS = { n: "olderMatch" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -23,11 +27,12 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const k = e?.key ?? "";
   // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
   // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : k === "n" || k === "N" ? (filtering ? null : "newerMatch") : null;
   if (k === "G") return "latest";
   if (k === "W") return filtering ? null : "widthStep";
+  if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
@@ -37,7 +42,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
-      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
@@ -1684,14 +1689,79 @@ export function linkify(md, rules, ctx = {}, { maxChars = 20000, maxMatches = 25
   return { md: changedAny ? lines.join("\n") : src, links };
 }
 
+// ---- breaks in a long hyphenated token (issue 112) ----
+// Herdr wraps an open message's bubble itself, at a space and before a "/" (so a long path
+// breaks between its parts), but never after a "-", so a hyphenated name longer than the
+// line broke inside a word ("…rounding-a" then "nd-receipt…"). In the drawn text only,
+// HYPHEN_BREAK goes after each "-" of such a token: Herdr (0.1.15 and 0.1.16) may end a line
+// before it, and it draws nothing. It is the zero-width non-joiner (U+200C): Herdr breaks at
+// none of U+200B (zero-width space), U+2060, U+FEFF, U+2063 or a soft hyphen, and U+2010
+// breaks before the hyphen, so it starts the next line. It goes only into text drawn as plain
+// lines (a coloured bubble, or any bubble a search marks), which cannot be selected, so it
+// never reaches the clipboard; a plain bubble's Markdown keeps Herdr's mid-word break. Copy,
+// quote, Select view, search and the size estimates read the message itself, which never
+// holds it; quoteText drops it.
+export const HYPHEN_BREAK = "\u200c";
+
+// Where HYPHEN_BREAK goes in one line: the index after each "-" of a token (a run without
+// white space) longer than `per` characters, except a "-" that ends the token or comes
+// before another "-". A Set, or null when there is none.
+export function hyphenSpots(line, per) {
+  const s = String(line ?? "");
+  if (!(per > 0) || s.length <= per || !s.includes("-")) return null;
+  let out = null;
+  const re = /\S+/g;
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    const w = m[0];
+    if (w.length <= per) continue;
+    for (let i = w.indexOf("-"); i >= 0 && i < w.length - 1; i = w.indexOf("-", i + 1)) {
+      if (w[i + 1] !== "-") (out ??= new Set()).add(m.index + i + 1);
+    }
+  }
+  return out;
+}
+
+// A piece of a line that starts at index `from`, with HYPHEN_BREAK at each spot after one of
+// its characters (a spot at its very start belongs to the piece before, which ends in "-").
+export function putBreaks(s, from, spots) {
+  if (!spots || !s) return s;
+  let out = "";
+  let at = 0;
+  for (let i = 1; i <= s.length; i++) {
+    if (spots.has(from + i)) { out += s.slice(at, i) + HYPHEN_BREAK; at = i; }
+  }
+  return out ? out + s.slice(at) : s;
+}
+
+// Text as drawn in a bubble `per` characters wide: HYPHEN_BREAK in its long hyphenated tokens.
+export function hyphenBreaks(text, per) {
+  const s = String(text ?? "");
+  if (!(per > 0) || !s.includes("-")) return s;
+  return s.split("\n").map((l) => putBreaks(l, 0, hyphenSpots(l, per))).join("\n");
+}
+
+// A line split around the search's matches, as spans() does on the message itself (so a
+// match across a "-" is still found and marks the same characters), each piece then as
+// drawn, with HYPHEN_BREAK in long hyphenated tokens.
+export function breakSpans(line, q, per) {
+  const spots = hyphenSpots(line, per);
+  let at = 0;
+  return spans(line, q).map((p) => {
+    const t = putBreaks(p.t, at, spots);
+    at += p.t.length;
+    return { t, hit: p.hit };
+  });
+}
+
 // A prompt as Markdown for TextView that changes nothing the person typed except: quote
 // runs become blockquotes, followed by a blank line so the comment is never pulled into
 // the quote; fenced code stays fenced code and inline code stays inline code; every other
 // ASCII punctuation character (and so "<") is escaped, so "#", "*", "-" and "1." show as
 // typed and no HTML is read; leading spaces become no-break spaces, so indentation is not
 // a code block; each line break is a hard break; bare http(s) URLs become autolinks; link
-// rule matches become [text](url). Reads at most max * 8 characters (32,000 by default);
-// when the prompt is longer, a last line says how many characters are not shown.
+// rule matches become [text](url). It never gets HYPHEN_BREAK: a plain bubble's Markdown can
+// be selected, and Herdr copies it as drawn. Reads at most max * 8 characters (32,000 by
+// default); when the prompt is longer, a last line says how many characters are not shown.
 // The links the rules make in a prompt, each once, for a coloured bubble, where the prompt is
 // plain text in the bubble's ink (TextView draws only in the theme's text colour) and the links
 // go on a line of their own under it (issue 116). Code spans and fenced code get none, as in
@@ -1987,24 +2057,45 @@ const KIND_WORDS = {
   hc: "hc report", peer: "agent message", scheduled: "Scheduled", sdk: "SDK",
   "task-notification": "Task notification", "auto-continuation": "Auto-continuation",
 };
+// A typed prompt a sender rule matched says so ("matched by rule"), whatever kind the rule
+// gave it: the session has no sender for it, only the rule's reading of its text.
 export function kindWords(sender) {
   if (!sender) return "Background agent";
+  if (sender.rule != null) return "matched by rule";
   if (sender.kind === "hc" && sender.request) return "hc request";
   return KIND_WORDS[sender.kind] ?? "Background agent";
 }
 const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
-// 300 px, "Agent message" with no name.
-export function senderLabel(sender, width) {
-  if (!sender || sender.kind === "you") return "User";
-  const words = kindWords(sender);
-  if (!sender.name) return cap1(words);
-  return width < 300 ? sender.name : `${sender.name} · ${words}`;
+// Where a turn's message came from: "you" (the person's own prompt), "rule" (typed in the
+// terminal and marked as an agent message by a sender rule, core/turns.js ruleSender) or
+// "sent" (another agent really sent it: hc, a peer session, a schedule, the SDK). Both
+// agent kinds draw alike for now; every place that draws a sender reads this to tell them
+// apart.
+export function senderOrigin(sender) {
+  if (!sender || sender.kind === "you") return "you";
+  return sender.rule != null ? "rule" : "sent";
 }
 
-// Icon per sender kind.
+// The sender label on an agent row: "t7 review" below 300 px, "t7 review · hc report" from
+// 300 px, "Agent message" with no name; a message a sender rule matched, "build-bot ·
+// matched by rule". senderParts gives the name and the words apart, so a label too long for
+// its room cuts the name in the middle and never the words.
+export function senderParts(sender, width) {
+  if (!sender || sender.kind === "you") return { name: "User", words: null };
+  const words = kindWords(sender);
+  if (!sender.name) return { name: cap1(words), words: null };
+  return { name: sender.name, words: width < 300 ? null : words };
+}
+export function senderLabel(sender, width) {
+  const p = senderParts(sender, width);
+  return p.words ? `${p.name} · ${p.words}` : p.name;
+}
+
+// Icon per sender kind; the tag for a message a sender rule matched (its label in words:
+// "Matched by a sender rule").
 export function senderIcon(sender) {
+  if (sender?.rule != null && sender.kind !== "you") return "tag";
   return { scheduled: "clock", sdk: "square-terminal" }[sender?.kind] ?? "bot";
 }
 
@@ -2481,8 +2572,14 @@ function rgb(color) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a ?? "");
   return m ? [1, 2, 3].map((i) => parseInt(m[i], 16)) : null;
 }
-// WCAG contrast ratio of two colours (alpha ignored), or null when one does not parse.
+// WCAG contrast ratio of two colours (alpha ignored), rounded to two decimals, or null when
+// one does not parse.
 export function contrast(a, b) {
+  const r = ratio(a, b);
+  return r == null ? null : Math.round(r * 100) / 100;
+}
+// The same ratio unrounded, for a threshold check: 4.495 is under 4.5.
+export function ratio(a, b) {
   const x = rgb(a);
   const y = rgb(b);
   if (!x || !y) return null;
@@ -2491,7 +2588,21 @@ export function contrast(a, b) {
     return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   };
   const [hi, lo] = [lum(x), lum(y)].sort((p, q) => q - p);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  return (hi + 0.05) / (lo + 0.05);
+}
+// A search match's fill: the working colour at 32%, and for the selected turn's matches
+// (strong) the strongest fill up to 60%, in 2% steps, that keeps the text on it (fg) at 4.5:1
+// unrounded. bg is the opaque colour the match is drawn over: the selected row's fill where
+// the row has one. Where even 32% does not reach 4.5:1, the selected match keeps 32%: never
+// less contrast than the others.
+export function matchFill(working, fg, bg, strong) {
+  if (!strong) return alpha(working, 0.32);
+  for (let a = 0.6; a > 0.32; a -= 0.02) {
+    const c = ratio(fg, mix(bg, working, a));
+    if (c == null) break;
+    if (c >= 4.5) return alpha(working, Math.round(a * 100) / 100);
+  }
+  return alpha(working, 0.32);
 }
 // a mixed toward b by t (0..1), as #rrggbb.
 export function mix(a, b, t) {

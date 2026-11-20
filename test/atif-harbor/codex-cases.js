@@ -2,6 +2,11 @@
 // and tests/unit/agents/installed/test_claude_code_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0).
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Ported: one_step_per_api_call_with_bundled_tool_calls.
 // Adaptation: a UserMessage starts the turn, since Agent Threads requires a prompt.
+<<<<<<< HEAD
+=======
+// Changed from Harbor's original: the pytest functions are translated to JavaScript case entries that run our
+// export's command line; litellm price mocks are dropped, the diff checks are ours, and "Adapted:" marks changed input.
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -250,45 +255,75 @@ export const CODEX_CASES = [{
   toolCase("codex: dict_output_that_is_not_a_string_is_kept_as_json[0]", '{"output": 5, "metadata": {"exit_code": 0}}',
     (tr) => {
       assert.equal(mcpResult(tr).content, "5");
+<<<<<<< HEAD
       assert.deepEqual(step(tr).extra.tool_call_details.call_mcp.metadata, { exit_code: 0 });
     },
     { reason: "R5a", kind: "by design", check: (tr) => {
+=======
+      assert.deepEqual(step(tr).extra?.tool_call_details?.call_mcp?.metadata, { exit_code: 0 });
+    },
+    { reason: "R5a", kind: "not handled", check: (tr) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpResult(tr).content, "5");
       assert.equal(step(tr).extra?.tool_call_details, undefined);
     } }),
   toolCase("codex: dict_output_that_is_not_a_string_is_kept_as_json[1]", '{"output": true, "metadata": {"exit_code": 0}}',
     (tr) => {
       assert.equal(mcpResult(tr).content, "true");
+<<<<<<< HEAD
       assert.deepEqual(step(tr).extra.tool_call_details.call_mcp.metadata, { exit_code: 0 });
     },
     { reason: "R5a", kind: "by design", check: (tr) => {
+=======
+      assert.deepEqual(step(tr).extra?.tool_call_details?.call_mcp?.metadata, { exit_code: 0 });
+    },
+    { reason: "R5a", kind: "not handled", check: (tr) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpResult(tr).content, "true");
       assert.equal(step(tr).extra?.tool_call_details, undefined);
     } }),
   toolCase("codex: dict_output_that_is_not_a_string_is_kept_as_json[2]", '{"output": [1, "two"], "metadata": {"exit_code": 0}}',
     (tr) => {
       assert.equal(mcpResult(tr).content, '[1, "two"]');
+<<<<<<< HEAD
       assert.deepEqual(step(tr).extra.tool_call_details.call_mcp.metadata, { exit_code: 0 });
     },
     { reason: "R5a", kind: "by design", check: (tr) => {
+=======
+      assert.deepEqual(step(tr).extra?.tool_call_details?.call_mcp?.metadata, { exit_code: 0 });
+    },
+    { reason: "R5a", kind: "not handled", check: (tr) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpResult(tr).content, "");
       assert.equal(step(tr).extra?.tool_call_details, undefined);
     } }),
   toolCase("codex: dict_output_that_is_not_a_string_is_kept_as_json[3]", '{"output": {"nested": null}, "metadata": {"exit_code": 0}}',
     (tr) => {
       assert.equal(mcpResult(tr).content, '{"nested": null}');
+<<<<<<< HEAD
       assert.deepEqual(step(tr).extra.tool_call_details.call_mcp.metadata, { exit_code: 0 });
     },
     { reason: "R5a", kind: "by design", check: (tr) => {
+=======
+      assert.deepEqual(step(tr).extra?.tool_call_details?.call_mcp?.metadata, { exit_code: 0 });
+    },
+    { reason: "R5a", kind: "not handled", check: (tr) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpResult(tr).content, '{"nested":null}');
       assert.equal(step(tr).extra?.tool_call_details, undefined);
     } }),
   toolCase("codex: dict_output_that_is_not_a_string_is_kept_as_json[4]", '{"output": "", "metadata": {"exit_code": 0}}',
     (tr) => {
       assert.equal(mcpResult(tr).content, "");
+<<<<<<< HEAD
       assert.deepEqual(step(tr).extra.tool_call_details.call_mcp.metadata, { exit_code: 0 });
     },
     { reason: "R5a", kind: "by design", check: (tr) => {
+=======
+      assert.deepEqual(step(tr).extra?.tool_call_details?.call_mcp?.metadata, { exit_code: 0 });
+    },
+    { reason: "R5a", kind: "not handled", check: (tr) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpResult(tr).content, "");
       assert.equal(step(tr).extra?.tool_call_details, undefined);
     } }),
@@ -297,6 +332,7 @@ export const CODEX_CASES = [{
   toolCase("codex: other_json_values_are_not_python_reprs[2]", "null", (tr) => assert.equal(mcpResult(tr).content, "null")),
   toolCase("codex: other_json_values_are_not_python_reprs[3]", '"quoted"',
     (tr) => assert.equal(mcpResult(tr).content, '"quoted"'),
+<<<<<<< HEAD
     { reason: "R5a", kind: "by design", check: (tr) => assert.equal(mcpResult(tr).content, "quoted") }),
   toolCase("codex: other_json_values_are_not_python_reprs[4]", "[1, 2]",
     (tr) => assert.equal(mcpResult(tr).content, "[1, 2]"),
@@ -304,20 +340,38 @@ export const CODEX_CASES = [{
   toolCase("codex: other_json_values_are_not_python_reprs[5]", "[]",
     (tr) => assert.equal(mcpResult(tr).content, "[]"),
     { reason: "R5a", kind: "by design", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
+=======
+    { reason: "R5a", kind: "not handled", check: (tr) => assert.equal(mcpResult(tr).content, "quoted") }),
+  toolCase("codex: other_json_values_are_not_python_reprs[4]", "[1, 2]",
+    (tr) => assert.equal(mcpResult(tr).content, "[1, 2]"),
+    { reason: "R5a", kind: "not handled", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
+  toolCase("codex: other_json_values_are_not_python_reprs[5]", "[]",
+    (tr) => assert.equal(mcpResult(tr).content, "[]"),
+    { reason: "R5a", kind: "not handled", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   toolCase("codex: other_json_values_are_not_python_reprs[6]", '[{"type": "user", "name": "bob"}]',
     (tr) => assert.equal(mcpResult(tr).content, '[{"type": "user", "name": "bob"}]'),
     { reason: "R5b", kind: "not handled", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
   toolCase("codex: other_json_values_are_not_python_reprs[7]", [1, "two"],
     (tr) => assert.equal(mcpResult(tr).content, '[1, "two"]'),
+<<<<<<< HEAD
     { reason: "R5a", kind: "by design", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
+=======
+    { reason: "R5a", kind: "not handled", check: (tr) => assert.equal(mcpResult(tr).content, "") }),
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 
 
   {
     id: "codex: codex_subagent_rollouts_use_atif_children_without_copied_history",
+<<<<<<< HEAD
     // Adapted: each child's copied history starts with the parent's prompt, as Codex writes it;
     // the subagent_history_start_ordinal boundary is what removes the copy, and each child's own
     // events are renumbered after it. A UserMessage starts the main rollout (Agent Threads
     // requires a prompt).
+=======
+    // Adapted: a UserMessage starts the main and each child rollout (Agent Threads requires a prompt);
+    // each child's own events are renumbered from its subagent_history_start_ordinal.
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     files: (dir) => {
       const main = writeDay(dir, "00-root", [
         meta("root"),
@@ -328,6 +382,7 @@ export const CODEX_CASES = [{
         imgTokens(100, 10, { cached: 40, ordinal: 6 }),
       ]);
       for (const name of ["alpha", "beta"]) writeDay(dir, name, [
+<<<<<<< HEAD
         meta(name, "root", `/root/${name}`, 5, NICKNAMES[name]),
         imgEvent(0, 1, "session_meta", { id: "root" }),
         imgPrompt("Oversee the subagents.", 2),
@@ -336,6 +391,15 @@ export const CODEX_CASES = [{
         imgPrompt(`Do the ${name} task.`, 5),
         message(`${name} child work`, 6),
         imgTokens(name === "alpha" ? 50 : 70, name === "alpha" ? 5 : 7, { cached: name === "alpha" ? 0 : 20, ordinal: 7 }),
+=======
+        meta(name, "root", `/root/${name}`, 4, NICKNAMES[name]),
+        imgEvent(0, 1, "session_meta", { id: "root" }),
+        message("copied parent history", 2),
+        imgTokens(999, 99, { cached: 999, ordinal: 3 }),
+        imgPrompt(`Do the ${name} task.`, 4),
+        message(`${name} child work`, 5),
+        imgTokens(name === "alpha" ? 50 : 70, name === "alpha" ? 5 : 7, { cached: name === "alpha" ? 0 : 20, ordinal: 6 }),
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       ]);
       return { main };
     },
@@ -374,11 +438,50 @@ export const CODEX_CASES = [{
         assert.equal(child.agent.extra.agent_nickname, undefined);
         assert.equal(child.extra.agent_name, NICKNAMES[child.trajectory_id]);
       }
+<<<<<<< HEAD
       assert.equal(JSON.stringify(t).includes("copied parent history"), false);
+=======
+      assert.equal(JSON.stringify(t.steps).includes("copied parent history"), false);
+      const refs = t.steps.flatMap((step) => step.observation?.results ?? []).flatMap((result) => (result.subagent_trajectory_ref ?? []).map((ref) => ref.trajectory_id));
+      assert.deepEqual(refs.sort(), ["alpha", "beta"]);
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.deepEqual(t.final_metrics, { total_prompt_tokens: 220, total_completion_tokens: 22, total_cached_tokens: 60, total_steps: 3 });
     } },
   },
   {
+<<<<<<< HEAD
+=======
+    // Adapted: a UserMessage starts the turn (Agent Threads requires a prompt), so Harbor's
+    // steps[0] is the first agent step here. The cost assertions use Harbor's mocked price
+    // table and are not ported; the cache-write token counts are.
+    id: "codex: cache_write_usage_is_preserved_and_priced",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      event("session_meta", { id: "session-cache-write" }, t(0)),
+      ctPrompt("Write the cache."),
+      event("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "Cache-writing response." }] }, t(0)),
+      { type: "event_msg", payload: { type: "token_count", info: {
+        last_token_usage: { input_tokens: 1000, output_tokens: 10, cached_input_tokens: 300, reasoning_output_tokens: 0, total_tokens: 1010, cache_write_input_tokens: 600 },
+        total_token_usage: { input_tokens: 1000, output_tokens: 10, cached_input_tokens: 300, reasoning_output_tokens: 0, total_tokens: 1010, cache_write_input_tokens: 600 },
+      } } },
+    ]) }),
+    facts: (tr) => {
+      assert.ok(tr != null);
+      assert.ok(tr.final_metrics != null);
+      assert.ok(tr.final_metrics.extra != null);
+      assert.equal(tr.final_metrics.extra.total_cache_write_input_tokens, 600);
+      assert.ok(step(tr).metrics != null);
+      assert.ok(step(tr).metrics.extra != null);
+      assert.equal(step(tr).metrics.extra.cache_write_input_tokens, 600);
+    },
+    diff: { reason: "R11", kind: "not handled", check: (tr) => {
+      assert.equal(step(tr).message, "Cache-writing response.");
+      assert.equal(step(tr).metrics.extra.cache_creation_input_tokens, 600);
+      assert.equal(step(tr).metrics.extra.cache_write_input_tokens, undefined);
+      assert.equal(tr.final_metrics.extra?.total_cache_write_input_tokens, undefined);
+    } },
+  },
+  {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     id: "codex: codex_grandchild_is_nested_under_its_parent",
     // Adapted: a UserMessage starts each of the three rollouts (Agent Threads requires a prompt).
     files: (dir) => {
@@ -608,7 +711,11 @@ export const CODEX_CASES = [{
       assert.equal(mcpContent(t), `look:\n[image: ${url}]`);
       assert.equal(existsSync(join(scratchDir, "images")), false);
     },
+<<<<<<< HEAD
     diff: { reason: "R5a", kind: "by design", check: (t) => {
+=======
+    diff: { reason: "R5a", kind: "not handled", check: (t) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpContent(t), "look:");
       assert.equal(existsSync(join(scratchDir, "images")), false);
       assert.deepEqual(readdirSync(scratchDir), ["session.jsonl"]);
@@ -626,7 +733,11 @@ export const CODEX_CASES = [{
       assert.equal(mcpContent(t), "look:\n[image omitted]");
       assert.equal(existsSync(join(scratchDir, "images")), false);
     },
+<<<<<<< HEAD
     diff: { reason: "R5a", kind: "by design", check: (t) => {
+=======
+    diff: { reason: "R5a", kind: "not handled", check: (t) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpContent(t), "look:");
       assert.equal(existsSync(join(scratchDir, "images")), false);
       assert.deepEqual(readdirSync(scratchDir), ["session.jsonl"]);
@@ -643,7 +754,11 @@ export const CODEX_CASES = [{
     facts: (t) => {
       assert.equal(mcpContent(t), "[image omitted]");
     },
+<<<<<<< HEAD
     diff: { reason: "R5a", kind: "by design", check: (t) => {
+=======
+    diff: { reason: "R5a", kind: "not handled", check: (t) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       assert.equal(mcpContent(t), "");
       assert.equal(existsSync(join(scratchDir, "images")), false);
       assert.deepEqual(readdirSync(scratchDir), ["session.jsonl"]);
@@ -683,7 +798,11 @@ export const CODEX_CASES = [{
         assert.equal(readFileSync(plantedLayout.victim, "utf8"), "victim");
         assert.deepEqual(readdirSync(plantedLayout.outside).sort(), ["victim.png"]);
       },
+<<<<<<< HEAD
       diff: { reason: "R5a", kind: "by design", check: (t) => {
+=======
+      diff: { reason: "R5a", kind: "not handled", check: (t) => {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
         assert.equal(mcpContent(t), "");
         assert.equal(readFileSync(plantedLayout.victim, "utf8"), "victim");
         assert.deepEqual(readdirSync(plantedLayout.outside).sort(), ["victim.png"]);

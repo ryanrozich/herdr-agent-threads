@@ -1,7 +1,9 @@
 #!/bin/sh
 # agent-threads: read one chunk of a Claude Code, Codex, Pi, Cursor or Antigravity transcript from a
 # byte offset.
-# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex|pi|cursor|antigravity]
+# Usage: extract.sh <file> <offset> <max-bytes> [claude|codex|pi|cursor|antigravity] [reasoning]
+# A fifth argument "reasoning" (the ATIF export only, never the pane) keeps the model's
+# reasoning for Claude Code and Codex: its text, or a mark that it was withheld.
 # Prints {"k":"file","size":N,"head":"<first uuid>"}, {"k":"chunk","used":N} (bytes of
 # whole lines read), then extract.jq's events. Reads only the bytes between offset and
 # offset+max-bytes, so a 700 MB transcript is never loaded at once. A cut-off last line is
@@ -17,6 +19,8 @@ case $file in /*) ;; *) file=./$file ;; esac # a relative name may start with "-
 offset=$2
 max=$3
 harness=${4:-claude}
+reasoning=0
+[ "${5:-}" = reasoning ] && reasoning=1
 here=$(dirname "$0")
 # shellcheck disable=SC2034 # read by lines.sh, which also sets lines_note
 threads_core=$here
@@ -108,7 +112,7 @@ while :; do
       nick=$(head -c 4096 "$file" | LC_ALL=C grep -m 1 -o '"agent_nickname":"[^"\\]*"' | head -n 1 | cut -d '"' -f 4) || nick=""
       { [ -z "$nick" ] || jq -cn --arg t "$nick" '{k: "an", t: $t[0:80]}'
       head -c "$used" "$tmp" \
-        | LC_ALL=C perl -ne 'BEGIN { $from = $ENV{THREADS_FROM_ORDINAL}; $from = undef unless defined $from && $from =~ /^\d+$/ }
+        | LC_ALL=C perl -ne 'BEGIN { $keep = shift @ARGV; $from = $ENV{THREADS_FROM_ORDINAL}; $from = undef unless defined $from && $from =~ /^\d+$/ }
             next if defined $from && (!/^\{"timestamp":"[^"\\]{0,40}","ordinal":(\d+)/ || $1 < $from);
             if (/"type":"(?:function_call_output|custom_tool_call_output)"/) {
               my ($id) = /"call_id":"([0-9A-Za-z_.:|-]{1,200})"/; next unless defined $id;
@@ -116,8 +120,13 @@ while :; do
               my $w = substr($_, 0, 4096) . substr($_, -1024);
               my $f = $w =~ /\\"exit_code\\":-?[1-9]|"exit_code":-?[1-9]|\\"success\\":false|(?:^|\\n|")(?:Script failed|aborted|Process exited with code [1-9]|Exit code: [1-9])|tool failed/ ? "true" : "false";
               printf qq({"type":"_x","timestamp":%s,"payload":{"call_id":"%s","f":%s}}\n), defined $ts ? qq("$ts") : "null", $id, $f; next }
+<<<<<<< HEAD
             print unless /"type":"(?:session_meta|world_state|token_usage_record|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/ || ($ENV{THREADS_REASONING} ne "1" && /"type":"reasoning"/) ' \
         | lines | jq -c -f "$here/extract-codex.jq"; } > "$out"
+=======
+            print unless /"type":"(?:session_meta|world_state|token_usage_record|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/ || (!$keep && /"type":"reasoning"/)' "$reasoning" \
+        | lines | jq -c --arg reasoning "$reasoning" -f "$here/extract-codex.jq"; } > "$out"
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
       # type except user, assistant, attachment, system, custom-title and agent-name, every attachment but
@@ -133,7 +142,7 @@ while :; do
             my @ids = /"tool_use_id":"([0-9A-Za-z_.:|-]{1,200})"/g; next unless @ids;
             my ($ts) = /"timestamp":"(\d{4}-\d\d-\d\dT[0-9:.]{1,20}Z?)"/;
             printf qq({"type":"_x","ts":%s,"ids":[%s],"err":%s}\n), defined $ts ? qq("$ts") : "null", join(",", map { qq("$_") } @ids), /"is_error":true/ ? "true" : "false"' \
-        | lines | jq -c -f "$here/extract.jq" > "$out"
+        | lines | jq -c --arg reasoning "$reasoning" -f "$here/extract.jq" > "$out"
     fi
   else
     : > "$out"
