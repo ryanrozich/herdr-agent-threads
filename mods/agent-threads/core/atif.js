@@ -502,10 +502,15 @@ const LINE_MAX = Number(process.env.THREADS_LINE_MAX) > 0 ? Number(process.env.T
   };
 
   const build = (path, opts, depth, seen) => {
-    const s = read(path, opts.env, opts.from ?? 0);
+    const meta = agent === "codex" ? head(path) : null;
+    // A subagent rollout read alone still starts at its own history: session_meta's
+    // subagent_history_start_ordinal, the same boundary an attached read passes in env.
+    const own = agent === "codex" && opts.env?.THREADS_FROM_ORDINAL === undefined
+      && Number.isInteger(meta?.payload?.subagent_history_start_ordinal)
+      ? { THREADS_FROM_ORDINAL: String(meta.payload.subagent_history_start_ordinal) } : {};
+    const s = read(path, { ...opts.env, ...own }, opts.from ?? 0);
     if (!s) return null;
     const results = fill(s, path);
-    const meta = agent === "codex" ? head(path) : null;
     const thread = meta?.type === "session_meta" && typeof meta.payload?.id === "string" ? meta.payload.id : null;
     const root = opts.root ?? (agent === "codex" ? thread : s.id) ?? s.id;
     const version = agent === "codex" ? meta?.payload?.cli_version : agent === "claude" ? claudeVersion(path) : null;

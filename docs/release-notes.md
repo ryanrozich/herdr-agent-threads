@@ -4,6 +4,8 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## Unreleased
 
+- A Codex subagent rollout exported by itself now starts at its own history boundary.
+
 ### Save a session as ATIF
 
 - The exported file now holds the model's reasoning, for Claude Code and Codex sessions, as `reasoning_content` on the step it came before. This is the default. To leave it out, put `--no-reasoning` before the path: `bun mods/agent-threads/core/atif.js --no-reasoning <transcript> > session.json`. The file then holds no reasoning, as one from 1.1.0 did.

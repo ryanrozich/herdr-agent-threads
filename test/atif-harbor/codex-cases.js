@@ -452,13 +452,15 @@ export const CODEX_CASES = [{
     // rollout is written beside it, as Harbor wrote it under the same sessions folder.
     files: (dir) => {
       const main = writeDay(dir, "2026-11-02T10-00-20-child", [
-        meta("child", "missing-parent", null, 4),
+        meta("child", "missing-parent", null, 5),
         imgEvent(0, 1, "session_meta", { id: "missing-parent" }),
-        message("copied parent history", 2),
-        imgTokens(999, 99, { ordinal: 3 }),
-        imgPrompt("Child task.", 4),
-        message("child work", 5),
-        imgTokens(50, 5, { ordinal: 6 }),
+        // A copied parent prompt opens a turn when read from ordinal 0: the boundary must cut it.
+        imgPrompt("Parent asks.", 2),
+        message("copied parent history", 3),
+        imgTokens(999, 99, { ordinal: 4 }),
+        imgPrompt("Child task.", 5),
+        message("child work", 6),
+        imgTokens(50, 5, { ordinal: 7 }),
       ]);
       writeDay(dir, "2026-11-02T09-00-00-old-root", [meta("old"), imgPrompt("Old root task.", 0), message("old", 1)]);
       return { main };
@@ -482,7 +484,7 @@ export const CODEX_CASES = [{
       assert.equal(t.subagent_trajectories, undefined);
       assert.deepEqual(t.steps.map((step) => step.message), ["Child task.", "child work"]);
       assert.deepEqual(t.steps.map((step) => step.step_id), [1, 2]);
-      assert.equal(JSON.stringify(t).includes("copied parent history"), false);
+      for (const copied of ["Parent asks.", "copied parent history"]) assert.equal(JSON.stringify(t).includes(copied), false, copied);
       assert.deepEqual(t.final_metrics, { total_prompt_tokens: 50, total_completion_tokens: 5, total_cached_tokens: 0, total_steps: 2 });
     } },
   },
