@@ -3651,8 +3651,10 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   expect(listed("marine mammal")).toEqual([1, 2]);
   expect(listed("walrus?")).toEqual([1, 2]);
   expect(listed("otter")).toEqual([3]);
+  // The count is the selection's place among the matches, from the newest (TRD-37): the
+  // answer, #2, is the newer of the two; under 420 px, the place alone.
   v.query = "marine mammal";
-  expect(v.filterCount()).toBe("2 of 3");
+  expect(v.filterCount()).toBe("1 of 2");
   v.query = "";
   draw(v, cx);
   expect(reply(answer)).toStartWith("A walrus");
@@ -6721,9 +6723,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 35 rows.
+  // Six groups (the settings card's keys among them), 36 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -11590,4 +11592,143 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   s.skipped = { lines: 1, bytes: 70 * 1048576 };
   v.restart(s);
   expect([s.skippedHead, s.skipped]).toEqual([null, null]);
+});
+
+// ---- search steps (TRD-37) ----
+// Eight turns, four of which hold "checkout test": #2, #4, #5 and #7. The search steps through
+// them newest first: n (olderMatch) back in time, Shift n (newerMatch) forward, no wrap.
+const STEPS = [2, 4, 5, 7];
+async function stepPane() {
+  const ev = [];
+  for (let n = 1; n <= 8; n++) {
+    ev.push({ k: "p", o: "human", t: STEPS.includes(n) ? `Run the checkout test again, take ${n}` : `Tidy the cart page, take ${n}`, ts: at(2 * n) });
+    ev.push({ k: "t", t: `Done with take ${n}.` }, { k: "d", ms: 1000, ts: at(2 * n + 1) });
+  }
+  const r = await scripted(ev);
+  r.v.width = 900;
+  return r;
+}
+
+test("a search starts at its newest match; n and Shift n step through the matches newest first, and stop at either end", async () => {
+  const { v, cx } = await stepPane();
+  expect(STEPS).not.toContain(Number(v.sel.split(":")[1]));
+  v.setQuery("checkout test", cx);
+  // The newest match, #7, selected and centred (the next draw scrolls there).
+  expect(v.sel).toBe("0:7");
+  expect(v.scrollTo).toEqual({ key: "0:7", how: "center" });
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("1 of 4 · newest first");
+  const step = (name) => { expect(v.action(name, cx)).toBe(true); settleRows(v, cx); return [v.sel, v.filterCount()]; };
+  expect(step("olderMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  // At the oldest, n does nothing and nothing wraps; no notice either.
+  const toasts = cx.toasts?.length ?? 0;
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  expect(cx.toasts?.length ?? 0).toBe(toasts);
+  expect(step("newerMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  // Under 420 px, the place alone, and "first" at the oldest.
+  v.width = 400;
+  expect(v.filterCount()).toBe("1 of 4");
+  v.action("first", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:2");
+  expect(v.filterCount()).toBe("4 of 4 · first");
+  // With no search, n finds nothing to step to.
+  v.setQuery("", cx);
+  settleRows(v, cx);
+  expect(v.action("olderMatch", cx)).toBe(false);
+});
+
+test("the search count: one match, none, hidden ones, no match selected, and new words that still match keep the place", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("take 5", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  // The selection left on a turn that is not a match: the count is the matches alone.
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.sel = "0:1";
+  expect(v.filterCount()).toBe("4 matches");
+  // Either step from there goes to the newest.
+  v.action("olderMatch", cx);
+  expect(v.sel).toBe("0:7");
+  // New words that the selected turn still matches keep it selected.
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  v.setQuery("checkout", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+});
+
+test("a turn that starts to match while the reader is on a match leaves them there; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("the search field's two step buttons: up is older, down is newer, and the one with nothing left that way is dimmed and does nothing", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const drawn = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  let c = drawn();
+  const older = () => afterId(c, "th-match-older");
+  const newer = () => afterId(c, "th-match-newer");
+  expect(older()).toContainEqual(["tooltip", "Older match (n)"]);
+  expect(newer()).toContainEqual(["tooltip", "Newer match (Shift n)"]);
+  // At the newest: down is dimmed, and its click leaves the selection.
+  expect(newer()).toContainEqual(["opacity", 0.35]);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  newer().find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.sel).toBe("0:7");
+  older().find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.sel).toBe("0:5");
+  c = drawn();
+  expect(newer().some((e) => e[0] === "opacity")).toBe(false);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  // No match: no step buttons.
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  c = drawn();
+  expect(older()).toBeNull();
+  expect(newer()).toBeNull();
+});
+
+test("the selected turn's matches get the stronger fill, the other matches the usual one", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const fills = (k) => {
+    rec = [];
+    v.item(theme, v.rows().find((r) => r.key === k), false, 100);
+    const c = rec;
+    rec = null;
+    return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith("#d7a000")).map((e) => e[1]);
+  };
+  // The working colour at 60% (99) on the selected turn's match, at 32% (52) on the others.
+  expect(v.sel).toBe("0:7");
+  expect(fills("0:7")).toEqual(["#d7a00099"]);
+  expect(fills("0:5")).toEqual(["#d7a00052"]);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(fills("0:5")).toEqual(["#d7a00099"]);
+  expect(fills("0:7")).toEqual(["#d7a00052"]);
 });

@@ -58,6 +58,23 @@ test("Shift w steps the reading width; plain w still fits the pane, and a filter
   expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
 });
 
+// TRD-37: n steps to the older search match and Shift n to the newer one, as in less and vim.
+// In the search field every letter types; a quote key of n keeps n, and the sheet then drops it.
+test("n and Shift n step through search matches; the field types them; a quote key of n wins", () => {
+  expect(keyAction(key("n"))).toBe("olderMatch");
+  expect(keyAction(key("n", { shift: true }))).toBe("newerMatch");
+  expect(keyAction(key("N", { shift: true }))).toBe("newerMatch");
+  expect(keyAction(key("N"))).toBe("newerMatch");
+  expect(keyAction(key("n"), true)).toBe(null);
+  expect(keyAction(key("n", { shift: true }), true)).toBe(null);
+  expect(keyAction(key("N"), true)).toBe(null);
+  expect(keyAction(key("n", { platform: true }))).toBe(null);
+  expect(keyAction(key("n"), false, "n")).toBe("quote");
+  const row = (q) => keySheet(q).find(([g]) => g === "List")[1].find(([k]) => k.includes("Shift n"));
+  expect(row("q")).toEqual([["n", "Shift n"], "Older or newer search match"]);
+  expect(row("n")).toBeUndefined();
+});
+
 test("alpha: every colour form", () => {
   expect(alpha("#ff8800", 0.5)).toBe("#ff880080");
   expect(alpha("#f80", 1)).toBe("#ff8800ff");
