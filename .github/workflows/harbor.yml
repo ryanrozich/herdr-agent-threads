@@ -1,0 +1,46 @@
+name: Harbor
+
+# Runs Harbor's own code (harbor-framework/harbor 0.26.0, pinned by commit) on our ATIF exports
+# of synthetic Claude and Codex sessions, and reports what Harbor accepts and what it sees.
+# Separate from ci.yml on purpose: Harbor needs Python 3.12 and a 230 MB install, and the queue
+# requires only the check named `check` (.mergify.yml), so this job never gates a merge.
+# It runs on a push that changes the export or this job, on any branch but the merge queue's,
+# so a ticket branch has its run before a pull request exists.
+on:
+  push:
+    branches-ignore: ["mergify/merge-queue/**"]
+    paths:
+      - ".github/workflows/harbor.yml"
+      - "test/harbor/**"
+      - "mods/agent-threads/core/**"
+      - "test/atif.test.js"
+      - "test/make-fixture.js"
+      - "test/make-agents.js"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harbor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harbor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      # Harbor's pyproject asks for uv 0.13.5 or newer.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: false
+
+      - name: Harbor on our exports
+        run: sh test/harbor/run.sh
