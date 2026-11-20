@@ -9443,7 +9443,8 @@ export default class Threads extends View {
     const s = this.current();
     const newest = s?.turns[s.turns.length - 1] ?? null;
     const going = turnRunning({
-      followed: this.res.kind === "found", alive: this.res.ended == null, open: Boolean(newest && !newest.done),
+      // A session guessed from the folder may be another one there: not followed.
+      followed: this.res.kind === "found" && !this.res.guess, alive: this.res.ended == null, open: Boolean(newest && !newest.done),
       reports: this.agent().key === "claude", status,
     });
     const key = `${this.sessions.map((x) => `${x.version}.${x.turns.length}.${x.agentVer ?? 0}`).join(",")}|${going ? 1 : 0}`;

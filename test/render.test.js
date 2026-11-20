@@ -12267,8 +12267,21 @@ test("running rule in the pane: a turn with no end is running only while the age
   expect(Number.isFinite(h.lastAt)).toBe(true);
   // The process gone: never running, whatever the status says.
   state.terminals[0].status = "working";
-  v.res = { ...v.res, ended: "exited" };
+  const res = v.res;
+  v.res = { ...res, ended: "exited" };
   expect(v.ledger().going).toBe(false);
+  // Followed means a real match: a session guessed from the folder, or none, is not.
+  v.res = { ...res, guess: true };
+  expect(v.ledger().going).toBe(false);
+  v.res = { kind: "none" };
+  expect(v.ledger().going).toBe(false);
+  v.res = res;
+  expect(v.ledger().going).toBe(true);
+  // Open means the newest turn is not done: a done turn with Claude still working is not running.
+  const newest = v.current().turns.at(-1);
+  newest.done = true;
+  expect(v.ledger().going).toBe(false);
+  newest.done = false;
   draw(v, cx);
 });
 
