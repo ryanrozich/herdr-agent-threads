@@ -3,6 +3,11 @@
 // Copyright the Harbor authors. Apache-2.0; see LICENSE beside this file.
 // Ported: the named entries in CLAUDE_CASES below. A prompt wraps private-method
 // cases; the nested helper uses an agent-<id>.jsonl file, launch result and first prompt.
+<<<<<<< HEAD
+=======
+// Changed from Harbor's original: the pytest functions are translated to JavaScript case entries that
+// run our export's command line on the same events; the diff checks are ours, and "Adapted:" marks changed input.
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 import { strict as assert } from "node:assert";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +37,13 @@ const sidechain = (event, agentId = "agent-1", uuid = null) => ({ ...event, isSi
 const onModel = (event, model, usage) => ({ ...event, message: { ...event.message, model, usage } });
 const haiku = (content, timestamp, msgId = null) => onModel(assistant(content, timestamp, msgId), "claude-haiku-4-5", { input_tokens: 50, output_tokens: 5 });
 const sidechainStepsOf = (t) => t.steps.filter((step) => step.extra?.is_sidechain);
+<<<<<<< HEAD
+=======
+// A difference whose export prints "no turns" runs a control: the same session with the stated
+// cause removed, which must export. The check asserts both, so another cause of "no turns" fails it.
+const session = (events) => (dir) => ({ main: writeSession(dir, "session.jsonl", events) });
+const messagesOf = (t) => t.steps.map((step) => step.message);
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 
 export const CLAUDE_CASES = [
   promptCase("user_event_text_content_block_unwrapped", [{ type: "text", text: "Base directory for this skill: /logs/agent/sessions/skills/xlsx\n\nAll Excel files must be deterministic." }], "Base directory for this skill: /logs/agent/sessions/skills/xlsx\n\nAll Excel files must be deterministic."),
@@ -46,7 +58,19 @@ export const CLAUDE_CASES = [
   },
   {
     ...promptCase("list_content_non_text_non_tool_result_block_json_encoded", [{ type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo" } }, { type: "text", text: "see the screenshot above" }], ""),
+<<<<<<< HEAD
     facts: (t) => assert.ok(t.steps[0].message.includes('"type": "image"')),
+=======
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.equal(userSteps(t).length, 1);
+      const message = userSteps(t)[0].message;
+      assert.equal(typeof message, "string");
+      assert.ok(message.includes('{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo"}}'));
+      assert.ok(message.includes("see the screenshot above"));
+      assert.ok(message.endsWith("see the screenshot above"));
+    },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     diff: { reason: "R5b", kind: "not handled", check: (t) => { assert.equal(t.steps[0].message, "see the screenshot above"); assert.equal(t.steps[0].extra.images, 1); } },
   },
   contentCase("thinking_block_with_thinking_key", [thinking("Let me analyze the problem step by step."), text("Here is my answer.")], (t) => { assert.equal(reason(t), "Let me analyze the problem step by step."); assert.equal(reply(t), "Here is my answer."); }),
@@ -80,7 +104,27 @@ export const CLAUDE_CASES = [
   {
     id: "claude: text_and_tool_use_in_one_event_bundle_into_one_step",
     files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user("Do it"), assistant([text("Let me run the command."), { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "echo hi" } }], "2026-01-01T00:00:01Z", "msg_a"), user([{ type: "tool_result", tool_use_id: "toolu_1", content: "hi" }], "2026-01-01T00:00:02Z")]) }),
+<<<<<<< HEAD
     facts: (t) => { assert.deepEqual(t.steps.map((s) => s.step_id), [1, 2]); const st = t.steps[1]; assert.equal(st.message, "Let me run the command."); assert.equal(st.tool_calls[0].tool_call_id, "toolu_1"); assert.equal(st.tool_calls[0].function_name, "Bash"); assert.deepEqual(st.tool_calls[0].arguments, { command: "echo hi" }); assert.equal(st.observation.results[0].content, "hi"); },
+=======
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.deepEqual(t.steps.map((s) => s.step_id), [1, 2]);
+      const st = t.steps[1];
+      assert.equal(st.source, "agent");
+      assert.equal(st.message, "Let me run the command.");
+      assert.ok(st.tool_calls != null);
+      assert.equal(st.tool_calls.length, 1);
+      assert.equal(st.tool_calls[0].tool_call_id, "toolu_1");
+      assert.equal(st.tool_calls[0].function_name, "Bash");
+      assert.deepEqual(st.tool_calls[0].arguments, { command: "echo hi" });
+      assert.ok(st.observation != null);
+      assert.equal(st.observation.results.length, 1);
+      assert.equal(st.observation.results[0].source_call_id, "toolu_1");
+      assert.equal(st.observation.results[0].content, "hi");
+      assert.ok(!t.steps.some((s) => (s.message || "").startsWith("Executed ")));
+    },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   },
   {
     id: "claude: multiple_tool_uses_in_one_event_bundle_into_one_step",
@@ -165,7 +209,14 @@ export const CLAUDE_CASES = [
     id: "claude: string_content_empty_is_skipped",
     files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user(""), assistant([text("ack")])]) }),
     facts: (t) => { assert.ok(t != null); assert.deepEqual(userSteps(t), []); },
+<<<<<<< HEAD
     diff: { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) },
+=======
+    diff: { reason: "R3", kind: "by design", control: session([user("x"), assistant([text("ack")])]), check: (t, control) => {
+      assert.equal(t, null);
+      assert.deepEqual(messagesOf(control), ["x", "ack"]);
+    } },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   },
   {
     id: "claude: string_content_whitespace_only_is_skipped",
@@ -187,7 +238,14 @@ export const CLAUDE_CASES = [
       assert.equal(userSteps(t).length, 1);
       assert.equal(userSteps(t)[0].message, "{\"hello\": \"world\", \"trailing_ws_in_value\": \"x \\n\"}");
     },
+<<<<<<< HEAD
     diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+=======
+    diff: { reason: "R5b", kind: "not handled", control: session([user("{\"hello\": \"world\", \"trailing_ws_in_value\": \"x \\n\"}")]), check: (t, control) => {
+      assert.equal(t, null);
+      assert.deepEqual(messagesOf(control), ["{\"hello\": \"world\", \"trailing_ws_in_value\": \"x \\n\"}"]);
+    } },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   },
   ...[
     [42, "42"],
@@ -202,7 +260,14 @@ export const CLAUDE_CASES = [
       assert.equal(userSteps(t).length, 1);
       assert.equal(userSteps(t)[0].message, expected);
     },
+<<<<<<< HEAD
     diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+=======
+    diff: { reason: "R5b", kind: "not handled", control: session([user(expected)]), check: (t, control) => {
+      assert.equal(t, null);
+      assert.deepEqual(messagesOf(control), [expected]);
+    } },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   })),
   {
     id: "claude: list_branch_tool_result_path_unchanged",
@@ -242,12 +307,29 @@ export const CLAUDE_CASES = [
       assert.ok(observation != null);
       assert.ok(JSON.stringify(observation).includes("tool output payload"));
     },
+<<<<<<< HEAD
     diff: { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) },
   },
   {
     // Adapted: Harbor writes each payload to its own session and asserts one user step each;
     // here all five share one session, in the test's order, so facts reads five user steps by
     // position. Harbor's converter gives exactly those five steps for this session.
+=======
+    diff: { reason: "R3", kind: "by design", control: session([
+      user("Read the file.", "2025-12-31T23:59:59Z"),
+      assistant([{ type: "tool_use", id: "toolu_xyz", name: "Read", input: { file_path: "/tmp/x" } }], "2026-01-01T00:00:00Z"),
+      user([text("before result"), { type: "tool_result", tool_use_id: "toolu_xyz", content: "tool output payload" }, text("after result")], "2026-01-01T00:00:01Z"),
+    ]), check: (t, control) => {
+      assert.equal(t, null);
+      assert.equal(control.steps[0].message, "Read the file.");
+      const call = agentSteps(control).find((step) => step.tool_calls?.[0]?.tool_call_id === "toolu_xyz");
+      assert.equal(call.observation.results[0].content, "tool output payload");
+    } },
+  },
+  {
+    // Adapted: Harbor writes each payload to its own session; here all five share one, in
+    // the test's order.
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     id: "claude: stringify_uses_json_dumps_for_non_str",
     files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
       user(true),
@@ -258,12 +340,17 @@ export const CLAUDE_CASES = [
     ]) }),
     facts: (t) => {
       assert.ok(t != null);
+<<<<<<< HEAD
       const expectations = [
+=======
+      for (const [payload, expected] of [
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
         [true, "true"],
         [false, "false"],
         [{ a: 1, b: "x" }, "{\"a\": 1, \"b\": \"x\"}"],
         [{ nested: { inner: [1, 2] } }, "{\"nested\": {\"inner\": [1, 2]}}"],
         [{ 中文: "value", "emoji_🎉": 1 }, "{\"中文\": \"value\", \"emoji_🎉\": 1}"],
+<<<<<<< HEAD
       ];
       assert.equal(userSteps(t).length, expectations.length, "one user step per payload");
       expectations.forEach(([payload, expected], index) => {
@@ -271,6 +358,17 @@ export const CLAUDE_CASES = [
       });
     },
     diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+=======
+      ]) {
+        assert.equal(userSteps(t).length, 1, JSON.stringify(payload));
+        assert.equal(userSteps(t)[0].message, expected, `json.dumps semantics expected for ${JSON.stringify(payload)}`);
+      }
+    },
+    diff: { reason: "R5b", kind: "not handled", control: session(["true", "false", "{\"a\": 1, \"b\": \"x\"}"].map((value) => user(value))), check: (t, control) => {
+      assert.equal(t, null);
+      assert.deepEqual(messagesOf(control), ["true", "false", "{\"a\": 1, \"b\": \"x\"}"]);
+    } },
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   },
   ...["", "a", "a\n", "\na", "\n", "  \t  ", "a  ", "  a", "a\nb\nc", "a\n\nb", "\x00", "héllo", "🎉", "a".repeat(1000)].map((byteSeq, index) => {
     const item = {
@@ -282,7 +380,14 @@ export const CLAUDE_CASES = [
         if (byteSeq.trim()) { assert.equal(steps.length, 1); assert.equal(steps[0].message, byteSeq); } else assert.deepEqual(steps, []);
       },
     };
+<<<<<<< HEAD
     if (byteSeq === "") item.diff = { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) };
+=======
+    if (byteSeq === "") item.diff = { reason: "R3", kind: "by design", control: session([user("x"), assistant([text("ack")])]), check: (t, control) => {
+      assert.equal(t, null);
+      assert.deepEqual(messagesOf(control), ["x", "ack"]);
+    } };
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     if (byteSeq === "\n" || byteSeq === "  \t  ") item.diff = { reason: "R4", kind: "not handled", check: (t) => { assert.equal(userSteps(t).length, 1); assert.equal(userSteps(t)[0].message, byteSeq); } };
     return item;
   }),
@@ -311,6 +416,31 @@ export const CLAUDE_CASES = [
     },
   },
   {
+<<<<<<< HEAD
+=======
+    // Adapted: a prompt starts the turn (Agent Threads requires one); Harbor's run log,
+    // claude-code.txt, is written into the logs folder as Harbor's test writes it. The step's
+    // estimated cost comes from Harbor's mocked price table and is not ported.
+    id: "claude: reported_cost_remains_authoritative",
+    files: (dir) => {
+      writeFileSync(join(dir, "claude-code.txt"), `${JSON.stringify({ type: "result", total_cost_usd: 1.25 })}\n`);
+      return { main: writeSession(dir, "projects/test-project/test-session/session.jsonl", [user("Finish."), assistant([text("Done.")], "2026-01-01T00:00:01Z", "msg_done")]) };
+    },
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.ok(t.final_metrics != null);
+      assert.equal(t.final_metrics.total_cost_usd, 1.25);
+      assert.ok(t.final_metrics.extra == null);
+    },
+    diff: { reason: "R8", kind: "not handled", check: (t) => {
+      assert.deepEqual(messagesOf(t), ["Finish.", "Done."]);
+      assert.equal(t.final_metrics.total_cost_usd, undefined);
+      assert.equal(t.steps[1].metrics.cost_usd, undefined);
+      assert.equal(JSON.stringify(t).includes("1.25"), false);
+    } },
+  },
+  {
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     id: "claude: agent_steps_carry_llm_call_count",
     files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user([text("Fix the bug.")]), assistant([text("Looking.")], "2026-01-01T00:00:01Z", "msg_1")]) }),
     facts: (t) => {

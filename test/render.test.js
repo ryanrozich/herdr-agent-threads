@@ -18,12 +18,18 @@ const app = mkdtempSync(join(tmpdir(), "threads-render-"));
 let calls = 0;
 // With rec set, every element method call is recorded as [name, ...args].
 let rec = null;
-// Element methods a test says the running Herdr has, for code that asks with "name in el".
+// Element methods by what a test says the running Herdr has, for code that asks with
+// "name in el". `lacking`: an older Herdr's gap, so `name in el` answers false and a call
+// throws, as Herdr's "not a function". `stubHas`: a method only a newer Herdr has (NEWER),
+// which answers true only while a test adds it.
+const lacking = new Set();
 const stubHas = new Set();
+const NEWER = new Set(["mode"]);
 const el = new Proxy(() => {}, {
-  has(_t, name) { return stubHas.has(String(name)); },
+  has(_t, name) { const n = String(name); return !lacking.has(n) && (!NEWER.has(n) || stubHas.has(n)); },
   get(_t, name) {
     if (name === "then") return undefined;
+    if (lacking.has(String(name))) return undefined;
     if (name === "when") return (cond, fn) => { if (cond) fn(el); return el; };
     if (name === "hover") return (fn) => { fn(el); return el; };
     return (...args) => { calls++; if (rec) rec.push([String(name), ...args]); for (const a of args) if (a === undefined) throw new Error(`undefined passed to .${String(name)}()`); return el; };
@@ -807,19 +813,19 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   const i = rows.findIndex((r) => r.kind === "turn" && r.key === "0:2");
   expect(rows[i - 1]).toMatchObject({ kind: "afold", key: "af:0:2", fold: "folded" });
   const detail = state.shared["threads.debug"].t4.detail;
-  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · agent message rule1"))).toBe(true);
+  expect(detail.some((d) => d.startsWith("afold#2 folded build-bot · matched by rule rule1"))).toBe(true);
   expect(v.counts()).toMatchObject({ agentAll: 2, foldedAll: 1, hiddenAll: 1 });
   expect(v.headerButtons().find((b) => b[0] === "th-agents")[2]).toBe("Show agent messages (1 folded, 1 hidden) (a)");
   expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 · Quote key · q");
   // Which rule: the folded line's tooltip names it.
-  expect(v.ruleTip(v.current().turns[1])).toBe("Marked by sender rule 1 · Hourly report");
-  expect(tooltips(v, cx)).toContain("Marked by sender rule 1 · Hourly report");
+  expect(v.ruleTip(v.current().turns[1])).toBe("Typed into the terminal. Sender rule 1 · Hourly report named its sender.");
+  expect(tooltips(v, cx)).toContain("Typed into the terminal. Sender rule 1 · Hourly report named its sender.");
   // Shown whole (a), the sender line over the message carries the same tooltip.
   v.prefs = { ...v.prefs, agentTurns: true };
   draw(v, cx);
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
   expect(state.shared["threads.debug"].t4.detail.some((d) => d.includes("agent:peer:release-checker"))).toBe(true);
-  expect(tooltips(v, cx)).toContain("Marked by sender rule 2 · From {name}:");
+  expect(tooltips(v, cx)).toContain("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
   v.prefs = { ...v.prefs, agentTurns: false };
   // In Pinned: a pinned rule-marked turn carries its sender like any agent message.
   v.sel = "0:2";
@@ -830,7 +836,7 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
   rec = null;
   expect(v.rows().find((r) => r.key === "0:2")?.turn.agent).toBe(true);
-  expect(kids).toContain("build-bot · agent message");
+  expect(kids).toEqual(expect.arrayContaining(["build-bot", "matched by rule"]));
   v.setView("all");
   // The rules removed: every turn is the person's again, with no stale row kept.
   v.applyPrefs("{}");
@@ -841,20 +847,213 @@ test("a typed prompt a sender rule matches folds, hides and counts as an agent m
   expect(v.shape(v.current().turns[1]).blank).toBeFalsy();
 });
 
+test("every place that draws an agent message can tell a rule-marked typed prompt from one another agent sent", async () => {
+  const { senderOrigin } = await import("../mods/agent-threads/ui.js");
+  // Two messages from helper-a: one typed in the terminal and marked by the "From {name}:"
+  // rule, one helper-a really sent. What is checked here is that each place has the fact to
+  // draw the mark from; the mark itself is checked in the tests that follow.
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+    { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
+  ]);
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  const [you, typed, sent] = v.current().turns;
+  expect([you, typed, sent].map((t) => senderOrigin(t.sender))).toEqual(["you", "rule", "sent"]);
+  expect(senderLabel(typed.sender, 400)).not.toBe(senderLabel(sent.sender, 400));
+  // Open header and closed rows: the debug list says which.
+  v.open = new Set(["0:2", "0:3"]);
+  draw(v, cx);
+  const detail = () => state.shared["threads.debug"].t4.detail;
+  expect(detail().some((d) => d.startsWith("head#2") && d.includes("agent:peer:helper-a") && d.endsWith("from:rule"))).toBe(true);
+  expect(detail().some((d) => d.startsWith("head#3") && d.includes("agent:peer:helper-a") && d.endsWith("from:sent"))).toBe(true);
+  // The viewer's copy of a turn keeps it.
+  expect([v.viewerTurn(you).origin, v.viewerTurn(typed).origin, v.viewerTurn(sent).origin]).toEqual(["you", "rule", "sent"]);
+  // The rail: its turns (every tick is made from one) and the card a tick opens. The rail
+  // shows from 700 px; the ticks drawn are only those in its window.
+  v.width = 700;
+  draw(v, cx);
+  const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
+  expect([senderOrigin(entry(2).turn.sender), senderOrigin(entry(3).turn.sender)]).toEqual(["rule", "sent"]);
+  const card = (n) => v.railCard({ turns: [entry(n)], live: false, pinned: false });
+  expect([card(2).origin, card(3).origin]).toEqual(["rule", "sent"]);
+  // Folded rows (agent messages hidden) and search rows hold the turn itself.
+  v.open = new Set();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(detail().some((d) => d.startsWith("afold#2") && d.includes(" rule2"))).toBe(true);
+  expect(detail().some((d) => d.startsWith("afold#3") && !d.includes(" rule"))).toBe(true);
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.setQuery("cart tests", cx);
+  draw(v, cx);
+  const found = v.rows().filter((r) => r.turn && r.kind === "turn");
+  expect(found.map((r) => senderOrigin(r.turn.sender))).toEqual(["rule", "sent"]);
+  v.setQuery("", cx);
+  // Pinned: a pinned turn is drawn from the turn, so it carries the same fact.
+  for (const k of ["0:2", "0:3"]) { v.sel = k; v.action("pin", cx); }
+  v.setView("pinned");
+  draw(v, cx);
+  expect(v.rows().filter((r) => r.turn).map((r) => senderOrigin(r.turn.sender))).toEqual(["rule", "sent"]);
+  v.setView("all");
+});
+
+// The mark on a message a sender rule matched (the designer's option 2, which the owner
+// chose): "matched by rule" for the words, the tag icon for the bot, and a 1 px dashed edge on
+// the bubble. A message another agent really sent keeps its words, its bot icon and no edge.
+const twoKinds = () => scripted([
+  { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+  { k: "p", o: "human", t: "From helper-a: the cart tests are green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+  { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
+]);
+const recOf = (fn) => { rec = []; try { fn(); return rec; } finally { rec = null; } };
+// The colour each dashed edge was drawn in: the border_color after each border_dashed.
+const dashes = (c) => c.flatMap((e, i) => (e[0] === "border_dashed" ? [c.slice(i + 1).find((x) => x[0] === "border_color")?.[1] ?? null] : []));
+const svgs = (c) => c.filter((e) => e[0] === "svg").map((e) => e[1].split("/").pop());
+
+test("a message a sender rule matched reads \"matched by rule\" with the tag icon, its tooltip says a rule named its sender; a sent one is as before", async () => {
+  const { senderIcon, kindWords } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  const [you, typed, sent] = v.current().turns;
+  expect(kindWords(typed.sender)).toBe("matched by rule");
+  expect([senderLabel(typed.sender, 400), senderLabel(sent.sender, 400)]).toEqual(["helper-a · matched by rule", "helper-a · agent message"]);
+  // Under 300 px the label is the name alone, as today.
+  expect([senderLabel(typed.sender, 240), senderLabel(sent.sender, 240)]).toEqual(["helper-a", "helper-a"]);
+  expect([senderIcon(typed.sender), senderIcon(sent.sender)]).toEqual(["tag", "bot"]);
+  expect([v.youLabel(you), v.youLabel(typed), v.youLabel(sent)]).toEqual(["USER", "FROM HELPER-A · MATCHED BY RULE", "FROM HELPER-A"]);
+  expect(v.ruleTip(typed)).toBe("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
+  expect(v.ruleTip(sent)).toBe(null);
+  // Closed rows: the name, then the words on their own, so a short label cuts the name and
+  // never "matched by rule"; the tag icon over the matched one, the bot over the sent one.
+  let c = recOf(() => v.render(cx));
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["helper-a", "matched by rule", "agent message"]));
+  expect(svgs(c)).toEqual(expect.arrayContaining(["tag.svg", "bot.svg"]));
+  expect(c.filter((e) => e[0] === "tooltip").map((e) => e[1])).toContain("Typed into the terminal. Sender rule 2 · From {name}: named its sender.");
+  // The words never shrink; the name does.
+  const words = c.findIndex((e) => e[0] === "child" && e[1] === "matched by rule");
+  expect(c.slice(Math.max(0, words - 4), words).some((e) => e[0] === "flex_none")).toBe(true);
+  // Open: the line inside the bubble.
+  v.open = new Set(["0:2", "0:3"]);
+  c = recOf(() => v.render(cx));
+  expect(strsOf(c)).toEqual(expect.arrayContaining(["FROM HELPER-A", "MATCHED BY RULE"]));
+  // The debug report, the viewer and Copy follow the label.
+  const detail = state.shared["threads.debug"].t4.detail;
+  expect(detail.some((d) => d.includes("[helper-a · matched by rule]"))).toBe(true);
+  expect(detail.some((d) => d.includes("[helper-a · agent message]"))).toBe(true);
+  expect([v.viewerTurn(typed).who, v.viewerTurn(sent).who]).toEqual(["helper-a · matched by rule", "helper-a · agent message"]);
+  // Folded (agent messages hidden, each has a reply): the same words and icon on the one line.
+  v.open = new Set();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.detail.some((d) => d.startsWith("afold#2 folded helper-a · matched by rule rule2"))).toBe(true);
+  c = recOf(() => v.render(cx));
+  expect(svgs(c)).toContain("tag.svg");
+});
+
+test("an open bubble is at least as wide as its \"FROM … · MATCHED BY RULE\" line, up to the bubble's limit", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "human", t: "From helper-a: green", ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 500, ts: at(3) },
+  ]);
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.width = 700;
+  v.open = new Set(["0:2"]);
+  draw(v, cx);
+  const r = v.rows().find((x) => x.kind === "you" && x.turn.n === 2);
+  // "From helper-a: green" alone makes a bubble of 160 px, the least an agent's has.
+  expect(v.youMd(r).bw).toBeGreaterThanOrEqual(260);
+  v.width = 240;
+  draw(v, cx);
+  const narrow = v.rows().find((x) => x.kind === "you" && x.turn.n === 2);
+  expect(v.youMd(narrow).bw).toBeLessThanOrEqual(240);
+});
+
+test("the dashed edge: on a matched message's bubble, closed and open, in the bubble's ink at 50% or the muted colour on Plain; none on a sent one", async () => {
+  const { bubbleStyle } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  const amber = bubbleStyle("amber", theme, true);
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([amber.bar]);
+  // Open (drawn twice: once more in the hidden probe that measures it). The sent one open
+  // beside the closed matched one adds none.
+  v.open = new Set(["0:2", "0:3"]);
+  draw(v, cx);
+  const open = dashes(recOf(() => v.render(cx)));
+  expect(open.length).toBeGreaterThanOrEqual(1);
+  expect(new Set(open)).toEqual(new Set([amber.bar]));
+  v.open = new Set(["0:3"]);
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([amber.bar]);
+  // Plain: the dashed edge takes the solid outline's place, in the muted colour; the sent
+  // bubble keeps its solid outline.
+  v.prefs = { ...v.prefs, agentBubbleColor: "plain" };
+  v.open = new Set();
+  draw(v, cx);
+  const c = recOf(() => v.render(cx));
+  expect(dashes(c)).toEqual([theme.muted]);
+  expect(c.filter((e) => e[0] === "border_1").length).toBeGreaterThanOrEqual(2);
+  // No rules: no edge anywhere.
+  v.applyPrefs("{}");
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  draw(v, cx);
+  expect(dashes(recOf(() => v.render(cx)))).toEqual([]);
+});
+
+test("on a Herdr whose elements have no border_dashed, the matched bubble keeps a solid edge in the same colour and the view still draws", async () => {
+  const { bubbleStyle } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true, agentBubbleColor: "amber" };
+  lacking.add("border_dashed");
+  try {
+    draw(v, cx);
+    const c = recOf(() => v.render(cx));
+    expect(c.some((e) => e[0] === "border_dashed")).toBe(false);
+    expect(c.some((e) => e[0] === "border_color" && e[1] === bubbleStyle("amber", theme, true).bar)).toBe(true);
+  } finally { lacking.delete("border_dashed"); }
+});
+
+test("the rail card has a second line for an agent message, matched or sent: its icon and label; none for the person's own", async () => {
+  const { v, cx } = await twoKinds();
+  v.applyPrefs(JSON.stringify(SENDERS));
+  v.prefs = { ...v.prefs, agentTurns: true };
+  v.width = 700;
+  draw(v, cx);
+  const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
+  const k = (n) => ({ key: `0:${n}`, turns: [entry(n)], live: false, pinned: false });
+  expect([1, 2, 3].map((n) => v.railCard(k(n)).who)).toEqual([null, "helper-a · matched by rule", "helper-a · agent message"]);
+  expect([1, 2, 3].map((n) => v.railCard(k(n)).icon)).toEqual([null, "tag", "bot"]);
+  const drawn = (n) => recOf(() => v.railCardView(theme, k(n)));
+  expect(svgs(drawn(2))).toContain("tag.svg");
+  expect(strsOf(drawn(2))).toEqual(expect.arrayContaining(["helper-a", "matched by rule"]));
+  expect(svgs(drawn(3))).toContain("bot.svg");
+  expect(strsOf(drawn(3))).toEqual(expect.arrayContaining(["helper-a", "agent message"]));
+  expect(svgs(drawn(1))).not.toContain("bot.svg");
+  expect(strsOf(drawn(1))).not.toContain("helper-a");
+});
+
 test("a sender rule that is not valid shows a note in the panel and is ignored", async () => {
   const { v, cx } = await scripted(senderEvents());
   v.applyPrefs(JSON.stringify({ senders: [{ pattern: "^(?<sender>(a+)+)!" }, { pattern: "^From (\\w+):" }] }));
   expect(v.prefsNotes).toEqual(["Sender rule 1: nested quantifier, as in (a+)+", "Sender rule 2: pattern has no (?<sender>...) group"]);
-  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not valid) · Quote key · q");
+  expect(v.settingsLine()).toBe("Link rules · 0 · Sender rules · 2 (2 not working) · Quote key · q");
   expect(v.current().turns.every((t) => !t.agent)).toBe(true);
-  // The card shows them where it shows notes the Link rules page cannot place on a rule.
+  // The card's Sender rules page shows each on its rule, with the reason.
   v.settingsOpen = true;
-  v.setPage = "links";
+  v.setPage = "senders";
   rec = [];
   v.render(cx);
   const kids = rec.filter(([n]) => n === "child").map(([, x]) => x);
   rec = null;
-  expect(kids).toContain("Sender rule 1: nested quantifier, as in (a+)+");
+  expect(kids).toContain("Not working: nested quantifier, as in (a+)+");
+  expect(kids).toContain("Not working: pattern has no (?<sender>...) group");
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
@@ -1490,8 +1689,8 @@ test("a closed turn's message and reply start select by drag, a click that does 
   // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
   // agent's message, a stop's reason) stays a plain line, in its own colour.
   const v2 = views.length;
-  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
-  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-y", ["ink"], theme.foreground, 14, 22);
   expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
   // While a search marks its hits, the lines are plain, so the marks still show.
   v.query = turn.prompt.split(/\s+/)[0];
@@ -1552,16 +1751,16 @@ test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubb
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n]) => n === "bg")).toBe(false);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.muted]);
   expect(rec.find(([n]) => n === "text_size")[1]).toBe(12.5);
   rec = [];
-  v.chip(theme, "/x", 120, true);
+  v.chip(theme, theme.background, "/x", 120, true);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.foreground]);
   v.query = "review";
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n, c]) => n === "bg" && c === "#d7a00052")).toBe(true);
   v.query = "";
   rec = null;
@@ -1712,7 +1911,7 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
   // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
   // open turn's label and docs/reference.md say.
   rec = [];
-  v.promptBlock(theme, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
+  v.promptBlock(theme, theme.background, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
   const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
   rec = null;
   expect(pasteSizes).toEqual([12.5, 12.5]);
@@ -1836,7 +2035,7 @@ test("link rules: the open card's reply and prompt carry links, rows never do", 
     { pattern: "(a+)+", url: "https://x.example/$1" },
   ] }));
   expect(v.links.length).toBe(2);
-  expect(v.settingsLine()).toBe("Link rules · 3 (1 not valid) · Quote key · q");
+  expect(v.settingsLine()).toBe("Link rules · 3 (1 not working) · Quote key · q");
   expect(v.prefsNotes).toEqual(["Link rule 3: nested quantifier, as in (a+)+"]);
   v.remote = { key: "t4|null", repo: "acme/widgets", owner: "acme", why: "test" };
   v.open = new Set(["0:1"]);
@@ -3452,8 +3651,10 @@ test("a row cut off shows Answered in #N, goes there, and search finds the answe
   expect(listed("marine mammal")).toEqual([1, 2]);
   expect(listed("walrus?")).toEqual([1, 2]);
   expect(listed("otter")).toEqual([3]);
+  // The count is the selection's place among the matches, from the newest (TRD-37): the
+  // answer, #2, is the newer of the two; under 420 px, the place alone.
   v.query = "marine mammal";
-  expect(v.filterCount()).toBe("2 of 3");
+  expect(v.filterCount()).toBe("1 of 2");
   v.query = "";
   draw(v, cx);
   expect(reply(answer)).toStartWith("A walrus");
@@ -6522,9 +6723,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 35 rows.
+  // Six groups (the settings card's keys among them), 36 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -9031,7 +9232,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   // recorded after its rows, so a row belongs to the first heading that follows it.
   const PAGE = [
     ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
-    ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color"]],
+    ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color", "Sender rules"]],
     ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
     ["Links and keys", ["Link rules", "Quote key"]],
     ["File", ["Copy path"]],
@@ -9050,7 +9251,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   });
   // Then Reset, once, with its line, at the end.
   expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
-  expect(gs.indexOf("Link rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
+  expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
@@ -9208,6 +9409,11 @@ test("a field that leaves the screen gives the keyboard back: the Link rules row
   back(() => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-back"); c.slice(at).find((e) => e[0] === "on_click").at(-1)({}, cx); });
   into();
   back(() => v.action("settingsPage:links", cx));
+  into();
+  back(() => onOf(cardOf(v), "th-set-senders", "on_click")({}, cx));
+  expect(v.setPage).toBe("senders");
+  into();
+  back(() => v.action("settingsPage:senders", cx));
 });
 
 test("the quote key field: a free letter becomes the key and is written; a taken letter or anything else keeps it, with a note; its letters are not the panel's keys", async () => {
@@ -9516,6 +9722,19 @@ test("the settings card scrolls by keys: a line, a page, the top or the end; the
   expect(lh.asked.length).toBe(n + 1);
   expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
   expect(y()).toBe(0);
+  // So has the Sender rules page, and its command takes the card there.
+  expect(v.action("settingsPage:senders", cx)).toBe(true);
+  expect(v.setPage).toBe("senders");
+  onOf(cardOf(v), "th-set-rows-senders", "on_size_change")({ height: 1200, width: 440 }, cx);
+  cardOf(v);
+  const sh = v.cardScrolls.senders;
+  const m = sh.asked.length;
+  v.key(keyEv("end"), cx);
+  expect(sh.asked.length).toBe(m + 1);
+  expect(lh.asked.length).toBe(n + 1);
+  expect(Math.abs(v.cardPlace("senders").y - (1200 - v.cardPlace("senders").viewH))).toBeLessThanOrEqual(1);
+  expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
+  expect(y()).toBe(0);
 });
 
 test("on a Herdr with no ScrollHandle the card's keys do nothing to it or to the list, and it has no marks", async () => {
@@ -9624,7 +9843,7 @@ test("nothing under the settings card or the keys sheet reacts: the rail and its
   v.reveal(theme, el);
   expect(hovered).toBe(1);
   for (const side of ["right", "left"]) {
-    for (const page of ["main", "links"]) {
+    for (const page of ["main", "links", "senders"]) {
       v.prefs = { ...v.prefs, railSide: side };
       // A tick's card is open when the card opens: it closes, and does not come back after.
       hovers()[1](true, cx);
@@ -9704,7 +9923,7 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no t
   expect(own(c, "th-bubbleColor-blue")).toContainEqual(["size", 24]);
   expect(own(c, "th-bubbleColor-plain")).toContainEqual(["border_color", muted]);
   // Reset's line is under the button, muted, whole.
-  expect(strsOf(c)).toContain("Link rules and the quote key stay.");
+  expect(strsOf(c)).toContain("Link rules, sender rules and the quote key stay.");
   // The file's path: muted 11.5 mono, cut at a slash, whole in its tooltip.
   const path = own(c, "th-set-path");
   for (const x of [["text_size", 11.5], ["text_color", muted]]) expect(path).toContainEqual(x);
@@ -10156,27 +10375,30 @@ test("no rules: the two types that fill a rule in dashed boxes, and Use opens on
 
 // The merge of the settings card with sender rules: a link rule change worked out the notes
 // again from the link rules alone, and the sender rules' notes went from the card.
-test("a link rule kept, switched or deleted on the card leaves the sender rules' notes on the Link rules page", async () => {
+test("a link rule kept, switched or deleted on the card leaves the sender rules and their notes, which show on the Sender rules page", async () => {
   const { v, cx } = await rulesPane();
   try {
     const bad = "Sender rule 1: pattern has no (?<sender>...) group";
+    const why = "Not working: pattern has no (?<sender>...) group";
+    const onSenders = () => { v.setPage = "senders"; const s = strsOf(cardOf(v)); v.setPage = "links"; return s; };
     const file = JSON.stringify({ textSize: 15, links: RULES, senders: [{ pattern: "^From (\\w+):" }] });
     recordFiles[v.prefsPath()] = file;
     v.applyPrefs(file);
-    expect(strsOf(cardOf(v))).toContain(bad);
+    expect(strsOf(cardOf(v))).not.toContain(bad);
+    expect(onSenders()).toContain(why);
     onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
     typeIn(v, "example", "Fixed in ACME-7.", cx);
     onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
     expect(v.prefsNotes).toContain(bad);
-    expect(strsOf(cardOf(v))).toContain(bad);
+    expect(onSenders()).toContain(why);
     await settleAll(cx);
     expect(lastLinks()[0].example).toBe("Fixed in ACME-7.");
     expect(JSON.parse(settingsWrites.at(-1)).senders).toEqual([{ pattern: "^From (\\w+):" }]);
     for (const press of [() => v.toggleRule(1, cx), () => v.removeRule(1, cx)]) {
       press();
-      expect(strsOf(cardOf(v))).toContain(bad);
+      expect(v.prefsNotes).toContain(bad);
       await settleAll(cx);
-      expect(strsOf(cardOf(v))).toContain(bad);
+      expect(onSenders()).toContain(why);
     }
   } finally { done(v); }
 });
@@ -10581,6 +10803,491 @@ test("a rule whose address is on github.com links only when the session's origin
   } finally { done(v); }
 });
 
+// ---- sender rules on the card: the Sender rules page, beside Link rules ----
+
+const SENDS = [
+  { name: "Checker", prefix: "From {name}:", example: "From release-checker: two links are dead", keepMe: 1 },
+  { name: "Nightly", pattern: "^\\[(?<sender>[a-z-]+)\\] ", example: "[nightly-bot] all green", on: false },
+  { name: "Broken", prefix: "From:" },
+  { name: "Bare", prefix: "{name} hourly" },
+  { name: "Miss", prefix: "Status {name}:", example: "nothing here" },
+];
+const SENDER_NOTE = "A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.";
+const SENDERS_NOT_LIST = "\"senders\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
+async function sendersPane(senders = SENDS) {
+  const r = await pane(fixture("--extra", "2"));
+  keepSettings = true;
+  settingsWrites.length = 0;
+  r.v.applyPrefs(JSON.stringify({ textSize: 15, links: RULES, senders }));
+  recordFiles[r.v.prefsPath()] = r.v.prefsRaw;
+  r.v.action("settings", r.cx);
+  r.v.setPage = "senders";
+  r.cx.pending = []; // the folder watch never ends: wait only for what follows
+  return r;
+}
+const lastSenders = () => JSON.parse(settingsWrites.at(-1)).senders;
+function typeSender(v, k, text, cx) { v.senderInputs[k].set_value(text); v.senderInputs[k].handlers.change({}, cx); }
+const idsAt = (c, id) => c.findIndex((e) => e[0] === "id" && e[1] === id);
+const ownOf = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+
+test("Agent messages ends with a Sender rules row, with its count and how many are not working; it opens the page, as the command does", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.applyPrefs(JSON.stringify({ senders: SENDS }));
+  v.action("settings", cx);
+  let c = cardOf(v);
+  const ids = idsIn(c);
+  // After the agent message color's dots, and before Link rules (the next section).
+  expect(ids.indexOf("th-set-senders")).toBeGreaterThan(ids.indexOf("th-agentBubbleColor-row"));
+  expect(ids.indexOf("th-set-senders")).toBeLessThan(ids.indexOf("th-set-links"));
+  // The row's own words (its section's heading is recorded after it, as the last row).
+  expect(strsOf(ownOf(c, "th-set-senders")).slice(0, 3)).toEqual(["Sender rules", "5", "1 not working"]);
+  expect(ownOf(c, "th-set-senders")).toContainEqual(["text_color", theme.blocked]);
+  expect(ownOf(c, "th-set-senders").some((e) => e[0] === "svg" && String(e[1]).endsWith("/chevron-right.svg"))).toBe(true);
+  onOf(c, "th-set-senders", "on_click")({}, cx);
+  expect(v.setPage).toBe("senders");
+  c = cardOf(v);
+  expect(strsOf(c)).toContain("Sender rules");
+  expect(idsIn(c)).toContain("th-set-back");
+  expect(idsIn(c)).not.toContain("th-set-tab-general");
+  expect(idsIn(c)).not.toContain("th-set-preview");
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.page).toBe("senders");
+  onOf(c, "th-set-back", "on_click")({}, cx);
+  expect(v.setPage).toBe("main");
+  // The command, beside settingsPage:links; only while the card is open.
+  expect(v.action("settingsPage:senders", cx)).toBe(true);
+  expect(v.setPage).toBe("senders");
+  v.action("settingsPage:links", cx);
+  expect(v.setPage).toBe("links");
+  v.closeSettings();
+  expect(v.action("settingsPage:senders", cx)).toBe(false);
+  // No rules: None, with nothing in the blocked colour.
+  v.applyPrefs("{}");
+  v.action("settings", cx);
+  expect(strsOf(ownOf(cardOf(v), "th-set-senders")).slice(0, 2)).toEqual(["Sender rules", "None"]);
+});
+
+test("the Sender rules page: each rule with its name, what it matches, the sender its example gives, its switch, or why it is not working", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of [SENDER_NOTE, "Rules · 5", "Checker", "Starts with", "From {name}:", "From ", "release-checker", ": two links are dead", "release-checker · matched by rule",
+      "Nightly", "Pattern", "^\\[(?<sender>[a-z-]+)\\] ", "Off", "nightly-bot", "] all green", "nightly-bot · matched by rule",
+      "Broken", "From:", "Not working: prefix has no {name}; it would mark every prompt that starts with it",
+      "Bare", "{name} hourly", "No example yet", "Miss", "nothing here", "Finds no sender in its example",
+      "When two rules match the same prompt, the higher one wins.", "Add rule",
+      "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."]) expect(s).toContain(x);
+    // The link rules are not on this page.
+    expect(s).not.toContain("Ticket");
+    expect(s).not.toContain("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.");
+    // The sender's name in the example underlined; the type's icon; the tag on what a match shows as.
+    expect(c).toContainEqual(["underline"]);
+    const icons = c.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
+    expect(icons).toEqual(expect.arrayContaining(["text-cursor.svg", "regex.svg", "tag.svg", "alert.svg"]));
+    expect(readFileSync(new URL("../mods/agent-threads/tag.svg", import.meta.url), "utf8")).toContain('stroke-width="1.5"');
+    // A switch on each rule that runs; the warning mark in its place on the refused one.
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-sender-on-1", "th-sender-on-2", "th-sender-on-4", "th-sender-on-5"]));
+    expect(idsIn(c)).not.toContain("th-sender-on-3");
+    const card3 = c.slice(idsAt(c, "th-sender-3"), idsAt(c, "th-sender-4"));
+    expect(card3.some((e) => e[0] === "svg" && String(e[1]).endsWith("/alert.svg"))).toBe(true);
+    expect(strsOf(card3)).toContain("Not working: prefix has no {name}; it would mark every prompt that starts with it");
+    // What it matches, in the mono font; Edit and Delete before the switch, as on Link rules.
+    expect(c.slice(idsAt(c, "th-sender-1"), idsAt(c, "th-sender-2"))).toContainEqual(["font_family", v.mono()]);
+    const ids = idsIn(c);
+    expect(ids.indexOf("th-sender-edit-btn-1")).toBeLessThan(ids.indexOf("th-sender-delete-btn-1"));
+    expect(ids.indexOf("th-sender-delete-btn-1")).toBeLessThan(ids.indexOf("th-sender-on-1"));
+    for (const x of [["tooltip", "Edit rule"], ["accessibility_label", "Edit rule"], ["size", 24]]) expect(ownOf(c, "th-sender-edit-btn-1")).toContainEqual(x);
+    for (const x of [["w", 36], ["h", 24]]) expect(ownOf(c, "th-sender-on-1")).toContainEqual(x);
+    // The example's result is worked out once, not at every draw.
+    const memo = v.senderExample(v.senderList[0]);
+    expect(v.senderExample(v.senderList[0])).toBe(memo);
+    // Esc closes the card from the page.
+    v.key(keyEv("escape"), cx);
+    expect(v.settingsOpen).toBe(false);
+  } finally { done(v); }
+});
+
+test("sender notes that are not about one rule show blocked, and the page then changes rules only in the file; the Link rules page no longer shows sender notes", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const bad = JSON.stringify({ textSize: 15, links: RULES, senders: { prefix: "From {name}:" } });
+    recordFiles[v.prefsPath()] = bad;
+    v.applyPrefs(bad);
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["senders is not a list; no sender rules", "No rules yet.",
+      "\"senders\" in the settings file is not a list now, so rules change only in the file until it is fixed."]));
+    expect(c).toContainEqual(["text_color", theme.blocked]);
+    expect(idsIn(c)).not.toContain("th-rule-add");
+    // Called anyway: nothing written, and the card says why.
+    settingsWrites.length = 0;
+    v.prefsError = null;
+    v.toggleRule(0, cx);
+    v.openRule(null);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.prefsError).toBe(SENDERS_NOT_LIST);
+    v.setPage = "links";
+    expect(strsOf(cardOf(v))).not.toContain("senders is not a list; no sender rules");
+    // A file that does not read as settings.
+    v.applyPrefs("{ not json");
+    v.setPage = "senders";
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("The settings file does not read as settings now, so rules change only in the file until it is fixed.");
+  } finally { done(v); }
+});
+
+test("the switch on a sender rule writes \"on\": false and takes it back out, keeping every other key; an off rule marks nothing", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    const ver = v.sendersVer;
+    expect(v.senders.map((r) => r.n)).toEqual([1, 4, 5]);
+    onOf(cardOf(v), "th-sender-on-1", "on_click")({}, cx);
+    expect(v.senders.map((r) => r.n)).toEqual([4, 5]);
+    expect(v.sendersVer).toBe(ver + 1);
+    expect(v.ruleEdit).toBe(null); // the press opens nothing
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual({ ...SENDS[0], on: false });
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual(RULES);
+    expect(w.textSize).toBe(15);
+    onOf(cardOf(v), "th-sender-on-2", "on_click")({}, cx);
+    await settleAll(cx);
+    const { on: _off, ...nightly } = SENDS[1];
+    expect(lastSenders()[1]).toEqual(nightly);
+    expect(v.senders.map((r) => r.n)).toEqual([2, 4, 5]);
+    onOf(cardOf(v), "th-sender-on-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual(SENDS[0]);
+  } finally { done(v); }
+});
+
+test("Delete takes a sender rule at once with Undo in its place; Undo puts it back; leaving the page drops Undo", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-delete-btn-1", "on_click")({}, cx);
+    expect(v.senderList.map((r) => r.name)).toEqual(["Nightly", "Broken", "Bare", "Miss"]);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual(SENDS.slice(1));
+    let c = cardOf(v);
+    expect(strsOf(c)).toContain("Deleted Checker.");
+    // Drawn where the rule was.
+    expect(idsIn(c)).toContain("th-rule-undo-line");
+    expect(v.ruleUndo.at).toBe(0);
+    onOf(c, "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual(SENDS);
+    c = cardOf(v);
+    expect(strsOf(c)).not.toContain("Deleted Checker.");
+    v.removeRule(1, cx);
+    expect(v.ruleUndo).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.ruleUndo).toBe(null);
+    await settleAll(cx);
+    expect(JSON.parse(settingsWrites.at(-1)).links).toEqual(RULES);
+  } finally { done(v); }
+});
+
+test("a press on a sender rule opens it in place: Name, Matches by, the prefix, Example and what it does to the example; Keep rule writes it, keeping keys this version does not know", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at]).toEqual(["senders", 0]);
+    expect(Object.fromEntries(Object.entries(v.senderInputs).map(([k, i]) => [k, i.value()]))).toEqual({ name: "Checker", prefix: "From {name}:", pattern: "", example: SENDS[0].example });
+    let c = cardOf(v);
+    const s = strsOf(c);
+    for (const x of ["Type", "Starts with", "Change", "Name", "Example", "It shows in the list, and in the tooltip on a message it matched.",
+      "{name} is the sender's name. It ends at the text you put after it, or at a space.", "Read against the first 100 characters of a prompt's first line.",
+      "A prompt this rule should match. Type any prompt here to try the rule.", "Matches. It shows as", "release-checker · matched by rule",
+      "Keep rule", "Discard", "Duplicate", "Delete"]) expect(s).toContain(x);
+    for (const x of ["Move up", "Finds", "Opens", "Description", "Matches by"]) expect(s).not.toContain(x);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-edit-1", "th-rule-f-prefix", "th-sender-type-change", "th-rule-result"]));
+    for (const x of ["th-rule-f-pattern", "th-sender-1", "th-sender-type-prefix"]) expect(idsIn(c)).not.toContain(x);
+    // A kept rule's type is one line with Change; Change shows both, and a choice folds them.
+    onOf(c, "th-sender-type-change", "on_click")({}, cx);
+    c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["Text at the start, with {name} where the sender's name is.", "A regular expression with a group named sender."]));
+    expect(ownOf(c, "th-sender-type-prefix")).toContainEqual(["border_color", theme.accent]);
+    onOf(c, "th-sender-type-prefix", "on_click")({}, cx);
+    expect(idsIn(cardOf(v))).toContain("th-sender-type-change");
+    // The result follows the example at each key.
+    typeSender(v, "example", "From helper-a: done", cx);
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["helper-a", "helper-a · matched by rule"]));
+    typeSender(v, "example", "Nothing to see", cx);
+    expect(strsOf(cardOf(v))).toContain("No match. This prompt would stay yours.");
+    expect(strsOf(cardOf(v))).not.toContain("Only the first 100 characters of the first line are read.");
+    // The rule's first line, first 100 characters, as the reader sees it.
+    typeSender(v, "example", `${"x".repeat(95)} From helper-a: late`, cx);
+    expect(strsOf(cardOf(v))).toEqual(expect.arrayContaining(["No match. This prompt would stay yours.", "Only the first 100 characters of the first line are read."]));
+    typeSender(v, "example", "Nothing to see", cx);
+    v.senderInputs.name.handlers.submit({}, cx); // Enter in a field keeps it
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(lastSenders()[0]).toEqual({ name: "Checker", prefix: "From {name}:", example: "Nothing to see", keepMe: 1 });
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.links).toEqual(RULES);
+    expect(w.textSize).toBe(15);
+    // Esc from a field closes the rule, not the card, and writes nothing; so does Discard.
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-sender-name");
+    typeSender(v, "name", "Changed", cx);
+    v.key(keyEv("escape"), cx);
+    expect([v.ruleEdit, v.settingsOpen, v.fieldFocused]).toEqual([null, true, null]);
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    c = cardOf(v);
+    expect(v.senderInputs.pattern.value()).toBe(SENDS[1].pattern);
+    expect(idsIn(c)).toContain("th-rule-f-pattern");
+    onOf(c, "th-rule-discard", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+  } finally { done(v); }
+});
+
+test("Add rule: Start of the prompt or Pattern; a draft that would not run says why when the field is left, and is never kept", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    let c = cardOf(v);
+    expect(strsOf(c)).toContain("New rule, not kept yet");
+    expect(idsIn(c).indexOf("th-rule-new")).toBeGreaterThan(idsIn(c).indexOf("th-sender-5"));
+    expect(v.ruleEdit.draft.by).toBe("prefix");
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["Text at the start, with {name} where the sender's name is.", "A regular expression with a group named sender."]));
+    // An empty field is not a fault until Keep rule.
+    onOf(c, "th-rule-keep", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: no prefix");
+    onOf(cardOf(v), "th-sender-type-pattern", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.by).toBe("pattern");
+    c = cardOf(v);
+    expect(idsIn(c)).toEqual(expect.arrayContaining(["th-rule-f-pattern", "th-sender-type-prefix"])); // a new rule keeps both rows
+    expect(idsIn(c)).not.toContain("th-rule-f-prefix");
+    // No reason at a key; leaving the field shows it.
+    typeSender(v, "pattern", "^From (\\w+):", cx);
+    expect(strsOf(cardOf(v))).not.toContain("Not working: pattern has no (?<sender>...) group");
+    v.senderInputs.pattern.handlers.blur({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: pattern has no (?<sender>...) group");
+    // A draft that will not run shows no result: the reason is under its field.
+    typeSender(v, "example", "From nightly-bot: ok", cx);
+    expect(idsIn(cardOf(v))).not.toContain("th-rule-result");
+    const n = settingsWrites.length;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).not.toBe(null);
+    await settleAll(cx);
+    expect(settingsWrites.length).toBe(n);
+    // Mended: the reason goes at that key, and the example says who it is from.
+    typeSender(v, "pattern", "^From (?<sender>[a-z]+-[a-z]+):", cx);
+    expect(v.ruleEdit.shown).toEqual({ prefix: null, pattern: null });
+    expect(strsOf(cardOf(v))).not.toContain("Not working: pattern has no (?<sender>...) group");
+    expect(strsOf(cardOf(v))).toContain("nightly-bot · matched by rule");
+    // A rule higher in the list takes the same prompt first, and the line says so.
+    expect(strsOf(cardOf(v))).toContain("Checker is higher in the list and takes this prompt first. Keep this rule, then Move up to put it above.");
+    typeSender(v, "name", "Seat", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[5]).toEqual({ name: "Seat", pattern: "^From (?<sender>[a-z]+-[a-z]+):", example: "From nightly-bot: ok" });
+    expect(lastSenders().slice(0, 5)).toEqual(SENDS);
+  } finally { done(v); }
+});
+
+test("a refused sender rule opens with its reason; Move up and Duplicate", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-3", "on_click")({}, cx);
+    expect(strsOf(cardOf(v))).toContain("Not working: prefix has no {name}; it would mark every prompt that starts with it");
+    v.closeRule();
+    onOf(cardOf(v), "th-sender-5", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-up", "on_click")({}, cx);
+    expect(v.ruleEdit.at).toBe(3);
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Miss", "Bare"]);
+    onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+    expect([v.ruleEdit.at, v.ruleEdit.insertAt, v.senderInputs.name.value()]).toEqual([null, 4, "Miss copy"]);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Miss", "Miss copy", "Bare"]);
+  } finally { done(v); }
+});
+
+test("a change to the senders in the file shows on the page and the open rule follows it; leaving the page drops an unkept rule", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-4", "on_click")({}, cx);
+    typeSender(v, "example", "helper-a hourly 2026-11-18T01:00:00Z", cx);
+    const added = JSON.stringify({ textSize: 15, links: RULES, senders: [{ name: "Top", prefix: "[{name}] " }, ...SENDS] });
+    recordFiles[v.prefsPath()] = added;
+    v.applyPrefs(added);
+    expect(v.ruleEdit.at).toBe(4);
+    expect(strsOf(cardOf(v))).toContain("Top");
+    expect(v.senders.map((r) => r.label)).toEqual(["Top", "Checker", "Bare", "Miss"]);
+    v.keepRule(cx);
+    await settleAll(cx);
+    expect(lastSenders()[4]).toEqual({ name: "Bare", prefix: "{name} hourly", example: "helper-a hourly 2026-11-18T01:00:00Z" });
+    expect(lastSenders()[0].name).toBe("Top");
+    // Leaving the page, to Link rules or back to the card, drops a rule not kept.
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.action("settingsPage:links", cx);
+    expect(v.ruleEdit).toBe(null);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.action("settingsPage:main", cx);
+    expect([v.ruleEdit, v.setPage]).toEqual([null, "main"]);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    onOf(cardOf(v), "th-set-back", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+// A Keep rule the file refuses (the owner, 18 Nov: as draft PR 121 does for link rules): the
+// open rule says why under its buttons, the File line's reason in the same red, and what was
+// typed is kept. inRule counts the reason between Keep rule and the File group, onFile after
+// the File note. The editor is shared, so link rules behave the same.
+const fileNotes = (kind) => [`Rules are kept under "${kind}" in the settings file. A change made there shows here within a second.`,
+  `"${kind}" in the settings file is not a list now, so rules change only in the file until it is fixed.`];
+function reasonIn(c, why, kind) {
+  const at = c.flatMap((e, i) => (e[0] === "child" && e[1] === why ? [i] : []));
+  const file = c.findIndex((e) => e[0] === "child" && fileNotes(kind).includes(e[1]));
+  const keep = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-keep");
+  return { inRule: at.filter((i) => keep >= 0 && i > keep && i < file).length, onFile: at.filter((i) => i > file).length };
+}
+const SENDERS_MOVED = "The rules in settings.json changed while this change was saved, so it was not saved. The list shows the file now.";
+
+test("a sender Keep rule refused because \"senders\" is not a list stays open with what was typed and says why under its buttons, until the file is fixed or the rule closes", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-a: done", cx);
+    const oops = JSON.stringify({ textSize: 15, links: RULES, senders: "oops" });
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.ruleEdit?.kind).toBe("senders");
+    expect(v.senderInputs.example.value()).toBe("From helper-a: done");
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    // Discard: the reason stays on the File line only.
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 1 });
+    // Refused again, then the file fixed: the reason goes from both places, and Keep writes.
+    const fixed = JSON.stringify({ textSize: 15, links: RULES, senders: SENDS });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-b: done", cx);
+    v.applyPrefs(oops);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    v.applyPrefs(fixed);
+    expect(reasonIn(cardOf(v), SENDERS_NOT_LIST, "senders")).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastSenders()[0].example).toBe("From helper-b: done");
+    expect(strsOf(cardOf(v))).not.toContain(SENDERS_NOT_LIST);
+  } finally { done(v); }
+});
+
+test("a sender Keep rule whose save finds the file's rules changed opens again where its rule now is, with what was typed, and says why in it", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    typeSender(v, "example", "From helper-a: done", cx);
+    const X = { name: "Top", prefix: "[{name}] " };
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: RULES, senders: [X, ...SENDS] }); // an editor adds a rule as Keep rule is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null); // closed at once, as for a Keep that is written
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect((v.senderList ?? []).map((r) => r.name)).toEqual(["Top", "Checker", "Nightly", "Broken", "Bare", "Miss"]);
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at]).toEqual(["senders", 1]);
+    expect(v.senderInputs.example.value()).toBe("From helper-a: done");
+    expect(reasonIn(cardOf(v), SENDERS_MOVED, "senders")).toEqual({ inRule: 1, onFile: 1 });
+    // From the list it now shows, the same Keep is written, and the reason goes.
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastSenders()[0]).toEqual(X);
+    expect(lastSenders()[1]).toEqual({ ...SENDS[0], example: "From helper-a: done" });
+    expect(strsOf(cardOf(v))).not.toContain(SENDERS_MOVED);
+    // Refused while the card has gone to another page: nothing opens.
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: RULES, senders: SENDS });
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    typeSender(v, "example", "[nightly-bot] red", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    v.setPage = "links";
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+  } finally { done(v); }
+});
+
+test("link rules share the editor: a Keep rule whose save finds the file's rules changed opens again with what was typed, and says why in it", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at]).toEqual(["links", 1]);
+    expect(v.ruleInputs.example.value()).toBe("Fixed in ACME-7.");
+    expect(reasonIn(cardOf(v), MOVED, "links")).toEqual({ inRule: 1, onFile: 1 });
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonIn(cardOf(v), MOVED, "links")).toEqual({ inRule: 0, onFile: 1 });
+  } finally { done(v); }
+});
+
+test("Reset leaves sender rules alone, and its note names them", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    v.setPage = "main";
+    expect(strsOf(cardOf(v)).filter((x) => x === "Link rules, sender rules and the quote key stay.")).toHaveLength(1);
+    v.action("textSize:+", cx);
+    await settleAll(cx);
+    v.action("resetSettings", cx);
+    await settleAll(cx);
+    const w = JSON.parse(settingsWrites.at(-1));
+    expect(w.senders).toEqual(SENDS);
+    expect(w.links).toEqual(RULES);
+    expect(v.senders.map((r) => r.n)).toEqual([1, 4, 5]);
+  } finally { done(v); }
+});
+
+test("no sender rules: the two examples in dashed boxes, and Use opens a new rule filled from one", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    let c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Name in brackets", "[build-bot] at the start of a prompt",
+      "From line", "From build-bot: at the start of a prompt", "Add rule"]));
+    expect(strsOf(c)).not.toContain("When two rules match the same prompt, the higher one wins.");
+    expect(c).toContainEqual(["border_dashed"]);
+    onOf(c, "th-sender-use-brackets", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at, v.senderInputs.name.value(), v.senderInputs.prefix.value()]).toEqual(["senders", null, "Name in brackets", "[{name}] "]);
+    c = cardOf(v);
+    expect(strsOf(c)).toContain("build-bot · matched by rule");
+    expect(strsOf(c)).not.toContain("Examples, not rules until you keep one");
+    onOf(c, "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([{ name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" }]);
+    // A rule with no name shows its text as its name.
+    const bare = JSON.stringify({ textSize: 15, links: RULES, senders: [{ prefix: "From {name}: " }] });
+    recordFiles[v.prefsPath()] = bare;
+    v.applyPrefs(bare);
+    expect(strsOf(cardOf(v)).filter((x) => x === "From {name}: ").length).toBe(2);
+  } finally { done(v); }
+});
+
 
 // Issue 131, the owner's third report: in an open turn whose reply ends in a numbered list, above
 // its LATEST UPDATE, a press in the list's fourth item jumped the list so the item went above the
@@ -10885,4 +11592,446 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   s.skipped = { lines: 1, bytes: 70 * 1048576 };
   v.restart(s);
   expect([s.skippedHead, s.skipped]).toEqual([null, null]);
+});
+
+// ---- search steps (TRD-37) ----
+// Eight turns, four of which hold "checkout test": #2, #4, #5 and #7. The search steps through
+// them newest first: n (olderMatch) back in time, Shift n (newerMatch) forward, no wrap.
+const STEPS = [2, 4, 5, 7];
+async function stepPane() {
+  const ev = [];
+  for (let n = 1; n <= 8; n++) {
+    ev.push({ k: "p", o: "human", t: STEPS.includes(n) ? `Run the checkout test again, take ${n}` : `Tidy the cart page, take ${n}`, ts: at(2 * n) });
+    ev.push({ k: "t", t: `Done with take ${n}.` }, { k: "d", ms: 1000, ts: at(2 * n + 1) });
+  }
+  const r = await scripted(ev);
+  r.v.width = 900;
+  return r;
+}
+
+test("a search starts at its newest match; n and Shift n step through the matches newest first, and stop at either end", async () => {
+  const { v, cx } = await stepPane();
+  expect(STEPS).not.toContain(Number(v.sel.split(":")[1]));
+  v.setQuery("checkout test", cx);
+  // The newest match, #7, selected and centred (the next draw scrolls there).
+  expect(v.sel).toBe("0:7");
+  expect(v.scrollTo).toEqual({ key: "0:7", how: "center" });
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("1 of 4 · newest first");
+  const step = (name) => { expect(v.action(name, cx)).toBe(true); settleRows(v, cx); return [v.sel, v.filterCount()]; };
+  expect(step("olderMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  // At the oldest, n does nothing and nothing wraps; no notice either.
+  const toasts = cx.toasts?.length ?? 0;
+  expect(step("olderMatch")).toEqual(["0:2", "4 of 4 · first mention"]);
+  expect(cx.toasts?.length ?? 0).toBe(toasts);
+  expect(step("newerMatch")).toEqual(["0:4", "3 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:5", "2 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  expect(step("newerMatch")).toEqual(["0:7", "1 of 4 · newest first"]);
+  // Under 420 px, the place alone, and "first" at the oldest.
+  v.width = 400;
+  expect(v.filterCount()).toBe("1 of 4");
+  v.action("first", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:2");
+  expect(v.filterCount()).toBe("4 of 4 · first");
+  // With no search, n finds nothing to step to.
+  v.setQuery("", cx);
+  settleRows(v, cx);
+  expect(v.action("olderMatch", cx)).toBe(false);
+});
+
+test("the search count: one match, none, hidden ones, no match selected, and new words that still match keep the place", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("take 5", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  // The selection left on a turn that is not a match: the count is the matches alone.
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.sel = "0:1";
+  expect(v.filterCount()).toBe("4 matches");
+  // Either step from there goes to the newest.
+  v.action("olderMatch", cx);
+  expect(v.sel).toBe("0:7");
+  // New words that the selected turn still matches keep it selected.
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  v.setQuery("checkout", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+});
+
+test("a turn that starts to match while the reader is on a match leaves them there; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("2 of 4 · newest first");
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("stepping away from the newest match and back leaves following off, so a newer match streaming in does not move the reader", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  // Back on the newest match, #7, the last row the search shows: a step never follows.
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  // A new last turn, #9, matches too: a step onto it does not follow either.
+  apply(s, { k: "p", o: "human", t: "One more checkout test", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  expect(v.filterCount()).toBe("2 of 5 · newest first");
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  v.scrollTo = null;
+  // A newer match streams in: the reader stays on #9 and nothing scrolls.
+  apply(s, { k: "t", t: "Done with take 9." }, { k: "d", ms: 1000, ts: at(41) });
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(42) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("2 of 6 · newest first");
+});
+
+test("a turn already in the list whose reply starts to match leaves the reader where they are; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  apply(s, { k: "p", o: "human", t: "Tidy the footer, take 9", ts: at(40) });
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect([v.sel, v.filterCount()]).toEqual(["0:5", "2 of 4 · newest first"]);
+  v.scrollTo = null;
+  // #9 was not a match; its reply streams in and names the checkout test.
+  apply(s, { k: "t", t: "The checkout test still fails on the footer." });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("in the Pinned view the search counts the pins it matches, and says No matches when it matches none of them", async () => {
+  const { v, cx } = await stepPane();
+  for (const k of ["0:1", "0:3"]) { v.sel = k; v.action("pin", cx); }
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  expect(v.matchPlace().n).toBe(0);
+  v.setQuery("", cx);
+  v.setView("all");
+  v.sel = "0:5";
+  v.action("pin", cx);
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+});
+
+test("the search field's two step buttons: up is older, down is newer, and the one with nothing left that way is dimmed and does nothing", async () => {
+  const { v, cx } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const drawn = () => { rec = []; draw(v, cx); const c = rec; rec = null; return c; };
+  let c = drawn();
+  const older = () => afterId(c, "th-match-older");
+  const newer = () => afterId(c, "th-match-newer");
+  expect(older()).toContainEqual(["tooltip", "Older match (n)"]);
+  // At the newest: down is dimmed and takes no press: no click, no pointer, no hover tint,
+  // and its tooltip says why.
+  expect(newer()).toContainEqual(["opacity", 0.35]);
+  expect(newer()).toContainEqual(["tooltip", "No newer match"]);
+  for (const m of ["on_click", "cursor_pointer", "hover"]) expect(newer().some((e) => e[0] === m)).toBe(false);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  expect(older().some((e) => e[0] === "cursor_pointer")).toBe(true);
+  expect(v.sel).toBe("0:7");
+  older().find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(v.sel).toBe("0:5");
+  c = drawn();
+  expect(newer()).toContainEqual(["tooltip", "Newer match (Shift n)"]);
+  expect(newer().some((e) => e[0] === "opacity")).toBe(false);
+  expect(older().some((e) => e[0] === "opacity")).toBe(false);
+  // No match: no step buttons.
+  v.setQuery("walrus", cx);
+  settleRows(v, cx);
+  c = drawn();
+  expect(older()).toBeNull();
+  expect(newer()).toBeNull();
+});
+
+// TRD-37: a search match's fill, on every surface a match is drawn on, in a dark and a light
+// theme. The backdrop of each surface is worked out here from the theme alone (what the row
+// and the bubble paint under the text), not read from main.js, so a caller that passes the
+// wrong backdrop fails. In the selected turn the fill is the strongest that keeps the text at
+// 4.5:1 unrounded; where even 34% would not, it stays at 32%, main's floor for every match.
+// Elsewhere it is 32%. A compact pin draws no match fill at all.
+const LIGHT = { ...theme, background: "#ffffff", foreground: "#1b1b1e", muted: "#5f5f6b", dim: "#7a7a85", border: "#e3e3e8", raised: "#f5f5f7", chrome: "#f3f3f5", hover: "#0000000a", selected: "#00000012", accent: "#2563eb", popover: "#ffffff", working: "#996700" };
+test("a match's fill on every surface it is drawn on, dark and light: 4.5:1 unrounded over the real backdrop, or main's 32% floor", async () => {
+  const { mix, ratio } = await import("../mods/agent-threads/ui.js");
+  const over = (c, bg) => (c.length === 9 ? mix(bg, c.slice(0, 7), parseInt(c.slice(7), 16) / 255) : c);
+  const got = {};
+  const check = (T, name, fills, ink, under, strong) => {
+    got[`${T === theme ? "dark" : "light"} ${name}`] = fills.join(" ");
+    expect([name, fills.length > 0]).toEqual([name, true]);
+    for (const f of fills) {
+      const a = parseInt(f.slice(7), 16);
+      if (!strong) { expect([name, a]).toEqual([name, 0x52]); continue; }
+      if (a === 0x52) expect([name, ratio(ink, mix(under, T.working, 0.34)) < 4.5]).toEqual([name, true]);
+      else expect([name, ratio(ink, mix(under, T.working, a / 255)) >= 4.5]).toEqual([name, true]);
+    }
+  };
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await stepPane();
+    const fills = (r) => {
+      rec = [];
+      v.item(T, r, false, 100);
+      const c = rec;
+      rec = null;
+      return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]);
+    };
+    const row = (k, kind = "turn") => v.rows().find((r) => r.key === k && r.kind === kind);
+    const bubble = mix(T.background, T.foreground, 20 / 255); // plain: the text colour at 8%
+    // The prompts: "checkout test" is in turns 5 and 7, and 7, the newest, is selected.
+    v.setQuery("checkout test", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "prompt in a plain bubble, selected", fills(row("0:7")), T.foreground, bubble, true);
+    check(T, "prompt in a plain bubble, not selected", fills(row("0:5")), T.foreground, bubble, false);
+    v.applyPrefs(JSON.stringify({}));
+    settleRows(v, cx);
+    check(T, "prompt in the default blue bubble, selected", fills(row("0:7")), "#ffffff", "#2563EB", true);
+    check(T, "prompt in the default blue bubble, not selected", fills(row("0:5")), "#ffffff", "#2563EB", false);
+    // The open turn's message, in either bubble.
+    v.action("open", cx);
+    settleRows(v, cx);
+    const you = () => v.rows().find((r) => r.kind === "you" && r.turn.n === 7);
+    check(T, "open turn's prompt in the default blue bubble", fills(you()), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "open turn's prompt in a plain bubble", fills(you()), T.foreground, bubble, true);
+    v.action("open", cx);
+    settleRows(v, cx);
+    // Outline lines: the selected one is drawn on the selected fill.
+    v.action("outline:on", cx);
+    settleRows(v, cx);
+    check(T, "outline line, selected", fills(row("0:7", "line")), T.foreground, over(T.selected, T.background), true);
+    check(T, "outline line, not selected", fills(row("0:5", "line")), T.foreground, T.background, false);
+    v.action("outline:off", cx);
+    // Reply text, on the row's background (rows have no fill): every reply says "Done with",
+    // and turn 7 stays selected.
+    v.setQuery("Done with", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    check(T, "reply text, selected", fills(row("0:7")), T.foreground, T.background, true);
+    check(T, "reply text, not selected", fills(row("0:8")), T.foreground, T.background, false);
+  }
+  // A command's name in its bubble, the plain one and the default blue one.
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await scripted([
+      { k: "p", o: "human", t: "Tidy the cart page", ts: at(0) }, { k: "t", t: "Tidied." }, { k: "d", ms: 1000, ts: at(1) },
+      { k: "p", o: "human", cmd: true, t: "/checkout-audit now", ts: at(2) }, { k: "t", t: "Audited." }, { k: "d", ms: 1000, ts: at(3) },
+    ]);
+    v.width = 900;
+    v.setQuery("checkout", cx);
+    settleRows(v, cx);
+    const r = v.rows().find((x) => x.kind === "turn" && x.turn.cmd);
+    expect(v.sel).toBe(r.key);
+    const fills = () => { rec = []; v.item(T, r, false, 100); const c = rec; rec = null; return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]); };
+    check(T, "command name in the default blue bubble", fills(), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "command name in a plain bubble", fills(), T.foreground, mix(T.background, T.foreground, 20 / 255), true);
+  }
+  // What each surface lands on. The plain bubble is lighter than the pane in the dark theme and
+  // darker in the light one, so its fill differs from the reply text's (and from main's 32%).
+  expect(got).toEqual(EXPECTED_FILLS);
+});
+const EXPECTED_FILLS = {
+  // Dark: 52% (85) on the background, 48% (7a) on the selected fill, 46% (75) in the plain
+  // bubble, and main's 32% floor in the blue bubble, where white is under 4.5:1 even at 34%.
+  "dark reply text, selected": "#d7a00085",
+  "dark reply text, not selected": "#d7a00052",
+  "dark prompt in a plain bubble, selected": "#d7a00075",
+  "dark prompt in a plain bubble, not selected": "#d7a00052",
+  "dark prompt in the default blue bubble, selected": "#d7a00052",
+  "dark prompt in the default blue bubble, not selected": "#d7a00052",
+  "dark open turn's prompt in the default blue bubble": "#d7a00052",
+  "dark open turn's prompt in a plain bubble": "#d7a00075",
+  "dark outline line, selected": "#d7a0007a",
+  "dark outline line, not selected": "#d7a00052",
+  "dark command name in the default blue bubble": "#d7a00052",
+  "dark command name in a plain bubble": "#d7a00075",
+  // Light: 60% (99) everywhere the selected turn's text is, 32% elsewhere.
+  "light reply text, selected": "#99670099",
+  "light reply text, not selected": "#99670052",
+  "light prompt in a plain bubble, selected": "#99670099",
+  "light prompt in a plain bubble, not selected": "#99670052",
+  "light prompt in the default blue bubble, selected": "#99670099",
+  "light prompt in the default blue bubble, not selected": "#99670052",
+  "light open turn's prompt in the default blue bubble": "#99670099",
+  "light open turn's prompt in a plain bubble": "#99670099",
+  "light outline line, selected": "#99670099",
+  "light outline line, not selected": "#99670052",
+  "light command name in the default blue bubble": "#99670099",
+  "light command name in a plain bubble": "#99670099",
+};
+
+// A compact pin in the Pinned view draws its lines without marking matches, selected or not.
+test("a compact pin draws no search match fill, selected or not", async () => {
+  const { v, cx } = await stepPane();
+  // Pins are kept across panes, so pin only what is not pinned yet.
+  for (const k of ["0:5", "0:7"]) { v.sel = k; if (!v.isPinnedTurn(v.findTurn(k))) v.action("pin", cx); }
+  v.setView("pinned");
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  const pins = v.rows().filter((r) => r.compact);
+  expect(pins.map((r) => r.turn.n)).toEqual(expect.arrayContaining([5, 7]));
+  expect(pins.some((r) => r.key === v.sel || r.turn === v.findTurn(v.sel))).toBe(true);
+  for (const r of pins) {
+    rec = [];
+    v.item(theme, r, false, 100);
+    const c = rec;
+    rec = null;
+    expect(c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(theme.working))).toEqual([]);
+  }
+});
+
+// Issue 112: an open bubble's long hyphenated token broke inside a word, since Herdr wraps
+// that text itself and never after a "-". The drawn text gets HYPHEN_BREAK after the "-"s of
+// a token too long for the line; the copy, the quote, search and the size estimates use the
+// message itself.
+test("an open coloured bubble draws a long hyphenated token with breaks, a plain one's Markdown never; copy, quote, search and the size use the message", async () => {
+  const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
+  const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const PROMPT = `Why does src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js round down, and does ${TOKEN} see it?`;
+  const { v, cx } = await quotePane();
+  const key = v.sel;
+  const turn = v.findTurn(key);
+  const setPrompt = (p) => { turn.prompt = p; turn.youMemo = null; turn.shapeKey = null; };
+  const you = () => v.youMd(v.rows().find((r) => r.kind === "you" && r.turn === turn));
+  setPrompt(PROMPT);
+  // Blue (the default): plain text, the breaks only in what is drawn.
+  expect(v.prefs.bubbleColor).toBe("blue");
+  let y = you();
+  expect(y.plain).toBe(true);
+  expect(y.text).toBe(PROMPT);
+  expect(y.parts[0].draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+  expect(y.parts[0].draw.replaceAll(B, "")).toBe(PROMPT);
+  expect(y.parts[0].rows).toBeNull();
+  rec = [];
+  draw(v, cx);
+  const drawn = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  rec = null;
+  expect(drawn).toContain(y.parts[0].draw);
+  expect(drawn).not.toContain(PROMPT);
+  // The width and height estimates are those of the message: the same as for one with "_"
+  // in place of each "-" (same lengths, no breaks).
+  const est = { bw: y.bw, bodyH: y.bodyH, long: y.long };
+  setPrompt(PROMPT.replaceAll("-", "_"));
+  expect(you().parts[0].draw).toBe(PROMPT.replaceAll("-", "_"));
+  expect({ bw: you().bw, bodyH: you().bodyH, long: you().long }).toEqual(est);
+  setPrompt(PROMPT);
+  // Search across a hyphen: still a match, the hit is the query's characters.
+  v.setQuery("merge-check", cx);
+  y = you();
+  expect(y.hl).toBe(true);
+  const hits = y.parts[0].rows.flat().filter((p) => p.hit);
+  expect(hits.map((p) => p.t.replaceAll(B, ""))).toEqual(["merge-check"]);
+  // Each word is an element that does not wrap inside: the long token is cut after its breaks.
+  rec = [];
+  draw(v, cx);
+  const words = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  rec = null;
+  expect(words).toContain(`nightly-${B}`);
+  expect(words).toContain(`totals-${B}`);
+  expect(words.filter((w) => w.includes(B)).every((w) => w.endsWith(B) || w === `merge-${B}check`)).toBe(true);
+  v.setQuery("", cx);
+  // Plain bubble: Markdown, which can be selected and which Herdr copies as drawn, so it gets
+  // no breaks and keeps Herdr's mid-word break (option 2); the message is unchanged.
+  v.action("bubbleColor:plain", cx);
+  y = you();
+  expect(y.plain).toBe(false);
+  expect(y.text).toBe(PROMPT);
+  expect(y.md.includes(B)).toBe(false);
+  expect(y.md).toContain(TOKEN.replaceAll("-", "\\-"));
+  mdSources.length = 0;
+  draw(v, cx);
+  const youMd = mdSources.filter(([id]) => id.startsWith("th-you-"));
+  expect(youMd.length).toBeGreaterThan(0);
+  expect(youMd.some(([, md]) => md.includes(B))).toBe(false);
+  // The copy icon under the message copies it as typed.
+  log = [];
+  v.copyPrompt(key, cx);
+  expect(cx.clip).toBe(PROMPT);
+  // ⌘C on the drawn Markdown: Herdr copies it as drawn, which is the message, and the panel
+  // never writes the clipboard on its own; q quotes it as typed.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = `does ${TOKEN} see`;
+  log = [];
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(cx.clip).toBe(`does ${TOKEN} see`);
+  expect(log.filter((e) => e[0] === "clipboard")).toEqual([]);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(cx.clip).toBe(`> does ${TOKEN} see\n\n`);
+  expect(cx.clip.includes(B)).toBe(false);
+  v.action("bubbleColor:blue", cx);
+});
+
+// Issue 112 meets the pasted block (issue 93): a pasted block is drawn as code, and code keeps
+// what was typed (as promptMd does for fenced and inline code), so its long hyphenated tokens
+// get no HYPHEN_BREAK; the message's own text around it still does.
+test("a pasted block keeps its long hyphenated tokens as typed, while the message around it gets breaks", async () => {
+  const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
+  const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const PROMPT = `Does ${TOKEN} see it? Output below.\n\n<pasted_content id="log">\nFAIL ${TOKEN} 2 of 40\nPASS lint\n</pasted_content>`;
+  const { v } = await quotePane();
+  const turn = v.findTurn(v.sel);
+  turn.prompt = PROMPT;
+  turn.youMemo = null;
+  turn.shapeKey = null;
+  const y = v.youMd(v.rows().find((r) => r.kind === "you" && r.turn === turn));
+  expect(y.plain).toBe(true);
+  const paste = y.parts.find((p) => p.paste);
+  const typed = y.parts.find((p) => !p.paste && !p.quote);
+  expect(paste.draw).toBe(`FAIL ${TOKEN} 2 of 40\nPASS lint`);
+  expect(paste.draw.includes(B)).toBe(false);
+  expect(paste.rows).toBeNull();
+  expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
 });

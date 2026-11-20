@@ -1,5 +1,6 @@
 # Merge queue for main. Nothing is queued on its own: a pull request enters
-# only after someone adds the `queue` label or comments `@mergifyio queue`.
+# only after someone adds the `queue` label or comments `@mergifyio queue`, and never
+# while it carries a `hold` or `hold:preview` label.
 #
 # Every condition is written with no space around the operator (base=main). Mergify reads
 # both spellings the same, but Catalyst's reader of this file takes only the compact one
@@ -12,6 +13,11 @@ queue_rules:
       - -draft
       - -conflict
       - check-success=check
+      # An acceptance hold keeps a pull request out of the queue, whoever queues it (the
+      # queue label, a command or any rule below), and takes it out if it is already queued:
+      # a pull request that stops meeting these conditions leaves the queue.
+      - label!=hold
+      - label!=hold:preview
       # Every review thread on the pull request is resolved.
       - "#review-threads-unresolved=0"
       # The title is a Conventional Commit (type, optional scope, optional !), because it

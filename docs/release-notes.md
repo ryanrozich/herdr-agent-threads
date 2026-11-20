@@ -2,6 +2,13 @@
 
 Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../CHANGELOG.md).
 
+## Unreleased
+
+### Save a session as ATIF
+
+- The exported file now holds the model's reasoning, for Claude Code and Codex sessions, as `reasoning_content` on the step it came before. This is the default. To leave it out, put `--no-reasoning` before the path: `bun mods/agent-threads/core/atif.js --no-reasoning <transcript> > session.json`. The file is then the same as one from 1.1.0.
+- Reasoning a transcript keeps only as a signature, redacted or encrypted is never written. The step it came before says some was left out (`extra.reasoning_withheld`), and the file's notes count those steps.
+
 ## 1.1.0
 
 A status line at the foot of the pane, prompts that keep their line breaks, and a way to save a session in a standard format. It also fixes highlighting, long transcripts and short panes. It needs the same Herdr and tools as 1.0.0.
