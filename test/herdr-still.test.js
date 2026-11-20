@@ -189,6 +189,7 @@ function fakeRig() {
 if { : >&3; } 2> /dev/null; then echo "fd 3 open: $*" >> ${JSON.stringify(join(d, "fd3.log"))}; fi
 [ $# -eq 0 ] && { env > ${JSON.stringify(join(d, "launch-env.txt"))}; exec sleep 30; }
 echo "$*" >> "$log"
+echo "$DISPLAY $HC_SESSION $*" >> ${JSON.stringify(join(d, "env.log"))}
 case "$1 $2" in
   "--version "*) echo "herdr-app 0.1.16" ;;
   "status "*) [ -e ${JSON.stringify(join(d, "hang"))} ] && exec perl -e 'sleep 60' ${JSON.stringify(`hang-${d}`)}; echo '{"overlays":[],"errors":[]}' ;;
@@ -196,13 +197,16 @@ case "$1 $2" in
   "do pane.split") echo '{"pane":"p2"}' ;;
   # As the real Herdr 0.1.16 does: any <mod>.<name> is ok, exit 0, known to the mod or not.
   # The stand-in mod reports each one in its debug report the way main.js command() does:
-  # acted true for pin, false for anything else; "agent-threads.mute" it never reports.
+  # its name before any colon, acted true for pin and search, false for anything else;
+  # "agent-threads.mute" it never reports, and "agent-threads.alias" it reports as pin.
   "do agent-threads."*)
     echo '{"ok":true}'
     c=\${2#agent-threads.}
+    c=\${c%%:*}
     [ "$c" = mute ] && exit 0
+    [ "$c" = alias ] && c=pin
     n=$(( $(cat ${JSON.stringify(join(d, "cmd.n"))} 2> /dev/null || echo 0) + 1 )); echo $n > ${JSON.stringify(join(d, "cmd.n"))}
-    a=false; [ "$c" = pin ] && a=true
+    a=false; case $c in pin | search) a=true ;; esac
     printf '{"frame.welcomed":"skipped","threads.debug":{"t1":{"command":{"n":%s,"name":"%s","acted":%s}}}}\n' $n "$c" $a > "$HERDR_APP_HOME/shared.json" ;;
   "do no.such.thing") echo '{"error":"unknown command \\"no.such.thing\\""}'; exit 1 ;;
   "shot "*) echo png > "$2" ;;
@@ -259,6 +263,12 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   const calls = readFileSync(join(f.d, "app.log"), "utf8");
   expect(calls).toContain("do agent-threads.pin\n");
   expect(calls.indexOf("do agent-threads.pin")).toBeLessThan(calls.indexOf("shot "));
+  // Every Herdr call of the run, the shot and the clean-up's app.quit included, used one
+  // display and one session: a --do command never changes them.
+  const envs = readFileSync(join(f.d, "env.log"), "utf8").trim().split("\n");
+  expect(envs.some((l) => l.endsWith(" shot " + png))).toBe(true);
+  expect(envs.some((l) => l.includes(" do app.quit"))).toBe(true);
+  expect(new Set(envs.map((l) => l.split(" ").slice(0, 2).join(" ")))).toEqual(new Set([":99 still99"]));
   // The app started with the clean environment, and the display it was given.
   const launch = readFileSync(join(f.d, "launch-env.txt"), "utf8");
   expect(launch).toContain("DISPLAY=:99\n");
@@ -288,6 +298,32 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   expect(calls.length).toBeGreaterThan(0);
   expect(existsSync(join(f.d, "fd3.log")) ? readFileSync(join(f.d, "fd3.log"), "utf8") : "").toBe("");
 }, 30000);
+
+// The mod check goes by the command's own name: a report under another name fails, a command
+// with an argument is checked by the part before the colon, and a command that names this mod
+// with a leading space or in capitals still takes the check.
+test("herdr-still.sh checks a mod command by its own name, whatever its spacing or case", () => {
+  const f = fakeRig();
+  // One the pane reports under another name: exit 1, no still.
+  const png5 = join(f.d, "s5.png");
+  let r = still([fx, png5, "--do", "agent-threads.alias"], f);
+  expect(r.status).toBe(1);
+  expect(r.stderr).toBe("herdr-still: --do agent-threads.alias: the mod did not act on it (not one of its commands, or nothing to do)\n");
+  expect(existsSync(png5)).toBe(false);
+  // A command with an argument is checked by its name, the part before the colon.
+  const png6 = join(f.d, "s6.png");
+  r = still([fx, png6, "--do", "agent-threads.search:checkout"], f);
+  expect([r.status, r.stderr]).toEqual([0, ""]);
+  // A command for this mod with a leading space, or in capitals, still goes through the mod
+  // check, never through Herdr's exit code alone.
+  for (const odd of [" agent-threads.nope", "AGENT-THREADS.nope"]) {
+    const p = join(f.d, "odd.png");
+    r = still([fx, p, "--do", odd], f);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^herdr-still: --do .*nope(: the mod did not act on it|: the Threads pane did not report it| failed)/i);
+    expect(existsSync(p)).toBe(false);
+  }
+}, 60000);
 
 test("herdr-still.sh has one deadline for the whole run: a Herdr call that hangs ends there, with exit 4, its own line and no still", () => {
   const f = fakeRig();

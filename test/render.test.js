@@ -486,9 +486,16 @@ test("a debug pane reports the last command and whether it acted; an unknown one
   expect(last()).toEqual({ n: 2, name: "no-such-command", acted: false });
   v.command("latest", cx);
   expect(last()).toEqual({ n: 3, name: "latest", acted: true });
+  // A command with an argument is reported by its own name, the part before the colon; the
+  // argument's text never reaches the report.
+  v.command("outline:on", cx);
+  expect(last()).toMatchObject({ n: 4, name: "outline" });
+  v.command("pick:words typed in a search", cx);
+  expect(last()).toMatchObject({ n: 5, name: "pick" });
+  expect(JSON.stringify(state.shared["threads.debug"])).not.toContain("words typed");
   v.debug = false;
   v.command("first", cx);
-  expect(v.lastCommand.n).toBe(3);
+  expect(v.lastCommand.n).toBe(5);
 });
 
 async function scripted(events) {
