@@ -9,8 +9,8 @@ import { problems } from "../atif-schema.js";
 // prompt, no turn · R4 user text not normalized Harbor's way · R5a we write no files and
 // results are text · R5b non-text blocks leave no marker · R6 tokens per turn, llm_call_count
 // never written · R7 a call with no result keeps a marked observation entry · R8 no cost
-// fields · R9 a Codex web_search_call loses its id · R10 a lone Codex rollout read by itself
-// ignores its own history boundary.
+// fields · R9 a Codex web_search_call loses its id · R10 a lone Codex subagent rollout keeps
+// its own prompt as a step.
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
   { id: "claude: byte_faithful_property_across_inputs[0]", reason: "R3", kind: "by design", note: "An empty prompt makes no turn in Agent Threads." },
