@@ -826,11 +826,114 @@ test("atif: redacted thinking stays out of the export whole", () => {
   const output = execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" });
   expect(output).not.toContain("opaque-ciphertext");
 });
-test("atif: the panel's reader keeps no thinking text", () => {
-  const plain = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8" });
-  const exportRead = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8", env: { ...process.env, THREADS_REASONING: "1" } });
+test("atif: the panel's reader keeps no thinking text, whatever the environment exports", () => {
+  // The switch is extract.sh's fifth argument, which only the export passes: a shell that
+  // exports THREADS_REASONING changes nothing for the pane.
+  const env = { ...process.env, THREADS_REASONING: "1" };
+  const plain = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8", env });
+  const exportRead = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude", "reasoning"], { encoding: "utf8" });
   expect(plain).not.toContain('"k":"h"');
+  expect(plain).not.toContain("First thought.");
   expect(exportRead).toContain('"k":"h"');
+});
+const codexReasonEvents = (reasoning) => [
+  { timestamp: "2026-01-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+  { timestamp: "2026-01-01T00:00:00Z", type: "event_msg", payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "input_text", text: "Fix the bug." }] } } },
+  ...(reasoning ? [{ timestamp: "2026-01-01T00:00:01Z", type: "response_item", payload: reasoning }] : []),
+  { timestamp: "2026-01-01T00:00:02Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Inspecting." }] } },
+  { timestamp: "2026-01-01T00:00:03Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "call_1", arguments: '{"command":"ls"}' } },
+  { timestamp: "2026-01-01T00:00:04Z", type: "response_item", payload: { type: "function_call_output", call_id: "call_1", output: "README.md" } },
+];
+test("atif: the Codex reader with reasoning turned off keeps none, and the file is the one without the reasoning", () => {
+  const withIt = join(dir, "reason-codex-off.jsonl");
+  const without = join(dir, "reason-codex-none.jsonl");
+  writeFileSync(withIt, `${codexReasonEvents({ type: "reasoning", summary: [{ type: "summary_text", text: "SECRET-PLAN" }], encrypted_content: "opaque" }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  writeFileSync(without, `${codexReasonEvents(null).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const env = { ...process.env, THREADS_REASONING: "1" };
+  const panel = execFileSync("sh", [join(core, "extract.sh"), withIt, "0", "1048576", "codex"], { encoding: "utf8", env });
+  expect(panel).not.toContain('"k":"h"');
+  expect(panel).not.toContain("SECRET-PLAN");
+  const off = execFileSync("bun", [join(core, "atif.js"), "--no-reasoning", withIt, "codex"], { encoding: "utf8", env });
+  expect(off).not.toContain("SECRET-PLAN");
+  expect(off).not.toContain("reasoning");
+  const t = JSON.parse(off);
+  const base = JSON.parse(execFileSync("bun", [join(core, "atif.js"), without, "codex"], { encoding: "utf8" }));
+  expect(t.steps).toEqual(base.steps);
+  expect(t.notes).toBe(base.notes);
+  expect(problems(t)).toEqual([]);
+});
+test("atif: reasoning with no text is marked withheld on its step and counted in the notes", () => {
+  const claude = join(dir, "reason-withheld.jsonl");
+  const content = [{ type: "thinking", thinking: "", signature: "sig-opaque" }, { type: "redacted_thinking", data: "opaque-ciphertext" }, { type: "text", text: "Done." }];
+  writeFileSync(claude, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content } })}\n`);
+  const out = execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("opaque");
+  const t = JSON.parse(out);
+  expect(t.steps[1].message).toBe("Done.");
+  expect(t.steps[1].reasoning_content).toBeUndefined();
+  expect(t.steps[1].extra.reasoning_withheld).toBe(2);
+  expect(t.notes).toContain("1 step has model reasoning that is not in this file");
+  expect(problems(t)).toEqual([]);
+  // Off, nothing is read: no mark, and the notes say nothing of it.
+  const off = JSON.parse(execFileSync("bun", [join(core, "atif.js"), "--no-reasoning", claude, "claude"], { encoding: "utf8" }));
+  expect(off.steps[1].extra?.reasoning_withheld).toBeUndefined();
+  expect(off.notes).not.toContain("reasoning");
+  // Codex: an encrypted item with an empty summary.
+  const codex = join(dir, "reason-codex-withheld.jsonl");
+  writeFileSync(codex, `${codexReasonEvents({ type: "reasoning", summary: [], encrypted_content: "opaque" }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const c = JSON.parse(execFileSync("bun", [join(core, "atif.js"), codex, "codex"], { encoding: "utf8" }));
+  expect(c.steps[1].message).toBe("Inspecting.");
+  expect(c.steps[1].reasoning_content).toBeUndefined();
+  expect(c.steps[1].extra.reasoning_withheld).toBe(1);
+  expect(c.notes).toContain("1 step has model reasoning that is not in this file");
+  // Codex reasoning written as the item's own text, with an empty summary, is exported, not withheld.
+  const raw = join(dir, "reason-codex-raw.jsonl");
+  writeFileSync(raw, `${codexReasonEvents({ type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: "Raw thought." }], encrypted_content: null }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const r = JSON.parse(execFileSync("bun", [join(core, "atif.js"), raw, "codex"], { encoding: "utf8" }));
+  expect(r.steps[1].reasoning_content).toBe("Raw thought.");
+  expect(r.steps[1].extra?.reasoning_withheld).toBeUndefined();
+  expect(r.notes).not.toContain("not in this file");
+  // A turn that is only withheld reasoning gets no step of its own: the notes count it.
+  const alone = join(dir, "reason-withheld-alone.jsonl");
+  writeFileSync(alone, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "thinking", thinking: "", signature: "sig-opaque" }] } })}\n`);
+  const a = JSON.parse(execFileSync("bun", [join(core, "atif.js"), alone, "claude"], { encoding: "utf8" }));
+  expect(a.steps.filter((st) => st.source === "agent")).toHaveLength(0);
+  expect(a.notes).toContain("1 more reasoning block with no step after it was left out the same way.");
+});
+test("atif: a background wake-up's reasoning stays on the wake-up's step", () => {
+  const file = join(dir, "reason-wake.jsonl");
+  const events = [
+    thinkingEvents[0],
+    { ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "text", text: "Started." }] } },
+    { type: "system", subtype: "turn_duration", durationMs: 1000, timestamp: "2026-11-01T09:00:06Z", sessionId: "s" },
+    { type: "user", timestamp: "2026-11-01T09:01:00Z", sessionId: "s", message: { role: "user", content: "<task-notification><task-id>bg1</task-id><status>completed</status></task-notification>" }, origin: { kind: "task-notification" } },
+    { type: "assistant", timestamp: "2026-11-01T09:01:05Z", sessionId: "s", message: { id: "msg_w", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "Wake thought." }, { type: "text", text: "The job finished." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  const wake = t.steps.find((st) => st.extra?.kind === "background_update");
+  expect(wake?.message).toBe("The job finished.");
+  expect(wake.reasoning_content).toBe("Wake thought.");
+  expect(problems(t)).toEqual([]);
+});
+test("atif: a text step dropped past the step limit counts its reasoning as withheld", () => {
+  const file = join(dir, "reason-past-max.jsonl");
+  const events = [thinkingEvents[0]];
+  // Each round is a text step and a call group: 151 rounds pass the 300-step limit.
+  for (let i = 0; i < 151; i++) {
+    const ts = new Date(Date.parse("2026-11-01T09:00:05Z") + i * 2000).toISOString();
+    const rts = new Date(Date.parse(ts) + 1000).toISOString();
+    events.push({ type: "assistant", timestamp: ts, sessionId: "s", message: { id: `msg_${i}`, role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: `Thought ${i}.` }, { type: "text", text: `Step ${i}.` }, { type: "tool_use", id: `toolu_${i}`, name: "Read", input: { file_path: "/app/a.py" } }], stop_reason: "tool_use" } });
+    events.push({ type: "user", timestamp: rts, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${i}`, content: "ok" }] } });
+  }
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  expect(t.steps.some((st) => st.reasoning_content === "Thought 150.")).toBe(false);
+  const marked = t.steps.filter((st) => st.extra?.reasoning_withheld);
+  expect(marked).toHaveLength(1);
+  expect(marked[0].extra.reasoning_withheld).toBe(1);
+  expect(marked[0].tool_calls.map((c) => c.tool_call_id)).toContain("toolu_150");
+  expect(t.notes).toContain("1 step has model reasoning that is not in this file");
 });
 test("atif: a Codex reasoning item becomes the next step's reasoning_content", () => {
   const file = join(dir, "reason-codex.jsonl");
