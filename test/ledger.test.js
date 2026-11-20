@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
-  BAR_W, BAR_H, BAR_SLANT, LINE_SLANT,
+  BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds,
 } from "../mods/agent-threads/ledger.js";
 import { fmtTime } from "../mods/agent-threads/core/turns.js";
 
@@ -324,4 +324,24 @@ test("ledger: a subagent last seen launched or running says so only in a running
   expect(sub(false).sub.state).toBeNull();
   expect(detailOf(sub(false)).fields).toContainEqual(["Result", "No result"]);
   expect(detailOf(sub(false)).fields).toContainEqual(["Last activity", fmtTime(T0 + 2000)]);
+});
+
+test("ledger: a dead turn killed during its only call says no result, when the agent writes result times", () => {
+  // Nothing in this turn has a result: whether that means "no result" is the agent's way, not
+  // the turn's (Claude Code, or a session with a result time anywhere).
+  const t = turn(15, [[["Bash", "bun run e2e", 2000, null]]], { done: false, end: null, reply: null });
+  const dead = ledgerTurn(S, t, 0, false, { ends: true }).rows;
+  expect(dead[2]).toMatchObject({ lk: "noresult", status: "no result", open: true, lastAt: T0 + 2000 });
+  expect(detailOf(dead[2]).fields).toContainEqual(["Result", "No result"]);
+  expect(ledgerTurn(S, t, 0, true, { ends: true }).rows[2]).toMatchObject({ lk: "running", status: "running" });
+  // Every call of a parallel batch pending, while live: each is running.
+  const batch = turn(16, [[["Read", "a", 2000, null], ["Read", "b", 2000, null]]], { done: false, end: null, reply: null });
+  expect(ledgerTurn(S, batch, 0, true, { ends: true }).rows.slice(2).map((r) => r.lk)).toEqual(["running", "running"]);
+  // An agent that writes no result times: a call with no end is an ordinary row.
+  expect(ledgerTurn(S, t, 0, false, { ends: false }).rows[2].lk).toBe("tool");
+  // Left out, the session decides: any call in it with an end.
+  const s = { ...S, turns: [turn(1, [[["Read", "a", 1000, 1200]]]), t] };
+  expect(sessionHasEnds(s)).toBe(true);
+  expect(sessionHasEnds({ ...S, turns: [t] })).toBe(false);
+  expect(ledgerTurn(s, t, 0, false).rows[2].lk).toBe("noresult");
 });

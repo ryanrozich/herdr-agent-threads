@@ -160,13 +160,22 @@ export function coarse(segs, n = 40) {
   return out;
 }
 
+// Whether a session's calls carry result times: any call in it with one. main.js also counts
+// Claude Code, which always writes them, so its first turn killed mid-call is not misread.
+export function sessionHasEnds(s) {
+  for (const t of s?.turns ?? []) for (const st of t.steps ?? []) for (const x of st.info ?? []) if (x?.rt != null) return true;
+  return false;
+}
+
 // One turn's rows: the heading, then a row per cell. si and the turn make the keys: the
 // heading's key is the turn's own ("<session>:<number>", as in the chat), so the selected
 // turn is the same key in the Chat and the Trajectory; a cell row is "tr:<session>:<number>:<i>".
 // live: the turn is running by the running rule (turnRunning), so a call with no result yet is
 // "running" and its bar reaches now. Otherwise such a call is "no result", and its row and
 // the heading carry the turn's last recorded activity (lastAt, ms).
-export function ledgerTurn(s, turn, si, live = false) {
+// opts.ends: whether the agent writes result times (see sessionHasEnds); left out, this turn
+// or its session decides.
+export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   const tr = trajectory(s, turn);
   const key = `${si}:${turn.n}`;
   const t0 = tr.start;
@@ -182,9 +191,10 @@ export function ledgerTurn(s, turn, si, live = false) {
   // A turn with no time on any step (the turn's own start and end are not a step's): its
   // cells are left empty and its heading says so.
   const timed = t0 != null && cells.some((c, i) => i > 0 && c.start != null);
-  // Whether this turn's calls carry result times at all. Without them a call with no end is a
-  // call whose outcome is not recorded (an ordinary row), not one with no result.
-  const ends = cells.some((c) => c.kind === "tool" && c.end != null);
+  // Whether the agent writes result times. Without them a call with no end is a call whose
+  // outcome is not recorded (an ordinary row), not one with no result. That is the agent's
+  // way, not the turn's: a turn killed during its only call has no end anywhere in it.
+  const ends = opts.ends ?? (cells.some((c) => c.kind === "tool" && c.end != null) || sessionHasEnds(s));
   let lastTool = -1;
   for (let i = cells.length - 1; i >= 0 && lastTool < 0; i--) if (cells[i].kind === "tool") lastTool = i;
   const rows = [];
