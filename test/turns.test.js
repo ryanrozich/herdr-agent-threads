@@ -480,6 +480,25 @@ test("background update text resets at each tool call and each new update", () =
   expect(s.turns[0].followups).toBe(2);
 });
 
+test("the latest background update keeps when its first text came, beside the text", () => {
+  const s = newSession("s", "f");
+  const at = (m) => `2026-11-01T09:${String(m).padStart(2, "0")}:00.000Z`;
+  const ev = [
+    { k: "p", o: "human", t: "go", ts: at(0) }, { k: "t", t: "done", ts: at(1) }, { k: "d", ms: 1 },
+    { k: "p", o: "task-notification", ts: at(5) }, { k: "t", t: "checking", ts: at(6) }, { k: "u", n: "Read", ts: at(7) },
+    { k: "t", t: "first update", ts: at(8) }, { k: "t", t: "and more", ts: at(9) }, { k: "d", ms: 1 },
+  ];
+  for (const e of ev) apply(s, e);
+  expect(s.turns[0].latest).toBe("first update\n\nand more");
+  expect(s.turns[0].latestAt).toBe(Date.parse(at(8)));
+  // A later wake-up with no text of its own leaves the update and its time as they were.
+  for (const e of [{ k: "p", o: "task-notification", ts: at(20) }, { k: "u", n: "Read", ts: at(21) }, { k: "d", ms: 1 }]) apply(s, e);
+  expect(s.turns[0].latestAt).toBe(Date.parse(at(8)));
+  // One that says something moves both.
+  for (const e of [{ k: "p", o: "task-notification", ts: at(30) }, { k: "t", t: "second", ts: at(31) }, { k: "d", ms: 1 }]) apply(s, e);
+  expect([s.turns[0].latest, s.turns[0].latestAt]).toEqual(["second", Date.parse(at(31))]);
+});
+
 test("a command line from another sender is that sender's turn, not the person's (F3)", () => {
   for (const o of ["peer", "scheduled", "sdk"]) {
     const s = newSession("x", "f");

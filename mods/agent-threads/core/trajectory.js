@@ -98,7 +98,7 @@ export function trajectory(s, turn, id = null) {
       if (last || reason) groups.push({ title, cells: [{ kind: "context", text: last, ...(reason ? { reason } : {}), start: at(w.afterAt), end: null }], ...(w.held ? { held: w.held } : {}) });
       else holdOn(w.held);
     }
-  } else if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
+  } else if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: at(turn.latestAt), end: null }] });
   return {
     id,
     n: turn.n,

@@ -277,7 +277,8 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     } else if (c.kind === "context") {
       r.lk = "context";
       r.text = firstLine(c.text) || " ";
-      r.startQ = true;
+      if (c.start != null && t0 != null) r.start = c.start - t0;
+      else r.startQ = true;
     }
     if (!timed) { r.start = null; r.dur = null; r.startQ = false; r.durQ = false; }
     rows.push(r);
@@ -450,13 +451,14 @@ export function ledgerStatus(t, width, going = false) {
 }
 
 // A row's start and duration columns as text, and whether it draws a bar of its duration. A
-// row that says "no result" shows no duration and no bar: what time it has is the launch
-// call's, which the detail keeps.
+// row with no time recorded leaves the column blank (the detail says "not recorded"). A row
+// that says "no result" shows no duration and no bar: what time it has is the launch call's,
+// which the detail keeps.
 export function rowTimes(r) {
   const none = r.status === "no result";
   return {
-    start: r.start != null ? startText(r.start) : r.startQ ? "?" : "",
-    dur: none ? "" : r.dur != null ? durText(r.dur) : r.durQ ? "?" : "",
+    start: r.start != null ? startText(r.start) : "",
+    dur: none || r.dur == null ? "" : durText(r.dur),
     bar: !none && r.dur != null && r.lk !== "more",
   };
 }
@@ -484,7 +486,7 @@ export function detailOf(r) {
   if (r.lk === "you") F.push(["From", "the user"]);
   else if (r.lk === "agent") F.push(["From", `${r.sender ?? "an agent"} · another agent, not the user`]);
   else if (r.lk === "context") F.push(["From", "the harness · nobody typed this"]);
-  F.push(["Turn", `${r.turn?.n ?? "?"}`]);
+  if (r.turn?.n != null) F.push(["Turn", `${r.turn.n}`]);
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
   const call = laneOf(r.lk) === "tools" && r.lk !== "more";
   // A call with no result took no time the transcript knows: Took is left out, and Result says
