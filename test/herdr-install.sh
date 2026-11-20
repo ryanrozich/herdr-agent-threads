@@ -5,7 +5,8 @@
 # installer script is fetched. It goes into HERDR_RIG, by default .herdr-rig in this checkout
 # (ignored by git), because a setup step's home does not reach the session that follows.
 # It prints one line starting "install-herdr: Herdr did not install" and exits 1 when it does
-# not install, and never waits on the network for more than the limits below.
+# not install, and never waits on the network for more than the limits below. Downloads are
+# https only and follow no redirect. HERDR_RIG must be a folder inside this checkout.
 # Moving the pin: one pull request that changes the two versions and the four checksums here,
 # read from https://releases.herdr.dev/app/<version>/ and /core/<version>/ (each has a
 # manifest with the sha256 of every archive), merged by a person.
@@ -20,7 +21,16 @@ RELEASES=https://releases.herdr.dev
 
 miss() { echo "install-herdr: Herdr did not install: $*" >&2; exit 1; }
 cd "$(dirname "$0")/.." || miss "no checkout"
-D=${HERDR_RIG:-$(pwd)/.herdr-rig}
+CO=$(pwd)
+D=${HERDR_RIG:-$CO/.herdr-rig}
+# It removes and replaces folders in D, so D is a folder inside the checkout, never the
+# checkout itself, never outside it, and never with a ".." step.
+case $D in
+  *..* | . | ./* | */. | */./*) miss "HERDR_RIG has a . or .. step: $D" ;;
+  "$CO"/?*) ;;
+  /*) miss "HERDR_RIG is outside this checkout: $D" ;;
+  *) D=$CO/$D ;;
+esac
 [ "$(uname -s)" = Linux ] || miss "this installs the Linux build, and this is $(uname -s)"
 case $(uname -m) in
   x86_64 | amd64) arch=x86_64 app_sha=$APP_SHA256_X86_64 core_sha=$CORE_SHA256_X86_64 ;;
@@ -33,8 +43,10 @@ T=$D/.download
 rm -rf "$T"
 mkdir -p "$T/x" || miss "cannot write $D"
 trap 'rm -rf "$T"' EXIT
-# A download goes to a file, so a failure is curl's own exit; each has a time limit.
-fetch() { curl -fsSL --connect-timeout 20 --max-time "$3" -o "$2" "$1" || miss "download failed: $1"; }
+# A download goes to a file, so a failure is curl's own exit; each has a time limit. The
+# whole 64-character digest is compared.
+# https only, and a redirect is a failure (curl exits 47), not a second host.
+fetch() { curl -fsSL --proto =https --proto-redir =https --max-redirs 0 --connect-timeout 20 --max-time "$3" -o "$2" "$1" || miss "download failed: $1"; }
 check() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] || miss "checksum mismatch for $3 (the pin says $2)"; }
 fetch "$RELEASES/app/$APP_VERSION/herdr-app-linux-$arch.tar.gz" "$T/app.tar.gz" 150
 check "$T/app.tar.gz" "$app_sha" "herdr-app $APP_VERSION"

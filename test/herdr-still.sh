@@ -5,17 +5,19 @@
 # one command (nothing has to outlive a setup step). Herdr is the pinned release that
 # test/herdr-install.sh (the install-herdr setup step) put in HERDR_RIG, by default .herdr-rig
 # in this checkout. Exit codes: 0 a still was written; 2 bad arguments or not Linux; 3 no
-# Herdr installed; 1 anything else, including an overlay over the window, an error Herdr
-# reports, or a --do command that failed, so a picture of the wrong state is never a pass.
+# Herdr installed; 4 the whole run passed its deadline (HERDR_STILL_DEADLINE, 240 s); 1
+# anything else, including an overlay over the window, an error Herdr reports, or a --do
+# command that failed, so a picture of the wrong state is never a pass.
 # Usage: sh test/herdr-still.sh <transcript.jsonl> <out.png> [--px 500] [--theme dark|light]
 #          [--size 1460x1150] [--do <command>]...
 #   --do runs a mod command before the shot, one second apart: --do agent-threads.pin
 # The app gets a clean environment (env -i): its own display, home, XDG folders and temp
-# folder inside a fresh folder, no Wayland or session bus, the network proxied to nowhere.
+# folder inside a fresh folder, no Wayland or session bus. Its proxy variables point at a
+# closed port as a courtesy to programs that read them; they are not a network limit.
 # HERDR_STILL_SHOW_ENV=1 prints that environment and exits, starting nothing; HERDR_STILL_X11
 # is where the display's socket appears (/tmp/.X11-unix), for test/herdr-still.test.js.
 set -u
-usage() { sed -n '10,12p' "$0" >&2; exit 2; }
+usage() { sed -n '11,13p' "$0" >&2; exit 2; }
 fail() { echo "herdr-still: $*" >&2; exit 1; }
 [ $# -ge 2 ] || usage
 abs() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd)" "$1" ;; esac; }
@@ -59,11 +61,20 @@ appenv() {
   $X env -i PATH="$RIG/bin:/usr/local/bin:/usr/bin:/bin" LANG=C.UTF-8 HOME="$R" TMPDIR="$R/tmp" \
     XDG_CONFIG_HOME="$R/config" XDG_DATA_HOME="$R/data" XDG_CACHE_HOME="$R/cache" XDG_STATE_HOME="$R/state" XDG_RUNTIME_DIR="$R/run" \
     DISPLAY=":$n" HERDR_APP_HOME="$A" HC_SESSION="still$n" DO_NOT_TRACK=1 HERDR_TELEMETRY=0 \
-    HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= "$@"
+    HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= "$@" 3>&-
 }
-h() { appenv timeout -k 5 30 "$APP" "$@"; }
+# In the background with wait, so the deadline's signal ends a call that hangs at once; the
+# subshell execs, so HPID is the timeout process, which passes a kill on to the call.
+HPID=""
+h() { (X="exec"; appenv timeout -k 5 30 "$APP" "$@") & HPID=$!; wait "$HPID"; }
+WPID=""
+DONE=""
 cleanup() {
-  [ -n "$APID" ] && { h "do" app.quit > /dev/null 2>&1; sleep 1; kill "$APID" 2> /dev/null; }
+  [ -n "$DONE" ] && return
+  DONE=1
+  [ -n "$WPID" ] && kill "$WPID" 2> /dev/null
+  [ -n "$HPID" ] && kill "$HPID" 2> /dev/null
+  [ -n "$APID" ] && { appenv timeout -k 2 8 "$APP" "do" app.quit > /dev/null 2>&1; sleep 1; kill "$APID" 2> /dev/null; }
   # The core and anything it started carry the folder in their environment.
   for p in /proc/[0-9]*; do
     grep -qs "$R" "$p/environ" && kill "${p#/proc/}" 2> /dev/null
@@ -74,6 +85,15 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 if [ "${HERDR_STILL_SHOW_ENV:-}" = 1 ]; then appenv env; exit 0; fi
+DEADLINE=${HERDR_STILL_DEADLINE:-240}
+case $DEADLINE in "" | *[!0-9]*) usage ;; esac
+# One deadline for the whole run: a watcher signals this shell when it passes, and the
+# trap names it and exits 4 through the same cleanup. It writes to fd 3, the script's own
+# stderr, since it can run inside a call whose stderr is sent elsewhere.
+exec 3>&2
+trap 'echo "herdr-still: the run passed its ${DEADLINE} s deadline" >&3; exit 4' USR1
+(trap 'kill "$s" 2> /dev/null; exit 0' TERM; sleep "$DEADLINE" 3>&- & s=$!; wait "$s" && kill -USR1 $$) 3>&- &
+WPID=$!
 
 # Only on Linux, where it starts its own display; never on a person's desktop session.
 [ "$(uname -s)" = Linux ] || { echo "herdr-still: Linux only (this is $(uname -s))" >&2; exit 2; }

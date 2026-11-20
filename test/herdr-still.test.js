@@ -22,10 +22,11 @@ function stub(dir, name, body) {
   chmodSync(join(dir, name), 0o755);
 }
 // GNU timeout's part that matters here: the command in a group of its own, the group ended
-// after the limit (STUB_LIMIT seconds in a test, so a hang takes 2 s), and 124.
+// after the limit (STUB_LIMIT seconds in a test, so a hang takes 2 s), and 124; a TERM to it
+// ends the command too.
 const TIMEOUT = `[ "$1" = -k ] && shift 2
 lim=\${STUB_LIMIT:-$1}; shift
-exec perl -e 'my $l = shift; my $p = fork; if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 } $SIG{ALRM} = sub { kill "TERM", -$p; select(undef, undef, undef, 0.3); kill "KILL", -$p; waitpid($p, 0); exit 124 }; alarm $l; waitpid($p, 0); exit($? >> 8)' "$lim" "$@"`;
+exec perl -e 'my $l = shift; my $p = fork; if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 } $SIG{TERM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 143 }; $SIG{ALRM} = sub { kill "TERM", -$p; select(undef, undef, undef, 0.3); kill "KILL", -$p; waitpid($p, 0); exit 124 }; alarm $l; waitpid($p, 0); exit($? >> 8)' "$lim" "$@"`;
 
 test("the settings: the display packages, one setup step that runs the pinned install within its limit and never fails a phase", () => {
   const pk = settings.environment.system_packages.map((p) => p.name);
@@ -52,6 +53,8 @@ test("the install pins one release, and every download it makes is checked again
   // curl only inside fetch(), with a time limit; each fetch's next line checks that file.
   const lines = install.split("\n");
   expect(lines.filter((l) => /\bcurl\b/.test(l) && !/^\s*#/.test(l) && !/command -v/.test(l) && !/for c in/.test(l))).toEqual([expect.stringMatching(/^fetch\(\) \{ curl .*--max-time "\$3" -o "\$2" "\$1"/)]);
+  // https only, and no redirect to another host: curl fails on one.
+  expect(install).toMatch(/^fetch\(\) \{ curl -fsSL --proto =https --proto-redir =https --max-redirs 0 /m);
   const fetches = lines.map((l, i) => [l, i]).filter(([l]) => /^fetch "/.test(l));
   expect(fetches.length).toBe(2);
   for (const [l, i] of fetches) {
@@ -63,8 +66,9 @@ test("the install pins one release, and every download it makes is checked again
   expect(lines.findIndex((l) => /\btar -x/.test(l))).toBeGreaterThan(lastCheck);
 });
 
-// The setup step's own command, run in a copy of the two scripts, with stand-ins.
-function runStep(curl, { sums = null, tar = null } = {}) {
+// The setup step's own command, run in a copy of the two scripts, with stand-ins. "__CO__" in
+// an env value is that copy's path.
+function runStep(curl, { sums = null, tar = null, env = {} } = {}) {
   const d = mkdtempSync(join(tmpdir(), "herdr-step-"));
   const bin = join(d, "bin");
   const co = join(d, "co");
@@ -76,7 +80,7 @@ function runStep(curl, { sums = null, tar = null } = {}) {
   stub(bin, "timeout", TIMEOUT);
   stub(bin, "sha256sum", sums ? `case $1 in *app*) echo "${sums.app}  $1" ;; *) echo "${sums.core}  $1" ;; esac` : 'shasum -a 256 "$1"');
   if (tar) stub(bin, "tar", tar);
-  const r = spawnSync("sh", ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2" } });
+  const r = spawnSync("sh", ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2", ...Object.fromEntries(Object.entries(env).map(([k, x]) => [k, x.replace("__CO__", co)])) } });
   const curlLog = existsSync(join(d, "curl.log")) ? readFileSync(join(d, "curl.log"), "utf8") : "";
   return { ...r, d, co, curlLog, marks: r.stderr.split("\n").filter((l) => l.startsWith(MARK)) };
 }
@@ -107,7 +111,35 @@ test("the setup step when the release server refuses, hangs, sends the wrong byt
   expect([r.status, r.marks.length]).toEqual([0, 1]);
   expect(r.marks[0]).toContain("an archive did not unpack");
   expect(existsSync(join(r.co, ".herdr-rig/bin"))).toBe(false);
+  // The whole digest is compared: the pin's first 8 or first 63 characters are not enough.
+  const app = pin("APP_SHA256_X86_64");
+  for (const near of [`${app.slice(0, 8)}${"0".repeat(56)}`, `${app.slice(0, 63)}${app.endsWith("0") ? "1" : "0"}`]) {
+    r = runStep(`${out}\necho bytes > "$o"`, { sums: { app: near, core: pin("CORE_SHA256_X86_64") } });
+    expect([r.status, r.marks.length]).toEqual([0, 1]);
+    expect(r.marks[0]).toContain(`checksum mismatch for herdr-app ${pin("APP_VERSION")}`);
+    expect(existsSync(join(r.co, ".herdr-rig/bin"))).toBe(false);
+  }
 }, 30000);
+
+test("the install refuses a HERDR_RIG outside the checkout, the checkout itself or one with a . or .. step, before it downloads anything", () => {
+  for (const [rig, why] of [["/elsewhere/rig", "outside this checkout"], ["../rig", ". or .. step"], ["sub/../../rig", ". or .. step"], [".", ". or .. step"], ["./", ". or .. step"]]) {
+    const r = runStep("exit 7", { env: { HERDR_RIG: rig } });
+    expect([rig, r.status, r.marks.length, r.curlLog]).toEqual([rig, 0, 1, ""]);
+    expect(r.marks[0]).toContain(why);
+  }
+  // The checkout itself is refused too: only a folder under it is allowed.
+  for (const rig of ["__CO__", "__CO__/"]) {
+    const r = runStep("exit 7", { env: { HERDR_RIG: rig } });
+    expect([rig, r.status, r.marks.length, r.curlLog]).toEqual([rig, 0, 1, ""]);
+    expect(r.marks[0]).toContain("outside this checkout");
+  }
+  // A folder inside, relative or absolute, gets as far as the download.
+  for (const rig of ["sub/rig", ".herdr-rig", "__CO__/deep/rig"]) {
+    const r = runStep("exit 7", { env: { HERDR_RIG: rig } });
+    expect([rig, r.marks.length]).toEqual([rig, 1]);
+    expect(r.marks[0]).toContain("download failed");
+  }
+});
 
 test("the setup step installs the pinned archives once both checksums match", () => {
   // Two small archives in the release layout, made here; the checksum stand-in names them by
@@ -147,7 +179,7 @@ function fakeRig() {
 echo "$*" >> "$log"
 case "$1 $2" in
   "--version "*) echo "herdr-app 0.1.16" ;;
-  "status "*) echo '{"overlays":[],"errors":[]}' ;;
+  "status "*) [ -e ${JSON.stringify(join(d, "hang"))} ] && exec sleep 60; echo '{"overlays":[],"errors":[]}' ;;
   "ls "*) echo '{"spaces":[{"name":"still","tabs":[{"terminals":[{"pane":"p1","terminal":"t1"}]}]}]}' ;;
   "do pane.split") echo '{"pane":"p2"}' ;;
   "do agent-threads.nope") echo "unknown command agent-threads.nope" >&2; exit 1 ;;
@@ -215,4 +247,19 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   expect(r.status).toBe(1);
   expect(r.stderr).toContain("herdr-still: --do agent-threads.nope failed: unknown command agent-threads.nope");
   expect(existsSync(png2)).toBe(false);
+}, 30000);
+
+test("herdr-still.sh has one deadline for the whole run: a Herdr call that hangs ends there, with exit 4, its own line and no still", () => {
+  const f = fakeRig();
+  writeFileSync(join(f.d, "hang"), "");
+  const png = join(f.d, "s.png");
+  const t0 = Date.now();
+  const r = still([fx, png], f, { HERDR_STILL_DEADLINE: "3" });
+  const took = (Date.now() - t0) / 1000;
+  expect([r.status, r.stderr]).toEqual([4, "herdr-still: the run passed its 3 s deadline\n"]);
+  // The hung call (its own limit is 30 s) did not hold the run past the deadline.
+  expect(took).toBeLessThan(12);
+  expect(existsSync(png)).toBe(false);
+  // A deadline that is not a number of seconds is a usage error.
+  expect(still([fx, png], f, { HERDR_STILL_DEADLINE: "soon" }).status).toBe(2);
 }, 30000);
