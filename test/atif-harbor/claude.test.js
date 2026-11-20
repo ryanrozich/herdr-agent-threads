@@ -30,3 +30,17 @@ test("harbor corpus (ours): awkward user strings survive the export byte for byt
   expect(run("x".repeat(200001))).toBe(`${"x".repeat(200000)}\n\n… (cut at 200 KB)`);
   for (const value of consumed) expect(run(value)).not.toBe(value);
 });
+
+test("harbor claude: json.dumps facts pass on Harbor's five messages and fail on a wrong one", () => {
+  const item = CLAUDE_CASES.find((candidate) => candidate.id === "claude: stringify_uses_json_dumps_for_non_str");
+  const exportOf = (messages) => {
+    const main = writeSession(mkdtempSync(join(tmpdir(), "threads-harbor-")), "session.jsonl", messages.map((message) => user(message)));
+    const result = spawnSync("bun", [cli, main, "claude"], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  const harbor = ["true", "false", '{"a": 1, "b": "x"}', '{"nested": {"inner": [1, 2]}}', '{"中文": "value", "emoji_🎉": 1}'];
+  item.facts(exportOf(harbor));
+  expect(() => item.facts(exportOf(harbor.with(2, '{"a":1,"b":"x"}')))).toThrow('json.dumps semantics expected for {"a":1,"b":"x"}');
+  expect(() => item.facts(exportOf(harbor.slice(0, 4)))).toThrow("one user step per payload");
+});
