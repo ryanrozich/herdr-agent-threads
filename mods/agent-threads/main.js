@@ -10054,7 +10054,7 @@ export default class Threads extends View {
       case "lfailBack": seek((r) => r.failed === true, -1); return true;
       case "luser": seek((r) => r.lk === "you", 1); return true;
       case "luserBack": seek((r) => r.lk === "you", -1); return true;
-      case "ldetail": this.tdetail = !this.detailOpen(); return true;
+      case "ldetail": this.toggleDetail(shown[i]?.key ?? null); return true;
       case "trajectory": return this.openTraj();
       case "escape":
         if (this.keysOpen || this.settingsOpen) return this.action("escape", cx);
@@ -10068,6 +10068,20 @@ export default class Threads extends View {
       case "narrower": case "wider": return this.trajPane ? this.action(name, cx) : false;
       default: return false;
     }
+  }
+  // The detail shown or hidden. Opening it under the list (narrower than 900 px) leaves the
+  // list shorter: the selected row (key) is scrolled back into view.
+  toggleDetail(key) {
+    this.tdetail = !this.detailOpen();
+    if (this.tdetail && key && !ledgerCols(this.pw()).detailRight) this.tscrollTo = key;
+  }
+  // A click on a row selects it; on the selected row it shows or hides the detail.
+  ledgerClick(key) {
+    if (key.startsWith("sess:") || key.startsWith("gone:")) return false;
+    const shown = this.ledgerRows();
+    if (key === shown[this.ledgerSel(shown)]?.key) this.toggleDetail(key);
+    this.tsel = key;
+    return true;
   }
   ledgerFilter(key) {
     this.tfilter = toggleFilter(this.tfilter, key);
@@ -10184,8 +10198,9 @@ export default class Threads extends View {
     const goTo = this.tscrollTo;
     if (goTo) {
       this.tscrollTo = null;
-      const head = this.turnOfRow(goTo);
-      const j = shown.findIndex((r) => r.key === goTo || r.key === head);
+      // The row itself, or its turn's heading when the filter hides it.
+      let j = shown.findIndex((r) => r.key === goTo);
+      if (j < 0) { const head = this.turnOfRow(goTo); j = shown.findIndex((r) => r.key === head); }
       // Now, and again once the list has its size (a timer asked for in a draw may not run
       // before the list is laid out at a new width).
       if (j >= 0) {
@@ -10202,11 +10217,7 @@ export default class Threads extends View {
         })
         .track_scroll(this.tscroll)
         .on_item_click((key, cx) => {
-          if (key.startsWith("sess:") || key.startsWith("gone:")) return;
-          // A click on the selected row shows or hides the detail.
-          if (key === sel) this.tdetail = !this.detailOpen();
-          this.tsel = key;
-          cx.notify();
+          if (this.ledgerClick(key)) cx.notify();
         })
         .size_full());
   }

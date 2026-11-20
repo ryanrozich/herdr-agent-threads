@@ -14197,3 +14197,44 @@ test("in the Trajectory shown in the Chat's own pane, - and = do nothing and pas
   expect(stops).toBe(0);
   expect(v.toast).toBe(null);
 });
+
+test("narrow, opening the detail under the list scrolls the selected row into view; wide, the list stays put", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 460;
+  v.paneW = 460;
+  v.enterTraj();
+  v.render(cx);
+  const scrolled = [];
+  v.tscroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  v.ledgerAction("llast", cx);
+  v.render(cx);
+  scrolled.length = 0;
+  cx.timers = [];
+  // Enter opens it: the selected row is centred in the shorter list, now and after layout.
+  v.key(keyEv("enter"), cx);
+  expect(v.detailOpen()).toBe(true);
+  v.render(cx);
+  const shown = v.ledgerRows();
+  const at = v.ledgerSel(shown);
+  expect(scrolled).toEqual([[at, "center"]]);
+  cx.flush(16);
+  expect(scrolled).toEqual([[at, "center"], [at, "center"]]);
+  // A click on the selected row opens it the same way.
+  v.ledgerAction("ldetail", cx);
+  v.render(cx);
+  scrolled.length = 0;
+  v.ledgerClick(shown[at].key);
+  expect(v.detailOpen()).toBe(true);
+  v.render(cx);
+  expect(scrolled[0]).toEqual([at, "center"]);
+  // From 900 px the detail sits at the right: opening it moves nothing.
+  v.ledgerAction("ldetail", cx);
+  v.width = 960;
+  v.paneW = 960;
+  v.render(cx);
+  scrolled.length = 0;
+  v.tdetail = false;
+  v.ledgerAction("ldetail", cx);
+  v.render(cx);
+  expect(scrolled).toEqual([]);
+});
