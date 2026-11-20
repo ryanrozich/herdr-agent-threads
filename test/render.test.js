@@ -12146,6 +12146,8 @@ test("card keys: Tab and Shift-Tab move one ring round the card, the pane keeps 
   // Nothing but the ring: the same words, no toast, no new element besides the ring.
   expect(strsOf(c)).toEqual(before);
   expect(v.toast).toBe(toasts);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.settingsCard.ring).toBe(ids[0]); // for the rig
   pressKey(v, cx, "tab", tabEv());
   expect(v.cardRing).toBe(ids[1]);
   pressKey(v, cx, "tab", tabEv(true));
