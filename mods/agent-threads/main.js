@@ -4849,6 +4849,19 @@ export default class Threads extends View {
       case "next": go(at < 0 ? keys.length - 1 : at + 1); return true;
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
+      // A search: the next match back in time (older) or forward (newer). With no match
+      // selected, either goes to the newest. At either end the selection stays: the search
+      // field already says it is the first mention or the newest, and nothing wraps.
+      case "olderMatch":
+      case "newerMatch": {
+        const mk = this.matchKeys(keys);
+        if (!mk.length) return false;
+        const i = mk.indexOf(this.sel);
+        const j = i < 0 ? mk.length - 1 : i + (name === "olderMatch" ? -1 : 1);
+        if (j < 0 || j >= mk.length) return true;
+        go(keys.indexOf(mk[j]));
+        return true;
+      }
       case "open":
         // Enter in a "#12" jump: keep the turn selected and leave the field.
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
@@ -6162,26 +6175,51 @@ export default class Threads extends View {
         .child(svg(ICON("search")).size(13).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))
         .when(!q, (el) => el.child(this.kbd(t, "/")))
-        .when(Boolean(q), (el) => el.child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
+        .when(Boolean(q), (el) => el.child(div().id("th-search-count").flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
           .child(this.filterCount())))
+        .when(Boolean(this.filterText()) && this.matchPlace().n > 0, (el) => el.children(this.stepButtons(t)))
         .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }));
   }
 
-  // "3 of 41 · 2 hidden": matching shown turns of all shown turns across every session in
-  // the pane, and matches among hidden agent messages. For "#12": where it went.
+  // The search field's two steps: older (up, the way back through the list) and newer. The
+  // one with no match left that way is dimmed and does nothing.
+  stepButtons(t) {
+    const { at, n } = this.matchPlace();
+    const step = (id, icon, tip, name, off) => {
+      const b = this.iconButton(t, id, icon, tip, (_e, cx) => { if (!off) { this.action(name, cx); cx.notify(); } });
+      return off ? b.opacity(0.35) : b;
+    };
+    return [
+      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n),
+      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1),
+    ];
+  }
+
+  // Where the selection is among the search's matches, counted from the newest, and what the
+  // older step reaches: "2 of 7 · newest first", "7 of 7 · first mention", "1 of 1 · only
+  // mention", or "7 matches" with no match selected; then matches among hidden agent
+  // messages. In a pane under 420 px, the place alone ("first" at the oldest). For "#12":
+  // where it went.
   filterCount() {
     const n = jumpTarget(this.query);
     if (n != null) return !n ? "turn #" : this.jumpKey(n) ? `turn ${n}` : `no turn ${n}`;
     const q = this.filterText();
     if (!q) return null;
     const status = this.status();
-    let shown = 0, hit = 0, hiddenHit = 0;
+    let hit = 0, hiddenHit = 0;
     this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
       const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status), turns: s.turns });
       const m = threadMatches(s.turns, t, q);
-      if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
+      if (on) { if (m) hit++; } else if (m) hiddenHit++;
     }));
-    return `${hit} of ${shown}${hiddenHit ? ` · ${hiddenHit} hidden` : ""}`;
+    const hidden = hiddenHit ? ` · ${hiddenHit} hidden` : "";
+    if (!hit) return `No matches${hidden}`;
+    const { at, n: all } = this.matchPlace();
+    const tight = this.pw() < 420;
+    if (!at) return `${all.toLocaleString()} ${all === 1 ? "match" : "matches"}${hidden}`;
+    const end = all === 1 ? "only mention" : at === all ? "first mention" : "newest first";
+    if (tight) return `${at} of ${all}${at === all && all > 1 ? " · first" : ""}`;
+    return `${at} of ${all} · ${end}${hidden}`;
   }
 
   // ---- the settings card (, or the sliders icon) ----
@@ -6954,6 +6992,24 @@ export default class Threads extends View {
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
   filterText() { return jumpTarget(this.query) == null ? this.query.trim() : ""; }
+  // The keys of the turns the search matches, oldest first, from the list's turn keys: a
+  // pin's visit can show a turn that does not match, which is not a match to step to.
+  matchKeys(keys = this.turnKeys(this.rows())) {
+    const q = this.filterText();
+    if (!q) return [];
+    return keys.filter((k) => {
+      const s = this.sessions[Number(k.split(":")[0])];
+      const t = this.findTurn(k);
+      return Boolean(s && t && threadMatches(s.turns, t, q));
+    });
+  }
+  // Where the selection is among the matches, counted from the newest: { at (1 for the
+  // newest, 0 when no match is selected), n }.
+  matchPlace() {
+    const mk = this.matchKeys();
+    const i = mk.indexOf(this.sel);
+    return { at: i < 0 ? 0 : mk.length - i, n: mk.length };
+  }
 
   // Turn n of the newest session that has one.
   jumpKey(n) {
@@ -6966,6 +7022,16 @@ export default class Threads extends View {
   setQuery(text, cx) {
     this.query = text ?? "";
     const n = jumpTarget(this.query);
+    // A search starts at its newest match: the selection moves there unless it is on a match.
+    if (n == null && this.filterText()) {
+      const mk = this.matchKeys();
+      if (mk.length && !mk.includes(this.sel)) {
+        this.sel = mk[mk.length - 1];
+        this.follow = false;
+        this.scrollTo = { key: this.sel, how: "center" };
+      }
+      return;
+    }
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
     if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
@@ -7390,7 +7456,7 @@ export default class Threads extends View {
     const parts = spans(around(text, q), q);
     const nb = (s) => s.replace(/^ | $/g, "\u00a0");
     return h_flex().flex_1().min_w(0).overflow_hidden().children(parts.map((p, i) => p.hit
-      ? div().flex_none().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)
+      ? div().flex_none().rounded(3).bg(this.hlFill(t)).text_color(t.foreground).child(p.t)
       : (i === parts.length - 1 ? div().flex_1().min_w(0).truncate() : div().flex_none()).text_color(color).child(nb(p.t))));
   }
 
@@ -7425,7 +7491,7 @@ export default class Threads extends View {
       if (!q || !l.toLowerCase().includes(q.toLowerCase())) return row.child(div().flex_1().min_w(0).truncate().text_color(color).child(l));
       const parts = spans(l, q);
       return row.children(parts.map((p, i) => p.hit
-        ? div().flex_none().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)
+        ? div().flex_none().rounded(3).bg(this.hlFill(t)).text_color(t.foreground).child(p.t)
         : (i === parts.length - 1 ? div().flex_1().min_w(0).truncate() : div().flex_none()).text_color(color).child(p.t.replace(/^ | $/g, "\u00a0"))));
     }));
   }
@@ -7446,7 +7512,7 @@ export default class Threads extends View {
     const q = this.filterText().toLowerCase();
     const hit = Boolean(q) && label.toLowerCase().includes(q);
     return div().flex_none().h(18).max_w(maxW).flex().items_center().rounded(4)
-      .when(hit, (el) => el.px(3).bg(alpha(t.working, 0.32)))
+      .when(hit, (el) => el.px(3).bg(this.hlFill(t)))
       .text_size(12.5).font_family(this.mono()).text_color(hit || bare ? t.foreground : this.cmdColor(t, selected))
       .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().child(label));
   }
@@ -7461,13 +7527,18 @@ export default class Threads extends View {
     return div().flex_none().w(2).h(h).rounded(1).bg(agent ? t.dim : alpha(t.foreground, 0.28));
   }
 
+  // A search match's fill: the working colour at 32%, and at 60% in the selected turn's rows
+  // (item sets hlCur), so the match the reader is on stands out among the others. It is a
+  // fill only, so no height changes and nothing is reshaped.
+  hlFill(t) { return alpha(t.working, this.hlCur ? 0.6 : 0.32); }
+
   // Wrapped text with the filter's matches marked, word by word.
   hlBlock(t, text, color) {
     const q = this.filterText();
     if (!q || !text.toLowerCase().includes(q.toLowerCase())) return div().text_color(color).child(text);
     return v_flex().children(text.split("\n").map((line) => h_flex().flex_wrap().min_h(LINE).children(
       spans(line, q).flatMap((p) => p.hit
-        ? [div().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)]
+        ? [div().rounded(3).bg(this.hlFill(t)).text_color(t.foreground).child(p.t)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
   }
 
@@ -7960,6 +8031,7 @@ export default class Threads extends View {
   // invisible(): gpui may skip painting a hidden element's subtree, and a size report made
   // at paint would then never come. The zero-height clip and opacity 0 hide it (R3-1).
   probe(t, due) {
+    this.hlCur = false;
     const hash = (x) => { let h = 5381; for (let i = 0; i < x.length; i++) h = ((h * 33) ^ x.charCodeAt(i)) >>> 0; return h.toString(36); };
     return div().absolute().top(0).left(0).w(this.width).h(0).overflow_hidden().opacity(0)
       .child(v_flex().w(this.width).children(due.map(([r, sig]) => v_flex().id(`th-probe-${r.key}-${hash(sig)}`).flex_none().w(this.inner())
@@ -8118,6 +8190,8 @@ export default class Threads extends View {
   }
 
   item(t, r, focusedPanel, size) {
+    // The selected turn's search matches get the stronger fill (hlFill) while its rows draw.
+    this.hlCur = r.turn != null && Boolean(this.sel) && r.turn === this.findTurn(this.sel);
     switch (r.kind) {
       case "spacer": return div();
       case "gap": return div();

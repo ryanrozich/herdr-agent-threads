@@ -15,6 +15,10 @@ const KEYS = {
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
 // Pinned view's header button (the list's header has no pin button).
 const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
+// Under a search, n steps to the next match back in time (older) and Shift n to the newer
+// one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
+// so a quote key someone chose keeps working.
+const SEARCH_KEYS = { n: "olderMatch" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -23,11 +27,12 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const k = e?.key ?? "";
   // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
   // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : null;
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : k === "n" || k === "N" ? (filtering ? null : "newerMatch") : null;
   if (k === "G") return "latest";
   if (k === "W") return filtering ? null : "widthStep";
+  if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : PIN_KEYS[k] ?? null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
@@ -37,7 +42,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
-      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], ...(quoteKey !== "n" ? [[["n", "Shift n"], "Older or newer search match"]] : []), [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
