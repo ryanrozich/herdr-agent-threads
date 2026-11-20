@@ -1689,8 +1689,8 @@ test("a closed turn's message and reply start select by drag, a click that does 
   // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
   // agent's message, a stop's reason) stays a plain line, in its own colour.
   const v2 = views.length;
-  v.selLines(theme, "th-sp-x", ["muted"], theme.muted, 14, 22);
-  v.selLines(theme, "th-sp-y", ["ink"], theme.foreground, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-x", ["muted"], theme.muted, 14, 22);
+  v.selLines(theme, theme.background, "th-sp-y", ["ink"], theme.foreground, 14, 22);
   expect(views.slice(v2).map((x) => x.id)).toEqual(["th-sp-y"]);
   // While a search marks its hits, the lines are plain, so the marks still show.
   v.query = turn.prompt.split(/\s+/)[0];
@@ -1751,16 +1751,16 @@ test("a closed turn's long path breaks after a slash or a hyphen, in a blue bubb
 test("the command name is quiet: no fill, muted, foreground when bare, tinted on a hit", async () => {
   const { v } = await quotePane();
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n]) => n === "bg")).toBe(false);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.muted]);
   expect(rec.find(([n]) => n === "text_size")[1]).toBe(12.5);
   rec = [];
-  v.chip(theme, "/x", 120, true);
+  v.chip(theme, theme.background, "/x", 120, true);
   expect(rec.filter(([n]) => n === "text_color").map(([, c]) => c)).toEqual([theme.foreground]);
   v.query = "review";
   rec = [];
-  v.chip(theme, "/review-pr", 120);
+  v.chip(theme, theme.background, "/review-pr", 120);
   expect(rec.some(([n, c]) => n === "bg" && c === "#d7a00052")).toBe(true);
   v.query = "";
   rec = null;
@@ -1911,7 +1911,7 @@ test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono p
   // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
   // open turn's label and docs/reference.md say.
   rec = [];
-  v.promptBlock(theme, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
+  v.promptBlock(theme, theme.background, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
   const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
   rec = null;
   expect(pasteSizes).toEqual([12.5, 12.5]);
@@ -11789,39 +11789,141 @@ test("the search field's two step buttons: up is older, down is newer, and the o
   expect(newer()).toBeNull();
 });
 
-test("the selected turn's matches get the stronger fill the text allows, the other matches the usual one", async () => {
+// TRD-37: a search match's fill, on every surface a match is drawn on, in a dark and a light
+// theme. The backdrop of each surface is worked out here from the theme alone (what the row
+// and the bubble paint under the text), not read from main.js, so a caller that passes the
+// wrong backdrop fails. In the selected turn the fill is the strongest that keeps the text at
+// 4.5:1 unrounded; where even 34% would not, it stays at 32%, main's floor for every match.
+// Elsewhere it is 32%. A compact pin draws no match fill at all.
+const LIGHT = { ...theme, background: "#ffffff", foreground: "#1b1b1e", muted: "#5f5f6b", dim: "#7a7a85", border: "#e3e3e8", raised: "#f5f5f7", chrome: "#f3f3f5", hover: "#0000000a", selected: "#00000012", accent: "#2563eb", popover: "#ffffff", working: "#996700" };
+test("a match's fill on every surface it is drawn on, dark and light: 4.5:1 unrounded over the real backdrop, or main's 32% floor", async () => {
+  const { mix, ratio } = await import("../mods/agent-threads/ui.js");
+  const over = (c, bg) => (c.length === 9 ? mix(bg, c.slice(0, 7), parseInt(c.slice(7), 16) / 255) : c);
+  const got = {};
+  const check = (T, name, fills, ink, under, strong) => {
+    got[`${T === theme ? "dark" : "light"} ${name}`] = fills.join(" ");
+    expect([name, fills.length > 0]).toEqual([name, true]);
+    for (const f of fills) {
+      const a = parseInt(f.slice(7), 16);
+      if (!strong) { expect([name, a]).toEqual([name, 0x52]); continue; }
+      if (a === 0x52) expect([name, ratio(ink, mix(under, T.working, 0.34)) < 4.5]).toEqual([name, true]);
+      else expect([name, ratio(ink, mix(under, T.working, a / 255)) >= 4.5]).toEqual([name, true]);
+    }
+  };
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await stepPane();
+    const fills = (r) => {
+      rec = [];
+      v.item(T, r, false, 100);
+      const c = rec;
+      rec = null;
+      return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]);
+    };
+    const row = (k, kind = "turn") => v.rows().find((r) => r.key === k && r.kind === kind);
+    const bubble = mix(T.background, T.foreground, 20 / 255); // plain: the text colour at 8%
+    // The prompts: "checkout test" is in turns 5 and 7, and 7, the newest, is selected.
+    v.setQuery("checkout test", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "prompt in a plain bubble, selected", fills(row("0:7")), T.foreground, bubble, true);
+    check(T, "prompt in a plain bubble, not selected", fills(row("0:5")), T.foreground, bubble, false);
+    v.applyPrefs(JSON.stringify({}));
+    settleRows(v, cx);
+    check(T, "prompt in the default blue bubble, selected", fills(row("0:7")), "#ffffff", "#2563EB", true);
+    check(T, "prompt in the default blue bubble, not selected", fills(row("0:5")), "#ffffff", "#2563EB", false);
+    // The open turn's message, in either bubble.
+    v.action("open", cx);
+    settleRows(v, cx);
+    const you = () => v.rows().find((r) => r.kind === "you" && r.turn.n === 7);
+    check(T, "open turn's prompt in the default blue bubble", fills(you()), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "open turn's prompt in a plain bubble", fills(you()), T.foreground, bubble, true);
+    v.action("open", cx);
+    settleRows(v, cx);
+    // Outline lines: the selected one is drawn on the selected fill.
+    v.action("outline:on", cx);
+    settleRows(v, cx);
+    check(T, "outline line, selected", fills(row("0:7", "line")), T.foreground, over(T.selected, T.background), true);
+    check(T, "outline line, not selected", fills(row("0:5", "line")), T.foreground, T.background, false);
+    v.action("outline:off", cx);
+    // Reply text, on the row's background (rows have no fill): every reply says "Done with",
+    // and turn 7 stays selected.
+    v.setQuery("Done with", cx);
+    settleRows(v, cx);
+    expect(v.sel).toBe("0:7");
+    check(T, "reply text, selected", fills(row("0:7")), T.foreground, T.background, true);
+    check(T, "reply text, not selected", fills(row("0:8")), T.foreground, T.background, false);
+  }
+  // A command's name in its bubble, the plain one and the default blue one.
+  for (const T of [theme, LIGHT]) {
+    const { v, cx } = await scripted([
+      { k: "p", o: "human", t: "Tidy the cart page", ts: at(0) }, { k: "t", t: "Tidied." }, { k: "d", ms: 1000, ts: at(1) },
+      { k: "p", o: "human", cmd: true, t: "/checkout-audit now", ts: at(2) }, { k: "t", t: "Audited." }, { k: "d", ms: 1000, ts: at(3) },
+    ]);
+    v.width = 900;
+    v.setQuery("checkout", cx);
+    settleRows(v, cx);
+    const r = v.rows().find((x) => x.kind === "turn" && x.turn.cmd);
+    expect(v.sel).toBe(r.key);
+    const fills = () => { rec = []; v.item(T, r, false, 100); const c = rec; rec = null; return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(T.working)).map((e) => e[1]); };
+    check(T, "command name in the default blue bubble", fills(), "#ffffff", "#2563EB", true);
+    v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+    settleRows(v, cx);
+    check(T, "command name in a plain bubble", fills(), T.foreground, mix(T.background, T.foreground, 20 / 255), true);
+  }
+  // What each surface lands on. The plain bubble is lighter than the pane in the dark theme and
+  // darker in the light one, so its fill differs from the reply text's (and from main's 32%).
+  expect(got).toEqual(EXPECTED_FILLS);
+});
+const EXPECTED_FILLS = {
+  // Dark: 52% (85) on the background, 48% (7a) on the selected fill, 46% (75) in the plain
+  // bubble, and main's 32% floor in the blue bubble, where white is under 4.5:1 even at 34%.
+  "dark reply text, selected": "#d7a00085",
+  "dark reply text, not selected": "#d7a00052",
+  "dark prompt in a plain bubble, selected": "#d7a00075",
+  "dark prompt in a plain bubble, not selected": "#d7a00052",
+  "dark prompt in the default blue bubble, selected": "#d7a00052",
+  "dark prompt in the default blue bubble, not selected": "#d7a00052",
+  "dark open turn's prompt in the default blue bubble": "#d7a00052",
+  "dark open turn's prompt in a plain bubble": "#d7a00075",
+  "dark outline line, selected": "#d7a0007a",
+  "dark outline line, not selected": "#d7a00052",
+  "dark command name in the default blue bubble": "#d7a00052",
+  "dark command name in a plain bubble": "#d7a00075",
+  // Light: 60% (99) everywhere the selected turn's text is, 32% elsewhere.
+  "light reply text, selected": "#99670099",
+  "light reply text, not selected": "#99670052",
+  "light prompt in a plain bubble, selected": "#99670099",
+  "light prompt in a plain bubble, not selected": "#99670052",
+  "light prompt in the default blue bubble, selected": "#99670099",
+  "light prompt in the default blue bubble, not selected": "#99670052",
+  "light open turn's prompt in the default blue bubble": "#99670099",
+  "light open turn's prompt in a plain bubble": "#99670099",
+  "light outline line, selected": "#99670099",
+  "light outline line, not selected": "#99670052",
+  "light command name in the default blue bubble": "#99670099",
+  "light command name in a plain bubble": "#99670099",
+};
+
+// A compact pin in the Pinned view draws its lines without marking matches, selected or not.
+test("a compact pin draws no search match fill, selected or not", async () => {
   const { v, cx } = await stepPane();
+  // Pins are kept across panes, so pin only what is not pinned yet.
+  for (const k of ["0:5", "0:7"]) { v.sel = k; if (!v.isPinnedTurn(v.findTurn(k))) v.action("pin", cx); }
+  v.setView("pinned");
   v.setQuery("checkout test", cx);
   settleRows(v, cx);
-  const fills = (k) => {
+  const pins = v.rows().filter((r) => r.compact);
+  expect(pins.map((r) => r.turn.n)).toEqual(expect.arrayContaining([5, 7]));
+  expect(pins.some((r) => r.key === v.sel || r.turn === v.findTurn(v.sel))).toBe(true);
+  for (const r of pins) {
     rec = [];
-    v.item(theme, v.rows().find((r) => r.key === k), false, 100);
+    v.item(theme, r, false, 100);
     const c = rec;
     rec = null;
-    return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith("#d7a000")).map((e) => e[1]);
-  };
-  // The matches are in the prompts. In the default blue bubble, white text over the working
-  // colour at 32% (52) is 4.54:1 and any stronger fill would take it under 4.5:1, so the
-  // selected turn's match keeps 32% too (ui.js matchFill).
-  expect(v.sel).toBe("0:7");
-  expect(fills("0:7")).toEqual(["#d7a00052"]);
-  expect(fills("0:5")).toEqual(["#d7a00052"]);
-  // In a plain bubble the text is the theme's: the selected turn's match is as strong as that
-  // text allows up to 60%, 52% (85) here, since 60% would take it to 3.9:1.
-  v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
-  settleRows(v, cx);
-  expect(fills("0:7")).toEqual(["#d7a00085"]);
-  expect(fills("0:5")).toEqual(["#d7a00052"]);
-  v.action("olderMatch", cx);
-  settleRows(v, cx);
-  expect(fills("0:5")).toEqual(["#d7a00085"]);
-  expect(fills("0:7")).toEqual(["#d7a00052"]);
-  // The chat rows above have no fill of their own. An outline line of the selected turn sits on
-  // the selected fill (#2a2d3a here), where 52% would leave the text at 4.19:1, so its match is
-  // measured over that fill: 48% (7a) at 4.53:1. Measured over the background, it would be 85.
-  v.action("outline", cx);
-  settleRows(v, cx);
-  expect(v.rows().find((r) => r.key === "0:5").kind).toBe("line");
-  expect(fills("0:5")).toEqual(["#d7a0007a"]);
-  expect(fills("0:7")).toEqual(["#d7a00052"]);
+    expect(c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(theme.working))).toEqual([]);
+  }
 });
