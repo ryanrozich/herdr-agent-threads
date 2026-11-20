@@ -13922,3 +13922,32 @@ test("the bars: an unfinished call's row bar is grey with a 5 px slant; the head
   expect(bgs).toContain(teal);
   expect(bgs).not.toContain(grey);
 });
+
+test("y does nothing in the Chat's Pinned view or in the Pinned column: no Trajectory opens there, and the key passes on", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  let stops = 0;
+  cx.stop_propagation = () => { stops++; };
+  const tryY = () => {
+    log = [];
+    stops = 0;
+    v.key(keyEv("y"), cx);
+    expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+    expect([v.traj, Boolean(v.splitAsk), stops]).toEqual([false, false, 0]);
+  };
+  v.setView("pinned");
+  expect(v.view).toBe("pinned");
+  tryY();
+  v.setView("all");
+  v.pinnedPane = true;
+  tryY();
+  v.width = 420;
+  v.paneW = 420;
+  tryY();
+  // In the Chat's list, y still opens it.
+  v.pinnedPane = false;
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(true);
+});
