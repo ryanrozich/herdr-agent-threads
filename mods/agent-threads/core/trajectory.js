@@ -48,11 +48,20 @@ export function trajectory(s, turn, id = null) {
   for (const st of list ?? []) {
     if (st.k === "text") {
       open().cells.push({ kind: "message", text: st.t, ...(st.r ? { reason: st.r } : {}), ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
+<<<<<<< HEAD
+=======
+      if (st.h) step.held = st.h;
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       continue;
     }
     if (st.k !== "group") continue;
     // Calls with no text before them (the first step, or calls after STEP_MAX) start a step.
     if (!step || step.cells.some((c) => c.kind === "tool")) open();
+<<<<<<< HEAD
+=======
+    // Reasoning withheld (the ATIF export only): counted on the step, its text never kept.
+    if (st.h) step.held = (step.held ?? 0) + st.h;
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     // A group's reasoning joins the step's message cell when it has one (a call that follows a
     // text step), so it is not lost in a second cell nothing reads.
     if (st.r) {
@@ -79,6 +88,14 @@ export function trajectory(s, turn, id = null) {
   addSteps(turn.steps);
   const text = reply(turn);
   if (text || turn.reasoning?.length) open().cells.push({ kind: "message", text, ...(turn.reasoning?.length ? { reason: turn.reasoning.join("\n\n") } : {}), start: at(turn.afterAt), end: at(turn.endTs) });
+<<<<<<< HEAD
+=======
+  // Withheld reasoning after the turn's last step is counted on that step. With no step to
+  // carry it, no step is made for it: the trajectory counts it (heldOut) for the notes.
+  let heldOut = 0;
+  const holdOn = (n) => { if (!n) return; if (step) step.held = (step.held ?? 0) + n; else heldOut += n; };
+  holdOn(turn.held);
+>>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   if (turn.wakes) {
     // The ATIF export's reader (keepWakes): each wake-up's steps, then its last text.
     title = "Update";
@@ -86,7 +103,9 @@ export function trajectory(s, turn, id = null) {
       step = null;
       addSteps(w.steps);
       const last = w.after.join("\n\n").trim();
-      if (last) groups.push({ title, cells: [{ kind: "context", text: last, start: at(w.afterAt), end: null }] });
+      const reason = w.reasoning?.length ? w.reasoning.join("\n\n") : "";
+      if (last || reason) groups.push({ title, cells: [{ kind: "context", text: last, ...(reason ? { reason } : {}), start: at(w.afterAt), end: null }], ...(w.held ? { held: w.held } : {}) });
+      else holdOn(w.held);
     }
   } else if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: null, end: null }] });
   return {
@@ -96,6 +115,7 @@ export function trajectory(s, turn, id = null) {
     end: at(turn.endTs),
     done: Boolean(turn.done),
     ...(turn.interrupted ? { interrupted: true } : {}),
+    ...(heldOut ? { heldOut } : {}),
     groups,
   };
 }
