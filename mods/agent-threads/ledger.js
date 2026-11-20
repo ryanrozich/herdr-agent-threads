@@ -449,6 +449,18 @@ export function ledgerStatus(t, width, going = false) {
   return out;
 }
 
+// A row's start and duration columns as text, and whether it draws a bar of its duration. A
+// row that says "no result" shows no duration and no bar: what time it has is the launch
+// call's, which the detail keeps.
+export function rowTimes(r) {
+  const none = r.status === "no result";
+  return {
+    start: r.start != null ? startText(r.start) : r.startQ ? "?" : "",
+    dur: none ? "" : r.dur != null ? durText(r.dur) : r.durQ ? "?" : "",
+    bar: !none && r.dur != null && r.lk !== "more",
+  };
+}
+
 // ---- the detail ----
 // What the detail says about a row: its tag and title, its fields as [label, value] and its
 // whole words (null for none). A heading's detail is its turn's numbers. A call with no result

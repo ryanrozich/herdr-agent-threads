@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
-  BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds,
+  BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds, rowTimes,
 } from "../mods/agent-threads/ledger.js";
 import { fmtTime } from "../mods/agent-threads/core/turns.js";
 
@@ -360,4 +360,26 @@ test("ledger detail: no result says 'interrupted' only for a turn marked so, wit
   expect(field(c, "Result")).toBe("No result: the turn was interrupted");
   // No detail says interrupted for a turn that was not.
   for (const r of ledgerTurn(S, done, 0, false, { ends: true }).rows) expect(JSON.stringify(detailOf(r).fields)).not.toContain("interrupted");
+});
+
+test("ledger rows: a row that says no result shows no duration, and its detail keeps the launch call's time", () => {
+  // Three subagents launched in the background, then the turn was cut off: each launch took 2 s,
+  // and none of the runs is known to have finished.
+  const t = turn(19, [[["Agent", "Review range math", 1000, 3000]]], { done: false, end: null, reply: null, agent: true });
+  const s = { agents: new Map([[t.steps[0].ids[0], { st: "async_launched", tok: null, ms: null }]]), agentIds: new Map() };
+  const rows = ledgerTurn(s, t, 0, false, { ends: true }).rows;
+  const r = rows.find((x) => x.status === "no result");
+  expect(r).toBeTruthy();
+  expect(r.dur).toBe(2000);
+  expect(rowTimes(r).dur).toBe("");
+  expect(detailOf(r).fields).toContainEqual(["Took", "2s"]);
+  // Every row of these turns that says "no result" has an empty duration column.
+  const cut = turn(20, [[["Bash", "bun run e2e", 2000, null]]], { done: false, end: null, reply: null });
+  for (const x of [...rows, ...ledgerTurn(S, cut, 0, false, { ends: true }).rows]) if (x.status === "no result") expect(rowTimes(x).dur).toBe("");
+  // A finished call keeps its duration.
+  const ok = ledgerTurn(S, turn(21, [[["Read", "a", 1000, 1200]]]), 0).rows.find((x) => x.lk === "tool");
+  expect(rowTimes(ok).dur).toBe(durText(200));
+  expect(rowTimes(ok).bar).toBe(true);
+  // Nor does the row draw the launch's time as a bar.
+  expect(rowTimes(r).bar).toBe(false);
 });
