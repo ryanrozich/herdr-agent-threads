@@ -184,7 +184,8 @@ const TRAJ_COL = 560;
 // yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
 const DAY_MS = 86400000;
-// The list's commands (keys.json) as the Trajectory's moves.
+// In the Trajectory, the list's commands from keys.json move through the ledger; the others
+// it does not mean do nothing there (ledgerAction).
 const LEDGER_CMD = { prev: "lprev", next: "lnext", first: "lfirst", latest: "llast", open: "ldetail" };
 // shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
 const FIT_KEY = "threads.fit";
@@ -9582,7 +9583,10 @@ export default class Threads extends View {
         if (this.detailOpen()) { this.tdetail = false; return true; }
         if (this.traj && !this.trajPane) { this.leaveTraj(); return true; }
         return false;
-      default: return this.action(name, cx);
+      // The few of the Chat's actions the Trajectory means. Any other (a bound pin, copy, the
+      // outline) would act on the Chat's selection, which the Trajectory does not show.
+      case "focus": case "settings": case "keys": case "narrower": case "wider": return this.action(name, cx);
+      default: return false;
     }
   }
   ledgerFilter(key) {

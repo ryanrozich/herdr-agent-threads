@@ -12445,3 +12445,25 @@ test("y does nothing in the Chat's Pinned view or in the Pinned column: no Traje
   v.key(keyEv("y"), cx);
   expect(v.traj).toBe(true);
 });
+
+test("in the Trajectory, a bound command the ledger does not mean does nothing: a bound pin pins no hidden turn", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.sel = v.turnKeys(v.rows()).at(-1);
+  v.enterTraj();
+  const pins = v.pinnedList().length;
+  log = [];
+  for (const name of ["pin", "copy", "outline", "agents", "jump", "pinned"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    v.command(name, cx);
+  }
+  expect(v.pinnedList().length).toBe(pins);
+  expect(cx.clip).toBe(null);
+  expect(v.traj).toBe(true);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  // The ones it means still work: its moves, the detail, the key sheet.
+  expect(v.ledgerAction("keys", cx)).toBe(true);
+  expect(v.keysOpen).toBe(true);
+  v.command("open", cx);
+});
