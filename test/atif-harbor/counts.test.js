@@ -1,10 +1,7 @@
 // Adapted from harbor-framework/harbor, tests/unit/agents/installed/test_claude_code_trajectory.py
 // and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0).
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Case inventory and omissions: differences.js.
-<<<<<<< HEAD
-=======
 // Changed from Harbor's original: nothing here is Harbor's code; it checks our record of Harbor's items adds up.
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

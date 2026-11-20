@@ -120,13 +120,8 @@ while :; do
               my $w = substr($_, 0, 4096) . substr($_, -1024);
               my $f = $w =~ /\\"exit_code\\":-?[1-9]|"exit_code":-?[1-9]|\\"success\\":false|(?:^|\\n|")(?:Script failed|aborted|Process exited with code [1-9]|Exit code: [1-9])|tool failed/ ? "true" : "false";
               printf qq({"type":"_x","timestamp":%s,"payload":{"call_id":"%s","f":%s}}\n), defined $ts ? qq("$ts") : "null", $id, $f; next }
-<<<<<<< HEAD
-            print unless /"type":"(?:session_meta|world_state|token_usage_record|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/ || ($ENV{THREADS_REASONING} ne "1" && /"type":"reasoning"/) ' \
-        | lines | jq -c -f "$here/extract-codex.jq"; } > "$out"
-=======
             print unless /"type":"(?:session_meta|world_state|token_usage_record|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/ || (!$keep && /"type":"reasoning"/)' "$reasoning" \
         | lines | jq -c --arg reasoning "$reasoning" -f "$here/extract-codex.jq"; } > "$out"
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every
       # type except user, assistant, attachment, system, custom-title and agent-name, every attachment but

@@ -90,10 +90,6 @@ def response_item($l; $p):
   if $p.type == "message" and $p.role == "assistant" then
     ($p.content | blocks_text) as $t
     | if ($t | length) > 0 then {k: "t", t: ($t | cap), ts: $l.timestamp} else empty end
-<<<<<<< HEAD
-  elif $p.type == "reasoning" and ($ENV.THREADS_REASONING // "") == "1" then
-    {k: "h", t: ([$p.summary[]? | select(.type == "summary_text") | .text | tostring | gsub("^\\s+|\\s+$"; "") | cap] | join("\n\n")), ts: $l.timestamp}
-=======
   elif $p.type == "reasoning" and ($ARGS.named.reasoning // "") == "1" then
     # The ATIF export only (extract.sh's "reasoning" argument): the summary's text, else the
     # item's own reasoning text (content), else a mark that the reasoning was withheld
@@ -102,7 +98,6 @@ def response_item($l; $p):
     | (if ($s | length) > 0 then $s
        else [$p.content[]? | select(type == "object" and (.type == "reasoning_text" or .type == "text")) | .text | tostring | gsub("^\\s+|\\s+$"; "") | cap] | join("\n\n") end | cap) as $r
     | if ($r | length) > 0 then {k: "h", t: $r, ts: $l.timestamp} else {k: "h", w: 1, ts: $l.timestamp} end
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   elif $p.type == "function_call" or $p.type == "custom_tool_call" then {k: "u", n: ($p.name // "tool"), id: $p.call_id, ts: $l.timestamp, in: ($p | brief)}
   elif $p.type == "web_search_call" then {k: "u", n: "web_search", ts: $l.timestamp, in: (($p.action.query // "") | tostring | .[0:120])}
   elif $p.type == "local_shell_call" then {k: "u", n: "shell", id: $p.call_id, ts: $l.timestamp, in: ($p | brief)}
