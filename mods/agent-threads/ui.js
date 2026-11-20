@@ -34,6 +34,25 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
 }
+// The settings card's ring keys (issue 104): Tab and Shift-Tab move the card's ring ("next",
+// "back"), and Enter and Space press the control it is on ("press") while it is on one that is
+// not a text field (ringOn). Chords with cmd, ctrl, alt or fn are Herdr's (ctrl-tab). Without
+// the ring, Space scrolls the card (cardKey).
+export function ringKey(e, ringOn) {
+  const m = e?.modifiers ?? {};
+  if (!e || m.platform || m.control || m.alt || m.function) return null;
+  if (e.key === "tab") return m.shift ? "back" : "next";
+  if (m.shift || !ringOn) return null;
+  return e.key === "enter" || e.key === "space" ? "press" : null;
+}
+// The stop after `cur` in `ids` (step 1) or before it (step -1), round the ends; from none (or
+// one no longer drawn), the first or the last.
+export function nextStop(ids, cur, step) {
+  if (!ids.length) return null;
+  const i = ids.indexOf(cur);
+  if (i < 0) return step > 0 ? ids[0] : ids[ids.length - 1];
+  return ids[(i + step + ids.length) % ids.length];
+}
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
@@ -59,7 +78,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ["Settings card", [
       [["↑", "↓", "j", "k"], "Scroll the card"], [["PgUp", "PgDn", "Space"], "Scroll it a page"], [["Home", "End"], "Its top or its end"],
-      [["Esc", ","], "Close it"],
+      [["Tab", "Shift Tab"], "Next or previous control, then ↵ or Space to press it"], [["Esc", ","], "Close it"],
     ]],
     ["View", [
       [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],

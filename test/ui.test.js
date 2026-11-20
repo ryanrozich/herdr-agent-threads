@@ -968,9 +968,9 @@ test("? opens the key sheet, as ? or Shift-/, but not while the search field typ
 
 test("the key sheet lists every key the panel takes, and a pin key gives way to a quote key of the same letter", () => {
   const shown = (q) => new Set(keySheet(q).flatMap(([, items]) => items.flatMap(([keys]) => keys)));
-  const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End" };
+  const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End", tab: "Tab" };
   const all = shown("q");
-  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G"]) {
+  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G", "tab"]) {
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
@@ -1491,4 +1491,29 @@ test("ringStep: the ring's eighths, empty only at 0% and full only at 100%", () 
   expect([null, undefined, -5, Number.NaN].map(ringStep)).toEqual([0, 0, 0, 0]);
   // Each step has its icon.
   for (let k = 0; k <= 8; k++) expect(existsSync(join(import.meta.dir, `../mods/agent-threads/ring-${k}.svg`))).toBe(true);
+});
+
+test("ringKey: Tab and Shift-Tab move the card's ring, Enter and Space press while a control has it; chords are Herdr's. nextStop goes round the ends", async () => {
+  const { ringKey, nextStop, cardKey } = await import("../mods/agent-threads/ui.js");
+  const k = (key, m = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...m } });
+  expect(ringKey(k("tab"), false)).toBe("next");
+  expect(ringKey(k("tab", { shift: true }), false)).toBe("back");
+  for (const m of ["control", "alt", "platform", "function"]) expect(ringKey(k("tab", { [m]: true }), true)).toBe(null);
+  expect(ringKey(k("enter"), true)).toBe("press");
+  expect(ringKey(k("space"), true)).toBe("press");
+  expect(ringKey(k("enter"), false)).toBe(null);
+  expect(ringKey(k("space"), false)).toBe(null);
+  expect(ringKey(k("enter", { shift: true }), true)).toBe(null);
+  expect(ringKey(k("j"), true)).toBe(null);
+  expect(ringKey(null, true)).toBe(null);
+  // Without the ring, Space is still the card's page down.
+  expect(cardKey(k("space"))).toBe("pagedown");
+  const ids = ["a", "b", "c"];
+  expect(nextStop(ids, null, 1)).toBe("a");
+  expect(nextStop(ids, null, -1)).toBe("c");
+  expect(nextStop(ids, "a", 1)).toBe("b");
+  expect(nextStop(ids, "c", 1)).toBe("a");
+  expect(nextStop(ids, "a", -1)).toBe("c");
+  expect(nextStop(ids, "gone", 1)).toBe("a");
+  expect(nextStop([], "a", 1)).toBe(null);
 });

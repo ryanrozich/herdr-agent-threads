@@ -6766,9 +6766,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 36 rows.
+  // Six groups (the settings card's keys among them), 37 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -12077,4 +12077,392 @@ test("a pasted block keeps its long hyphenated tokens as typed, while the messag
   expect(paste.draw.includes(B)).toBe(false);
   expect(paste.rows).toBeNull();
   expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+});
+
+// ---- the settings card's keys (issue 104): Tab, Shift-Tab, Enter and Space, and the ring ----
+
+const tabEv = (shift = false) => ({ key: "tab", keystroke: shift ? "shift-tab" : "tab", modifiers: { shift, control: false, alt: false, platform: false, function: false } });
+const stopsOf = (v) => { cardOf(v); return v.cardStops.map((s) => s.id); };
+const ringed = (c) => idsIn(c).filter((id) => ownOf(c, id).some((e) => e[0] === "top" && e[1] === -3) && ownOf(c, id).some((e) => e[0] === "border_color" && e[1] === theme.accent));
+const pressKey = (v, cx, key, extra = {}) => { let stopped = 0; v.key({ ...keyEv(key), ...extra }, { ...cx, stop_propagation() { stopped++; } }); return stopped; };
+async function cardPane() {
+  const r = await pane(fixture("--extra", "4", "--agents"));
+  r.v.width = 545; r.v.paneW = 573; r.v.rootH = 700;
+  r.v.action("settings", r.cx);
+  return r;
+}
+const SWATCHES = (key) => ["slate", "plum", "blue", "purple", "teal", "green", "amber", "rose", "gray", "plain"].map((n) => `th-${key}-${n}`);
+
+test("card keys: Tab goes through every control of the card in the order they are drawn, section by section", async () => {
+  const { v } = await cardPane();
+  expect(stopsOf(v)).toEqual(["th-set-close",
+    "th-textSize-minus", "th-textSize-plus", ...SWATCHES("bubbleColor"), "th-set-truncate", "th-set-time",
+    "th-set-agents", "th-set-agent-rail", ...SWATCHES("agentBubbleColor"), "th-set-senders",
+    "th-width-comfortable", "th-width-wide", "th-width-full", "th-set-width", "th-rail-left", "th-rail-right", "th-set-hints", "th-set-status",
+    "th-set-links", "th-set-quote", "th-set-copy", "th-set-reset", "th-set-keys"]);
+  v.prefs = { ...v.prefs, truncate: true };
+  const all = stopsOf(v);
+  expect(all.slice(all.indexOf("th-set-truncate"), all.indexOf("th-set-time") + 1))
+    .toEqual(["th-set-truncate", "th-promptLines-minus", "th-promptLines-plus", "th-replyLines-minus", "th-replyLines-plus", "th-set-time"]);
+});
+
+test("card keys: the Link rules page goes Back, Close, then each rule's Edit, Delete and switch, Add rule, Copy path; an open rule's controls sit in its place", async () => {
+  const { v } = await rulesPane();
+  try {
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close",
+      "th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-on-1", "th-rule-edit-btn-2", "th-rule-delete-btn-2", "th-rule-on-2",
+      "th-rule-add", "th-set-copy", "th-set-keys"]);
+    v.openRule(1);
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close",
+      "th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-on-1",
+      "th-rule-type-change", "th-rule-f-name", "th-rule-f-description", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-url", "th-rule-f-example",
+      "th-rule-open", "th-rule-keep", "th-rule-discard", "th-rule-up", "th-rule-dup", "th-rule-delete",
+      "th-set-copy", "th-set-keys"]);
+    v.closeRule();
+    v.openRule(null);
+    const s = stopsOf(v);
+    expect(s.slice(s.indexOf("th-rule-on-2") + 1, s.indexOf("th-set-copy")))
+      .toEqual(["th-rule-type-custom", "th-rule-type-ticket", "th-rule-type-pull-request", "th-rule-f-name", "th-rule-f-description", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-url", "th-rule-f-example", "th-rule-keep", "th-rule-discard"]);
+    v.closeRule();
+    // No rules: the examples' Use buttons, then Add rule.
+    v.applyPrefs(JSON.stringify({ textSize: 15, links: [] }));
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-rule-use-ticket", "th-rule-use-pull-request", "th-rule-add", "th-set-copy", "th-set-keys"]);
+  } finally { done(v); }
+});
+
+test("card keys: Tab and Shift-Tab move one ring round the card, the pane keeps the keyboard, and nothing else appears", async () => {
+  const { v, cx } = await cardPane();
+  const ids = stopsOf(v);
+  const before = strsOf(cardOf(v));
+  expect(ringed(cardOf(v))).toEqual([]); // opening the card shows no ring
+  const toasts = v.toast;
+  const f0 = focusCalls;
+  expect(pressKey(v, cx, "tab", tabEv())).toBe(1);
+  expect(v.cardRing).toBe(ids[0]);
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([ids[0]]);
+  // The ring: 2 px of the accent, 3 px outside the control, round its corners.
+  for (const x of [["absolute"], ["top", -3], ["left", -3], ["right", -3], ["bottom", -3], ["border_2"], ["border_color", theme.accent]]) expect(ownOf(c, ids[0])).toContainEqual(x);
+  // Nothing but the ring: the same words, no toast, no new element besides the ring.
+  expect(strsOf(c)).toEqual(before);
+  expect(v.toast).toBe(toasts);
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe(ids[1]);
+  pressKey(v, cx, "tab", tabEv(true));
+  pressKey(v, cx, "tab", tabEv(true));
+  expect(v.cardRing).toBe(ids.at(-1)); // round the start to the end
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe(ids[0]); // and back
+  expect(focusCalls).toBe(f0); // the pane had the keyboard all along
+  expect(v.fieldFocused).toBe(null);
+  // Shift-Tab with no ring starts at the end.
+  v.cardRing = null;
+  pressKey(v, cx, "tab", tabEv(true));
+  expect(v.cardRing).toBe(ids.at(-1));
+  // Ctrl-Tab and Cmd-Tab are Herdr's and the system's.
+  v.cardRing = null;
+  expect(pressKey(v, cx, "tab", { modifiers: { ...tabEv().modifiers, control: true } })).toBe(0);
+  expect(pressKey(v, cx, "tab", { modifiers: { ...tabEv().modifiers, platform: true } })).toBe(0);
+  expect(v.cardRing).toBe(null);
+  // With the card shut Tab is not the pane's.
+  v.closeSettings();
+  expect(pressKey(v, cx, "tab", tabEv())).toBe(0);
+  expect(v.action("ring:next", cx)).toBe(false);
+});
+
+test("card keys: Enter and Space press the control with the ring, as a click does; without a ring they do what they did", async () => {
+  const { v, cx } = await cardPane();
+  stopsOf(v);
+  v.cardRing = "th-set-truncate";
+  const was = Boolean(v.prefs.truncate);
+  expect(pressKey(v, cx, "enter")).toBeGreaterThan(0); // the key stops here
+  expect(Boolean(v.prefs.truncate)).toBe(!was);
+  stopsOf(v);
+  pressKey(v, cx, "space");
+  expect(Boolean(v.prefs.truncate)).toBe(was);
+  expect(v.cardRing).toBe("th-set-truncate");
+  // A choice, a stepper and a color dot.
+  v.cardRing = "th-width-full"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.width).toBe("full");
+  const size = v.prefs.textSize;
+  v.cardRing = "th-textSize-plus"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.textSize).toBe(size + 1);
+  v.cardRing = "th-bubbleColor-teal"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.bubbleColor).toBe("teal");
+  expect(ringed(cardOf(v))).toEqual(["th-bubbleColor-teal"]);
+  // The same press through the command the key runs (how the rig drives it).
+  v.cardRing = "th-bubbleColor-rose"; stopsOf(v);
+  expect(v.action("ring:press", cx)).toBe(true);
+  expect(v.prefs.bubbleColor).toBe("rose");
+  // No ring: Enter is the list's and Space scrolls the card; no control on the card is pressed.
+  v.cardRing = null;
+  const prefs = JSON.stringify(v.prefs);
+  pressKey(v, cx, "enter");
+  pressKey(v, cx, "space");
+  expect(JSON.stringify(v.prefs)).toBe(prefs);
+  expect(v.cardRing).toBe(null);
+});
+
+test("card keys: a text field takes the keyboard while the ring is on it and hands it back to the pane when Tab leaves; Enter and Space stay the field's", async () => {
+  const { v, cx } = await cardPane();
+  let fieldFocus = 0;
+  v.quoteInput.focus = () => { fieldFocus++; };
+  stopsOf(v);
+  v.cardRing = "th-set-links";
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe("th-set-quote");
+  expect([fieldFocus, v.fieldFocused]).toEqual([1, "quote"]);
+  // The field shows it has the keys by its own accent edge, not a second ring.
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([]);
+  expect(ownOf(c, "th-set-quote")).toContainEqual(["border_color", theme.accent]);
+  // Space and Enter are the field's: not pressed, not stopped.
+  expect(pressKey(v, cx, "space")).toBe(0);
+  expect(pressKey(v, cx, "enter")).toBe(0);
+  const f0 = focusCalls;
+  pressKey(v, cx, "tab", tabEv());
+  expect([v.cardRing, v.fieldFocused, focusCalls]).toEqual(["th-set-copy", null, f0 + 1]);
+  pressKey(v, cx, "tab", tabEv(true));
+  pressKey(v, cx, "tab", tabEv(true));
+  expect([v.cardRing, v.fieldFocused]).toEqual(["th-set-links", null]);
+  // A field clicked into: Tab goes on from it.
+  v.cardRing = null;
+  v.quoteInput.handlers.focus({}, cx);
+  stopsOf(v);
+  pressKey(v, cx, "tab", tabEv());
+  expect([v.cardRing, v.fieldFocused]).toEqual(["th-set-copy", null]);
+});
+
+test("card keys: where the ring goes when a press takes its control away (Link rules, Back, Edit, Delete, Undo, Keep, Discard)", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    v.cardRing = "th-set-links"; stopsOf(v);
+    pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["links", "th-set-back"]);
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["main", "th-set-links"]);
+    v.setPage = "links";
+    // Edit: into the rule, at its first control; Esc back to Edit.
+    v.cardRing = "th-rule-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([0, "th-rule-type-change"]);
+    expect(ringed(cardOf(v))).toEqual(["th-rule-type-change"]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen, v.cardRing]).toEqual([null, true, "th-rule-edit-btn-1"]);
+    // Delete: Undo in its place takes the ring; Undo gives it to the rule's Edit again.
+    v.cardRing = "th-rule-delete-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([RULES[1]]);
+    expect(v.cardRing).toBe("th-rule-undo");
+    expect(ringed(cardOf(v))).toEqual(["th-rule-undo"]);
+    stopsOf(v); pressKey(v, cx, "space");
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+    expect(v.cardRing).toBe("th-rule-edit-btn-1");
+    // Keep rule: back on the kept rule's Edit. Discard of a new rule: back on Add rule.
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-edit-btn-2"]);
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([null, "th-rule-type-custom"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-add"]);
+    // Delete from the open rule: Undo again.
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-delete"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-undo"]);
+    // Keep rule that would not run: the ring goes to the field that says why, which takes the keys.
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.ruleEdit).not.toBe(null);
+    expect(v.cardRing).toBe("th-rule-f-pattern");
+    expect(v.fieldFocused).toBe("rule-pattern");
+  } finally { done(v); }
+});
+
+test("card keys: the card closing (x, Esc, ? keys, a press elsewhere) drops the ring, and the pane keeps or takes back the keyboard", async () => {
+  const { v, cx } = await cardPane();
+  v.cardRing = "th-set-close"; stopsOf(v);
+  pressKey(v, cx, "enter");
+  expect([v.settingsOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, null]);
+  // It opens again with no ring.
+  v.action("settings", cx);
+  expect(v.cardRing).toBe(null);
+  v.cardRing = "th-set-keys"; stopsOf(v);
+  pressKey(v, cx, "space");
+  expect([v.settingsOpen, v.keysOpen, v.cardRing]).toEqual([false, true, null]);
+  v.action("keys", cx);
+  // Esc from a field: the pane takes the keyboard back.
+  v.action("settings", cx);
+  v.quoteInput.focus = () => {};
+  v.cardRing = "th-set-links"; stopsOf(v);
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.fieldFocused).toBe("quote");
+  const f0 = focusCalls;
+  pressKey(v, cx, "escape");
+  expect([v.settingsOpen, v.cardRing, v.fieldFocused, focusCalls]).toEqual([false, null, null, f0 + 1]);
+  // A press in another pane closes it without taking the keyboard from there.
+  v.action("settings", cx);
+  v.cardRing = "th-set-agents";
+  const f1 = focusCalls;
+  onOf(frame(v, cx), "th-set-card", "on_mouse_down_out")({}, cx);
+  expect([v.settingsOpen, v.cardRing, focusCalls]).toEqual([false, null, f1]);
+});
+
+test("card keys: a pointer press on the card takes the ring away, and a click never shows one", async () => {
+  const { v, cx } = await cardPane();
+  v.cardRing = "th-set-agents";
+  const c = cardOf(v);
+  const down = c.find((e) => e[0] === "on_mouse_down" && e[1] === "left" && ownOf(c, "th-set-card").includes(e));
+  expect(down).toBeTruthy();
+  down.at(-1)({}, cx);
+  expect(v.cardRing).toBe(null);
+  onOf(cardOf(v), "th-set-truncate", "on_click")({}, cx);
+  expect(v.cardRing).toBe(null);
+  expect(ringed(cardOf(v))).toEqual([]);
+  // A pointer press that opens a rule or deletes one shows no ring either.
+  const r = await rulesPane();
+  try {
+    onOf(cardOf(r.v), "th-rule-edit-btn-1", "on_click")({}, r.cx);
+    expect(r.v.cardRing).toBe(null);
+    r.v.closeRule();
+    onOf(cardOf(r.v), "th-rule-delete-btn-1", "on_click")({}, r.cx);
+    await settleAll(r.cx);
+    expect(r.v.cardRing).toBe(null);
+    expect(ringed(cardOf(r.v))).toEqual([]);
+  } finally { done(r.v); }
+});
+
+test("card keys: a ring whose control went another way (a file change, a switch) moves to the control now in its place", async () => {
+  const { v, cx } = await cardPane();
+  v.prefs = { ...v.prefs, truncate: true };
+  stopsOf(v);
+  v.cardRing = "th-replyLines-plus";
+  stopsOf(v);
+  v.prefs = { ...v.prefs, truncate: false };
+  // This frame draws no ring and takes the control at the ring's place; the next shows it.
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([]);
+  expect(v.cardRing).toBe("th-set-time");
+  expect(ringed(cardOf(v))).toEqual(["th-set-time"]);
+  // Drawn with a frame's context, the card asks for the next frame itself.
+  v.cardRing = "gone";
+  cx.timers = [];
+  rec = []; v.settingsCard(theme, cx); rec = null;
+  expect(cx.timers.length).toBe(1);
+  cx.timers = [];
+});
+
+test("card keys: Change, a type, Move up and Duplicate keep the ring on the open rule", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-type-change"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-rule-type-custom"); // its own type's row
+    expect(stopsOf(v)).toContain("th-rule-type-custom");
+    v.cardRing = "th-rule-type-ticket"; pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.type, v.cardRing]).toEqual(["ticket", "th-rule-type-change"]);
+    // Move up to the top: the button goes, Duplicate beside it takes the ring.
+    v.cardRing = "th-rule-up"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect([v.ruleEdit.at, v.cardRing]).toEqual([0, "th-rule-dup"]);
+    expect(ringed(cardOf(v))).toEqual(["th-rule-dup"]);
+    // Duplicate: the copy opens under it at its first control; Discard goes back where the first opened from.
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.cardRing]).toEqual([null, "th-rule-type-change"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-edit-btn-2"]);
+  } finally { done(v); }
+});
+
+// The Sender rules page (and its row on the card) take the ring as the Link rules page does.
+
+test("card keys: the Sender rules page goes Back, Close, each rule's Edit, Delete and switch (none on a rule that is not working), Add rule, Copy path; an open rule's controls sit in its place", async () => {
+  const { v } = await sendersPane();
+  try {
+    const rows = (ns) => ns.flatMap((n) => [`th-sender-edit-btn-${n}`, `th-sender-delete-btn-${n}`, ...(n === 3 ? [] : [`th-sender-on-${n}`])]);
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1, 2, 3, 4, 5]), "th-rule-add", "th-set-copy", "th-set-keys"]);
+    // A kept rule found by its pattern: Change, Name, Pattern and its Reference, Example, the buttons.
+    v.openRule(1, null, null, "senders");
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1]),
+      "th-sender-type-change", "th-rule-f-name", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-example",
+      "th-rule-keep", "th-rule-discard", "th-rule-up", "th-rule-dup", "th-rule-delete",
+      ...rows([3, 4, 5]), "th-set-copy", "th-set-keys"]);
+    v.closeRule();
+    // A new rule, under the list: both types, then Starts with in place of Pattern.
+    v.openRule(null, null, null, "senders");
+    const s = stopsOf(v);
+    expect(s.slice(s.indexOf("th-sender-on-5") + 1, s.indexOf("th-set-copy")))
+      .toEqual(["th-sender-type-prefix", "th-sender-type-pattern", "th-rule-f-name", "th-rule-f-prefix", "th-rule-f-example", "th-rule-keep", "th-rule-discard"]);
+    v.closeRule();
+    // No rules: the examples' Use buttons, then Add rule.
+    v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-sender-use-brackets", "th-sender-use-from", "th-rule-add", "th-set-copy", "th-set-keys"]);
+  } finally { done(v); }
+});
+
+test("card keys: on Sender rules the ring follows a press the way it does on Link rules (the row, Back, Edit, Change, a type, the switch, Delete, Undo, Keep, Discard, Use)", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    v.setPage = "main";
+    v.cardRing = "th-set-senders"; stopsOf(v);
+    pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["senders", "th-set-back"]);
+    stopsOf(v); pressKey(v, cx, "space");
+    expect([v.setPage, v.cardRing]).toEqual(["main", "th-set-senders"]);
+    v.setPage = "senders";
+    // Edit: into the rule at Change; Change to its own type's row; the other type folds the
+    // rows back, and the ring goes to Change; Esc back to Edit.
+    v.cardRing = "th-sender-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([0, "th-sender-type-change"]);
+    expect(ringed(cardOf(v))).toEqual(["th-sender-type-change"]);
+    pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-sender-type-prefix");
+    expect(stopsOf(v)).toContain("th-sender-type-prefix");
+    v.cardRing = "th-sender-type-pattern"; pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.by, v.cardRing]).toEqual(["pattern", "th-sender-type-change"]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen, v.cardRing]).toEqual([null, true, "th-sender-edit-btn-1"]);
+    // The switch: pressed in place.
+    v.cardRing = "th-sender-on-1"; stopsOf(v); pressKey(v, cx, "space");
+    await settleAll(cx);
+    expect(lastSenders()[0].on).toBe(false);
+    expect(v.cardRing).toBe("th-sender-on-1");
+    // Delete: Undo takes the ring; Undo gives it to the rule's Edit again.
+    v.cardRing = "th-sender-delete-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Broken", "Bare", "Miss"]);
+    expect(v.cardRing).toBe("th-rule-undo");
+    expect(ringed(cardOf(v))).toEqual(["th-rule-undo"]);
+    stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Bare", "Miss"]);
+    expect(v.cardRing).toBe("th-sender-edit-btn-2");
+    // Keep rule: back on the kept rule's Edit. Add rule, then Discard: back on Add rule.
+    v.cardRing = "th-sender-edit-btn-4"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-sender-edit-btn-4"]);
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at, v.cardRing]).toEqual(["senders", null, "th-sender-type-prefix"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-add"]);
+    // Keep rule that would not run: the ring goes to the field that says why, which takes the keys.
+    let focused = 0;
+    v.senderInputs.prefix.focus = () => { focused++; };
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.cardRing, v.fieldFocused, focused]).toEqual(["senders", "th-rule-f-prefix", "rule-sender-prefix", 1]);
+    // Shift-Tab out of the field: back to Name, which takes the keys in its place.
+    let named = 0;
+    v.senderInputs.name.focus = () => { named++; };
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect([v.cardRing, v.fieldFocused, named]).toEqual(["th-rule-f-name", "rule-sender-name", 1]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen]).toEqual([null, true]);
+    // No rules: Use opens the example's rule at its first control.
+    v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
+    v.cardRing = "th-sender-use-from"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.cardRing]).toEqual(["senders", "th-sender-type-prefix"]);
+  } finally { done(v); }
 });

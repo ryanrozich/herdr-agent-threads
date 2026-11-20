@@ -56,7 +56,7 @@ import {
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
-  keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
+  keyAction, ringKey, nextStop, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
@@ -214,6 +214,8 @@ const CARD_SECTIONS = [
 const cardPad = (w) => (w < 320 ? 12 : 16);
 // A color dot on the card, across (settings-spacing 2).
 const SWATCH = 24;
+// The card's keyboard ring: how far outside its control it is drawn (issue 104).
+const RING_OUT = 3;
 // A text button's size: the usual, and the card's, which is the height of its rows' controls.
 const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
 const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
@@ -865,6 +867,11 @@ export default class Threads extends View {
     this.quoteDraft = null;
     this.fieldFocused = null;
     this.quoteFileNote = null;
+    // The card's keys (issue 104): the control with the ring (its id, null: none), the order
+    // it was last drawn in, and the order as the card draws it, [{ id, press, field }].
+    this.cardRing = null;
+    this.ringIds = [];
+    this.cardStops = [];
     this.linkList = [];
     this.senderList = [];
     // The Link rules and Sender rules pages: the rule open in the editor (null: none), the
@@ -978,7 +985,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
@@ -1285,15 +1292,77 @@ export default class Threads extends View {
     this.leaveLinks();
     this.quoteDraft = null;
     this.setQuoteField(this.quoteKey);
+    this.cardRing = null;
     this.h.focus();
     return true;
   }
-  // Closes the card. A field in it that had the keyboard hands it back to the pane.
+  // Closes the card. A field in it that had the keyboard hands it back to the pane; else the
+  // pane has it already, or another pane took it with the press that closed the card.
   closeSettings() {
     this.settingsOpen = false;
+    this.cardRing = null;
     this.leaveLinks();
     this.dropField();
   }
+
+  // ---- the settings card's keys (issue 104) ----
+  //
+  // The pane keeps the keyboard while the card is open; only a text field on the card takes
+  // it, while the ring is on that field. Tab and Shift-Tab move a ring through the card's
+  // controls in the order they are drawn (cardStop), round the ends, and Enter and Space press
+  // the control it is on, as a click does. So the panel's keys and one Esc work whatever the
+  // ring is on, and nothing has to hand the keyboard back when the card closes or a control
+  // goes. The ring shows only after Tab: a pointer press on the card takes it away, and a press
+  // that moves it (ringMove) does nothing without one, so a click never shows a ring.
+
+  // The ring one stop on (1) or back (-1). Onto a field, the field takes the keyboard; off one,
+  // the pane takes it back.
+  moveRing(step) {
+    const stops = this.cardStops ?? [];
+    const from = this.cardRing ?? stops.find((s) => s.field && s.field.name === this.fieldFocused)?.id ?? null;
+    this.ringTo(nextStop(stops.map((s) => s.id), from, step));
+    return true;
+  }
+  ringTo(id) {
+    const field = (this.cardStops ?? []).find((s) => s.id === id)?.field ?? null;
+    this.cardRing = id;
+    if (field) { this.fieldFocused = field.name; field.input.focus(); }
+    else if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
+  }
+  // Enter or Space: the control with the ring, pressed as a click presses it.
+  pressRing(cx) {
+    const s = (this.cardStops ?? []).find((x) => x.id === this.cardRing);
+    if (!s) return false;
+    if (s.field) { this.ringTo(s.id); return true; }
+    s.press({}, cx);
+    return true;
+  }
+  // Where the ring goes when a press takes its control away; nothing while it is not shown.
+  ringMove(id) { if (this.cardRing && id) this.cardRing = id; }
+  // A control the ring can reach, in the order drawn: what Enter and Space do (its click), and
+  // for a text field its input and the name fieldFocused takes. The ring is 2 px of the accent,
+  // 3 px outside the control and round its corners, over nothing, so the control does not move;
+  // a field shows it has the keys with its own accent edge instead (and has them itself). The
+  // control with the ring is the one a screen reader hears as focused, where Herdr has the
+  // calls (0.1.15 and 0.1.16 do).
+  cardStop(el, t, id, press, { radius = 6, label = null, role = "button", field = null } = {}) {
+    this.cardStops.push({ id, press, field });
+    if (this.cardRing !== id || field) return el;
+    let out = el;
+    if ("role" in out) out = out.role(role);
+    if (label && "accessibility_label" in out) out = out.accessibility_label(label);
+    if ("aria_active_descendant" in out) out = out.aria_active_descendant();
+    return out.relative().child(div().absolute().top(-RING_OUT).left(-RING_OUT).right(-RING_OUT).bottom(-RING_OUT)
+      .rounded(radius + RING_OUT).border_2().border_color(t.accent));
+  }
+  // A new rule's or an opened rule's first control: its first type, or Change. A sender rule
+  // shows its two types while it is new, a link rule while its fields are untouched.
+  editorFirst(e) {
+    if (e.kind === "senders") return e.at == null || e.typeOpen ? `th-sender-type-${SENDER_TYPES[0][0]}` : "th-sender-type-change";
+    return (e.at == null && !e.touched) || e.typeOpen ? `th-rule-type-${LINK_TYPES[0]}` : "th-rule-type-change";
+  }
+  // A rule's Edit button on its page's list (n counts from 1).
+  editStop(kind, n) { return kind === "senders" ? `th-sender-edit-btn-${n}` : `th-rule-edit-btn-${n}`; }
   // Leaving the Link rules or Sender rules page: a rule open in the editor is dropped unkept,
   // and Undo goes.
   leaveLinks() {
@@ -1495,16 +1564,21 @@ export default class Threads extends View {
     else d = { name: "", description: "", pattern: "", url: "", example: "", type: "custom", on: true };
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     const e = { kind, at, key: at != null ? JSON.stringify(base) : null, lost: false, insertAt: insertAt ?? raw.length, base, draft: d, touched: Boolean(from), typeOpen: false,
-      shown: senders ? { prefix: null, pattern: null } : { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0, refused: null };
+      shown: senders ? { prefix: null, pattern: null } : { pattern: null, url: null }, faults: null, result: null, lastGood: null, stale: false, gen: 0, refused: null,
+      // The control the ring was on, which it goes back to when the rule closes unkept.
+      from: this.cardRing };
     this.ruleEdit = e;
+    this.ringMove(this.editorFirst(e));
     for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, d[k], kind);
     this.ruleCheck();
     // A kept rule that is not working says why at once.
     if (at != null) for (const f of Object.keys(e.shown)) e.shown[f] = e.faults[f];
   }
   closeRule() {
+    const from = this.ruleEdit?.from;
     this.ruleEdit = null;
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
+    this.ringMove(from);
   }
   // A type pressed: in a new rule whose Finds, Opens and Example are untouched it fills them
   // (and the name, unless one was typed); otherwise it is only the label.
@@ -1520,6 +1594,7 @@ export default class Threads extends View {
       for (const [f] of RULE_FIELDS) this.setRuleField(f, e.draft[f]);
       this.ruleCheck();
     } else e.typeOpen = false;
+    this.ringMove(this.editorFirst(e) === "th-rule-type-change" ? "th-rule-type-change" : `th-rule-type-${k}`);
   }
   // A sender rule's type pressed: its field shows, with the text it had, and on a kept rule
   // the two rows fold back to one line.
@@ -1527,6 +1602,7 @@ export default class Threads extends View {
     const e = this.ruleEdit;
     if (e?.kind !== "senders" || !SENDER_TYPES.some(([k]) => k === by)) return;
     e.typeOpen = false;
+    this.ringMove(e.at == null ? `th-sender-type-${by}` : "th-sender-type-change");
     if (e.draft.by === by) return;
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     e.draft.by = by;
@@ -1653,6 +1729,8 @@ export default class Threads extends View {
     const bad = Object.keys(e.faults).filter((f) => e.faults[f]);
     if (bad.length) {
       for (const f of bad) e.shown[f] = e.faults[f];
+      if (this.cardRing) this.cardRing = `th-rule-f-${bad[0]}`;
+      this.fieldFocused = `${fieldTag(e.kind)}${bad[0]}`;
       this.inputsOf(e.kind)[bad[0]].focus();
       return false;
     }
@@ -1660,9 +1738,11 @@ export default class Threads extends View {
     const raw = this.fileRules(e.kind);
     this.followRules(raw);
     const o = this.ruleObject(e.draft, e.base, e.kind);
+    const at = e.at ?? Math.min(e.insertAt, raw.length);
     if (e.at != null) raw[e.at] = o;
-    else raw.splice(Math.min(e.insertAt, raw.length), 0, o);
+    else raw.splice(at, 0, o);
     this.closeRule();
+    this.ringMove(this.editStop(e.kind, at + 1));
     this.writeRules(e.kind, raw, cx, null, e);
     return true;
   }
@@ -1688,6 +1768,7 @@ export default class Threads extends View {
     // Its neighbors, so Undo puts it back beside them whatever moved meanwhile.
     this.ruleUndo = { kind, at, rule, prev, next, name: this.listOf(kind)[at]?.name ?? `Rule ${at + 1}` };
     if (this.ruleEdit?.at === at) this.closeRule();
+    this.ringMove("th-rule-undo");
     this.writeRules(kind, raw, cx, this.ruleUndo);
   }
   undoRemove(cx) {
@@ -1697,6 +1778,7 @@ export default class Threads extends View {
     this.followRules(raw);
     raw.splice(Math.min(u.at, raw.length), 0, u.rule);
     this.ruleUndo = null;
+    this.ringMove(this.editStop(u.kind, Math.min(u.at, raw.length - 1) + 1));
     this.writeRules(u.kind, raw, cx);
   }
   // Move up: the open rule one place higher, so it takes text before the rule it passes.
@@ -1706,6 +1788,7 @@ export default class Threads extends View {
     const raw = this.fileRules(e.kind);
     [raw[e.at - 1], raw[e.at]] = [raw[e.at], raw[e.at - 1]];
     e.at -= 1; // so the twin nearest the new place is the one followed
+    if (e.at === 0 && this.cardRing === "th-rule-up") this.cardRing = "th-rule-dup";
     this.writeRules(e.kind, raw, cx);
     this.ruleCheck();
   }
@@ -1714,6 +1797,8 @@ export default class Threads extends View {
     const e = this.ruleEdit;
     if (!e) return;
     this.openRule(null, { ...e.draft }, (e.at ?? e.insertAt) + 1, e.kind);
+    // Discard goes back to where the rule it copies was opened from.
+    if (this.ruleEdit) this.ruleEdit.from = e.from;
   }
 
   // ---- pins (pins.js has the file's format) ----
@@ -4795,6 +4880,15 @@ export default class Threads extends View {
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
+    // The settings card: Tab and Shift-Tab move its ring, also out of a field; Enter and Space
+    // press the control with the ring, unless it is a field (they type, and Enter keeps a rule).
+    const ck = this.settingsOpen ? ringKey(e, Boolean(this.cardRing) && !this.fieldFocused) : null;
+    if (ck) {
+      if (!this.action(`ring:${ck}`, cx)) return;
+      cx.stop_propagation();
+      cx.notify();
+      return;
+    }
     // A field in the settings card has the keyboard: its letters are its own, and one Esc
     // closes the card.
     if (this.fieldFocused) {
@@ -4958,6 +5052,9 @@ export default class Threads extends View {
         this.cardScrollBy(name.slice(15));
         return true;
       case "settingsPage:links": case "settingsPage:senders": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
+      // The settings card's Tab, Shift-Tab and Enter or Space (key, ringKey).
+      case "ring:next": case "ring:back": return this.settingsOpen && this.moveRing(name === "ring:next" ? 1 : -1);
+      case "ring:press": return this.settingsOpen && this.pressRing(cx);
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
         if (this.keysOpen) { this.keysOpen = false; return true; }
@@ -5711,7 +5808,7 @@ export default class Threads extends View {
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
-      .when(this.settingsOpen, (el) => el.child(this.settingsCard(t)))
+      .when(this.settingsOpen, (el) => el.child(this.settingsCard(t, cx)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
@@ -6249,7 +6346,7 @@ export default class Threads extends View {
   // While it is open nothing under it reacts (covered()), and the wheel moves only the card:
   // the clear layer keeps the wheel from the list. No scrim, so the colors and the text size
   // are chosen against the real list; the border and a deep shadow mark the layer.
-  settingsCard(t) {
+  settingsCard(t, cx = null) {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     // A rules page (Link rules or Sender rules) has the head with Back, and no tabs or preview.
     const page = this.setPage === "links" || this.setPage === "senders" ? this.setPage : null;
@@ -6269,6 +6366,10 @@ export default class Threads extends View {
     const key = page ?? "main";
     const rowsH = this.cardBody?.key === key ? this.cardBody.h : null;
     const bodyH = Math.min(bodyMax, rowsH ?? bodyMax);
+    // Built top to bottom (the foot last, in place), so the controls take their places in
+    // Tab's order as drawn.
+    this.cardStops = [];
+    const head = this.cardHead(t, page, close, pad);
     const rows = page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w);
     const place = this.cardPlace(key);
     place.viewH = bodyH;
@@ -6289,15 +6390,17 @@ export default class Threads extends View {
         .on_scroll_wheel(wheel("rows"))
         .children(rows))
       .children(marks.map((y) => div().absolute().top(y).left(0).w(1).h(1)));
-    return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
+    const card = div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .child(v_flex().id("th-set-card").absolute().top(top).right(CARD_GAP).w(w)
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_2xl()
         .on_click((_e, cx) => cx.stop_propagation())
+        // A pointer press anywhere on the card takes the keyboard ring away.
+        .on_mouse_down("left", (_e, cx) => { if (this.cardRing) { this.cardRing = null; cx.notify(); } })
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
-        .child(this.cardHead(t, page, close, pad))
+        .child(head)
         // The always-drawn bar sits in a strip at the right edge, so it takes no press meant
         // for a row.
         .child(this.cardBar
@@ -6305,6 +6408,27 @@ export default class Threads extends View {
             .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical(id).mode("always").absolute().top(0).bottom(0).left(0).right(0)))
           : body)
         .child(this.cardFoot(t, pad)));
+    this.placeRing(cx);
+    return card;
+  }
+  // The ring's control was not drawn this time (a press or a file change took it away, and no
+  // press said where the ring goes): the ring goes to the control that now follows where it
+  // was, after the last one before it that is still drawn, passing over text fields (which
+  // would take the keyboard). It shows from the next frame, which a frame's context asks for.
+  placeRing(cx) {
+    if (!this.cardRing) return;
+    const ids = this.cardStops.map((s) => s.id);
+    if (ids.includes(this.cardRing)) { this.ringIds = ids; return; }
+    const old = this.ringIds ?? [];
+    let j = old.indexOf(this.cardRing);
+    if (j < 0) j = old.length;
+    let i = 0;
+    while (--j >= 0) if (ids.includes(old[j])) { i = ids.indexOf(old[j]) + 1; break; }
+    const stops = this.cardStops;
+    while (i < stops.length && stops[i].field) i++;
+    this.cardRing = stops[i]?.id ?? [...stops].reverse().find((s) => !s.field)?.id ?? null;
+    this.ringIds = ids;
+    cx?.timer.after(0, (cx) => cx.notify());
   }
   setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 2 * CARD_GAP)); }
   // Where the card's view is on a page (y, from the top of its rows), as the keys left it and
@@ -6341,10 +6465,11 @@ export default class Threads extends View {
   // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
   // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
   cardHead(t, page, close, pad) {
+    const back = (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; this.ringMove(page === "senders" ? "th-set-senders" : "th-set-links"); cx.notify(); };
     return h_flex().flex_none().h(CARD_HEAD).px(pad).gap(8).items_center().border_b(1).border_color(t.border)
-      .when(Boolean(page), (el) => el.child(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", (_e, cx) => { this.dropField(); this.leaveLinks(); this.setPage = "main"; cx.notify(); }).ml(-5)))
+      .when(Boolean(page), (el) => el.child(this.cardStop(this.iconButton(t, "th-set-back", "chevron-left", "Back to settings", back).ml(-5), t, "th-set-back", back, { radius: 5, label: "Back to settings" })))
       .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(page === "links" ? "Link rules" : page === "senders" ? "Sender rules" : "Settings"))
-      .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
+      .child(this.cardStop(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5), t, "th-set-close", close, { radius: 5, label: "Close" }));
   }
 
   // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
@@ -6352,11 +6477,12 @@ export default class Threads extends View {
   // were here with the floating top; the owner wants the version here, and the chat's stats
   // are now the status line at the pane's foot (statusRow).
   cardFoot(t, pad) {
+    const keys = (_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); };
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
       .child(this.versionRow(t))
-      .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
-        .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
-        .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
+      .child(this.cardStop(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
+        .on_click(keys)
+        .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")), t, "th-set-keys", keys, { radius: 4, label: "Every key" }));
   }
 
   // The pieces every row of the card is made of. A row is 28 px high at least, 4 px from the
@@ -6376,34 +6502,43 @@ export default class Threads extends View {
       .when(!on, (el) => el.p(1).bg(t.border).border_1().border_color(t.muted))
       .child(div().size(14).rounded(7).bg(on ? t.background : t.muted));
     // A switch row: the whole row flips it.
-    const sw = (id, text, on, act, value = null) => h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer()
-      .on_click((_e, cx) => { cx.stop_propagation(); this.action(act, cx); cx.notify(); })
-      .child(label(text))
-      .when(Boolean(value), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(value)))
-      .child(toggle(on));
-    const step = (id, icon, act, ok) => div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(6)
-      .border_1().border_color(t.border).bg(t.background).cursor_pointer()
-      .when(!ok, (el) => el.opacity(0.4))
-      .hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { cx.stop_propagation(); if (ok) this.action(act, cx); cx.notify(); })
-      .child(svg(ICON(icon)).size(12).text_color(t.muted));
+    const sw = (id, text, on, act, value = null) => {
+      const press = (_e, cx) => { cx.stop_propagation(); this.action(act, cx); cx.notify(); };
+      return this.cardStop(h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer()
+        .on_click(press)
+        .child(label(text))
+        .when(Boolean(value), (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(value)))
+        .child(toggle(on)), t, id, press, { role: "switch", label: text });
+    };
+    const step = (id, icon, act, ok, name) => {
+      const press = (_e, cx) => { cx.stop_propagation(); if (ok) this.action(act, cx); cx.notify(); };
+      return this.cardStop(div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(6)
+        .border_1().border_color(t.border).bg(t.background).cursor_pointer()
+        .when(!ok, (el) => el.opacity(0.4))
+        .hover((s) => s.bg(t.hover))
+        .on_click(press)
+        .child(svg(ICON(icon)).size(12).text_color(t.muted)), t, id, press, { label: name });
+    };
     const stepper = (key, name) => {
       const [lo, hi] = RANGES[key];
       const v = this.prefs[key];
       return h_flex().min_h(28).gap(6).items_center()
         .child(label(name))
-        .child(step(`th-${key}-minus`, "minus", `${key}:-`, v > lo))
+        .child(step(`th-${key}-minus`, "minus", `${key}:-`, v > lo, `${name} down`))
         .child(div().flex_none().w(20).text_center().text_size(13).font_family(this.mono()).text_color(t.foreground).child(String(v)))
-        .child(step(`th-${key}-plus`, "plus", `${key}:+`, v < hi));
+        .child(step(`th-${key}-plus`, "plus", `${key}:+`, v < hi, `${name} up`));
     };
     // A chooser: each choice its icon and its word, the chosen one filled. 28 px high, as a row.
     const choose = (id, cur, opts, act) => h_flex().flex_none().p(2).gap(2).rounded(6).border_1().border_color(t.border).bg(t.background)
-      .children(opts.map(([v, word, icon]) => h_flex().id(`${id}-${v}`).flex_none().h(22).px(8).gap(5).items_center().rounded(4).cursor_pointer()
-        .text_size(12).bg(v === cur ? t.hover : alpha(t.hover, 0)).text_color(v === cur ? t.foreground : t.muted)
-        .hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${act}:${v}`, cx); cx.notify(); })
-        .child(svg(ICON(icon)).size(13).flex_none())
-        .child(word)));
+      .children(opts.map(([v, word, icon]) => {
+        const press = (_e, cx) => { cx.stop_propagation(); this.action(`${act}:${v}`, cx); cx.notify(); };
+        return this.cardStop(h_flex().id(`${id}-${v}`).flex_none().h(22).px(8).gap(5).items_center().rounded(4).cursor_pointer()
+          .text_size(12).bg(v === cur ? t.hover : alpha(t.hover, 0)).text_color(v === cur ? t.foreground : t.muted)
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click(press)
+          .child(svg(ICON(icon)).size(13).flex_none())
+          .child(word), t, `${id}-${v}`, press, { radius: 4, role: "radio_button" });
+      }));
     const row = (text, ctl) => h_flex().min_h(28).gap(8).items_center().flex_wrap().child(label(text)).child(ctl);
     return { label, note, group, sw, stepper, choose, row, toggle };
   }
@@ -6414,9 +6549,10 @@ export default class Threads extends View {
   resetRow(t) {
     const differ = this.prefsDiffer();
     const { note } = this.cardKit(t);
+    const reset = (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); };
     return v_flex().gap(6).items_start()
-      .child(this.button(t, "th-set-reset", "Reset to defaults", (_e, cx) => { if (differ) this.action("resetSettings", cx); cx.notify(); }, "refresh", CARD_BUTTON)
-        .when(!differ, (el) => el.opacity(0.45)))
+      .child(this.cardStop(this.button(t, "th-set-reset", "Reset to defaults", reset, "refresh", CARD_BUTTON)
+        .when(!differ, (el) => el.opacity(0.45)), t, "th-set-reset", (e, cx) => { cx.stop_propagation(); reset(e, cx); }))
       .child(note("Link rules, sender rules and the quote key stay."));
   }
   prefsDiffer() { return CARD_KEYS.some((k) => this.prefs[k] !== DEFAULTS[k]); }
@@ -6455,9 +6591,10 @@ export default class Threads extends View {
       linkRules: () => [this.linkRulesEntry(t)],
       senderRules: () => [this.senderRulesEntry(t)],
       quoteKey: () => [v_flex().gap(4)
-        .child(row("Quote key", h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
+        .child(row("Quote key", this.cardStop(h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
           .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground))))
+          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground)),
+        t, "th-set-quote", null, { field: { input: this.quoteInput, name: "quote" } })))
         .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
     };
@@ -6468,13 +6605,14 @@ export default class Threads extends View {
   // many are not working in the blocked color, and a chevron. Each page has its own row
   // method, so the row can move to another section on its own (CARD_SECTIONS).
   pageEntry(t, id, page, name, n, bad) {
-    return h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
+    const open = (_e, cx) => { cx.stop_propagation(); this.dropField(); this.leaveLinks(); this.setPage = page; this.ringMove("th-set-back"); cx.notify(); };
+    return this.cardStop(h_flex().id(id).min_h(28).gap(8).items_center().cursor_pointer().rounded(6)
       .hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { cx.stop_propagation(); this.dropField(); this.leaveLinks(); this.setPage = page; cx.notify(); })
+      .on_click(open)
       .child(div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child(name))
       .child(div().flex_none().text_size(12).text_color(t.muted).child(n ? String(n) : "None"))
       .when(bad > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.blocked).child(`${bad} not working`)))
-      .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim));
+      .child(svg(ICON("chevron-right")).size(13).flex_none().text_color(t.dim)), t, id, open, { label: name });
   }
   linkRulesEntry(t) {
     const bad = (this.linkList ?? []).filter((r) => r.why || r.rule?.slow).length;
@@ -6523,11 +6661,13 @@ export default class Threads extends View {
     const dots = h_flex().flex_none().gap(2).flex_wrap().children(list.map((v) => {
       const st = bubbleStyle(v, t, agent);
       const on = v === cur;
-      return div().id(`th-${key}-${v}`).flex_none().size(SWATCH).rounded(SWATCH / 2).p(2).cursor_pointer()
+      const press = (_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); };
+      return this.cardStop(div().id(`th-${key}-${v}`).flex_none().size(SWATCH).rounded(SWATCH / 2).p(2).cursor_pointer()
         .border_2().border_color(on ? t.accent : alpha(t.accent, 0))
         .tooltip(`${word(v)}${v === DEFAULTS[key] ? " · default" : ""}`)
-        .on_click((_e, cx) => { cx.stop_propagation(); this.action(`${key}:${v}`, cx); cx.notify(); })
-        .child(div().size_full().rounded(8).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.muted : st.fill));
+        .on_click(press)
+        .child(div().size_full().rounded(8).bg(st.fill).border_1().border_color(st.outline || v === "plain" ? t.muted : st.fill)),
+      t, `th-${key}-${v}`, press, { radius: SWATCH / 2, role: "radio_button", label: `${name}: ${word(v)}` });
     }));
     const title = div().text_size(13).text_color(t.foreground).child(name);
     return oneLine
@@ -6545,10 +6685,11 @@ export default class Threads extends View {
     // The button: its padding and border, the icon and its gap, and the word.
     const button = 2 * CARD_BUTTON.px + 2 + CARD_BUTTON.icon + CARD_BUTTON.gap + Math.ceil(word.length * 12 * 0.55);
     const room = w - 2 * cardPad(w) - 6 - button;
+    const copy = (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); };
     return h_flex().gap(6).items_center()
       .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
         .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
-      .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
+      .child(this.cardStop(this.button(t, "th-set-copy", word, copy, copied ? "check" : "copy", CARD_BUTTON), t, "th-set-copy", (e, cx) => { cx.stop_propagation(); copy(e, cx); }, { label: "Copy the settings file's path" }));
   }
 
   // The card's last row: the mod's name and version (version.js), with the commit install.sh
@@ -6582,9 +6723,12 @@ export default class Threads extends View {
     const edit = this.rulesEditable("links");
     // Notes on the link rules that are not about one rule ("links is not a list").
     const other = (this.linkNotes ?? []).filter((n) => !/^Link rule \d+:/.test(n));
-    const rows = list.map((r, i) => (e?.at === i ? this.ruleEditor(t) : this.ruleRow(t, r, i, edit)));
-    if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.ruleEditor(t));
-    if (this.ruleUndo?.kind === "links") rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
+    // Placed first and built in that order, so Tab takes them as drawn.
+    const slots = list.map((_r, i) => (e?.at === i ? "edit" : i));
+    if (e && e.at == null) slots.splice(Math.min(e.insertAt, slots.length), 0, "edit");
+    if (this.ruleUndo?.kind === "links") slots.splice(Math.min(this.ruleUndo.at, slots.length), 0, "undo");
+    const rows = slots.map((x) => (x === "edit" ? this.ruleEditor(t) : x === "undo" ? this.undoLine(t) : this.ruleRow(t, list[x], x, edit)));
+    const add = (_e, cx) => { this.openRule(null); cx.notify(); };
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
       group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
@@ -6592,7 +6736,7 @@ export default class Threads extends View {
       ...other.map((n) => note(n, t.blocked)),
       list.length >= 2 ? note("When two rules match the same text, the higher one wins.") : null,
       edit && !e && list.length < MAX_RULES
-        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null); cx.notify(); }, "plus", CARD_BUTTON)) : null,
+        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null,
       group("File", [
         note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
           : writable(this.prefsRaw) ? "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed."
@@ -6614,6 +6758,8 @@ export default class Threads extends View {
     const bad = why != null;
     const ex = this.ruleExample(r);
     const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i); cx.notify(); };
+    const del = (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); };
+    const flip = (_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx); cx.notify(); };
     const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
     return v_flex().id(`th-rule-${r.n}`).p(12).gap(4).rounded(6).border_1()
       .border_color(bad ? alpha(t.blocked, 0.55) : t.border).when(bad, (el) => el.bg(alpha(t.blocked, 0.07)))
@@ -6623,12 +6769,12 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(!bad && !r.on ? t.muted : t.foreground).child(r.name))
         .when(!bad && !r.on, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
         .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
-          .child(this.ruleIcon(t, `th-rule-edit-btn-${r.n}`, "pencil", "Edit rule", open))
-          .child(this.ruleIcon(t, `th-rule-delete-btn-${r.n}`, "trash", "Delete rule", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx); cx.notify(); }, true))))
+          .child(this.cardStop(this.ruleIcon(t, `th-rule-edit-btn-${r.n}`, "pencil", "Edit rule", open), t, `th-rule-edit-btn-${r.n}`, open, { radius: 5 }))
+          .child(this.cardStop(this.ruleIcon(t, `th-rule-delete-btn-${r.n}`, "trash", "Delete rule", del, true), t, `th-rule-delete-btn-${r.n}`, del, { radius: 5 }))))
         .child(bad ? end(null).child(svg(ICON("alert")).size(14).text_color(t.blocked))
-          : edit ? end(`th-rule-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
-            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx); cx.notify(); })
-            .child(toggle(r.on))
+          : edit ? this.cardStop(end(`th-rule-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+            .on_click(flip)
+            .child(toggle(r.on)), t, `th-rule-on-${r.n}`, flip, { radius: 5, role: "switch", label: `${r.name}: ${r.on ? "on" : "off"}` })
             : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
       .child(v_flex().gap(4).when(!bad && !r.on, (el) => el.opacity(0.55))
         .when(Boolean(r.description), (el) => el.child(div().text_size(12).text_color(t.muted).child(r.description)))
@@ -6672,12 +6818,13 @@ export default class Threads extends View {
   // Where a deleted rule was: a quiet dashed line, 32 px high, with Undo as a 24 px text button.
   // No confirm step: Undo is the way back.
   undoLine(t) {
+    const undo = (_e, cx) => { cx.stop_propagation(); this.undoRemove(cx); cx.notify(); };
     return h_flex().id("th-rule-undo-line").min_h(32).pl(12).pr(4).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(`Deleted ${this.ruleUndo.name}.`))
-      .child(div().id("th-rule-undo").flex_none().h(24).px(8).flex().items_center().rounded(5).cursor_pointer()
+      .child(this.cardStop(div().id("th-rule-undo").flex_none().h(24).px(8).flex().items_center().rounded(5).cursor_pointer()
         .text_size(12).font_medium().text_color(t.foreground).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { cx.stop_propagation(); this.undoRemove(cx); cx.notify(); })
-        .child("Undo"));
+        .on_click(undo)
+        .child("Undo"), t, "th-rule-undo", undo, { radius: 5 }));
   }
 
   // No rules: the two types that fill a rule, in dashed boxes. Use opens a new rule with that
@@ -6687,12 +6834,13 @@ export default class Threads extends View {
       .child(div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"))
       .children(["ticket", "pull-request"].map((k) => {
         const tpl = LINK_TEMPLATES[k];
+        const use = (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); };
         return h_flex().id(`th-rule-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
           .child(svg(ICON(LINK_ICON[k])).size(14).flex_none().text_color(t.dim))
           .child(v_flex().flex_1().min_w(0).gap(4)
             .child(div().text_size(13).font_semibold().text_color(t.foreground).child(tpl.word))
             .child(div().text_size(12).text_color(t.muted).child(tpl.line)))
-          .child(this.miniButton(t, `th-rule-use-${k}`, "Use", (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); }));
+          .child(this.miniStop(t, `th-rule-use-${k}`, "Use", use, `Use ${tpl.word}`));
       }));
   }
 
@@ -6706,14 +6854,13 @@ export default class Threads extends View {
     const { note } = this.cardKit(t);
     const isNew = e.at == null;
     const label = (text) => this.ruleLabel(t, text);
+    // Built as each field draws, so Reference takes its place after Finds.
     const hints = {
-      description: note("It shows under the name in the list."),
-      pattern: h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
+      description: () => note("It shows under the name in the list."),
+      pattern: () => h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
         .child(div().flex_none().child("A JavaScript regular expression. Capitals count."))
-        .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
-          .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
-          .child("Reference")),
-      url: note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
+        .child(this.referenceLink(t)),
+      url: () => note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
     };
     const field = ([k, name]) => this.ruleField(t, e, k, name, hints[k]);
     const typeRows = (isNew && !e.touched) || e.typeOpen;
@@ -6723,32 +6870,34 @@ export default class Threads extends View {
         .children(LINK_TYPES.map((k) => {
           const on = d.type === k;
           const x = LINK_TEMPLATES[k];
-          return h_flex().id(`th-rule-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+          const choose = (_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); };
+          return this.cardStop(h_flex().id(`th-rule-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
             .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
             .hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); })
+            .on_click(choose)
             .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(on ? t.foreground : t.dim))
             .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(x.word))
-            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(x.line));
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(x.line)), t, `th-rule-type-${k}`, choose, { radius: 5, role: "radio_button", label: x.word });
         }))
         .when(!isNew || e.touched, (el) => el.child(note("The label changes; the fields stay.")))
       : h_flex().gap(6).items_center()
         .child(label("Type"))
         .child(svg(ICON(LINK_ICON[d.type] ?? "regex")).size(13).flex_none().text_color(t.dim))
         .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(tpl.word))
-        .child(this.miniButton(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+        .child(this.miniStop(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-rule-type-${d.type}`); cx.notify(); }, "Change the type"));
+    const fields = RULE_FIELDS.map(field);
     const r = e.stale ? e.lastGood : e.result;
     const result = r
       ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
         .child(this.examplePieces(t, r))
         .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
           .child(div().flex_1().min_w(0).truncate().text_size(11).font_family(this.mono()).text_color(t.muted).child(r.under))
-          .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniButton(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); })))))
+          .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniStop(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); }, "Open the example's link")))))
         .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this text first"), t.muted)))
       : null;
     return this.ruleShell(t, e)
       .child(typeBlock)
-      .children(RULE_FIELDS.map(field))
+      .children(fields)
       .when(Boolean(result), (el) => el.child(result))
       .child(this.ruleButtons(t, e))
       .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
@@ -6756,20 +6905,32 @@ export default class Threads extends View {
 
   // The parts both rule editors share. A field's label.
   ruleLabel(t, text) { return div().text_size(11.5).font_medium().text_color(t.muted).child(text); }
+  // A mini button (Use, Open, Change) as a ring stop.
+  miniStop(t, id, word, press, name = null) { return this.cardStop(this.miniButton(t, id, word, press), t, id, press, { label: name }); }
+  // Reference under Finds or Pattern: MDN's regular expression cheat sheet.
+  referenceLink(t) {
+    const open = (_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); };
+    return this.cardStop(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
+      .on_click(open)
+      .child("Reference"), t, "th-rule-reference", open, { radius: 3, role: "link", label: "Regular expression reference" });
+  }
   // A field: its label, its box (the accent while it has the keys, the blocked color while
   // its fault shows), its fault as "Not working: why", and its hint.
+  // The hint is a function, so a control in it takes its ring stop after the field's.
   ruleField(t, e, k, name, hint) {
     const { note } = this.cardKit(t);
     const shown = e.shown[k] ?? null;
-    const focused = this.fieldFocused === `${fieldTag(e.kind)}${k}`;
+    const tag = `${fieldTag(e.kind)}${k}`;
+    const input = this.inputsOf(e.kind)[k];
     return v_flex().gap(3)
       .child(this.ruleLabel(t, name))
-      .child(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
-        .border_color(shown ? t.blocked : focused ? t.accent : t.border).bg(t.background)
-        .child(Input.new(this.inputsOf(e.kind)[k]).w_full().h_full().text_size(12.5).text_color(t.foreground)
-          .when(k === "pattern" || k === "url" || k === "prefix", (el) => el.font_family(this.mono()))))
+      .child(this.cardStop(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
+        .border_color(shown ? t.blocked : this.fieldFocused === tag ? t.accent : t.border).bg(t.background)
+        .child(Input.new(input).w_full().h_full().text_size(12.5).text_color(t.foreground)
+          .when(k === "pattern" || k === "url" || k === "prefix", (el) => el.font_family(this.mono()))),
+      t, `th-rule-f-${k}`, null, { field: { input, name: tag } }))
       .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))
-      .when(Boolean(hint), (el) => el.child(hint));
+      .when(Boolean(hint), (el) => el.child(hint()));
   }
   // A rule higher in the list that takes the example first, and how to put this one above it.
   beatenLine(e, name, what) {
@@ -6790,13 +6951,14 @@ export default class Threads extends View {
   refusedHere(e) { return Boolean(e.refused) && e.refused === this.prefsError; }
   ruleButtons(t, e) {
     const isNew = e.at == null;
+    const big = (id, word, press, icon) => this.cardStop(this.button(t, id, word, press, icon, CARD_BUTTON), t, id, press);
     return h_flex().gap(6).flex_wrap()
-      .child(this.button(t, "th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check", CARD_BUTTON))
-      .child(this.button(t, "th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }, null, CARD_BUTTON))
-      .when(!isNew && e.at > 0, (el) => el.child(this.button(t, "th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up", CARD_BUTTON)))
+      .child(big("th-rule-keep", "Keep rule", (_e, cx) => { this.keepRule(cx); cx.notify(); }, "check"))
+      .child(big("th-rule-discard", "Discard", (_e, cx) => { this.closeRule(); cx.notify(); }, null))
+      .when(!isNew && e.at > 0, (el) => el.child(big("th-rule-up", "Move up", (_e, cx) => { this.moveRuleUp(cx); cx.notify(); }, "chevron-up")))
       .when(!isNew, (el) => el
-        .child(this.button(t, "th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy", CARD_BUTTON))
-        .child(this.button(t, "th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx, e.kind); cx.notify(); }, "trash", CARD_BUTTON)));
+        .child(big("th-rule-dup", "Duplicate", (_e, cx) => { this.duplicateRule(); cx.notify(); }, "copy"))
+        .child(big("th-rule-delete", "Delete", (_e, cx) => { this.removeRule(e.at, cx, e.kind); cx.notify(); }, "trash")));
   }
 
   // The Sender rules page, on the Link rules page's pattern: what a sender rule is, then
@@ -6810,16 +6972,19 @@ export default class Threads extends View {
     const e = this.ruleEdit?.kind === "senders" ? this.ruleEdit : null;
     const edit = this.rulesEditable("senders");
     const other = (this.senderNotes ?? []).filter((n) => !/^Sender rule \d+:/.test(n));
-    const rows = list.map((r, i) => (e?.at === i ? this.senderEditor(t) : this.senderRow(t, r, i, edit)));
-    if (e && e.at == null) rows.splice(Math.min(e.insertAt, rows.length), 0, this.senderEditor(t));
-    if (this.ruleUndo?.kind === "senders") rows.splice(Math.min(this.ruleUndo.at, rows.length), 0, this.undoLine(t));
+    // Placed first and built in that order, so Tab takes them as drawn.
+    const slots = list.map((_r, i) => (e?.at === i ? "edit" : i));
+    if (e && e.at == null) slots.splice(Math.min(e.insertAt, slots.length), 0, "edit");
+    if (this.ruleUndo?.kind === "senders") slots.splice(Math.min(this.ruleUndo.at, slots.length), 0, "undo");
+    const rows = slots.map((x) => (x === "edit" ? this.senderEditor(t) : x === "undo" ? this.undoLine(t) : this.senderRow(t, list[x], x, edit)));
+    const add = (_e, cx) => { this.openRule(null, null, null, "senders"); cx.notify(); };
     return [
       note("A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.", t.muted),
       group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
       !list.length && !e && edit ? this.senderExamples(t) : null,
       list.length >= 2 ? note("When two rules match the same prompt, the higher one wins.") : null,
       edit && !e && list.length < MAX_RULES
-        ? h_flex().child(this.button(t, "th-rule-add", "Add rule", (_e, cx) => { this.openRule(null, null, null, "senders"); cx.notify(); }, "plus", CARD_BUTTON)) : null,
+        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null,
       ...other.map((n) => note(n, t.blocked)),
       group("File", [
         note(edit ? "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."
@@ -6845,6 +7010,8 @@ export default class Threads extends View {
     const ex = this.senderExample(r);
     const pattern = Boolean(r.pattern) && !r.prefix;
     const open = (_e, cx) => { cx.stop_propagation(); this.openRule(i, null, null, "senders"); cx.notify(); };
+    const del = (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx, "senders"); cx.notify(); };
+    const flip = (_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx, "senders"); cx.notify(); };
     const end = (id) => div().when(Boolean(id), (el) => el.id(id)).flex_none().w(36).h(24).ml(4).flex().items_center().justify_center();
     const text = r.prefix || r.pattern;
     return v_flex().id(`th-sender-${r.n}`).p(12).gap(4).rounded(6).border_1()
@@ -6855,12 +7022,12 @@ export default class Threads extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(off ? t.muted : t.foreground).child(r.name))
         .when(off, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child("Off")))
         .when(edit, (el) => el.child(h_flex().flex_none().gap(4)
-          .child(this.ruleIcon(t, `th-sender-edit-btn-${r.n}`, "pencil", "Edit rule", open))
-          .child(this.ruleIcon(t, `th-sender-delete-btn-${r.n}`, "trash", "Delete rule", (_e, cx) => { cx.stop_propagation(); this.removeRule(i, cx, "senders"); cx.notify(); }, true))))
+          .child(this.cardStop(this.ruleIcon(t, `th-sender-edit-btn-${r.n}`, "pencil", "Edit rule", open), t, `th-sender-edit-btn-${r.n}`, open, { radius: 5 }))
+          .child(this.cardStop(this.ruleIcon(t, `th-sender-delete-btn-${r.n}`, "trash", "Delete rule", del, true), t, `th-sender-delete-btn-${r.n}`, del, { radius: 5 }))))
         .child(bad ? end(null).child(svg(ICON("alert")).size(14).text_color(t.blocked))
-          : edit ? end(`th-sender-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
-            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRule(i, cx, "senders"); cx.notify(); })
-            .child(toggle(r.on))
+          : edit ? this.cardStop(end(`th-sender-on-${r.n}`).cursor_pointer().tooltip(r.on ? "Switch off" : "Switch on")
+            .on_click(flip)
+            .child(toggle(r.on)), t, `th-sender-on-${r.n}`, flip, { radius: 5, role: "switch", label: `${r.name}: ${r.on ? "on" : "off"}` })
             : div().flex_none().text_size(12).text_color(t.muted).child(r.on ? "On" : "Off")))
       .child(v_flex().gap(4).when(off, (el) => el.opacity(0.55))
         .child(this.examplePieces(t, ex))
@@ -6914,7 +7081,7 @@ export default class Threads extends View {
         .child(v_flex().flex_1().min_w(0).gap(4)
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child(x.rule.name))
           .child(div().text_size(12).text_color(t.muted).child(x.line)))
-        .child(this.miniButton(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }))));
+        .child(this.miniStop(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }, `Use ${x.rule.name}`))));
   }
 
   // The open sender rule: Type (two rows on a new rule, else one line with Change), Name,
@@ -6927,17 +7094,16 @@ export default class Threads extends View {
     const label = (text) => this.ruleLabel(t, text);
     // A function: an element is used once, and both hints below hold this line.
     const firstLine = () => note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
+    // Built as each field draws, so Reference takes its place after Pattern.
     const hints = {
-      name: note("It shows in the list, and in the tooltip on a message it matched."),
-      prefix: v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine()),
-      pattern: v_flex().gap(2)
+      name: () => note("It shows in the list, and in the tooltip on a message it matched."),
+      prefix: () => v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine()),
+      pattern: () => v_flex().gap(2)
         .child(h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
           .child(div().flex_none().child("A JavaScript regular expression with a group named sender. Capitals count."))
-          .child(div().id("th-rule-reference").flex_none().underline().cursor_pointer().tooltip(REGEX_REFERENCE)
-            .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url?.(REGEX_REFERENCE); })
-            .child("Reference")))
+          .child(this.referenceLink(t)))
         .child(firstLine()),
-      example: note("A prompt this rule should match. Type any prompt here to try the rule."),
+      example: () => note("A prompt this rule should match. Type any prompt here to try the rule."),
     };
     const field = (k) => this.ruleField(t, e, k, SENDER_FIELDS.find((x) => x[0] === k)[1], hints[k]);
     const type = SENDER_TYPES.find(([k]) => k === d.by) ?? SENDER_TYPES[0];
@@ -6945,19 +7111,21 @@ export default class Threads extends View {
       ? v_flex().gap(4).child(label("Type"))
         .children(SENDER_TYPES.map(([k, word, icon, line]) => {
           const on = d.by === k;
-          return h_flex().id(`th-sender-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
+          const choose = (_e, cx) => { cx.stop_propagation(); this.chooseSenderType(k); cx.notify(); };
+          return this.cardStop(h_flex().id(`th-sender-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
             .border_color(on ? t.accent : t.border).bg(on ? t.hover : t.background)
             .hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => { cx.stop_propagation(); this.chooseSenderType(k); cx.notify(); })
+            .on_click(choose)
             .child(svg(ICON(icon)).size(13).flex_none().text_color(on ? t.foreground : t.dim))
             .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(word))
-            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(line));
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(line)), t, `th-sender-type-${k}`, choose, { radius: 5, role: "radio_button", label: word });
         }))
       : h_flex().gap(6).items_center()
         .child(label("Type"))
         .child(svg(ICON(type[2])).size(13).flex_none().text_color(t.dim))
         .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(type[1]))
-        .child(this.miniButton(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; cx.notify(); }));
+        .child(this.miniStop(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-sender-type-${d.by}`); cx.notify(); }, "Change the type"));
+    const fields = ["name", d.by, "example"].map(field);
     const r = e.stale ? null : e.result;
     const result = r
       ? v_flex().id("th-rule-result").gap(4)
@@ -6968,9 +7136,7 @@ export default class Threads extends View {
       : null;
     return this.ruleShell(t, e)
       .child(typeBlock)
-      .child(field("name"))
-      .child(field(d.by))
-      .child(field("example"))
+      .children(fields)
       .when(Boolean(result), (el) => el.child(result))
       .child(this.ruleButtons(t, e))
       .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
