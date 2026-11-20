@@ -69,7 +69,7 @@ At the top, the heading counts the failed calls. On a failed call it says which 
 
 The Chat and its Trajectory pane select the same turn: move to a turn in one, and the other shows it within a second.
 
-**Running or not.** A call shows as running only when there is evidence the agent is still at it: the pane follows a terminal, the agent's process is alive there, the newest turn has no end in the transcript, and, for Claude Code, Herdr says the terminal is working or waiting on you. Otherwise a call with no result says "no result", its bar stops at the last thing the transcript recorded, and the detail says when that was ("Last activity"). A missing result alone never shows as running, since a session killed mid-turn never writes its end.
+**Running or not.** A call shows as running only when there is evidence the agent is still at it: the pane follows a terminal's own session (not one guessed from the folder), the agent's process is alive there, the newest turn has no end in the transcript, and, for Claude Code, Herdr says the terminal is working or waiting on you. Otherwise a call with no result says "no result", its bar stops at the last thing the transcript recorded, and the detail says when that was ("Last activity"). A missing result alone never shows as running, since a session killed mid-turn never writes its end.
 
 ## Quoting into the terminal
 
