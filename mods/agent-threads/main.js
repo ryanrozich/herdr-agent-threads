@@ -6425,6 +6425,9 @@ export default class Threads extends View {
     const rows = () => (page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w));
     const place = this.cardPlace(key);
     place.viewH = bodyH;
+    // When the rows get shorter (a rule closes), the place stays inside them, as Herdr's own
+    // scroll does; a scroll to the ring is worked out from there.
+    if (rowsH != null) place.y = Math.max(0, Math.min(place.y, rowsH - bodyH));
     const handle = this.cardScrolls?.[key] ?? null;
     const id = `th-set-body-${key}-${this.cardOpens}`;
     // Child 0 is the rows; the marks after it are what the keys bring into view (cardMarks).

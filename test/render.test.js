@@ -12436,6 +12436,56 @@ test("card ring: after an open rule above or below the ring closes, or one opene
   }
 });
 
+test("card ring: when a rule closes and the rows get shorter, the card's place stays inside them, and the next scroll starts from there", async () => {
+  for (const back of ["th-set-copy", "th-set-close"]) {
+    const { v, cx } = await rulesPane();
+    try {
+      v.rootH = 700;
+      const handle = v.cardScrolls.links;
+      const { frame, ringTruth } = herdrStandIn(v, cx, "links", "part");
+      frame();
+      // The ring on Copy path, near the rows' end, or on Close, in the head; a rule opens
+      // above, the ring goes to Copy path, so the card is at the end of the longer rows, and
+      // back. Closing the rule takes the ring back there.
+      v.ringTo(back);
+      frame();
+      v.openRule(0);
+      frame();
+      v.ringTo("th-set-copy");
+      frame();
+      const place = v.cardPlace("links");
+      const long = v.cardBody.h;
+      expect(long).toBeGreaterThan(place.viewH);
+      expect(place.y).toBeGreaterThan(0);
+      v.ringTo(back);
+      frame();
+      v.closeRule();
+      frame();
+      // Shorter now: the place is no further than the new end, and the report says so.
+      const end = Math.max(0, v.cardBody.h - place.viewH);
+      expect([back, v.cardBody.h < long, v.cardRing]).toEqual([back, true, back]);
+      expect([back, v.cardView().view.y]).toEqual([back, place.y]);
+      expect([back, place.y >= 0 && place.y <= end]).toEqual([back, true]);
+      const s = v.cardView().ringAt;
+      expect([back, s]).toEqual([back, ringTruth()]);
+      if (s) expect([back, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([back, true]);
+      // The next moves are worked out from that place.
+      for (let i = 0; i < 4; i++) {
+        const was = place.y;
+        const asked = handle.asked.length;
+        pressKey(v, cx, "tab", tabEv(back === "th-set-copy"));
+        cardWithCx(v, cx);
+        const span = ringTruth();
+        cx.flush(0);
+        const r = span ? cardReveal(span[0], span[1], was, v.cardBody.h, place.viewH) : null;
+        expect([back, v.cardRing, handle.asked.slice(asked)]).toEqual([back, v.cardRing, r ? [1 + r.mark] : []]);
+        expect([back, v.cardRing, place.y]).toEqual([back, v.cardRing, r ? r.y : was]);
+        frame();
+      }
+    } finally { done(v); }
+  }
+});
+
 test("card ring: Space on Shorten long messages adds its line steppers, and Tab goes on through them and on, each shown where it is drawn", async () => {
   for (const by of ["part", "place"]) {
     const { v, cx } = await cardPane();
