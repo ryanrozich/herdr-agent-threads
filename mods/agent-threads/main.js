@@ -38,6 +38,30 @@ const HOVER_CLOSE_MS = 200;
 // HoverCard opens the Turn card while the pointer rests on a line's info icon. It owns its open
 // state, so it needs no handler, which a list item cannot carry.
 const HoverCard = Popup && gpuiBase.HoverCard?.new ? gpuiBase.HoverCard : null;
+// A method an older Herdr's elements may lack: called when the element has it, or the element
+// is kept as it is. Asked with `in`: on Herdr's diagnostic re-run typeof says "function" for
+// any name.
+const maybe = (el, name, ...args) => (name in el ? el[name](...args) : el);
+// The settings card's Tab and Shift-Tab (issue 104). Plain Tab is the window's own key: it
+// moves the keyboard to the next focusable element before a pane's on_key_down sees it. These
+// bindings sit in the card's own key context (CARD_CONTEXT), which the pane's root declares
+// while the card is open (cardKeyContext); a binding in a deeper context goes before the
+// window's, and its actions reach the root's on_action handlers, which move the ring.
+const CARD_CONTEXT = "ThreadsCard";
+const CARD_BINDINGS = [
+  { keystroke: "tab", action: "agent-threads.ringNext", context: CARD_CONTEXT },
+  { keystroke: "shift-tab", action: "agent-threads.ringBack", context: CARD_CONTEXT },
+];
+// What installing them answered: null (not yet), the count, "missing" (this Herdr has no
+// cx.bind_keys) or "failed: <message>" (tried again the next time the card opens). The keymap
+// is the app's, not a pane's, so the mod installs them once for all its panes; never from
+// render, where Herdr refuses it.
+let cardKeys = null;
+function bindCardKeys(cx) {
+  if (typeof cardKeys === "number" || cardKeys === "missing") return;
+  if (!cx || !("bind_keys" in cx)) { cardKeys = "missing"; return; }
+  try { cardKeys = cx.bind_keys(CARD_BINDINGS); } catch (err) { cardKeys = `failed: ${err?.message ?? err}`; }
+}
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
@@ -819,6 +843,7 @@ export default class Threads extends View {
     this.seen = { turn: null, status: null };
     this.known = new Set();
     this.h = cx.focus_handle();
+    bindCardKeys(cx);
     this.scroll = VirtualListScrollHandle.new();
     // The settings card's scroll positions, one per page, which the arrows, j, k, Page Up,
     // Page Down, Space, Home and End move (cardScroll). Herdr 0.1.15 and newer; before that
@@ -985,11 +1010,11 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
-      lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
+      keyboard: this.keyboardAt(), lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
       contrast: this.contrastList(),
@@ -4873,6 +4898,28 @@ export default class Threads extends View {
 
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
   // ("agent-threads.next" and so on), delivered through nextCommand().
+  // While the settings card is open the pane's root is its key context, so the card's bound Tab
+  // and Shift-Tab (CARD_BINDINGS) land here and move the ring, as Tab does in key() when it gets there.
+  cardKeyContext(el) {
+    let out = maybe(el, "key_context", CARD_CONTEXT);
+    for (const [{ action }, step] of [[CARD_BINDINGS[0], "next"], [CARD_BINDINGS[1], "back"]]) {
+      out = maybe(out, "on_action", action, (_e, cx) => {
+        if (!this.action(`ring:${step}`, cx)) return;
+        if ("stop_propagation" in cx) cx.stop_propagation();
+        cx.notify();
+      });
+    }
+    return out;
+  }
+  // Where the keyboard is, for the debug report: "pane" (the panel's own handle, so its keys and
+  // the card's reach it), "field:<name>" (a settings card field: fieldFocused, which the fields'
+  // focus and blur events and the code that moves the keyboard into one keep), or "elsewhere"
+  // (the window moved it on, or another pane has it).
+  keyboardAt() {
+    if (this.h && "is_focused" in this.h && this.h.is_focused()) return "pane";
+    if (this.fieldFocused) return `field:${this.fieldFocused}`;
+    return "elsewhere";
+  }
   key(e, cx) {
     // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
     // after a click acts on its own, and the turn is not opened behind it.
@@ -5041,7 +5088,7 @@ export default class Threads extends View {
       case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
-      case "settings": return this.setSettings(!this.settingsOpen);
+      case "settings": bindCardKeys(cx); return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
@@ -5788,6 +5835,7 @@ export default class Threads extends View {
       // The pointer in the pane: the floating top shows its icons.
       .on_hover((on, cx) => { if (Boolean(on) !== Boolean(this.paneHover)) { this.paneHover = Boolean(on); cx.notify(); } })
       .on_key_down((e, cx) => this.key(e, cx))
+      .when(this.settingsOpen, (el) => this.cardKeyContext(el))
       .on_modifiers_changed((e, cx) => this.cmdUp(e, cx))
       // Zoomed px from on_size_change, design px everywhere else (zoom()).
       .on_size_change((size, cx) => {
@@ -6593,7 +6641,7 @@ export default class Threads extends View {
       quoteKey: () => [v_flex().gap(4)
         .child(row("Quote key", this.cardStop(h_flex().id("th-set-quote").flex_none().w(36).h(24).px(6).items_center().rounded(6)
           .border_1().border_color(this.fieldFocused === "quote" ? t.accent : t.border).bg(t.background)
-          .child(Input.new(this.quoteInput).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground)),
+          .child(maybe(Input.new(this.quoteInput), "tab_stop", false).w_full().h_full().text_size(13).font_family(this.mono()).text_color(t.foreground)),
         t, "th-set-quote", null, { field: { input: this.quoteInput, name: "quote" } })))
         .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
@@ -6927,7 +6975,7 @@ export default class Threads extends View {
       .child(this.ruleLabel(t, name))
       .child(this.cardStop(h_flex().id(`th-rule-f-${k}`).h(26).px(7).items_center().rounded(5).border_1()
         .border_color(shown ? t.blocked : this.fieldFocused === tag ? t.accent : t.border).bg(t.background)
-        .child(Input.new(input).w_full().h_full().text_size(12.5).text_color(t.foreground)
+        .child(maybe(Input.new(input), "tab_stop", false).w_full().h_full().text_size(12.5).text_color(t.foreground)
           .when(k === "pattern" || k === "url" || k === "prefix", (el) => el.font_family(this.mono()))),
       t, `th-rule-f-${k}`, null, { field: { input, name: tag } }))
       .when(Boolean(shown), (el) => el.child(note(`Not working: ${shown}`, t.blocked)))

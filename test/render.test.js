@@ -71,6 +71,8 @@ const editors = [];
 // Plain scroll handles made (the image viewer's panel), with the children each was asked to reveal.
 const scrollHandles = [];
 let focusCalls = 0;
+// Every list given to cx.bind_keys, for the whole file: the mod installs its keys once.
+const keyBinds = [];
 const never = () => new Promise(() => {});
 // The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
 // test sets this (n) => { start, end }.
@@ -221,6 +223,7 @@ function makeCx() {
     flush(ms = 200, rounds = 10) { for (let i = 0; i < rounds; i++) { const due = cx.timers.filter((x) => x.ms <= ms); cx.timers = cx.timers.filter((x) => x.ms > ms); if (!due.length) return; for (const x of due) x.fn(cx); } },
     spawn: (fn) => { const p = fn(cx); cx.pending.push(p); return p; },
     pending: [], notify() { cx.notifyHook?.(); }, stop_propagation() {},
+    bind_keys(list) { keyBinds.push(list); return list.length; },
     clip: null,
     write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
     read_from_clipboard() { return cx.clip ?? undefined; },
@@ -12471,3 +12474,93 @@ test("card keys: on Sender rules the ring follows a press the way it does on Lin
     expect([v.ruleEdit?.kind, v.cardRing]).toEqual(["senders", "th-sender-type-prefix"]);
   } finally { done(v); }
 });
+
+// ---- the settings card's bound Tab (issue 104): the window takes plain Tab before on_key_down ----
+
+const CARD_BOUND = [
+  { keystroke: "tab", action: "agent-threads.ringNext", context: "ThreadsCard" },
+  { keystroke: "shift-tab", action: "agent-threads.ringBack", context: "ThreadsCard" },
+];
+const rootOf = (v, cx) => { rec = []; v.render(cx); const c = rec; rec = null; return c; };
+const actionsOf = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_action").map((e) => [e[1], e[2]]));
+
+test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the ring's actions, in the card's key context", async () => {
+  const a = await cardPane();
+  const b = await cardPane();
+  b.v.action("settings", b.cx);
+  b.v.action("settings", b.cx);
+  expect(keyBinds).toEqual([CARD_BOUND]);
+  a.v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
+});
+
+test("card bound keys: the pane's root is the ThreadsCard key context, with the ring's actions, only while the card is open", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const shut = rootOf(v, cx);
+  expect(shut.filter((e) => e[0] === "key_context")).toEqual([]);
+  expect(actionsOf(shut)).toEqual({});
+  v.action("settings", cx);
+  const open = rootOf(v, cx);
+  expect(open.filter((e) => e[0] === "key_context")).toEqual([["key_context", "ThreadsCard"]]);
+  expect(Object.keys(actionsOf(open)).sort()).toEqual(["agent-threads.ringBack", "agent-threads.ringNext"]);
+  v.action("settings", cx);
+  expect(rootOf(v, cx).filter((e) => e[0] === "key_context")).toEqual([]);
+});
+
+test("card bound keys: the bound actions move the ring as Tab and Shift-Tab do in on_key_down, and nothing else appears", async () => {
+  const { v, cx } = await cardPane();
+  const ids = stopsOf(v);
+  const run = (name) => { let stopped = 0, told = 0; actionsOf(rootOf(v, cx))[name]({ action: name }, { ...cx, stop_propagation() { stopped++; }, notify() { told++; } }); return [v.cardRing, stopped, told]; };
+  const byKey = (shift) => { pressKey(v, cx, "tab", tabEv(shift)); return v.cardRing; };
+  const toast = v.toast;
+  expect(run("agent-threads.ringNext")).toEqual([ids[0], 1, 1]);
+  expect(run("agent-threads.ringNext")).toEqual([ids[1], 1, 1]);
+  expect(run("agent-threads.ringBack")).toEqual([ids[0], 1, 1]);
+  expect(run("agent-threads.ringBack")).toEqual([ids.at(-1), 1, 1]);
+  const actions = [];
+  v.cardRing = null;
+  for (const n of ["agent-threads.ringNext", "agent-threads.ringNext", "agent-threads.ringBack", "agent-threads.ringBack"]) actions.push(run(n)[0]);
+  const keys = [];
+  v.cardRing = null;
+  for (const s of [false, false, true, true]) keys.push(byKey(s));
+  expect(actions).toEqual(keys);
+  expect(v.toast).toBe(toast);
+  // A field with the keyboard: the bound Tab takes the ring on out of it, as the key does.
+  v.cardRing = "th-set-quote"; v.fieldFocused = "quote";
+  expect(run("agent-threads.ringNext")[0]).toBe(ids[ids.indexOf("th-set-quote") + 1]);
+  expect(v.fieldFocused).toBeNull();
+});
+
+test("card bound keys: the card's fields are kept out of the window's Tab order", async () => {
+  const { v } = await cardPane();
+  const stops = (c) => c.filter((e) => e[0] === "tab_stop");
+  expect(stops(cardOf(v))).toEqual([["tab_stop", false]]); // the quote key field
+  const r = await rulesPane();
+  try {
+    r.v.openRule(1);
+    const fields = stopsOf(r.v).filter((id) => id.startsWith("th-rule-f-"));
+    expect(fields.length).toBeGreaterThan(1);
+    expect(stops(cardOf(r.v))).toEqual(fields.map(() => ["tab_stop", false]));
+  } finally { done(r.v); }
+});
+
+test("card bound keys: the debug report says where the keyboard is: the pane, a card field, or elsewhere", async () => {
+  const { v, cx } = await cardPane();
+  const at = () => { v.report(); return state.shared["threads.debug"].t4.keyboard; };
+  let focused = true;
+  v.h = { focus() {}, is_focused: () => focused };
+  expect(at()).toBe("pane");
+  focused = false;
+  expect(at()).toBe("elsewhere");
+  v.quoteInput.handlers.focus(null, cx);
+  expect(at()).toBe("field:quote");
+  v.quoteInput.handlers.blur(null, cx);
+  expect(at()).toBe("elsewhere");
+  v.fieldFocused = "rule-name";
+  expect(at()).toBe("field:rule-name");
+  // A handle without is_focused (an older Herdr) is never read as the pane's.
+  v.h = { focus() {} };
+  v.fieldFocused = null;
+  expect(at()).toBe("elsewhere");
+});
+
