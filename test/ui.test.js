@@ -7,7 +7,7 @@ import {
   statusGroups, statusWidth, ringStep,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
-  isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
+  isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
@@ -97,6 +97,17 @@ test("matchFill: the usual 32%, and the strongest fill up to 60% that keeps the 
   expect(contrast(dark.fg, drawn(alpha(dark.working, 0.6), dark.bg))).toBeLessThan(4.5);
   // White in a dark theme's blue bubble is already under 4.5:1 at 32%: no stronger fill there.
   expect(matchFill(dark.working, "#ffffff", blue, true)).toBe("#e6c07a52");
+  // Over the selected row's fill (Herdr 0.1.16's dark #ffffff17 drawn over the background) the
+  // same text allows less: 40% (66) at 4.69:1 where the plain background allows 48% (7a).
+  expect(matchFill(dark.working, dark.fg, dark.bg, true)).toBe("#e6c07a7a");
+  expect(matchFill(dark.working, dark.fg, over("#ffffff17", dark.bg), true)).toBe("#e6c07a66");
+  // Light (#00000012): 60% still keeps 6.6:1.
+  expect(matchFill(light.working, light.fg, over("#00000012", light.bg), true)).toBe("#99670099");
+  // The threshold is unrounded: over #35373b, 38% gives 4.498:1, which rounds to 4.5 but is
+  // under it, so the fill is 36% (5c), not 38% (61).
+  expect(contrast(dark.fg, mix("#35373b", dark.working, 0.38))).toBe(4.5);
+  expect(ratio(dark.fg, mix("#35373b", dark.working, 0.38))).toBeLessThan(4.5);
+  expect(matchFill(dark.working, dark.fg, "#35373b", true)).toBe("#e6c07a5c");
 });
 
 test("alpha: every colour form", () => {

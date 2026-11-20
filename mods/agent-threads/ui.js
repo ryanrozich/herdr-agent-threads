@@ -2507,8 +2507,14 @@ function rgb(color) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a ?? "");
   return m ? [1, 2, 3].map((i) => parseInt(m[i], 16)) : null;
 }
-// WCAG contrast ratio of two colours (alpha ignored), or null when one does not parse.
+// WCAG contrast ratio of two colours (alpha ignored), rounded to two decimals, or null when
+// one does not parse.
 export function contrast(a, b) {
+  const r = ratio(a, b);
+  return r == null ? null : Math.round(r * 100) / 100;
+}
+// The same ratio unrounded, for a threshold check: 4.495 is under 4.5.
+export function ratio(a, b) {
   const x = rgb(a);
   const y = rgb(b);
   if (!x || !y) return null;
@@ -2517,16 +2523,17 @@ export function contrast(a, b) {
     return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   };
   const [hi, lo] = [lum(x), lum(y)].sort((p, q) => q - p);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  return (hi + 0.05) / (lo + 0.05);
 }
 // A search match's fill: the working colour at 32%, and for the selected turn's matches
-// (strong) the strongest fill up to 60%, in 2% steps, that keeps the text on it (fg, over
-// bg) at 4.5:1. Where even 32% does not, the selected match keeps 32%: never less contrast
-// than the others.
+// (strong) the strongest fill up to 60%, in 2% steps, that keeps the text on it (fg) at 4.5:1
+// unrounded. bg is the opaque colour the match is drawn over: the selected row's fill where
+// the row has one. Where even 32% does not reach 4.5:1, the selected match keeps 32%: never
+// less contrast than the others.
 export function matchFill(working, fg, bg, strong) {
   if (!strong) return alpha(working, 0.32);
   for (let a = 0.6; a > 0.32; a -= 0.02) {
-    const c = contrast(fg, mix(bg, working, a));
+    const c = ratio(fg, mix(bg, working, a));
     if (c == null) break;
     if (c >= 4.5) return alpha(working, Math.round(a * 100) / 100);
   }

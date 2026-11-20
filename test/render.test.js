@@ -11816,4 +11816,12 @@ test("the selected turn's matches get the stronger fill the text allows, the oth
   settleRows(v, cx);
   expect(fills("0:5")).toEqual(["#d7a00085"]);
   expect(fills("0:7")).toEqual(["#d7a00052"]);
+  // The chat rows above have no fill of their own. An outline line of the selected turn sits on
+  // the selected fill (#2a2d3a here), where 52% would leave the text at 4.19:1, so its match is
+  // measured over that fill: 48% (7a) at 4.53:1. Measured over the background, it would be 85.
+  v.action("outline", cx);
+  settleRows(v, cx);
+  expect(v.rows().find((r) => r.key === "0:5").kind).toBe("line");
+  expect(fills("0:5")).toEqual(["#d7a0007a"]);
+  expect(fills("0:7")).toEqual(["#d7a00052"]);
 });

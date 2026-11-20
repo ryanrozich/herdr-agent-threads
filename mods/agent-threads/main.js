@@ -7535,13 +7535,16 @@ export default class Threads extends View {
   // A search match's fill: the working colour at 32%, and stronger in the selected turn's rows
   // (item sets hlCur), so the match the reader is on stands out among the others: up to 60%,
   // as far as the text on it still reads at 4.5:1 (ui.js matchFill; a bubble's theme has its
-  // own text and fill). It is a fill only, so no height changes and nothing is reshaped.
+  // own text and fill). Measured over what the match sits on: the selected fill on the rows
+  // that draw one (item sets hlOnSel: outline lines and compact pins), else the background.
+  // It is a fill only, so no height changes and nothing is reshaped.
   hlFill(t) {
-    const k = `${t.working}|${t.foreground}|${t.background}|${this.hlCur ? 1 : 0}`;
+    const onSel = Boolean(this.hlCur && this.hlOnSel && t.selected);
+    const k = `${t.working}|${t.foreground}|${t.background}|${this.hlCur ? 1 : 0}|${onSel ? t.selected : ""}`;
     this.fillMemo ??= new Map();
     let f = this.fillMemo.get(k);
     if (f == null) {
-      f = matchFill(t.working, t.foreground, t.background, Boolean(this.hlCur));
+      f = matchFill(t.working, t.foreground, onSel ? over(t.selected, t.background) : t.background, Boolean(this.hlCur));
       if (this.fillMemo.size > 16) this.fillMemo.clear();
       this.fillMemo.set(k, f);
     }
@@ -8208,6 +8211,8 @@ export default class Threads extends View {
   item(t, r, focusedPanel, size) {
     // The selected turn's search matches get the stronger fill (hlFill) while its rows draw.
     this.hlCur = r.turn != null && Boolean(this.sel) && r.turn === this.findTurn(this.sel);
+    // Of those, the rows drawn on the selected fill (lineItem, pinRow); chat rows have none.
+    this.hlOnSel = r.kind === "line" || (r.kind === "turn" && Boolean(r.compact));
     switch (r.kind) {
       case "spacer": return div();
       case "gap": return div();
