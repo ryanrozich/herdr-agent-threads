@@ -56,7 +56,7 @@ import {
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
-  keyAction, ledgerKey, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
+  keyAction, ledgerKey, TRAJ_MAX, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
@@ -195,6 +195,8 @@ const WIDTH_KEY = "threads.width";
 // px size (the measured width and the frame). "hold" until a time: the pane's own resize
 // (fitToReading) is under way and is not the owner's choice.
 const PIN_W_KEY = "threads.pinWidth";
+// The Trajectory pane's width as the owner last left it, kept the same way: { px }.
+const TRAJ_W_KEY = "threads.trajWidth";
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -3279,36 +3281,47 @@ export default class Threads extends View {
     if (!me || this.paneW == null) return;
     const map = shared(WIDTH_KEY) ?? {};
     if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
-    if (!this.pinnedPane) return;
+    // The Pinned column's and the Trajectory pane's width, each kept in its own key.
+    const wKey = this.pinnedPane ? PIN_W_KEY : this.trajPane ? TRAJ_W_KEY : null;
+    if (!wKey) return;
     const now = Date.now();
     this.firstSizeAt ??= now;
-    const kept = shared(PIN_W_KEY) ?? {};
+    const kept = shared(wKey) ?? {};
     if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
     const px = Math.round(this.paneW) + PANE_FRAME;
-    if (kept.px !== px) setShared(PIN_W_KEY, { px });
+    if (kept.px !== px) setShared(wKey, { px });
   }
   keptPinWidth() {
     const px = shared(PIN_W_KEY)?.px;
     return Number.isFinite(px) && px > 0 ? px : null;
   }
+  keptTrajWidth() {
+    const px = shared(TRAJ_W_KEY)?.px;
+    return Number.isFinite(px) && px > 0 ? px : null;
+  }
 
   // - and =, in the column or in Threads while the column is open: the column 40 px
   // narrower or wider, and Threads the other way, so the terminal stays put (ui.js
-  // columnResize says why a drag on the divider cannot do this).
+  // columnResize says why a drag on the divider cannot do this). The Trajectory pane steps
+  // the same way: in it, or in the Chat while it is open and the Pinned column is not. At
+  // its limit it says nothing (no notice on a key in the Trajectory).
   resizeColumn(d, cx) {
-    const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
-    const main = this.pinnedPane ? this.mainPane() : this.me();
+    const traj = this.trajPane || (!this.pinnedPane && !this.pinnedPaneOpen() && Boolean(this.trajPaneOpen()));
+    const side = this.pinnedPane || this.trajPane;
+    const col = side ? this.me() : traj ? this.trajPaneOpen() : this.pinnedPaneOpen();
+    const main = side ? this.mainPane() : this.me();
     if (!col || !main) return false;
     const w = shared(WIDTH_KEY) ?? {};
     // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
-    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d);
+    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640);
+    if (!next && traj) return true;
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
     // With readingWidth on, Threads stops at the reading width and the terminal takes the rest.
     if (this.prefs.readingWidth && Number.isFinite(this.readingPx())) next.main = Math.min(next.main, this.readingPx());
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
-    setShared(PIN_W_KEY, { px: next.column });
+    setShared(traj ? TRAJ_W_KEY : PIN_W_KEY, { px: next.column });
     return true;
   }
 
@@ -9364,7 +9377,7 @@ export default class Threads extends View {
     const me = this.me();
     if (!me || this.pw() < TRAJ_SPLIT_MIN) { this.enterTraj(); return true; }
     if (this.splitAsk) return true;
-    this.splitAsk = { before: panes().map((p) => p.pane), px: TRAJ_COL, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
+    this.splitAsk = { before: panes().map((p) => p.pane), px: this.keptTrajWidth() ?? TRAJ_COL, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     this.trajOpen = true;
     // The selected turn goes with it (syncSel), so the new pane opens on it.
     this.selSent = null;

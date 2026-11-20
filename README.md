@@ -129,7 +129,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `1` to `5` | Go to a pin |
 | `u` | Undo the last unpin |
 | `v` | Show the Pinned column |
-| `-` `=` | Make the Pinned column narrower or wider |
+| `-` `=` | Make the Pinned column or the Trajectory pane narrower or wider |
 | `y` | Open or go to the Trajectory |
 | `g` | Go to a turn number |
 | `[` `]` | Previous or next day |

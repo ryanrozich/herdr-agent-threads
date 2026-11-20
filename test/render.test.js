@@ -12271,3 +12271,46 @@ test("running rule in the pane: a turn with no end is running only while the age
   expect(v.ledger().going).toBe(false);
   draw(v, cx);
 });
+
+test("- and = step the Trajectory pane 40 px and the Chat the other way, keep its width for the next split, and say nothing at the limit", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  state.shared["threads.width"] = { p2: 600, p3: 918 };
+  // In the Chat, with no Pinned column: the Trajectory pane.
+  log = [];
+  v.key(keyEv("="), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 960 }, { id: "p2", px: 562 }]);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 960 });
+  expect(state.shared["threads.pinWidth"]).toBeUndefined();
+  // In the Trajectory pane.
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  log = [];
+  w.key(keyEv("-"), cx2);
+  // The Chat gives way up to its reading width (readingWidth on), as beside the Pinned column.
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: Math.min(602, w.readingPx()) }]);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 920 });
+  // The Chat at its 240 px: = does nothing, with no notice.
+  state.shared["threads.width"] = { p2: 238, p3: 918 };
+  log = [];
+  w.key(keyEv("="), cx2);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect([w.toast, v.toast]).toEqual([null, null]);
+  // The next split opens at the kept width.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  delete state.shared["threads.trajByTerminal"];
+  v.splitAsk = null;
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(920);
+});

@@ -42,6 +42,7 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
 const LEDGER_KEYS = {
   up: "lprev", k: "lprev", down: "lnext", j: "lnext", home: "lfirst", end: "llast", enter: "ldetail", space: "ldetail",
   f: "lfail", m: "luser", y: "trajectory", escape: "escape", t: "focus", ",": "settings", "?": "keys",
+  "-": "narrower", "=": "wider",
 };
 export function ledgerKey(e) {
   const m = e?.modifiers ?? {};
@@ -64,7 +65,10 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "Next or previous user message"],
       [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
     ]],
-    ["Pane", [[["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"]]],
+    ["Pane", [
+      ...(inPane ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
+      [["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"],
+    ]],
   ];
   return [
     ["List", [
@@ -89,7 +93,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["Esc", ","], "Close it"],
     ]],
     ["View", [
-      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column or Trajectory pane narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }
@@ -2553,11 +2557,14 @@ export function pinRowShape({ prompt, reply, width }) {
 // divider between those two resizes Threads alone (the terminal takes up the rest). So the
 // keys resize both, the column by d and Threads by -d, and the terminal keeps its width.
 // From the column's width c and Threads' m: the two new widths, or null when there is no
-// room (the column 200 to 640 px, Threads at least PIN_MAIN_MIN).
+// room (the column 200 to max px, 640 for the Pinned column, Threads at least PIN_MAIN_MIN).
+// The Trajectory pane steps the same way with no upper limit of its own (TRAJ_MAX): it has a
+// layout from 900 px, past the Pinned column's 640.
 export const PIN_STEP = 40;
-export function columnResize(c, m, d) {
+export const TRAJ_MAX = Infinity;
+export function columnResize(c, m, d, max = 640) {
   if (!(c > 0) || !(m > 0)) return null;
-  let dd = Math.max(200, Math.min(640, Math.round(c + d))) - Math.round(c);
+  let dd = Math.max(200, Math.min(max, Math.round(c + d))) - Math.round(c);
   if (Math.round(m) - dd < PIN_MAIN_MIN) dd = Math.round(m) - PIN_MAIN_MIN;
   if (d > 0 ? dd <= 0 : dd >= 0) return null;
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
