@@ -53,6 +53,29 @@ export function nextStop(ids, cur, step) {
   if (i < 0) return step > 0 ? ids[0] : ids[ids.length - 1];
   return ids[(i + step + ids.length) % ids.length];
 }
+// Installs a mod's key bindings once for all its panes (cx.bind_keys works on the app's
+// keymap). ask(cx) runs from init and again when the settings card opens. The first call
+// installs, whatever Herdr answers. Only when that call threw (init may be a place Herdr
+// refuses it) does the next call try once more; after that nothing is asked again. answer is
+// what Herdr said: the count, "missing" (no cx.bind_keys), "failed: <message>", or any other
+// answer as text.
+export function keyInstaller(bindings) {
+  const s = { answer: null, tries: 0 };
+  s.ask = (cx) => {
+    const retry = s.tries === 1 && String(s.answer).startsWith("failed: ");
+    if (s.tries > 0 && !retry) return s.answer;
+    s.tries++;
+    if (!cx || !("bind_keys" in cx)) s.answer = "missing";
+    else {
+      try {
+        const n = cx.bind_keys(bindings);
+        s.answer = typeof n === "number" ? n : `answered ${String(n)}`;
+      } catch (err) { s.answer = `failed: ${err?.message ?? err}`; }
+    }
+    return s.answer;
+  };
+  return s;
+}
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.

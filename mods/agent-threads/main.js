@@ -52,16 +52,11 @@ const CARD_BINDINGS = [
   { keystroke: "tab", action: "agent-threads.ringNext", context: CARD_CONTEXT },
   { keystroke: "shift-tab", action: "agent-threads.ringBack", context: CARD_CONTEXT },
 ];
-// What installing them answered: null (not yet), the count, "missing" (this Herdr has no
-// cx.bind_keys) or "failed: <message>" (tried again the next time the card opens). The keymap
-// is the app's, not a pane's, so the mod installs them once for all its panes; never from
-// render, where Herdr refuses it.
-let cardKeys = null;
-function bindCardKeys(cx) {
-  if (typeof cardKeys === "number" || cardKeys === "missing") return;
-  if (!cx || !("bind_keys" in cx)) { cardKeys = "missing"; return; }
-  try { cardKeys = cx.bind_keys(CARD_BINDINGS); } catch (err) { cardKeys = `failed: ${err?.message ?? err}`; }
-}
+// Installed once for all the mod's panes (keyInstaller), from init and, only if that call
+// threw, once more when the card first opens; never from render, where Herdr refuses it.
+// cardKeys.answer is what Herdr said, for the debug report.
+const cardKeys = keyInstaller(CARD_BINDINGS);
+function bindCardKeys(cx) { cardKeys.ask(cx); }
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
@@ -80,7 +75,7 @@ import {
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
-  keyAction, ringKey, nextStop, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
+  keyAction, ringKey, nextStop, keyInstaller, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
@@ -1010,7 +1005,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys.answer } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
