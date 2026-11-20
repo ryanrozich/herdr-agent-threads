@@ -270,7 +270,7 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   // Every Herdr call of the run, the shot and the clean-up's app.quit included, used one
   // display and one session: a --do command never changes them.
   const envs = readFileSync(join(f.d, "env.log"), "utf8").trim().split("\n");
-  expect(envs.some((l) => l.endsWith(" shot " + png))).toBe(true);
+  expect(envs.some((l) => l.endsWith(` shot ${png}`))).toBe(true);
   expect(envs.some((l) => l.includes(" do app.quit"))).toBe(true);
   expect(new Set(envs.map((l) => l.split(" ").slice(0, 2).join(" ")))).toEqual(new Set([":99 still99"]));
   // The app started with the clean environment, and the display it was given.
