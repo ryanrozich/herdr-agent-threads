@@ -48,7 +48,7 @@ export const EXPECTED_DIFFERENCES = [
   { id: "codex: images_are_never_written_through_a_planted_symlink[1]", reason: "R5a", kind: "by design", note: "Agent Threads writes no files at all, so nothing is written through the planted path." },
   { id: "codex: images_are_never_written_through_a_planted_symlink[2]", reason: "R5a", kind: "by design", note: "Agent Threads writes no files at all, so nothing is written through the planted path." },
   { id: "codex: input_image_data_url_is_saved_next_to_trajectory", reason: "R5a", kind: "by design", note: "Agent Threads writes no files; only the text part of the tool output survives." },
-  { id: "codex: loaded_orphan_subagent_excludes_copied_history", reason: "R10", kind: "by design", note: "The orphan keeps its prompt step; its copied history is cut by the ordinal boundary when read alone." },
+  { id: "codex: loaded_orphan_subagent_excludes_copied_history", reason: "R10", kind: "by design", note: "The orphan keeps its prompt step; a lone rollout is read whole (R10), and the adapted copy holds no prompt, so nothing of the parent survives." },
   { id: "codex: mcp_image_block_is_saved", reason: "R5a", kind: "by design", note: "Agent Threads writes no files; only the text part of the tool output survives." },
   { id: "codex: missing_root_usage_keeps_combined_totals_unknown", reason: "R2", kind: "not handled", note: "A child no spawn_agent call names is not attached; Harbor links by parent_thread_id alone." },
   { id: "codex: one_step_per_api_call_with_bundled_tool_calls", reason: "R6", kind: "not handled", note: "Agent Threads puts token totals on the turn's last step and does not write llm_call_count per API call." },

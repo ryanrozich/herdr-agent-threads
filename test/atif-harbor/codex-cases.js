@@ -314,8 +314,10 @@ export const CODEX_CASES = [{
 
   {
     id: "codex: codex_subagent_rollouts_use_atif_children_without_copied_history",
-    // Adapted: a UserMessage starts the main and each child rollout (Agent Threads requires a prompt);
-    // each child's own events are renumbered from its subagent_history_start_ordinal.
+    // Adapted: each child's copied history starts with the parent's prompt, as Codex writes it;
+    // the subagent_history_start_ordinal boundary is what removes the copy, and each child's own
+    // events are renumbered after it. A UserMessage starts the main rollout (Agent Threads
+    // requires a prompt).
     files: (dir) => {
       const main = writeDay(dir, "00-root", [
         meta("root"),
@@ -326,13 +328,14 @@ export const CODEX_CASES = [{
         imgTokens(100, 10, { cached: 40, ordinal: 6 }),
       ]);
       for (const name of ["alpha", "beta"]) writeDay(dir, name, [
-        meta(name, "root", `/root/${name}`, 4, NICKNAMES[name]),
+        meta(name, "root", `/root/${name}`, 5, NICKNAMES[name]),
         imgEvent(0, 1, "session_meta", { id: "root" }),
-        message("copied parent history", 2),
-        imgTokens(999, 99, { cached: 999, ordinal: 3 }),
-        imgPrompt(`Do the ${name} task.`, 4),
-        message(`${name} child work`, 5),
-        imgTokens(name === "alpha" ? 50 : 70, name === "alpha" ? 5 : 7, { cached: name === "alpha" ? 0 : 20, ordinal: 6 }),
+        imgPrompt("Oversee the subagents.", 2),
+        message("copied parent history", 3),
+        imgTokens(999, 99, { cached: 999, ordinal: 4 }),
+        imgPrompt(`Do the ${name} task.`, 5),
+        message(`${name} child work`, 6),
+        imgTokens(name === "alpha" ? 50 : 70, name === "alpha" ? 5 : 7, { cached: name === "alpha" ? 0 : 20, ordinal: 7 }),
       ]);
       return { main };
     },
@@ -371,7 +374,7 @@ export const CODEX_CASES = [{
         assert.equal(child.agent.extra.agent_nickname, undefined);
         assert.equal(child.extra.agent_name, NICKNAMES[child.trajectory_id]);
       }
-      assert.equal(JSON.stringify(t.steps).includes("copied parent history"), false);
+      assert.equal(JSON.stringify(t).includes("copied parent history"), false);
       assert.deepEqual(t.final_metrics, { total_prompt_tokens: 220, total_completion_tokens: 22, total_cached_tokens: 60, total_steps: 3 });
     } },
   },
