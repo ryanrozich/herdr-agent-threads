@@ -895,7 +895,8 @@ export default class Threads extends View {
   }
 
   // props().debug (tests only): what the pane shows, as data, in shared("threads.debug")
-  // under its terminal, so a check can read it with no screenshot.
+  // under its terminal (the Pinned pane under "<terminal>:pinned", so it never replaces the
+  // Chat's entry), so a check can read it with no screenshot.
   report() {
     const s = this.current();
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
@@ -949,7 +950,8 @@ export default class Threads extends View {
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
     this.lastReport = text;
-    setShared("threads.debug", { ...(shared("threads.debug") ?? {}), [this.terminal]: snap });
+    const key = this.pinnedPane ? `${this.terminal}:pinned` : this.terminal;
+    setShared("threads.debug", { ...(shared("threads.debug") ?? {}), [key]: snap });
   }
 
   // One row or card part as text for the debug report: "turn#3 p2/r3 h89 cmd:/review-pr",

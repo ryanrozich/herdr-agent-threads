@@ -498,6 +498,24 @@ test("a debug pane reports the last command and whether it acted; an unknown one
   expect(v.lastCommand.n).toBe(5);
 });
 
+// The Pinned pane reports under its own key, so the Chat's entry (and its command record,
+// which test/herdr-still.sh reads) is never replaced by the Pinned pane's.
+test("a debug Pinned pane reports under the terminal plus :pinned; the Chat's entry stays", async () => {
+  const { v, cx } = await pane(join(root, "test/fixtures/session.jsonl"));
+  v.command("pin", cx);
+  v.report();
+  const chat = state.shared["threads.debug"].t4;
+  expect(chat.command).toMatchObject({ name: "pin", acted: true });
+  state.props = { ...state.props, view: "pinned" };
+  const w = new Threads();
+  w.init(state.props, makeCx());
+  await settle(w);
+  expect(w.pinnedPane).toBe(true);
+  w.report();
+  expect(state.shared["threads.debug"]["t4:pinned"]).toBeDefined();
+  expect(state.shared["threads.debug"].t4).toEqual(chat);
+});
+
 async function scripted(events) {
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
