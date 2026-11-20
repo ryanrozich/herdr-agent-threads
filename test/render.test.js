@@ -12008,3 +12008,25 @@ test("an open bubble draws a long hyphenated token with breaks; copy, quote, sea
   expect(cx.clip.includes(B)).toBe(false);
   v.action("bubbleColor:blue", cx);
 });
+
+// Issue 112 meets the pasted block (issue 93): a pasted block is drawn as code, and code keeps
+// what was typed (as promptMd does for fenced and inline code), so its long hyphenated tokens
+// get no HYPHEN_BREAK; the message's own text around it still does.
+test("a pasted block keeps its long hyphenated tokens as typed, while the message around it gets breaks", async () => {
+  const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
+  const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const PROMPT = `Does ${TOKEN} see it? Output below.\n\n<pasted_content id="log">\nFAIL ${TOKEN} 2 of 40\nPASS lint\n</pasted_content>`;
+  const { v } = await quotePane();
+  const turn = v.findTurn(v.sel);
+  turn.prompt = PROMPT;
+  turn.youMemo = null;
+  turn.shapeKey = null;
+  const y = v.youMd(v.rows().find((r) => r.kind === "you" && r.turn === turn));
+  expect(y.plain).toBe(true);
+  const paste = y.parts.find((p) => p.paste);
+  const typed = y.parts.find((p) => !p.paste && !p.quote);
+  expect(paste.draw).toBe(`FAIL ${TOKEN} 2 of 40\nPASS lint`);
+  expect(paste.draw.includes(B)).toBe(false);
+  expect(paste.rows).toBeNull();
+  expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+});

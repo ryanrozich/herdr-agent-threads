@@ -7796,7 +7796,7 @@ export default class Threads extends View {
     // A hyphenated token longer than about 3/4 of the widest bubble's line gets HYPHEN_BREAK
     // after its "-"s in the drawn text (ui.js hyphenBreaks); the margin is for a line of
     // wider letters than the estimate's average. y.text stays the message itself. A pasted
-    // block gets none: its lines are cut at the bubble's edge, never wrapped.
+    // block gets none: it is drawn as code, and code keeps what was typed (promptMd).
     const brk = Math.max(8, Math.floor(((bmax - 2 * ROW.BUBBLE_PX) / yc) * 0.75));
     const parts = plain ? promptParts(c.text, max).map((p) => {
       const t = p.lines.join("\n");
