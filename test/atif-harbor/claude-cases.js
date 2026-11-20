@@ -293,8 +293,9 @@ export const CLAUDE_CASES = [
     } },
   },
   {
-    // Adapted: Harbor writes each payload to its own session; here all five share one, in
-    // the test's order.
+    // Adapted: Harbor writes each payload to its own session and asserts one user step each;
+    // here all five share one session, in the test's order, so facts reads five user steps by
+    // position. Harbor's converter gives exactly those five steps for this session.
     id: "claude: stringify_uses_json_dumps_for_non_str",
     files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
       user(true),
@@ -305,16 +306,17 @@ export const CLAUDE_CASES = [
     ]) }),
     facts: (t) => {
       assert.ok(t != null);
-      for (const [payload, expected] of [
+      const expectations = [
         [true, "true"],
         [false, "false"],
         [{ a: 1, b: "x" }, "{\"a\": 1, \"b\": \"x\"}"],
         [{ nested: { inner: [1, 2] } }, "{\"nested\": {\"inner\": [1, 2]}}"],
         [{ 中文: "value", "emoji_🎉": 1 }, "{\"中文\": \"value\", \"emoji_🎉\": 1}"],
-      ]) {
-        assert.equal(userSteps(t).length, 1, JSON.stringify(payload));
-        assert.equal(userSteps(t)[0].message, expected, `json.dumps semantics expected for ${JSON.stringify(payload)}`);
-      }
+      ];
+      assert.equal(userSteps(t).length, expectations.length, "one user step per payload");
+      expectations.forEach(([payload, expected], index) => {
+        assert.equal(userSteps(t)[index].message, expected, `json.dumps semantics expected for ${JSON.stringify(payload)}`);
+      });
     },
     diff: { reason: "R5b", kind: "not handled", control: session(["true", "false", "{\"a\": 1, \"b\": \"x\"}"].map((value) => user(value))), check: (t, control) => {
       assert.equal(t, null);
