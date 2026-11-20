@@ -77,3 +77,16 @@ test("the queue's conditions put no space around the operator", () => {
     expect([list, c, compact]).toEqual([list, c, true]);
   }
 });
+
+// An acceptance hold must stop every route into the queue, so the hold lines sit in the queue
+// rule's own queue_conditions (which the label, the command and every pull_request_rules
+// entry all go through), not in one entry's conditions.
+test("a hold or hold:preview label keeps any pull request out of the queue", () => {
+  const rules = mergify.slice(mergify.indexOf("queue_rules:"), mergify.indexOf("merge_queue:"));
+  const queueConditions = rules.slice(rules.indexOf("queue_conditions:"), rules.indexOf("merge_conditions:"));
+  const conditions = [...queueConditions.matchAll(/^ {6}- (.+)$/gm)].map((m) => m[1]);
+  expect(conditions).toContain("label!=hold");
+  expect(conditions).toContain("label!=hold:preview");
+  // One queue rule, so no pull request can be queued into a rule without them.
+  expect([...rules.matchAll(/^ {2}- name: /gm)]).toHaveLength(1);
+});
