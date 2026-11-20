@@ -14238,3 +14238,48 @@ test("narrow, opening the detail under the list scrolls the selected row into vi
   v.render(cx);
   expect(scrolled).toEqual([]);
 });
+
+test("until the first build is done: no counts in the heading or the bottom line, and f, Shift f, Home and End do nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  // A failed call in the newest turn, so the first slice has one to count.
+  const s = v.current();
+  const last = s.turns[s.turns.length - 1];
+  last.steps.find((st) => st.k === "group").info[0].f = true;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  const ids = (c) => c.filter((e) => e[0] === "id").map((e) => e[1]);
+  const statusTexts = (c) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status"); return c.slice(at).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  let c = frame(v, cx);
+  const L = v.ledger();
+  expect(L.partial).toBe(true);
+  expect(L.totals.failed).toBe(1);
+  expect(ids(c)).toContain("th-traj-heading");
+  expect(ids(c)).not.toContain("th-traj-fails");
+  expect(ids(c)).toContain("th-status");
+  expect(ids(c).filter((x) => String(x).startsWith("th-status-"))).toEqual([]);
+  expect(statusTexts(c).join(" ")).not.toMatch(/turn|step|failed|token|\?/);
+  const sel = v.tsel;
+  for (const name of ["lfail", "lfailBack", "lfirst", "llast"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    expect(v.tsel).toBe(sel);
+  }
+  for (const k of ["home", "end", "f"]) v.key(keyEv(k), cx);
+  v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(sel);
+  expect(v.toast).toBe(null);
+  // Once the build is done, all of them are back.
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  c = frame(v, cx);
+  expect(ids(c)).toContain("th-traj-fails");
+  expect(ids(c)).toContain("th-status-turns");
+  expect(v.ledgerAction("lfirst", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+  expect(v.ledgerAction("lfail", cx)).toBe(true);
+  expect(v.tsel).toMatch(/^tr:/);
+});

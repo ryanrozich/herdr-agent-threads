@@ -10010,7 +10010,7 @@ export default class Threads extends View {
     const k = this.ledgerShown;
     if (k?.rows === L.rows && k.f === f) return k.shown;
     const shown = filterRows(L.rows, f).rows;
-    this.ledgerShown = { rows: L.rows, f, shown };
+    this.ledgerShown = { rows: L.rows, f, shown, partial: L.partial };
     return shown;
   }
   // The selected row, as shown: the one selected, or its turn's heading when the filter hides
@@ -10030,6 +10030,9 @@ export default class Threads extends View {
   ledgerAction(name, cx) {
     const shown = this.ledgerRows();
     const i = this.ledgerSel(shown);
+    // Until the first build is done the rows are the newest turns only: the first and last
+    // rows and the failed calls are not known yet.
+    const held = this.ledgerShown?.partial === true;
     const pick = (j) => {
       const r = shown[j];
       if (!r || r.kind === "sess") return;
@@ -10048,10 +10051,10 @@ export default class Threads extends View {
     switch (name) {
       case "lprev": pick(i < 0 ? shown.length - 1 : step(i, -1)); return true;
       case "lnext": pick(i < 0 ? shown.length - 1 : step(i, 1)); return true;
-      case "lfirst": pick(step(-1, 1)); return true;
-      case "llast": pick(step(shown.length, -1)); return true;
-      case "lfail": seek((r) => r.failed === true, 1); return true;
-      case "lfailBack": seek((r) => r.failed === true, -1); return true;
+      case "lfirst": if (held) return false; pick(step(-1, 1)); return true;
+      case "llast": if (held) return false; pick(step(shown.length, -1)); return true;
+      case "lfail": if (held) return false; seek((r) => r.failed === true, 1); return true;
+      case "lfailBack": if (held) return false; seek((r) => r.failed === true, -1); return true;
       case "luser": seek((r) => r.lk === "you", 1); return true;
       case "luserBack": seek((r) => r.lk === "you", -1); return true;
       case "ldetail": this.toggleDetail(shown[i]?.key ?? null); return true;
@@ -10090,7 +10093,8 @@ export default class Threads extends View {
   // some calls' results were not kept).
   failCount(L, shown, i) {
     const n = L.totals.failed;
-    if (!n) return null;
+    // Until the first build is done, the count would be of the newest turns only.
+    if (!n || L.partial) return null;
     const fails = L.totals.fails;
     const at = shown[i]?.failed ? fails.indexOf(shown[i].key) : -1;
     const more = L.totals.partial.length ? "+" : "";
@@ -10361,7 +10365,9 @@ export default class Threads extends View {
 
   // The foot: the Chat's status line, with the Trajectory's numbers (ledger.js ledgerStatus).
   ledgerFoot(t, L, w) {
-    const groups = ledgerStatus(L.totals, w, L.going);
+    // Until the first build is done, the line is left empty: its counts would be of the
+    // newest turns only. It keeps its height.
+    const groups = L.partial ? [] : ledgerStatus(L.totals, w, L.going);
     return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
       .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
         .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.key === "failed" ? t.blocked : t.dim))
