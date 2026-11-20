@@ -65,7 +65,7 @@ Each turn starts with a heading row: its number, its time, and at the right its 
 
 At the top, the heading counts the failed calls. On a failed call it says which one ("1 of 2"), and its arrows go to the previous or next one, as `Shift f` and `f` do. From 540 px a row of buttons sits under it: Input, Model and Tools hide or show their rows, Failed lists only failed calls, and User only your messages. From 900 px they say "Failed only" and "User only" and show their counts.
 
-`Enter`, or a click on the selected row, shows the row's detail: what it is, when it started, how long it took, its result and its whole text. From 900 px the detail sits at the right of the ledger and starts open; narrower it sits under the ledger and starts closed. `Esc` closes it.
+`Enter`, or a click on the selected row, shows the row's detail: what it is, when it started, how long it took, its result and its whole text. From 900 px the detail sits at the right of the ledger and starts open; narrower it sits under the ledger and starts closed. `Esc` closes it. Commands bound in `keys.json` to the list's moves and to opening a turn move through the ledger and show the detail; the other list commands, such as pin or copy, do nothing in the Trajectory, since its selection is not the chat's.
 
 The Chat and its Trajectory pane select the same turn: move to a turn in one, and the other shows it within a second.
 
