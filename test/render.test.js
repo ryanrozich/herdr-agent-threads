@@ -12226,6 +12226,15 @@ test("the Trajectory at 960 px: the filter bar with counts, the detail open at t
   expect(v.ledgerRows().filter((r) => r.kind === "tr").every((r) => r.failed)).toBe(true);
   // The status line: turns and steps, failed, tokens, time worked.
   expect(v.trajReport().status[0]).toMatch(/^\d+ turns · \d+ steps$/);
+  // The list's commands (keys.json) move through the ledger here; trajectory goes back.
+  onOf(frame(v, cx), "th-filter-failed", "on_click")({}, cx);
+  v.command("first", cx);
+  const top = v.tsel;
+  v.command("next", cx);
+  expect(v.tsel).not.toBe(top);
+  expect(v.turnOfRow(v.tsel)).toBe(v.turnOfRow(top));
+  v.command("trajectory", cx);
+  expect(v.traj).toBe(false);
   draw(v, cx);
 });
 

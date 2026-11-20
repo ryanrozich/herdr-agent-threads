@@ -309,3 +309,15 @@ test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant, 
   // Narrower than the slant: a plain box.
   expect(slantPoints(10, 13, 3, 4)).toEqual([[10, 0], [13, 0], [13, 3], [10, 3]]);
 });
+
+test("ledger: a subagent last seen launched or running says so only in a running turn; else no result", () => {
+  const t = turn(14, [[["Agent", "Audit the tests", 1000, 2000]]], { done: false, end: null, reply: null, agent: true });
+  const s = { agents: new Map([[t.steps[0].ids[0], { st: "running", tok: null, ms: null }]]), agentIds: new Map() };
+  const sub = (live) => ledgerTurn(s, t, 0, live).rows.find((r) => r.tool === "Agent");
+  expect(sub(true).sub.state).toBe("running");
+  expect(sub(true).noResult).toBeUndefined();
+  expect(sub(false)).toMatchObject({ status: "no result", noResult: true, lastAt: T0 + 2000 });
+  expect(sub(false).sub.state).toBeNull();
+  expect(detailOf(sub(false)).fields).toContainEqual(["Result", "No result"]);
+  expect(detailOf(sub(false)).fields).toContainEqual(["Last activity", fmtTime(T0 + 2000)]);
+});

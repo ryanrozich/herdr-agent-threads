@@ -239,6 +239,13 @@ export function ledgerTurn(s, turn, si, live = false) {
       }
       r.status = STATUS[r.lk] ?? null;
       if (failed && r.sub?.tokens) r.status = `failed · ${fmtTokens(r.sub.tokens)} tok`;
+      // A subagent the transcript last saw launched or running: only a running turn may say so
+      // (the running rule). Otherwise its outcome is unknown, so it has no result.
+      if (r.sub && !failed && !live && (r.sub.state === "running" || r.sub.state === "async_launched")) {
+        r.sub = { ...r.sub, state: null };
+        r.status = "no result";
+        r.noResult = true;
+      }
       r.failed = failed;
       if (failed) fails++;
       if (c.start != null && t0 != null) r.start = c.start - t0;
@@ -271,7 +278,7 @@ export function ledgerTurn(s, turn, si, live = false) {
   // only its latest model message, so it is activity, not an end.)
   const stale = !live && !tr.done && !tr.interrupted;
   const lastAt = stale ? (lastEnd != null || tr.end != null ? Math.max(lastEnd ?? tr.end, tr.end ?? lastEnd) : null) : null;
-  if (lastAt != null) for (const r of rows) if (r.lk === "noresult" || (r.open && !live)) r.lastAt = lastAt;
+  if (lastAt != null) for (const r of rows) if (r.lk === "noresult" || r.noResult || (r.open && !live)) r.lastAt = lastAt;
   const open = openAt.map((a) => [a, Math.max(a, t1)]);
   const opens = openSub.map((a) => [a, Math.max(a, t1)]);
   const line = timed && span > 0
@@ -450,7 +457,7 @@ export function detailOf(r) {
   }
   if (call) {
     const none = r.lastAt != null ? "No result" : "No result: the turn was interrupted";
-    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" ? none : r.durQ ? "not recorded" : "ok"]);
+    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" || r.noResult ? none : r.durQ ? "not recorded" : "ok"]);
     if (r.lastAt != null) F.push(["Last activity", fmtTime(r.lastAt)]);
     if (r.sub) F.push(["Subagent", [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") || "no state recorded"]);
   }

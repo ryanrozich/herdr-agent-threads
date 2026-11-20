@@ -184,6 +184,8 @@ const TRAJ_COL = 560;
 // yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
 const DAY_MS = 86400000;
+// The list's commands (keys.json) as the Trajectory's moves.
+const LEDGER_CMD = { prev: "lprev", next: "lnext", first: "lfirst", latest: "llast", open: "ldetail" };
 // shared("threads.fit"): panes the launcher just opened, which size themselves to fitWidth once.
 const FIT_KEY = "threads.fit";
 // Each pane's measured width, so the Pinned column and its Threads pane can resize together.
@@ -5138,9 +5140,10 @@ export default class Threads extends View {
 
   // A command bound in keys.json (next, previous and the like) is a key by another road: like
   // key(), it wins over a press's pending open (OPEN_WAIT_MS).
+  // In the Trajectory, the list's commands move through the ledger instead (LEDGER_CMD).
   command(name, cx) {
     this.openWait = null;
-    const acted = this.action(name, cx);
+    const acted = this.traj ? this.ledgerAction(LEDGER_CMD[name] ?? name, cx) : this.action(name, cx);
     // props().debug: the last command's own name (the part before any colon, so a search's
     // text never reaches the report) and whether it acted, for test/herdr-still.sh: Herdr
     // answers ok for any agent-threads.<name>, one we have or not.
@@ -9370,6 +9373,7 @@ export default class Threads extends View {
     this.traj = true;
     this.keysOpen = false;
     this.tsel = this.sel && this.findTurn(this.sel) ? this.sel : null;
+    this.tscrolled = false;
     this.tscrollTo = this.tsel;
   }
   leaveTraj() {
@@ -9538,7 +9542,7 @@ export default class Threads extends View {
     const inks = trajInks(t, dark);
     const detail = this.detailOpen() && selRow ? detailOf(selRow) : null;
     const right = cols.detailRight;
-    const list = this.ledgerList(t, shown, i, cols, inks, cx);
+    const list = this.ledgerList(t, shown, i, cols, inks, cx, right);
     const panel = detail ? this.ledgerDetail(t, detail, inks, right) : null;
     return v_flex()
       .id("threads-root")
@@ -9556,7 +9560,7 @@ export default class Threads extends View {
       .child(this.trajHeading(t, L, shown, i))
       .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks)))
       .child(right
-        ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel))
+        ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().items_start().child(list).when(Boolean(panel), (el) => el.child(panel))
         : v_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel)))
       .when(Boolean(this.prefs.keyHints), (el) => el.child(this.footer(t)))
       .when(this.statusShown(), (el) => el.child(this.ledgerFoot(t, L, w)))
@@ -9610,15 +9614,24 @@ export default class Threads extends View {
   }
 
   // The ledger: a uniform LEDGER_ROW px list, so Herdr places every row with no measuring.
-  ledgerList(t, shown, i, cols, inks, cx) {
+  // right: the detail sits at its right, in a row, where the list takes the row's height
+  // (h_flex centres its children, so it would have none).
+  ledgerList(t, shown, i, cols, inks, cx, right = false) {
     const sel = shown[i]?.key ?? null;
+    // The first draw shows the selected row (the newest heading when none is selected).
+    if (!this.tscrolled && shown.length) { this.tscrolled = true; this.tscrollTo ??= sel; }
     const goTo = this.tscrollTo;
     if (goTo) {
       this.tscrollTo = null;
       const j = shown.findIndex((r) => r.key === goTo || r.key === this.turnOfRow(goTo));
-      if (j >= 0) cx.timer.after(0, (cx) => { this.tscroll.scroll_to_item(j); cx.notify(); });
+      // Now, and again once the list has its size (a timer asked for in a draw may not run
+      // before the list is laid out at a new width).
+      if (j >= 0) {
+        this.tscroll.scroll_to_item(j, "center");
+        cx.timer.after(16, (cx) => { this.tscroll.scroll_to_item(j, "center"); cx.notify(); });
+      }
     }
-    return div().id("th-traj-listbox").flex_1().min_h(0).min_w(0).w_full().relative()
+    return div().id("th-traj-listbox").flex_1().min_h(0).min_w(0).w_full().relative().when(right, (el) => el.h_full())
       .child(v_virtual_list("th-traj-list", shown.length, LEDGER_ROW, (j) => shown[j]?.key ?? `gone:${j}`,
         (range) => {
           const out = [];
