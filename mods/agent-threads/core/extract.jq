@@ -35,8 +35,8 @@
 #   n  a task notification              {a: task id (a subagent's agent id), st: status, ms,
 #                                       tok}, from a user line (which is also a "p") or a
 #                                       queued one
-# Thinking blocks, tool input past its summary, tool results' text and bookkeeping lines are
-# dropped. Texts are
+# Thinking blocks are kept only for ATIF with THREADS_REASONING=1. Tool input past its
+# summary, tool results' text and bookkeeping lines are dropped. Texts are
 # capped at 200 KB so one chunk's output stays well under exec's 8 MiB limit.
 
 def cap:
@@ -195,6 +195,8 @@ def assistant_event:
       ( $l.message.content[]?
         | select(type == "object")
         | if .type == "text" then {k: "t", t: ((.text // "") | cap), ts: $l.timestamp}
+          elif ($ENV.THREADS_REASONING // "") == "1" and (.type == "thinking" or .type == "reasoning" or .type == "analysis") then
+            {k: "h", t: ((.text // .thinking // "") | tostring | gsub("^\\s+|\\s+$"; "") | cap), ts: $l.timestamp}
           elif .type == "tool_use" then {k: "u", n: .name, id: .id, ts: $l.timestamp, in: (.input | brief)}
           else empty end ),
       ( select($l.message.id != null and $l.message.usage != null and ($l.apiBlockIndex // 0) == 0)

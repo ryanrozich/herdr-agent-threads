@@ -47,12 +47,13 @@ export function trajectory(s, turn, id = null) {
   const addSteps = (list) => {
   for (const st of list ?? []) {
     if (st.k === "text") {
-      open().cells.push({ kind: "message", text: st.t, ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
+      open().cells.push({ kind: "message", text: st.t, ...(st.r ? { reason: st.r } : {}), ...(st.cut ? { cut: true } : {}), start: at(st.at), end: null });
       continue;
     }
     if (st.k !== "group") continue;
     // Calls with no text before them (the first step, or calls after STEP_MAX) start a step.
     if (!step || step.cells.some((c) => c.kind === "tool")) open();
+    if (st.r) step.cells.push({ kind: "message", text: "", reason: st.r, start: null, end: null });
     st.calls.forEach((name, i) => {
       const id = st.ids?.[i] ?? null;
       const info = st.info?.[i] ?? null;
@@ -71,7 +72,7 @@ export function trajectory(s, turn, id = null) {
   };
   addSteps(turn.steps);
   const text = reply(turn);
-  if (text) open().cells.push({ kind: "message", text, start: at(turn.afterAt), end: at(turn.endTs) });
+  if (text || turn.reasoning?.length) open().cells.push({ kind: "message", text, ...(turn.reasoning?.length ? { reason: turn.reasoning.join("\n\n") } : {}), start: at(turn.afterAt), end: at(turn.endTs) });
   if (turn.wakes) {
     // The ATIF export's reader (keepWakes): each wake-up's steps, then its last text.
     title = "Update";

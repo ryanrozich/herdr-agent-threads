@@ -6,6 +6,7 @@ sh test/leftover-check.sh                  # bun test, failing if the run leaves
 bun test/make-fixture.js out.jsonl [id] [cwd] [flags]   # synthetic transcript; flags in the file header
 bun test/make-big.js out.jsonl 600 [real|noisy|dense]   # very large synthetic transcript, for timing
 sh test/scan-private.sh                    # before committing: no home paths, names, emails, real ids or sidebars (PNGs via tesseract)
+bun test test/atif-harbor                   # Harbor ATIF cases; expected differences and omissions in test/atif-harbor/differences.js
 ```
 
 CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. The test run also writes a JUnit report (`junit.xml`, ignored by git), which the next step sends to Mergify Test Engine with the job's own ID token; no secret is stored. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.

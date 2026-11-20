@@ -116,7 +116,7 @@ while :; do
               my $w = substr($_, 0, 4096) . substr($_, -1024);
               my $f = $w =~ /\\"exit_code\\":-?[1-9]|"exit_code":-?[1-9]|\\"success\\":false|(?:^|\\n|")(?:Script failed|aborted|Process exited with code [1-9]|Exit code: [1-9])|tool failed/ ? "true" : "false";
               printf qq({"type":"_x","timestamp":%s,"payload":{"call_id":"%s","f":%s}}\n), defined $ts ? qq("$ts") : "null", $id, $f; next }
-            print unless /"type":"(?:session_meta|world_state|token_usage_record|reasoning|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/' \
+            print unless /"type":"(?:session_meta|world_state|token_usage_record|Reasoning|CommandExecution|FileChange|McpToolCall|DynamicToolCall|Extension|SubAgentActivity|CollabAgentToolCall|ImageView|WebSearch|FunctionCallOutput|ContextCompaction)"/ || ($ENV{THREADS_REASONING} ne "1" && /"type":"reasoning"/) ' \
         | lines | jq -c -f "$here/extract-codex.jq"; } > "$out"
     else
       # Bookkeeping lines start with {"type":"<name>" and are most of the bytes; drop every

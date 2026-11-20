@@ -1,0 +1,31 @@
+// Adapted from harbor-framework/harbor, tests/unit/agents/installed/test_claude_code_trajectory.py
+// and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0).
+// Copyright the Harbor authors. Apache-2.0; see LICENSE. Cases: CLAUDE_CASES in claude-cases.js.
+import { test, expect } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CLAUDE_CASES, user, writeSession } from "./claude-cases.js";
+import { checkCase } from "./differences.js";
+
+const cli = join(import.meta.dir, "../../mods/agent-threads/core/atif.js");
+for (const item of CLAUDE_CASES) test(`harbor claude: ${item.id.slice(8).replaceAll("_", " ")}`, () => {
+  const { main } = item.files(mkdtempSync(join(tmpdir(), "threads-harbor-")));
+  const t = JSON.parse(execFileSync("bun", [cli, main, "claude"], { encoding: "utf8" }));
+  checkCase(item, t);
+});
+
+test("harbor corpus (ours): awkward user strings survive the export byte for byte", () => {
+  const same = ["plain", "line\r\nnext", "line\rnext", "a\u2028b", "a\u2029b", "a\u0085b", "\uFEFFstart", "a\u00A0b", "a\u200Bb", "e\u0301", "a\u0001b", "a\u007Fb", 'say "hello"', "a\\b", "astral 😀", "مرحبا", "a\tb", "line\nnext", "👩‍💻", "  leading", "trailing\n", "mixed é 😀 שלום"];
+  const consumed = ["[Request interrupted by user]", "<command-name>/usage</command-name>", "<local-command-stdout>ok</local-command-stdout>", "<bash-input>pwd</bash-input>", "<task-notification>done</task-notification>"];
+  const run = (value) => {
+    const main = writeSession(mkdtempSync(join(tmpdir(), "threads-harbor-")), "session.jsonl", [user(value)]);
+    const result = spawnSync("bun", [cli, main, "claude"], { encoding: "utf8" });
+    return result.status === 0 ? JSON.parse(result.stdout).steps[0]?.message : null;
+  };
+  expect(same).toHaveLength(22);
+  for (const value of same) expect(run(value)).toBe(value);
+  expect(run("x".repeat(200001))).toBe(`${"x".repeat(200000)}\n\n… (cut at 200 KB)`);
+  for (const value of consumed) expect(run(value)).not.toBe(value);
+});

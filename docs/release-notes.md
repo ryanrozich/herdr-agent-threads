@@ -25,7 +25,7 @@ A status line at the foot of the pane, prompts that keep their line breaks, and 
 
 ### Save a session as ATIF
 
-You can write a session out as an ATIF trajectory (Agent Trajectory Interchange Format, version 1.7, the format the Harbor project uses). The file holds every step, each tool call with its result, subagents nested inside, and token counts. It runs on your computer and sends nothing. There is no button for it in the pane yet. From a clone of this repository, with [Bun](https://bun.sh):
+You can write a session out as an ATIF trajectory (Agent Trajectory Interchange Format, version 1.7, the format the Harbor project uses). The file holds every step, each tool call with its result, subagents nested inside, and token counts. It runs on your computer and sends nothing. The exported file keeps the model's thinking as `reasoning_content` when present. There is no button for it in the pane yet. From a clone of this repository, with [Bun](https://bun.sh):
 
 ```sh
 bun mods/agent-threads/core/atif.js ~/.claude/projects/<folder>/<session>.jsonl > session.json

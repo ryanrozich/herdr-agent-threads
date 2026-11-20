@@ -90,6 +90,8 @@ def response_item($l; $p):
   if $p.type == "message" and $p.role == "assistant" then
     ($p.content | blocks_text) as $t
     | if ($t | length) > 0 then {k: "t", t: ($t | cap), ts: $l.timestamp} else empty end
+  elif $p.type == "reasoning" and ($ENV.THREADS_REASONING // "") == "1" then
+    {k: "h", t: ([$p.summary[]? | select(.type == "summary_text") | .text | tostring | gsub("^\\s+|\\s+$"; "") | cap] | join("\n\n")), ts: $l.timestamp}
   elif $p.type == "function_call" or $p.type == "custom_tool_call" then {k: "u", n: ($p.name // "tool"), id: $p.call_id, ts: $l.timestamp, in: ($p | brief)}
   elif $p.type == "web_search_call" then {k: "u", n: "web_search", ts: $l.timestamp, in: (($p.action.query // "") | tostring | .[0:120])}
   elif $p.type == "local_shell_call" then {k: "u", n: "shell", id: $p.call_id, ts: $l.timestamp, in: ($p | brief)}

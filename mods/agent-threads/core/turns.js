@@ -305,8 +305,9 @@ const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
 function addStep(s, turn, name, id = null, e = null, owner = turn) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
+  const reason = turn.reasoning?.join("\n\n") || "";
   if (text) {
-    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
+    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(reason ? { r: reason } : {}), ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
     else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
@@ -315,6 +316,7 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
   let g = steps[steps.length - 1];
   if (g?.k === "group" && Boolean(g.agent) !== agent && steps.length < STEP_MAX) g = null;
   if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; if (agent) g.agent = true; steps.push(g); }
+  if (!text && reason) g.r = g.r ? `${g.r}\n\n${reason}` : reason;
   if (g.calls.length < STEP_CALLS) {
     g.calls.push(String(name ?? "tool"));
     // The call's id in the transcript, for calls.sh to find its input and output on demand.
@@ -427,7 +429,7 @@ function applyOne(s, e) {
   }
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
-  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
+  if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "h" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
   if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
@@ -464,6 +466,9 @@ function applyOne(s, e) {
       }
       return;
     }
+    case "h":
+      if (cur && e.t && s.seg === "own") (cur.reasoning ??= []).push(e.t);
+      return;
     case "t":
       if (!cur || !e.t) return;
       if (s.seg === "own") {
@@ -482,7 +487,7 @@ function applyOne(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; }
+      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; if (cur.reasoning) cur.reasoning = []; }
       else {
         cur.latestParts = [];
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
