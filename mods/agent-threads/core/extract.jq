@@ -1,4 +1,4 @@
-# agent-threads extractor: transcript lines in (jq -R, whole lines only), compact events
+# agent-threads extractor: transcript lines in (one JSON string each, from lines.sh; whole lines only), compact events
 # out, one JSON object per line, in file order:
 #   p  prompt                           {o: origin kind, ts, t: text}; t only for own origins;
 #                                       a peer's origin name as n ("general-purpose");
@@ -12,8 +12,12 @@
 #                                       follows its command line this way; a local command
 #                                       has no such line
 #   i  "[Request interrupted"           {ts}
-#   t  assistant text block             {t}
-#   u  tool call                        {n: tool name}
+#   t  assistant text block             {t, ts}
+#   u  tool call                        {n: tool name, id, ts, in: its input in up to 120
+#                                       characters (the command, the path, the pattern)}
+#   x  a call's result                  {id, ts, f: whether it failed}: extract.sh turns each
+#                                       result line into a short "_x" line before jq, so a
+#                                       result's text is never parsed
 #   m  assistant usage, per message id  {id, m: model, e: effort, u: {i,o,cr,cc}, ts}
 #      (once per message: on the apiBlockIndex 0 line; every block line repeats it)
 #   e  synthetic or API error message   {t}
@@ -31,7 +35,8 @@
 #   n  a task notification              {a: task id (a subagent's agent id), st: status, ms,
 #                                       tok}, from a user line (which is also a "p") or a
 #                                       queued one
-# Thinking blocks, tool inputs, tool results and bookkeeping lines are dropped. Texts are
+# Thinking blocks, tool input past its summary, tool results' text and bookkeeping lines are
+# dropped. Texts are
 # capped at 200 KB so one chunk's output stays well under exec's 8 MiB limit.
 
 def cap:
@@ -63,6 +68,41 @@ def launch($l; $c):
       | if ($id | type) == "string" then {k: "r", id: $id, a: ($r.agentId | .[0:80]), m: ($r.resolvedModel // null), st: ($r.status | .[0:40])} else empty end
     else empty end;
 
+# A call's input in up to 120 characters on one line: the field that says what it does.
+def brief:
+  (if type == "object" then (.command // .file_path // .path // .pattern // .url // .query // .description // .skill // .prompt // ([.[] | strings][0]) // "")
+   elif type == "string" then . else "" end)
+  | tostring | .[0:400] | gsub("\\s+"; " ") | sub("^ "; "") | .[0:120];
+
+# Each call result in a line jq sees (a subagent's launch result) and in the short lines
+# extract.sh makes of the rest ("_x": ts, ids, err).
+def results($l; $c):
+  $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
+  | {k: "x", id: .tool_use_id, ts: $l.timestamp, f: (.is_error == true)};
+# In a subagent's own transcript (THREADS_SIDECHAIN=1, the ATIF export only), the result of
+# a subagent it started has no toolUseResult: the started one's id is only a line of the
+# result text, "agentId: <id>", in the footer Claude Code puts after what the subagent said.
+# What the subagent said can hold such a line too, so only the last text block with one
+# counts, and its last match. Letters, digits, "-" and "_" only; core/atif.js checks the file
+# it names again, its first prompt against the call's, and that no other call has it.
+def side_launch($c):
+  if ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
+  else $c[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id | type) == "string")
+    | .tool_use_id as $id
+    | ([.content | if type == "string" then [.] elif type == "array" then [.[]? | select(type == "object" and .type == "text") | (.text // "") | tostring] else [] end
+        | .[] | select(test("(?:^|\n)agentId: [A-Za-z0-9_-]"))] | last) as $t
+    | select($t != null)
+    | ([$t | match("(?:^|\n)agentId: (?<a>[A-Za-z0-9_-]{1,80})(?![A-Za-z0-9_-])"; "g") | .captures[0].string] | last) as $a
+    | select($a != null)
+    | {k: "r", id: $id, a: $a, m: null, st: null}
+  end;
+# A short result line: one call, or several with one error flag between them (which of them
+# failed is not known then).
+def short_results:
+  .ts as $ts | (.err == true) as $err | (.ids // []) as $ids
+  | $ids[] | select(type == "string")
+  | {k: "x", id: ., ts: $ts, f: (if ($ids | length) == 1 then $err elif $err then null else false end)};
+
 # A task notification's task id, status, and the usage block's time and tokens.
 def notice($t):
   tag($t; "task-id") as $a | tag($t; "status") as $st
@@ -73,11 +113,21 @@ def notice($t):
 def user_event:
   . as $l
   | ($l.message.content) as $c
-  | if $l.toolUseResult != null then launch($l; $c)
-    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then empty
+  | if $l.toolUseResult != null then launch($l; $c), results($l; $c)
+    elif ($c | type) == "array" and any($c[]?; type == "object" and .type == "tool_result") then
+      # A fork's own transcript, read after the records it copied from its caller (THREADS_FORK=1,
+      # the ATIF export only): its first record carries the fork call's result and, beside it,
+      # the fork's prompt as text blocks.
+      (if ($ENV.THREADS_FORK // "") == "1" and any($c[]?; type == "object" and .type == "text")
+       then {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)} else empty end),
+      side_launch($c), results($l; $c)
     elif $l.isCompactSummary == true then empty
     # Meta lines are bookkeeping (reminders, scheduled-turn notes), except a message from
     # another session: Claude Code marks a peer's hand-back isMeta too, with an origin object.
+    # A Skill-started subagent's prompt is its first record, marked meta (THREADS_SKILL holds that
+    # record's uuid, in the ATIF export only).
+    elif $l.isMeta == true and ($ENV.THREADS_SKILL // "") != "" and $l.uuid == $ENV.THREADS_SKILL then
+      {k: "p", o: "human", ts: $l.timestamp, t: ($c | text_of | cap)}
     elif $l.isMeta == true and ($l.origin.kind? // null) != "peer" then
       if ($l.parentUuid | type) == "string" then {k: "b", pu: $l.parentUuid} else empty end
     else ($c | text_of) as $t
@@ -144,8 +194,8 @@ def assistant_event:
     else
       ( $l.message.content[]?
         | select(type == "object")
-        | if .type == "text" then {k: "t", t: ((.text // "") | cap)}
-          elif .type == "tool_use" then {k: "u", n: .name, id: .id}
+        | if .type == "text" then {k: "t", t: ((.text // "") | cap), ts: $l.timestamp}
+          elif .type == "tool_use" then {k: "u", n: .name, id: .id, ts: $l.timestamp, in: (.input | brief)}
           else empty end ),
       ( select($l.message.id != null and $l.message.usage != null and ($l.apiBlockIndex // 0) == 0)
         | {k: "m", id: $l.message.id, m: $l.message.model, e: ($l.effort // $l.perTurnEffort // null), ts: $l.timestamp,
@@ -154,8 +204,11 @@ def assistant_event:
       ( select($l | ends_reply) | {k: "s", ts: $l.timestamp} )
     end;
 
+# A subagent's own transcript (subagents/agent-<id>.jsonl) marks every line isSidechain: the
+# ATIF export reads one with THREADS_SIDECHAIN=1. The panel never sets it.
 def event:
-  if .isSidechain == true then empty
+  if .isSidechain == true and ($ENV.THREADS_SIDECHAIN // "") != "1" then empty
+  elif .type == "_x" then short_results
   elif .type == "user" then user_event
   elif .type == "assistant" then assistant_event
   elif .type == "system" and .subtype == "turn_duration" then {k: "d", ms: .durationMs, ts: .timestamp}

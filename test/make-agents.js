@@ -23,9 +23,14 @@ let ct = T0;
 const cline = (type, payload, gap = 1) => `${JSON.stringify({ timestamp: iso((ct += gap * 1000)), ordinal: ord++, type, payload })}\n`;
 const ask = (turn, text, gap) => cline("event_msg", { type: "item_completed", turn_id: turn, item: { type: "UserMessage", content: [{ type: "text", text }] } }, gap);
 const say = (text, phase = "final_answer", gap = 6) => cline("response_item", { type: "message", role: "assistant", phase, content: [{ type: "output_text", text }] }, gap);
-const call = (name, gap = 2) => cline("response_item", { type: "function_call", name, arguments: "{}" }, gap);
+// A call with its id and input, and its output; the outputs keep each turn's total time.
+const call = (name, id, args, gap = 2) => name === "apply_patch"
+  ? cline("response_item", { type: "custom_tool_call", name, call_id: id, input: args }, gap)
+  : cline("response_item", { type: "function_call", name, call_id: id, arguments: JSON.stringify(args) }, gap);
+const output = (id, text, code = 0, gap = 1) => cline("response_item", { type: "function_call_output", call_id: id,
+  output: JSON.stringify({ output: text, metadata: { exit_code: code, duration_seconds: gap } }) }, gap);
 const count = (input, cached, output) => cline("event_msg", { type: "token_count",
-  info: { total_token_usage: { total_tokens: input + output }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output } } }, 0);
+  info: { total_token_usage: { total_tokens: input + output }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output }, model_context_window: 258400 } }, 0);
 const fin = (ms) => cline("event_msg", { type: "task_complete", duration_ms: ms }, 0);
 const codexFile = join(out, `rollout-${stamp(T0).slice(0, 19)}-${codexId}.jsonl`);
 writeFileSync(codexFile, [
@@ -33,16 +38,20 @@ writeFileSync(codexFile, [
   cline("turn_context", { model: "gpt-5.5-codex", effort: "medium" }, 0),
   ask("turn-0001", "Why is the order total a cent off when there are three or more items?", 0),
   say("Checking how the cart adds up tax.", "commentary", 4),
-  call("exec_command"),
-  call("exec_command"),
+  call("exec_command", "call_c1", { cmd: "rg -n lineTax cart" }),
+  output("call_c1", "cart/total.ts:18:export function lineTax(item) {"),
+  call("exec_command", "call_c2", { cmd: "bun test cart/total.test.ts" }, 1),
+  output("call_c2", "1 fail: three items at $3.33", 1),
   count(48200, 41000, 620),
-  say("Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?", "final_answer", 9),
+  say("Tax is rounded on each line and then summed, so three lines can round up three times.\n\n- `cart/total.ts` rounds in `lineTax()`\n- The receipt sums the rounded values\n\nRounding once, on the order's tax total, fixes it. Want me to change it?", "final_answer", 8),
   fin(41000),
   ask("turn-0002", "Yes, and add a test with three items at $3.33", 70),
-  call("apply_patch"),
-  call("exec_command"),
+  call("apply_patch", "call_p1", "*** Begin Patch\n*** Update File: cart/total.ts\n*** Add File: cart/total.test.ts\n*** End Patch\n"),
+  output("call_p1", "Success. Updated the following files:\nM cart/total.ts\nA cart/total.test.ts"),
+  call("exec_command", "call_c3", { cmd: "bun test" }, 1),
+  output("call_c3", "214 pass"),
   count(52100, 47000, 910),
-  say("Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass.", "final_answer", 14),
+  say("Done. `totalTax()` now rounds once, and `cart/total.test.ts` checks three items at $3.33 come to $10.79 with tax. All 214 tests pass.", "final_answer", 13),
   fin(63000),
 ].join(""));
 

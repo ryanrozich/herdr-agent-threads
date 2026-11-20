@@ -35,6 +35,9 @@
 //   --quotes     add prompts that quote the reply above in Markdown ("> "): quote only,
 //                comment only, quote then comment, comment then quote, interleaved, ">"
 //                with no space, nested "> >", a ">" line inside a fence, and a 40-line quote
+//   --paste      add prompts with pasted output (issue 93): the example table under a
+//                comment, a paste whose body lines start with ">", a plain multi-line
+//                message, a paste that is the whole prompt, and an unclosed paste
 //   --links      add a turn whose prompt and reply hold ACME-123, #45, a fence holding
 //                ACME-9, an existing link, a URL with ACME-2 in it and a #123456 colour
 //   --hostile    add a turn whose reply holds an ESC[201~, a CR and a command (for the
@@ -73,6 +76,7 @@ const subagents = bool("--subagents");
 const latestFx = bool("--latest");
 const long = bool("--long");
 const quotes = bool("--quotes");
+const pasteFx = bool("--paste");
 const linksFx = bool("--links");
 const hostile = bool("--hostile");
 const edge = bool("--edge");
@@ -140,10 +144,10 @@ function assistant(blocks, { stop = "end_turn", out = 120, input = 6, read = 420
     uuid: uid(), timestamp: tick(i === 0 ? secs : 0) }));
   return id;
 }
-function tool(name, input, result, promptId, tur = null) {
+function tool(name, input, result, promptId, tur = null, err = false) {
   const id = `toolu_${String(msg).padStart(6, "0")}_${name}`;
   assistant([{ type: "thinking", thinking: "…" }, { type: "tool_use", id, name, input }], { stop: "tool_use", out: 60 });
-  push({ ...base(), type: "user", promptId, toolUseResult: tur ?? { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result }] }, uuid: uid(), timestamp: tick(2) });
+  push({ ...base(), type: "user", promptId, toolUseResult: tur ?? { stdout: result }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: result, ...(err ? { is_error: true } : {}) }] }, uuid: uid(), timestamp: tick(2) });
   return id;
 }
 function command(name, args = "", { origin = false, order = "name" } = {}) {
@@ -215,7 +219,7 @@ noise();
 let p = prompt("Fix the flaky login test so it stops timing out in CI");
 assistant([{ type: "text", text: "Let me look at the test first." }], { stop: "tool_use" });
 tool("Read", { file_path: "tests/login.spec.ts" }, "…", p);
-tool("Bash", { command: "bun test login" }, "1 fail", p);
+tool("Bash", { command: "bun test login" }, "1 fail", p, null, true);
 tool("Edit", { file_path: "tests/login.spec.ts" }, "ok", p);
 assistant([{ type: "text", text: "The test raced the redirect. It now waits for the session response instead of sleeping 2 s:\n\n```ts\nawait page.waitForResponse(\n  (r) => r.url().endsWith('/session'),\n)\nexpect(await cookie()).toBeTruthy()\n```\n\nRan the suite 20 times locally with no failures. One unrelated warning remains in the auth mock." }], { out: 410, read: 61000, write: 2400, secs: 6 });
 end(102000);
@@ -460,6 +464,33 @@ if (quotes) {
     prompt(q);
     assistant([{ type: "text", text: `Done with quote case ${i + 1}. The backoff now starts at 200 ms.` }], { out: 60 });
     end(7000 + i * 1000);
+  });
+}
+
+if (pasteFx) {
+  // Issue 93's own example plus the shapes around it: a paste whose body lines start with
+  // ">" (a shell transcript), a plain multi-line message, a paste that is the whole prompt,
+  // and one a clip left unclosed.
+  const table = [
+    "Jobs over the last hour:",
+    "┌──────────┬────────┬───────┐",
+    "│ job      │ runs   │ p95   │",
+    "├──────────┼────────┼───────┤",
+    "│ build    │ 12     │ 4m 10s│",
+    "│ e2e      │ 9      │ 2m 05s│",
+    "└──────────┴────────┴───────┘",
+  ].join("\n");
+  const P = [
+    `How did the build get so slow? Output below.\n\n<pasted_content id="example">\n${table}\n</pasted_content>`,
+    `<pasted_content id="shell">\n> npm test\n> jest --ci\n</pasted_content>\n\nWhich of these failed?`,
+    "First point.\nSecond point.\n\nThird point after a blank line.",
+    `<pasted_content id="only">\n${table}\n</pasted_content>`,
+    "Unclosed paste below\n<pasted_content id=\"clip\">\nalpha\nbeta\ngamma",
+  ];
+  P.forEach((p, i) => {
+    prompt(p);
+    assistant([{ type: "text", text: `Paste case ${i + 1} noted. The table keeps its columns.` }], { out: 40 });
+    end(6000 + i * 500);
   });
 }
 

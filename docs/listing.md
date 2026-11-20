@@ -5,6 +5,7 @@ This repo is listed at herdr.dev/mods. Herdr's guide (`~/.config/herdr-app/AGENT
 - A **public GitHub repo** with the topic **`herdr-mod`**. It shows up under Community at herdr.dev/mods within the hour.
 - The folder laid out like Herdr's home: **`mods/<name>/`** (the mod) and **`keys.json`** (the keys it expects). An installer copies `mods/<name>/` into its own `mods/` and merges `keys.json`.
 - **`RECIPE.md`**: the brief another agent builds the mod from, in this order: `# Name`, one paragraph and `![Name](preview.png)`; What you see; How it behaves; Built from; Watch out; Done when. Its first paragraph is the listing description.
+- **RECIPE.md under 64 KB.** The index skips a larger one ("RECIPE.md exceeds 64 KB or has an unknown size"), and the mod drops off the listing. The long reference is in [reference.md](reference.md), and `test/recipe-size.test.js` fails when RECIPE.md passes 60 KB.
 - **`preview.png`**: a screenshot, beside `RECIPE.md`.
 
 There are no manifest fields, icon, category or image size rules.

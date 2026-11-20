@@ -50,7 +50,8 @@ import {
 } from "herdr";
 import {
   newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, RULE_TEXT,
-  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount,
+  fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
+  noteSkip, skipNote,
 } from "./core/turns.js";
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
@@ -60,11 +61,19 @@ import {
   focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
+import { VERSION, versionLine, parseBuild } from "./version.js";
+// build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
+// is missing or does not parse still loads; the version line then says the commit is not
+// known. It settles long before anyone opens the settings card.
+let built = null;
+import("./build.js")
+  .then((m) => { built = parseBuild(m?.BUILD) ? m.BUILD : null; })
+  .catch(() => { built = null; });
 import { isDiagram, drawDiagram } from "./diagram.js";
 
 const ICON = (n) => `mods/${MOD}/${n}.svg`;
@@ -178,16 +187,26 @@ const CARD_FOOT = 40;
 // Its gap to the pane's sides and bottom.
 const CARD_GAP = 12;
 // How far above the pane's bottom the card ends at the least, so a strip of the list stays
-// in view under it (the owner's call): 160, kept only in a pane at least CARD_STRIP_MIN tall,
-// where under that the card takes the height. 0 makes the card take the height everywhere.
+// in view under it (the owner's call): 160 in a pane at least CARD_STRIP_MIN tall. Under that
+// the strip shrinks a pixel for each pixel the pane loses, so the card keeps its height until
+// the strip is down to the foot's space, and then takes the height: shrinking the pane never
+// grows the card (TRD-6). 0 makes the card take the height everywhere.
 const CARD_STRIP = 160;
 const CARD_STRIP_MIN = 514;
+// The strip at the card's right edge that holds its always-drawn scrollbar.
+const CARD_BAR_W = 10;
+// The keys sheet's key column: wide enough for its widest row's chips (PgUp, PgDn, Space) on
+// one line, in a pane at least KEYS_COL_MIN wide. A narrower pane keeps the narrow column,
+// where those chips wrap, so the descriptions do not wrap more than they did.
+const KEYS_COL = 128;
+const KEYS_COL_NARROW = 92;
+const KEYS_COL_MIN = 520;
 // The card's one page: its sections in order, each with its rows in order (settingsRows draws
 // each row from its key). Moving a row or renaming a section is a change to this list alone.
 const CARD_SECTIONS = [
   ["Messages", ["textSize", "userColor", "truncate", "time"]],
   ["Agent messages", ["agents", "agentRail", "agentColor", "senderRules"]],
-  ["Layout", ["width", "keepWidth", "railSide", "keyHints"]],
+  ["Layout", ["width", "keepWidth", "railSide", "keyHints", "statusLine"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
@@ -202,7 +221,9 @@ const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
 const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey, links and senders are never reset.
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+// The status line's height (statusRow).
+const STATUS_H = 24;
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The rule editor's fields: key, label, placeholder, the most it takes.
@@ -290,6 +311,13 @@ const YOU_MAX = 420; // a whole prompt taller than this scrolls inside the YOU b
 const YOU_LINK_GAP = 4;
 const YOU_LINK_LINE = 18;
 const DRAG_SLOP = 4; // design px a press may move and still be a click, not a text selection
+// A press on a closed turn selects it at once and opens it this long after the release,
+// unless a second press comes first: the first press of a double press (to select a word in
+// the reply) must not open the turn, which would redraw the reply under the pointer as other
+// views and send the second press to whatever text took its place (issue 131). A press only
+// reports its click count, not where its text lies, so the mod cannot tell a press on the
+// reply's words from one beside them.
+const OPEN_WAIT_MS = 300;
 const FULL_REPLY_CHARS = 200000; // of an open reply; a note under it says what is left out
 const VIEWER_PROMPT = 8000; // characters of the prompt in the image viewer's panel
 const LONG_REPLY = 1600; // characters past which an open reply ends in a Collapse (Esc) row
@@ -334,6 +362,10 @@ const NO_CUT = 100000;
 const SYSTEM_FACE = ".SystemUIFont";
 const READ_INK = 0.86;
 const LATEST_LINES = 6;
+// The most of a LATEST UPDATE drawn as Markdown, and the height of the note under it that
+// says how much more there is.
+const LATEST_MD = 12000;
+const LATEST_NOTE = 20;
 
 const base = (p) => (p ?? "").split("/").pop().replace(/^-/, "");
 const dirname = (p) => p.slice(0, p.lastIndexOf("/"));
@@ -784,6 +816,16 @@ export default class Threads extends View {
     this.known = new Set();
     this.h = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
+    // The settings card's scroll positions, one per page, which the arrows, j, k, Page Up,
+    // Page Down, Space, Home and End move (cardScroll). Herdr 0.1.15 and newer; before that
+    // the card scrolls with the wheel or trackpad only, and those keys do nothing on it.
+    const scrollHandle = () => gpuiBase.ScrollHandle?.new?.() ?? null;
+    this.cardScrolls = { main: scrollHandle(), links: scrollHandle(), senders: scrollHandle() };
+    if (!this.cardScrolls.main || !this.cardScrolls.links || !this.cardScrolls.senders) this.cardScrolls = null;
+    // The card's scrollbar is drawn all the time, so a card taller than its room shows there is
+    // more below before anything scrolls. That needs Herdr's Scrollbar and its mode; without
+    // them the scroll area's own bar shows while it scrolls.
+    this.cardBar = Boolean(gpuiBase.Scrollbar?.vertical) && "mode" in div();
     this.input = InputState.new({ placeholder: "Filter turns, or #12 to jump" });
     this.input.on("change", (_e, cx) => { this.setQuery(this.input.value(), cx); cx.notify(); });
     this.quoteInput = InputState.new({ placeholder: "", value: "q" });
@@ -831,6 +873,7 @@ export default class Threads extends View {
     this.rulesPending = { links: null, senders: null };
     this.lastFocus = null;
     this.quoteKey = "q"; // settings.json quoteKey
+    this.build = undefined; // a stand-in for build.js in tests; undefined reads build.js (built)
     this.links = []; // compiled link rules (settings.js parseLinks)
     this.linksVer = 0;
     this.senders = []; // compiled sender rules (settings.js parseSenders)
@@ -918,7 +961,7 @@ export default class Threads extends View {
       res: { kind: this.res.kind, guess: Boolean(this.res.guess), ended: this.res.ended ?? null, endedAt: this.res.endedAt ?? null, choices: this.res.choices?.length ?? 0, pendingId: this.res.pendingId ?? null, via: this.res.via ?? null },
       banners: this.bannerTitles(),
       tried: (this.res.tried ?? []).map((x) => `${x.ok ? "ok" : "no"} ${x.what}: ${x.detail}`),
-      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null })),
+      sessions: this.sessions.map((x) => ({ id: x.id.slice(-4), turns: x.turns.length, loaded: Boolean(x.loaded), clearAt: x.clearAt, error: x.error ?? null, skipped: x.skipped ?? null })),
       rows: rows.map((r) => `${r.kind}${r.turn ? `#${r.turn.n}` : ""}${r.kind === "divider" ? `:${dividerLabel(r.s)}` : ""}`),
       live: this.liveShown ? this.liveState(theme()).label : null, status: this.status(),
       sel: this.sel, query: this.query, count: this.filterCount(),
@@ -935,6 +978,7 @@ export default class Threads extends View {
       settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
+      statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
       lastFocus: this.lastFocus, lastBarHit: this.lastBarHit ?? null, barGeom: this.barGeom(),
       toast: this.toast?.text ?? null,
       railJumpAt: this.railJumpAt ?? null, railShown: this.railShown(), listH: this.listH, railCard: (() => { const k = this.railHover && this.railShown() ? this.railTicks().ticks.find((x) => x.key === this.railHover) : null; return k ? this.railCard(k) : null; })(),
@@ -950,6 +994,8 @@ export default class Threads extends View {
       senders: { count: this.senderCount ?? 0, valid: this.senders.length, ver: this.sendersVer, rules: this.senders.map((r) => `${r.n} ${r.label}`) },
       repo: { repo: this.remote.repo, why: this.remote.why },
       settingsLine: this.settingsLine(),
+      // perl was not found, so a character across a 4 KB piece of a line can show as U+FFFD.
+      noPerl: Boolean(this.noPerl),
     };
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
@@ -966,7 +1012,7 @@ export default class Threads extends View {
       case "turn": case "wrow": {
         const sh = r.shape;
         if (r.compact) return `pin${n} ${r.pinNo} p${sh.p} h${sh.height}${r.fresh ? " new" : ""}${r.running ? " live" : ""} | ${sh.prompt.join(" ⏎ ")} | ${sh.reply}`;
-        const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "c" ? l : `▎${l}`)) : sh.prompt;
+        const pl = sh.kinds ? sh.prompt.map((l, i) => (sh.kinds[i] === "q" || sh.kinds[i] === "qonly" ? `▎${l}` : l)) : sh.prompt;
         return `${r.kind}${n} p${sh.p}/r${sh.r}${sh.q ? ` q${sh.q}` : ""}${sh.kinds?.[0] === "qonly" ? " qonly" : ""} h${sh.height}${sh.cmd ? ` cmd:${sh.cmd.name}` : ""}${who} | ${this.metaText(r.turn, r.kind === "wrow")} | ${sh.chip ? `[${sh.chip.label}] ` : ""}${pl.join(" ⏎ ")} | ${sh.reply.join(" ⏎ ")}`;
       }
       case "wtop": return `wtop${n} tiles ${r.turn.images.length} h${this.height(r)}`;
@@ -1226,6 +1272,10 @@ export default class Threads extends View {
     this.detailsOpen = false;
     this.quietRail();
     this.cardOpens++;
+    this.cardPlaces = {};
+    // A handle keeps its place from the last opening: its mark at 0 (child 1) takes the view
+    // back to the top, the way a new opening starts.
+    for (const h of Object.values(this.cardScrolls ?? {})) h.scroll_to_item(1);
     this.setPage = "main";
     this.leaveLinks();
     this.quoteDraft = null;
@@ -2085,6 +2135,11 @@ export default class Threads extends View {
             // From here until the offset moves, s holds part of this chunk.
             s.partial = true;
             if (c.rewind) rewindTail(s);
+            // No perl on this machine: the reader fell back to jq's raw read (core/lines.sh).
+            if (c.noPerl) this.noPerl = true;
+            // A line too long to read (extract.sh's line_max) was skipped: counted for the debug report,
+            // and noted in the list after the turn it fell in (noteSkip).
+            if (c.skipped) { s.skipped = { lines: (s.skipped?.lines ?? 0) + 1, bytes: (s.skipped?.bytes ?? 0) + c.skipped }; noteSkip(s, c.skipped); }
             // Once read in full, a prompt or end of turn that turns up was seen as it happened.
             if (s.clock && s.loaded) {
               const at = Date.now();
@@ -2582,6 +2637,8 @@ export default class Threads extends View {
       const t0 = first ? from.ti : 0;
       if (!first && si > 0) out.push({ kind: "divider", key: `div:${si}`, s });
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
+      // A line skipped before the first turn (noteSkip).
+      if (!first && s.skippedHead && !outline && !q) out.push({ kind: "note", key: `skip:${si}:head`, text: skipNote(s.skippedHead) });
       // The live newest turn (isLive), found once for the session.
       const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
@@ -2642,6 +2699,8 @@ export default class Threads extends View {
         // same agents toggle. It keeps the turn's key, so the selection carries over.
         if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
+        // A line skipped while this turn was the newest one read (noteSkip): one dim line after it.
+        if (turn.skipped && !q) out.push({ kind: "note", key: `skip:${key}`, text: skipNote(turn.skipped) });
       }
       flush();
       // Built from inside a day band: the band's day item, kept, counts its turns again.
@@ -3534,13 +3593,23 @@ export default class Threads extends View {
     // What the agent said in its last background update, when that is not the reply.
     const late = (turn.latest ?? "").trim();
     if (late && late !== text) {
+      // With Shorten long messages off (the default) the update is Markdown from the start,
+      // like the reply above it (the owner, 18 Nov: a flat preview was all there was, since
+      // nothing was cut and so no Show all came). On, a clamped one-block preview (C5), the
+      // Markdown after Show all. Past LATEST_MD characters the rest is not drawn, and a note
+      // under it says how much (left).
+      const whole = !this.prefs.truncate;
       const all = this.full.has(`l:${key}`);
       // One block that gpui wraps at the card's width (C5); the estimate counts lines only
       // until the probe has measured it.
-      const text = flattenMd(late.slice(0, 4000));
+      const text = whole ? "" : flattenMd(late.slice(0, 4000));
       const l = rowLines(text, LATEST_LINES + 1, this.prose() / this.charW(MD_CHAR));
+      // cutMd ends a cut text in " …", so it cuts 4 short of the cap.
+      const cut = (whole || all) && late.length > LATEST_MD;
+      const md = whole || all ? (cut ? cutMd(late, LATEST_MD - 4) : late) : null;
+      const left = cut ? late.length - md.replace(/\s*…$/, "").length : 0;
       push({ ...item, kind: "lhead", key: `lh:${key}` });
-      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, text, estLines: l.lines.length + (l.cut ? 1 : 0), md: all ? late.slice(0, 12000) : null });
+      out.push({ ...item, kind: "latest", key: `lt:${key}`, all, whole, text, estLines: l.lines.length + (l.cut ? 1 : 0), md, left });
     }
     out.push({ ...item, kind: "copy", key: `cp:${key}`, part: "bottom" });
   }
@@ -3769,6 +3838,34 @@ export default class Threads extends View {
     return true;
   }
 
+  // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
+  // comes first: a second press (on_mouse_down with a click count over 1), a drag
+  // (holdForSelect), any key (key), or a search starting. A press on another closed turn
+  // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
+  // then is not opened.
+  openAfterPress(key, cx) {
+    const w = this.openWait;
+    if (w && w.key !== key) { this.openWait = null; if (this.mayOpen(w)) this.toggle(w.key, cx); }
+    this.sel = key;
+    this.follow = false;
+    const gen = (this.openGen = (this.openGen ?? 0) + 1);
+    this.openWait = { key, gen, filtering: Boolean(this.filtering) };
+    cx.timer.after(OPEN_WAIT_MS, (cx) => {
+      const w = this.openWait;
+      if (w?.gen !== gen) return;
+      this.openWait = null;
+      if (this.mayOpen(w)) this.toggle(key, cx);
+    });
+    cx.notify();
+  }
+  // Whether a pending open still applies: the turn is closed and on the list, and no search
+  // started since the press (a press in the search field or its button takes no key here).
+  mayOpen(w) {
+    if (this.open.has(w.key) || !this.findTurn(w.key)) return false;
+    if (this.filtering && !w.filtering) return false;
+    return this.rows().some((r) => r.key === w.key);
+  }
+
   toggle(key, cx) {
     if (this.open.has(key)) {
       this.open.delete(key);
@@ -3781,8 +3878,10 @@ export default class Threads extends View {
     this.sel = key;
     this.follow = false;
     // Opening shows the whole card when it fits (seen drawn: its chips and buttons were
-    // left under the footer); closing keeps the row in view.
-    this.scrollTo = { key, how: this.open.has(key) ? "card" : "top" };
+    // left under the footer); closing keeps the row in view. Opening waits for the card's
+    // parts to be measured (until), as a return to a pin does: worked out from estimates,
+    // the view landed and then moved again as the measures came in (issue 131).
+    this.scrollTo = this.open.has(key) ? { key, how: "card", until: Date.now() + 400 } : { key, how: "top" };
     cx.notify();
   }
 
@@ -3940,13 +4039,10 @@ export default class Threads extends View {
   }
 
   // A code block with no editor (one that failed to start): its lines, wrapped, in the box.
-  // In the image viewer, outside the list (scroll), they do not wrap and scroll both ways.
+  // In the image viewer, outside the list (scroll), a taller block scrolls down inside.
   plainCode(t, id, text, mono, scroll = false) {
-    if (scroll) {
-      return v_flex().id(id).size_full().px(8).py(6).items_start().overflow_scroll().text_size(12).font_family(mono).text_color(t.muted)
-        .children(text.split("\n").map((l) => div().flex_none().h(CODE_LINE).line_height(`${CODE_LINE}px`).whitespace_nowrap().child(l || " ")));
-    }
     return v_flex().id(id).size_full().px(8).py(6).text_size(12).font_family(mono).text_color(t.muted)
+      .when(scroll, (el) => el.overflow_y_scroll())
       .children(text.split("\n").map((l) => div().w_full().min_h(CODE_LINE).line_height(`${CODE_LINE}px`).child(l || " ")));
   }
   // The quiet line under a code block or a tool's output whose rest is hidden: Show all and
@@ -4103,10 +4199,12 @@ export default class Threads extends View {
   // ---- quoting a reply into the terminal (the one write: RECIPE.md, How it behaves) ----
 
   // What is quoted for the turn: in Select view, or after ⌘C on the formatted reply, what ⌘C
-  // copied, only when it is part of this reply (so text from anywhere else is never pasted);
-  // otherwise the whole reply as Markdown source. { text, source } or { refuse, source, why }. In Select view a press means
-  // the highlight, so it never falls back to the whole reply: when the clipboard holds
-  // nothing from this reply, the quote says how instead.
+  // copied, only when it is part of this reply, or of a turn on screen (copiedPart), so text
+  // from anywhere else is never pasted; otherwise the whole reply as Markdown source.
+  // { text, source, from } or { refuse, source, why }: from is the turn the copied text came
+  // from, when it is another one. In Select view a press means the highlight, so it never
+  // falls back to the whole reply: when the clipboard holds nothing from the pane, the quote
+  // says how instead.
   quoteSource(key, cx) {
     const turn = key ? this.findTurn(key) : null;
     const reply = turn && this.turnKeys(this.rows()).includes(key) ? this.replyText(turn) : "";
@@ -4117,6 +4215,9 @@ export default class Threads extends View {
       if (lit?.trim()) return { text: lit, source: "selection", how: "editor" };
       const clip = readClip(cx);
       if (clip.trim() && inReply(clip, reply)) return { text: clip, source: "selection", how: "clipboard" };
+      // ⌘C on the formatted text of another turn on screen, Select view still open here.
+      const part = this.copiedPart(cx);
+      if (part) return { text: part.text, source: "selection", how: "clipboard", from: part.key };
       const say = lit != null ? `Nothing highlighted: select text, then ${this.quoteKey}` : `Couldn't read the highlight, press ⌘C then ${this.quoteKey}`;
       return { refuse: say, source: "selection", why: clip.trim() ? "notInReply" : "empty" };
     }
@@ -4126,13 +4227,13 @@ export default class Threads extends View {
   }
 
   // After ⌘C in Select view, once the editor's copy has run: when the clipboard holds text
-  // from this reply, a toast says q quotes it. Never the text itself in the record.
+  // from this reply or another turn on screen, a toast says q quotes it. Never the text itself in the record.
   sawCopy(key, cx) {
     cx.timer.after(60, (cx) => {
       if (this.selecting !== key) return;
       const turn = this.findTurn(key);
       const clip = readClip(cx);
-      const ok = Boolean(turn && clip.trim() && inReply(clip, this.replyText(turn)));
+      const ok = Boolean(turn && clip.trim() && (inReply(clip, this.replyText(turn)) || this.copiedPart(cx)));
       this.selectCopy = { at: Date.now(), ok, chars: clip.length };
       if (ok) {
         const words = clip.trim().split(/\s+/).length;
@@ -4151,7 +4252,25 @@ export default class Threads extends View {
   notePointer(at, cx) {
     if (!this.pressAt || !at) return;
     this.pressMoved = Math.max(this.pressMoved ?? 0, Math.hypot(at.x - this.pressAt.x, at.y - this.pressAt.y));
-    if (cx && this.selectGesture()) this.liftFill(this.sel, cx);
+    if (cx && this.selectGesture()) { this.holdForSelect(); this.liftFill(this.sel, cx); }
+  }
+  // Selecting text is reading: following stops, as a click on a turn stops it (toggle). Left on,
+  // the newest reply growing during the drag, or a new turn, pulled the view to the bottom and
+  // carried the text under the pointer off the top of the pane (issue 131). Scrolling back down
+  // to the end follows again (stickCheck).
+  // A press that becomes a selection also keeps closed the turn an earlier press was about
+  // to open (OPEN_WAIT_MS).
+  holdForSelect() {
+    this.openWait = null;
+    if (!this.follow && !this.toBottom) return;
+    // A scroll to the bottom a frame already queued (16 ms, below) checks this and does not run.
+    // A count, not a time: a clock that steps back, or a hold in the same millisecond as the
+    // request, would drop a later request.
+    this.holds = (this.holds ?? 0) + 1;
+    this.follow = false;
+    this.toBottom = false;
+    this.pinningUntil = 0;
+    this.stickStep = null;
   }
   // Herdr paints a text selection under the text in the theme's selection colour, which a
   // mod cannot change. On the selected turn's fill it is hard to see (graphite: #394454 on
@@ -4173,18 +4292,30 @@ export default class Threads extends View {
     this.clipBefore = this.clipAtPress;
     this.clipAtPress = readClip(cx);
   }
-  // { key, text } when the clipboard holds text copied since the last press from the selected
-  // or an open turn's reply or message, or null.
+  // { key, text } when the clipboard holds text copied since the last press from the reply
+  // or message of the selected turn, an open turn or a turn on screen, or null. A drag's
+  // release often lands on another turn's item, which then is the selected one (click).
   copiedPart(cx) {
     if (this.clipAtPress == null || !this.replySelectable()) return null;
     const clip = readClip(cx);
     if (!clip.trim() || clip === this.clipAtPress) return null;
-    const keys = [...new Set([this.sel, ...this.open])].filter(Boolean);
+    const keys = [...new Set([this.sel, ...this.open, ...this.screenTurns()])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
       return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
+  }
+  // The turns with an item in the range the list drew last, top to bottom.
+  screenTurns() {
+    const rows = this.rowsMemo ?? [];
+    const [a, b] = this.viewRange ?? [0, 0];
+    const out = [];
+    for (let i = a; i < Math.min(b, rows.length); i++) {
+      const k = rowTurnKey(rows[i]);
+      if (k && !out.includes(k)) out.push(k);
+    }
+    return out;
   }
   // ⌘ released: the one moment after ⌘C that reaches the panel. Says once that q quotes it.
   cmdUp(e, cx) {
@@ -4208,8 +4339,12 @@ export default class Threads extends View {
   // A quote press (the quote key, the Quote button, or debugQuote in tests). Returns false
   // when it did nothing, so the key can reach Herdr. Key repeat is ignored by the caller,
   // and a second press within 1 s does nothing.
-  quote(cx, via, key = this.selecting ?? this.copiedPart(cx)?.key ?? this.sel) {
+  quote(cx, via, button = null) {
     if (this.settingsOpen || this.choosing) return false;
+    // The turn a press is for (a button's, the one in Select view, the selected one), and the
+    // turn quoted from: without a button, the turn ⌘C copied from when it is another one.
+    const target = button ?? this.selecting ?? this.sel;
+    const key = button ?? this.selecting ?? this.copiedPart(cx)?.key ?? this.sel;
     const at = Date.now();
     if (this.quoteAt && at - this.quoteAt < 1000) return true;
     this.quoteAt = at;
@@ -4219,10 +4354,14 @@ export default class Threads extends View {
     // what it copied.
     const k = this.quoteKey;
     const q = this.quoteSource(key, cx);
+    // Text copied from a turn other than the one the press is for: the toast names it ("from #12").
+    const fromKey = q.from ?? key;
+    const fromTurn = !q.refuse && fromKey && fromKey !== target ? this.findTurn(fromKey)?.n ?? null : null;
+    const from = fromTurn != null ? ` from #${fromTurn}` : "";
     // Kept for the debug report and, with no text in it, in shared("threads.lastQuote") on
     // every build, so a quote that went wrong can be told apart afterwards.
     const record = (x) => {
-      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, ...x };
+      this.lastQuote = { at, via, terminal: this.terminal, selectView: this.selecting === key, copiedInSelect: this.selectCopy ?? null, fromTurn, ...x };
       try { setShared("threads.lastQuote", this.lastQuote); } catch { /* the report still has it */ }
     };
     const out = q.refuse ? null : quoteText(q.text);
@@ -4267,10 +4406,10 @@ export default class Threads extends View {
         const folds = out.text.length > 800 || (out.text.match(/\n/g) ?? []).length > 2;
         let text;
         if (!r.pasted) text = `Could not focus ${t4}. Quote copied.`;
-        else if (gate.busy) text = `Quoted into ${t4} · ${this.agent().short} will queue it`;
-        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines into ${t4}`;
-        else if (out.cut === "chars") text = `Quoted the start into ${t4} · cut at 2,000 characters`;
-        else if (q.source === "selection") text = `Quoted the selection into ${t4}`;
+        else if (gate.busy) text = `Quoted${from} into ${t4} · ${this.agent().short} will queue it`;
+        else if (out.cut === "lines") text = `Quoted the first ${out.lines - 1} lines${from} into ${t4}`;
+        else if (out.cut === "chars") text = `Quoted the start${from} into ${t4} · cut at 2,000 characters`;
+        else if (q.source === "selection") text = `Quoted the selection${from} into ${t4}`;
         else text = `Quoted ${plural(out.lines, "line")} into ${t4}`;
         // Claude Code folds a long paste, and a second paste opens it.
         if (r.pasted && folds && this.agent().key === "claude") text += " · ⌘V again shows it in full";
@@ -4476,6 +4615,7 @@ export default class Threads extends View {
         this.full.has(k) ? this.full.delete(k) : this.full.add(k);
         return cx.notify();
       }
+      if (!this.open.has(key)) return this.openAfterPress(key, cx);
       return this.toggle(key, cx);
     }
     // A click on an image in an open card shows it at the card's full width, or back.
@@ -4644,6 +4784,9 @@ export default class Threads extends View {
   // Keys while the panel has the keyboard. The same actions are commands for keys.json
   // ("agent-threads.next" and so on), delivered through nextCommand().
   key(e, cx) {
+    // Any key wins over a press's pending open (OPEN_WAIT_MS): j, Enter or Esc pressed just
+    // after a click acts on its own, and the turn is not opened behind it.
+    this.openWait = null;
     // ⌘C in Select view: the editor copies the highlight with its own binding, and the
     // panel says that q now quotes it.
     if (this.selecting && e.keystroke === "cmd-c") this.sawCopy(this.selecting, cx);
@@ -4655,6 +4798,15 @@ export default class Threads extends View {
         else this.closeSettings();
         cx.stop_propagation(); cx.notify();
       }
+      return;
+    }
+    // The settings card is open: the arrows, j, k, Page Up, Page Down, Space, Home and End
+    // scroll it, and the list under it stays where it was.
+    const card = this.settingsOpen && !this.keysOpen ? cardKey(e) : null;
+    if (card) {
+      this.action(`settingsScroll:${card}`, cx);
+      cx.stop_propagation();
+      cx.notify();
       return;
     }
     const name = keyAction(e, this.filtering, this.quoteKey);
@@ -4736,6 +4888,7 @@ export default class Threads extends View {
       case "fit": return this.fitToReading(cx);
       case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
+      case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
       case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
@@ -4777,6 +4930,12 @@ export default class Threads extends View {
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      // The card's keys as commands (for key bindings, and for a window no keys reach).
+      case "settingsScroll:down": case "settingsScroll:up": case "settingsScroll:pagedown": case "settingsScroll:pageup":
+      case "settingsScroll:home": case "settingsScroll:end":
+        if (!this.settingsOpen) return false;
+        this.cardScrollBy(name.slice(15));
+        return true;
       case "settingsPage:links": case "settingsPage:senders": case "settingsPage:main": if (!this.settingsOpen) return false; this.dropField(); this.leaveLinks(); this.setPage = name.slice(13); return true;
       case "escape":
         if (this.detailsOpen) { this.detailsOpen = false; return true; }
@@ -4834,7 +4993,8 @@ export default class Threads extends View {
     // Tests only: "debugWidth:240" lays the pane out for that width.
     if (this.debug && /^debugWidth:\d+$/.test(name)) { this.forcedWidth = Number(name.slice(11)); this.width = this.forcedWidth; return true; }
     // Tests only: the selected turn as it looks while you select text in it.
-    if (this.debug && name === "debugLift") { this.liftFill(this.sel); return true; }
+    // What a drag does once it passes DRAG_SLOP, for the rig, which has no pointer.
+    if (this.debug && name === "debugLift") { this.holdForSelect(); this.liftFill(this.sel); cx?.notify(); return true; }
     // Tests only: "debugRailJump:3" is a click on the turn #3 tick (railJump), and reports
     // the tick's height in px (railJumpAt) for the rig to compare with where the turn lands.
     if (this.debug && name.startsWith("debugRailJump:")) {
@@ -4897,10 +5057,17 @@ export default class Threads extends View {
         const pinnedIds = new Set(Object.values(shared(PIN_MAP_KEY) ?? {}).map((v) => v.pane));
         const mains = threads.filter((p) => !pinnedIds.has(p.pane));
         if (focusedOne ? me?.pane === focusedOne.pane : threads.length === 1 || !me || (mains.length === 1 && !this.pinnedPane && mains[0].pane === me.pane)) {
-          if (this.action(c, cx)) cx.notify();
+          this.command(c, cx);
         }
       }
     });
+  }
+
+  // A command bound in keys.json (next, previous and the like) is a key by another road: like
+  // key(), it wins over a press's pending open (OPEN_WAIT_MS).
+  command(name, cx) {
+    this.openWait = null;
+    if (this.action(name, cx)) cx.notify();
   }
 
   // Pins the pane to a transcript the person picked from the guesses.
@@ -4976,7 +5143,7 @@ export default class Threads extends View {
       let st = false;
       try {
         st = EditorState.new({
-          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: false,
+          language: langFor(c.lang), value: c.text, readonly: true, line_numbers: false, folding: false, soft_wrap: true,
           font_family: settings().font_family, font_size: 12,
           syntax: {
             keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1,
@@ -5278,7 +5445,7 @@ export default class Threads extends View {
     const pad = (el) => el.pl(L.padX).pr(L.padX);
     const reply = g.blocks.length
       ? g.blocks.map((b, k) => div().w_full().when(k > 0, (el) => el.pt(Math.round((12 * rt.size) / 13))).text_size(rt.size).line_height(`${rt.line}px`)
-        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
+        .child(g.code?.[k] ? this.galleryCode(t, g.code[k], k, L) : this.readFont(div().w_full().opacity(READ_INK)).child(TextView.markdown(`th-gallery-md-${k}`, b).selectable(false).w_full())))
       : [div().text_size(rt.size).text_color(t.dim).child(turn.running ? "No reply yet." : "No reply.")];
     return v_flex().id("th-gallery-panel").flex_none().min_h(0).min_w(0).bg(t.background)
       .when(L.wide, (el) => el.w(L.panelW).h_full().border_l(1).border_color(t.border))
@@ -5312,11 +5479,13 @@ export default class Threads extends View {
   }
   // A fenced code block in the panel, as the open turn draws one: the language and Copy on a
   // head, then the highlighted code, up to CODE_LINES wrapped rows (a taller one scrolls
-  // inside, and says so).
-  galleryCode(t, c, k) {
+  // inside, and says so). Rows are wrapped at the panel's text width, less the box's border
+  // and the editor's inset, at 12 px mono (codePer in the list).
+  galleryCode(t, c, k, L) {
     const mono = this.mono();
     const copied = this.gal.codeCopied === k;
-    const rows = c.text.split("\n").length;
+    const textW = L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX);
+    const rows = Math.max(1, codeRows(c.text, (textW - 18) / (12 * MONO_EM)));
     const shown = Math.min(CODE_LINES, rows);
     return v_flex().w_full()
       .child(h_flex().h(28).pl(10).pr(4).gap(6).items_center().rounded_t(7).bg(t.chrome).border_1().border_color(t.border)
@@ -5351,8 +5520,10 @@ export default class Threads extends View {
   galleryPrompt(t, turn, rt, L) {
     const g = this.gal;
     const shown = g.images[g.i]?.n;
-    const all = String(turn.prompt ?? "").split("\n");
-    const lines = all.slice(0, 400);
+    // The prompt's lines as promptParts segments them: a pasted block's wrapper tags are
+    // gone and its body is verbatim, so a shell transcript's ">" lines keep their marker.
+    const entries = promptParts(String(turn.prompt ?? ""), 1000).flatMap((r) => r.lines.map((l) => ({ text: l, quote: r.quote, paste: Boolean(r.paste) })));
+    const lines = entries.slice(0, 400);
     const ink = turn.ink ?? t.foreground;
     const tag = (p, li, k) => {
       const j = g.images.findIndex((x) => x.n === p.n);
@@ -5369,13 +5540,12 @@ export default class Threads extends View {
       return h_flex().flex_wrap().min_h(rt.line).items_center().children(pieces.flatMap((p, k) => (p.n != null ? [tag(p, li, k)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " "))))));
     };
-    const QUOTE = /^ {0,3}>\s?/;
     const sub = turn.sub ?? t.muted;
     const blocks = [];
     for (let li = 0; li < lines.length; li++) {
-      if (!QUOTE.test(lines[li])) { blocks.push(line(lines[li], li)); continue; }
+      if (!lines[li].quote) { blocks.push(line(lines[li].text, li)); continue; }
       const quoted = [];
-      for (; li < lines.length && QUOTE.test(lines[li]); li++) quoted.push(line(lines[li].replace(QUOTE, ""), li, sub));
+      for (; li < lines.length && lines[li].quote; li++) quoted.push(line(lines[li].text, li, sub));
       li--;
       blocks.push(div().relative().min_w(0).pl(QUOTE_INSET).text_size(rt.small)
         .child(div().absolute().left(0).top(3).bottom(3).w(2).rounded(1).bg(turn.agent ? sub : alpha(ink, 0.28)))
@@ -5384,7 +5554,7 @@ export default class Threads extends View {
     const body = this.readFont(v_flex().min_w(0).text_size(rt.size).line_height(`${rt.line}px`))
       .when(Boolean(turn.cmd), (el) => el.child(div().text_color(turn.sub ?? t.muted).font_family(this.mono()).text_size(12.5).child(turn.cmd)))
       .children(blocks)
-      .when(all.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(all.length - lines.length, "more line")} not shown`)))
+      .when(entries.length > lines.length, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${plural(entries.length - lines.length, "more line")} not shown`)))
       .when(turn.promptCut > 0, (el) => el.child(div().text_size(11.5).italic().text_color(turn.sub ?? t.dim).child(`… ${turn.promptCut.toLocaleString()} more characters not shown`)));
     const max = Math.round((L.wide ? L.panelW - 2 * L.padX : Math.min(VIEWER.MEASURE, L.stageW - 2 * L.padX)) * 0.92);
     return h_flex().w_full().pb(14).when(!turn.agent, (el) => el.justify_end())
@@ -5511,6 +5681,7 @@ export default class Threads extends View {
       .child(this.body(t, focusedPanel, cx))
       .when(floating, (el) => el.child(this.floatTop(t, focusedPanel)))
       .when(Boolean(this.prefs.keyHints), (el) => el.child(this.footer(t)))
+      .when(this.statusShown(), (el) => el.child(this.statusRow(t)))
       .when(this.pillShown(), (el) => el.child(this.pillView(t)))
       .when(!Popup && Boolean(this.detailsTurn()), (el) => el.child(this.detailsView(t)))
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
@@ -6029,18 +6200,42 @@ export default class Threads extends View {
     const close = (_e, cx) => { cx.stop_propagation(); this.closeSettings(); cx.notify(); };
     // A rules page (Link rules or Sender rules) has the head with Back, and no tabs or preview.
     const page = this.setPage === "links" || this.setPage === "senders" ? this.setPage : null;
-    const top = this.floating() ? TOP_BAND : 46;
     const h = this.rootH || 600;
-    const under = Math.max(this.footSpace() + CARD_GAP, h >= CARD_STRIP_MIN ? CARD_STRIP : 0);
-    const room = Math.max(180, h - top - under);
+    const fixed = CARD_HEAD + CARD_FOOT + 2;
+    // Under the icons at the top, unless the pane is too short for the head and foot there:
+    // then the card moves up, so they stay inside the pane (TRD-7).
+    const top = Math.max(0, Math.min(this.floating() ? TOP_BAND : 46, h - CARD_GAP - fixed));
+    const under = Math.max(this.footSpace() + CARD_GAP, Math.min(CARD_STRIP, h - (CARD_STRIP_MIN - CARD_STRIP)));
+    // At least 180 px, over the key hints if it must, but never past the pane's bottom (less
+    // the gap): in a very short pane the rows shrink first, to nothing if need be.
+    const room = Math.max(Math.min(180, h - top - CARD_GAP), h - top - under);
     const w = this.setCardW();
     const pad = cardPad(w);
-    const fixed = CARD_HEAD + CARD_FOOT + 2;
-    const bodyMax = Math.max(60, room - fixed);
-    // The rows' own height, as last drawn on this page, up to the room left.
+    const bodyMax = Math.max(0, room - fixed);
+    // The rows' own height, as last drawn on this page and tab, up to the room left.
     const key = page ?? "main";
-    const bodyH = Math.min(bodyMax, this.cardBody?.key === key ? this.cardBody.h : bodyMax);
+    const rowsH = this.cardBody?.key === key ? this.cardBody.h : null;
+    const bodyH = Math.min(bodyMax, rowsH ?? bodyMax);
     const rows = page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w);
+    const place = this.cardPlace(key);
+    place.viewH = bodyH;
+    const handle = this.cardScrolls?.[key] ?? null;
+    const id = `th-set-body-${key}-${this.cardOpens}`;
+    // Child 0 is the rows; the marks after it are what the keys bring into view (cardMarks).
+    const marks = handle && rowsH ? cardMarks(rowsH) : [];
+    const wheel = (from) => (e) => this.cardWheel(e, key, from);
+    const body = v_flex().id(id).flex_none().h(bodyH)
+      .when(this.cardBar, (el) => el.overflow_y_scroll()).when(!this.cardBar, (el) => el.overflow_y_scrollbar())
+      .when(Boolean(handle), (el) => el.track_scroll(handle))
+      .on_scroll_wheel(wheel("area"))
+      .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
+        .on_size_change((size, cx) => {
+          const h = size.height / this.zoom();
+          if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
+        })
+        .on_scroll_wheel(wheel("rows"))
+        .children(rows))
+      .children(marks.map((y) => div().absolute().top(y).left(0).w(1).h(1)));
     return div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
       // The card's own scroll runs first (it is drawn over this layer); the wheel stops here.
@@ -6050,16 +6245,45 @@ export default class Threads extends View {
         .on_click((_e, cx) => cx.stop_propagation())
         .on_mouse_down_out((_e, cx) => { if (this.settingsOpen) { this.closeSettings(); cx.notify(); } })
         .child(this.cardHead(t, page, close, pad))
-        .child(v_flex().id(`th-set-body-${key}-${this.cardOpens}`).flex_none().h(bodyH).overflow_y_scrollbar()
-          .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
-            .on_size_change((size, cx) => {
-              const h = size.height / this.zoom();
-              if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
-            })
-            .children(rows)))
+        // The always-drawn bar sits in a strip at the right edge, so it takes no press meant
+        // for a row.
+        .child(this.cardBar
+          ? div().relative().flex_none().h(bodyH).child(body)
+            .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical(id).mode("always").absolute().top(0).bottom(0).left(0).right(0)))
+          : body)
         .child(this.cardFoot(t, pad)));
   }
   setCardW() { return Math.max(200, Math.min(CARD_W, this.pw() - 2 * CARD_GAP)); }
+  // Where the card's view is on a page (y, from the top of its rows), as the keys left it and
+  // the wheel moved it since, and the view's height as last drawn. A new opening starts over.
+  cardPlace(key) { return ((this.cardPlaces ??= {})[key] ??= { y: 0, viewH: 0 }); }
+  // A key or a settingsScroll command: the view moves a line, a page, or to the top or end
+  // (cardScroll), by bringing one mark into view. Nothing happens on a Herdr with no
+  // ScrollHandle, or before the rows have been measured.
+  cardScrollBy(kind) {
+    const key = this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main";
+    const handle = this.cardScrolls?.[key];
+    const h = this.cardBody?.key === key ? this.cardBody.h : null;
+    const place = this.cardPlace(key);
+    const r = handle && h ? cardScroll(kind, place.y, h, place.viewH) : null;
+    if (!r) return false;
+    place.y = r.y;
+    handle.scroll_to_item(1 + r.mark);
+    return true;
+  }
+  // The wheel or trackpad moved the card: its place follows, so the keys go on from there.
+  // The rows and the area both listen (the area's own scrolling may stop the event before
+  // the area's listener runs); the same event reaching both counts once.
+  cardWheel(e, key, from) {
+    const dy = Number(e?.delta?.y) || 0;
+    if (!dy) return;
+    const place = this.cardPlace(key);
+    const k = `${e?.position?.x},${e?.position?.y},${dy},${e?.touch_phase}`;
+    if (from === "area" && place.wheelKey === k) return;
+    place.wheelKey = from === "rows" ? k : null;
+    const h = this.cardBody?.key === key ? this.cardBody.h : 0;
+    place.y = Math.max(0, Math.min(Math.max(0, h - place.viewH), place.y - dy));
+  }
 
   // The close and back buttons sit 5 px out, so their glyphs (not their boxes) are on the inset.
   // The settings key (,) is in the sliders icon's tooltip and on the keys sheet.
@@ -6070,12 +6294,13 @@ export default class Threads extends View {
       .child(this.iconButton(t, "th-set-close", "x", "Close (Esc)", close).mr(-5));
   }
 
-  // The card's foot, under the scroll: the agent, the turn count and the session's title (the
-  // floating top has no header to hold them), and "? keys", the way to every key while the key
-  // hints are off.
+  // The card's foot, under the scroll: the mod's name and version (versionRow), and "? keys",
+  // the way to every key while the key hints are off. The chat's agent, counts and title
+  // were here with the floating top; the owner wants the version here, and the chat's stats
+  // are now the status line at the pane's foot (statusRow).
   cardFoot(t, pad) {
     return h_flex().id("th-set-foot").flex_none().h(CARD_FOOT).px(pad).gap(8).items_center().border_t(1).border_color(t.border)
-      .child(this.floating() ? this.aboutRow(t) : div().flex_1())
+      .child(this.versionRow(t))
       .child(h_flex().id("th-set-keys").flex_none().gap(4).items_center().cursor_pointer().tooltip("Every key (?)")
         .on_click((_e, cx) => { cx.stop_propagation(); this.action("keys", cx); cx.notify(); })
         .child(this.kbd(t, "?")).child(div().flex_none().text_size(12).text_color(t.muted).child("keys")));
@@ -6173,6 +6398,7 @@ export default class Threads extends View {
       keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
+      statusLine: () => [sw("th-set-status", "Chat stats at the bottom", P.statusLine !== false, "statusLine")],
       linkRules: () => [this.linkRulesEntry(t)],
       senderRules: () => [this.senderRulesEntry(t)],
       quoteKey: () => [v_flex().gap(4)
@@ -6270,6 +6496,15 @@ export default class Threads extends View {
       .child(div().id("th-set-path").flex_1().min_w(0).truncate().text_size(11.5).font_family(this.mono()).text_color(t.muted)
         .tooltip(path).child(cutPath(path, Math.floor(room / (11.5 * MONO_EM)))))
       .child(this.button(t, "th-set-copy", word, (_e, cx) => { this.copy(this.prefsPath(), "settings-path", null, cx, true); cx.notify(); }, copied ? "check" : "copy", CARD_BUTTON));
+  }
+
+  // The card's last row: the mod's name and version (version.js), with the commit install.sh
+  // found. A plain line, not a control; a copy without a build says the commit is not known,
+  // and its tooltip says why. It takes the room "? keys" leaves and truncates in a narrow card,
+  // so otherwise its tooltip is the whole line.
+  versionRow(t) {
+    const line = versionLine(VERSION, this.build === undefined ? built : this.build);
+    return div().id("th-set-version").flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).tooltip(line.tip ?? line.text).child(line.text);
   }
 
   // The quote key field's note: a letter that cannot be the quote key, and why it stays.
@@ -6409,7 +6644,9 @@ export default class Threads extends View {
   }
 
   // The open rule: Type, then Name, Description, Finds, Opens and Example, the line that says
-  // what the rule does to its example, and Keep rule with the rest.
+  // what the rule does to its example, and Keep rule with the rest. A Keep rule that was not
+  // saved has the File line's reason under the buttons too, while the File line shows it: a
+  // tall rule can push the foot of the page out of view (issue 114).
   ruleEditor(t) {
     const e = this.ruleEdit;
     const d = e.draft;
@@ -6715,20 +6952,6 @@ export default class Threads extends View {
     return out;
   }
 
-  // The settings card's foot with the floating top: the agent, the turn and hidden counts and
-  // the session's title, which the header row showed. Its tooltip names the terminal and session.
-  aboutRow(t) {
-    const agent = this.agent();
-    const s = this.current();
-    const c = s?.loaded ? this.counts() : null;
-    const text = [c ? plural(c.shownCur, "turn") : this.headerText(), c?.hiddenAll ? `${c.hiddenAll.toLocaleString()} hidden` : null, s?.title].filter(Boolean).join(" · ");
-    return h_flex().id("th-about").flex_1().min_w(0).gap(6).items_center().tooltip(this.bindingTip())
-      .child(mark(agent.key, 14) ?? svg(ICON("square-terminal")).size(13).text_color(t.muted))
-      .child(div().flex_none().text_size(12).text_color(t.foreground).child(agent.name))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(text))
-      .when(this.debug && Boolean(this.timing), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(10.5).font_family(this.mono()).text_color(t.dim).child(this.timing)));
-  }
-
   // The text the list is filtered by: none while the field holds a "#12" jump.
   filterText() { return jumpTarget(this.query) == null ? this.query.trim() : ""; }
 
@@ -6912,7 +7135,12 @@ export default class Threads extends View {
       this.pinningUntil = Date.now() + 1000;
       this.upAt = 0;
       this.downAt = 0;
-      cx.timer.after(16, (cx) => { this.scroll.scroll_to_bottom(); cx.notify(); });
+      const holds = this.holds ?? 0;
+      cx.timer.after(16, (cx) => {
+        if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
+        this.scroll.scroll_to_bottom();
+        cx.notify();
+      });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
       // A return waits for the card's parts to be measured: estimates can be off by 100 px,
       // and the list keeps its offset in px, so it would land away from the place.
@@ -7021,8 +7249,9 @@ export default class Threads extends View {
         this.pressAt = e.position ? { x: e.position.x, y: e.position.y } : null;
         this.pressMoved = 0;
         this.pressCount = e.click_count ?? 1;
-        // A double or triple press selects a word or a paragraph straight away.
-        if (this.pressCount > 1) this.liftFill(this.sel, cx);
+        // A double or triple press selects a word or a paragraph straight away, and the turn
+        // its first press was about to open stays closed (OPEN_WAIT_MS).
+        if (this.pressCount > 1) { this.holdForSelect(); this.liftFill(this.sel, cx); }
         this.notePress(cx);
       })
       .when(strip, (el) => el.child(h_flex().id("th-day-strip").h(DAY_STRIP).flex_none().w_full().justify_center().items_center().bg(t.background)
@@ -7577,7 +7806,7 @@ export default class Threads extends View {
       case "you": return this.youHeight(r);
       case "rhead": return ROW.GAP + ROW.LINE + (this.captionRows(r.turn) ? 6 + this.captionRows(r.turn) * 18 : 0);
       case "lhead": return 14 + TV_LINE;
-      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + 22 : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
+      case "latest": return 6 + (r.md ? this.mdHeight(r.md) + (r.left > 0 ? LATEST_NOTE : 0) + (r.whole ? 0 : 22) : this.latestBox(r) + (this.latestCut(r) ? 22 : 0));
       case "noreply": return 6 + TV_LINE * (this.wrapped(this.noReplyText(r.turn), w, MD_CHAR) + 1);
       case "md": return (r.gap ?? 6) + (r.table ? this.tableHeight(r) : this.mdHeight(r.src ?? r.md));
       case "seltext": return 6 + 22 + r.boxH;
@@ -7625,7 +7854,9 @@ export default class Threads extends View {
       case "md": return `${head}|${r.md.length}|${r.gap ?? 6}|${this.linksVer}|${this.repoSig()}|${this.mdBroken?.has(r.key) ? "plain" : "md"}${r.table ? `|t${this.tableExtra(r)}` : ""}`;
       case "cmd": return `${head}|${r.md.length}|${r.md.slice(-24)}|t${this.tableExtra(r)}`;
       case "lhead": return `${head}|${r.turn.followups}`;
-      case "latest": return `${head}|${r.md ? `all${r.md.length}` : r.text.length}`;
+      // The Markdown form draws a Show less row only after Show all (not when whole) and a note
+      // past the cap (left), so both are part of its layout.
+      case "latest": return `${head}|${r.md ? `all${r.md.length}|${r.whole ? "w" : "s"}|${r.left ?? 0}` : r.text.length}`;
       case "noreply": return `${head}|${this.noReplyText(r.turn)}`;
       default: return head;
     }
@@ -8190,11 +8421,16 @@ export default class Threads extends View {
         .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size, sh.pHard)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
-    // quote that is the whole prompt keeps the prompt's own colour and size.
+    // quote that is the whole prompt keeps the prompt's own colour and size. A pasted
+    // block: one quiet label row ("Pasted · N lines", muted 12.5 px, no bar), then each
+    // body line its own mono row, clipped by the shape, never wrapped.
     if (sh.kinds) {
       return v_flex().min_w(0).children(sh.prompt.map((l, i) => {
         const k = sh.kinds[i];
         if (k === "c") return h_flex().min_w(0).when(!agent, (el) => el.font_medium()).child(sl(i, [l], color, size));
+        if (k === "p") return h_flex().h(lh).min_w(0).items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_family(this.mono()).text_color(color).child(l || " "));
+        if (k === "pl") return h_flex().h(lh).min_w(0).items_center().child(sl(i, [l], t.muted, 12.5));
         return h_flex().h(lh).min_w(0).gap(QUOTE_INSET - 2).items_center()
           .child(this.quoteBar(t, agent))
           .child(k === "qonly"
@@ -8584,12 +8820,16 @@ export default class Threads extends View {
         const canLess = !longLine && r.less && this.youClip(turn).more > 0;
         // Markdown through TextView (quotes, code and link rules drawn the way the reply is),
         // or with a filter that matches the prompt, the matches marked and each quote run
-        // behind the same bar.
+        // behind the same bar. A pasted block: the quiet label, then its body in the mono
+        // face, one block, the wrapper gone.
         const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
             ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
               .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
-            : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
+            : p.paste
+              ? v_flex().min_w(0).child(div().text_size(12.5).text_color(bt.muted).child(pasteLabel(p.lines.length)))
+                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, p.lines.join("\n"), bt.muted)))
+              : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
           : this.mdView(tv(`th-you-${r.key}`), y.md, this.replySelectable());
         const cmd = commandParts(turn);
@@ -8642,7 +8882,8 @@ export default class Threads extends View {
       case "latest": {
         if (r.md) return v_flex().mt(6)
           .child(this.readBlock(div()).child(this.mdView(tv(`th-lmd-${r.key}`), r.md, this.replySelectable())))
-          .child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less"));
+          .when(r.left > 0, (el) => el.child(div().h(LATEST_NOTE).flex().items_center().text_size(11.5).italic().text_color(t.dim).child(`… ${r.left.toLocaleString()} more characters not shown`)))
+          .when(!r.whole, (el) => el.child(div().h(22).flex().items_center().text_size(12).text_color(t.accent).child("Show less")));
         // One block that gpui wraps at the card's width, 21 px a line, in a box that shows
         // whole lines up to LATEST_LINES (C5).
         const block = this.readBlock(div()).text_color(t.foreground).child(r.text);
@@ -8864,8 +9105,46 @@ export default class Threads extends View {
     return fitHints([...out, ["?", "keys"]], this.pw());
   }
 
-  // The room the key hints take at the pane's foot: none while they are off (settings keyHints).
-  footSpace() { return this.prefs.keyHints ? (this.footerH ?? 38) : 0; }
+  // The room the key hints and the status line take at the pane's foot: none for either while
+  // it is off (settings keyHints and statusLine).
+  footSpace() { return (this.prefs.keyHints ? (this.footerH ?? 38) : 0) + (this.statusShown() ? STATUS_H : 0); }
+
+  // The status line: the chat's stats for the session the pane reads, once it is read (the
+  // owner, 2026-11-19: a slim line at the very bottom). Only what the transcript records:
+  // turns, hidden turns and tool calls for every agent; tokens, cache hit and context for
+  // the agents that record usage (sessionStats). It takes no click and shows no tooltip.
+  statusShown() { return this.prefs.statusLine !== false && Boolean(this.current()?.loaded); }
+  // Summed again only when the session changes, and then only from the newest done turn on,
+  // as bindingTip's totals are: a sum over every turn on every draw is too slow in a long
+  // session (Herdr stops a draw past about 50 ms).
+  statusStats() {
+    const c = this.counts();
+    const s = this.current();
+    if (!s) return { turns: c.shownCur, hidden: c.hiddenCur, ...sumsStats(turnSums([])) };
+    // The session's own objects are part of the key: a session read again from the start gets
+    // a new turns list, so the same id and counts can never bring back the old line.
+    const v = `${s.id}|${s.version}|${s.turns.length}`;
+    const u = this.statusMemo;
+    if (u?.v !== v || u.s !== s || u.list !== s.turns) {
+      const keep = u && u.s === s && u.list === s.turns && u.stable <= s.turns.length && (u.stable === 0 || s.turns[u.stable - 1] === u.mark);
+      let k = keep ? u.stable : 0;
+      const from = k;
+      while (k < s.turns.length - 1 && s.turns[k].done) k++;
+      const base = turnSums(s.turns, from, k, keep ? u.base : null);
+      this.statusMemo = { v, s, list: s.turns, stable: k, mark: s.turns[k - 1] ?? null, base, stats: sumsStats(turnSums(s.turns, k, s.turns.length, base)) };
+    }
+    return { turns: c.shownCur, hidden: c.hiddenCur, ...this.statusMemo.stats };
+  }
+  statusGroupsShown() { return statusGroups(this.statusStats(), this.pw()); }
+  statusRow(t) {
+    const groups = this.statusGroupsShown();
+    return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
+      .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())
+        // The ring takes the text's colour: in dim its arc barely parts from its faint track on a
+        // dark theme (rig stills).
+        .child(svg(ICON(g.icon)).flex_none().size(12).text_color(g.icon.startsWith("ring-") ? t.muted : t.dim))
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(g.text))));
+  }
 
   footer(t) {
     const hint = (k, label) => (k === "?"
@@ -8884,36 +9163,49 @@ export default class Threads extends View {
   // The sheet's card: as tall as its keys (a 36 px title, 10 px padding above and below, each
   // group's 16 px name, 25 px a key row, 6 px gaps inside a group and 12 px between groups),
   // and no taller than the room between the header and the footer, where its list scrolls.
-  keySheetH(groups) {
+  keySheetWant(groups) {
     const rows = groups.reduce((n, [, items]) => n + items.length, 0);
-    const want = 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+    return 36 + 20 + groups.length * (16 + 6) + rows * 25 + (groups.length - 1) * 12 + 8;
+  }
+  keySheetH(groups) {
     const room = (this.rootH || 600) - 46 - this.footSpace() - 6;
-    return Math.max(120, Math.min(want, room));
+    return Math.max(120, Math.min(this.keySheetWant(groups), room));
   }
 
   // ?: every key, grouped (ui.js keySheet), over the list between the header and the footer.
   // Esc, ?, the close button or a click outside the card closes it.
   keySheetView(t) {
     const close = (_e, cx) => { cx.stop_propagation(); this.keysOpen = false; cx.notify(); };
+    // The key column fits the widest row's chips on one line where the pane has room (TRD-8).
+    const col = this.pw() >= KEYS_COL_MIN ? KEYS_COL : KEYS_COL_NARROW;
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
-      .child(h_flex().flex_none().w(92).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
+      .child(h_flex().flex_none().w(col).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
     const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane });
+    const sheetH = this.keySheetH(groups);
+    // Taller than its room: the list scrolls, and where Herdr has Scrollbar and its mode the bar
+    // is drawn all the time, in a strip at the right edge, so the sheet shows there is more.
+    const bar = this.cardBar && this.keySheetWant(groups) > sheetH;
+    const list = v_flex().id("th-keys-list").flex_1().min_h(0)
+      .when(bar, (el) => el.overflow_y_scroll().pr(12 + CARD_BAR_W)).when(!bar, (el) => el.overflow_y_scrollbar().pr(12)).pl(12).py(10).gap(12)
+      .children(groups.map(([group, items]) => v_flex().gap(6)
+        .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
+        .children(items.map(row))));
     return div().id("th-keys-scrim").absolute().top(0).left(0).right(0).bottom(0).bg(alpha(t.background, 0.6))
       .on_click(close)
       // Nothing under the sheet takes the wheel (covered()).
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
-      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(this.keySheetH(groups))
+      .child(v_flex().id("th-keys").absolute().top(46).left(10).right(10).h(sheetH)
         .rounded(8).border_1().border_color(t.border).bg(this.solidFill(t)).shadow_md()
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().flex_none().h(36).px(12).gap(8).items_center().border_b(1).border_color(t.border)
           .child(div().flex_1().min_w(0).text_size(13).font_semibold().text_color(t.foreground).child("Keys"))
           .child(this.kbd(t, "?"))
           .child(this.iconButton(t, "th-keys-close", "x", "Close (Esc)", close)))
-        .child(v_flex().id("th-keys-list").flex_1().min_h(0).overflow_y_scrollbar().px(12).py(10).gap(12)
-          .children(groups.map(([group, items]) => v_flex().gap(6)
-            .child(div().text_size(11).font_semibold().text_color(t.muted).child(group))
-            .children(items.map(row))))));
+        .child(bar
+          ? div().relative().flex_1().min_h(0).flex().flex_col().child(list)
+            .child(div().absolute().top(0).bottom(0).right(0).w(CARD_BAR_W).child(gpuiBase.Scrollbar.vertical("th-keys-list").mode("always").absolute().top(0).bottom(0).left(0).right(0)))
+          : list));
   }
 
   // i: the Turn card, with the selected turn's numbers and what each means (detailRows). It

@@ -45,6 +45,12 @@ export function newSession(id, file) {
     // launch result ("r") and its task notification ("n"): running, completed, failed,
     // stopped or killed, with the notification's time and tokens.
     agents: new Map(), agentIds: new Map(),
+    // Lines the reader skipped (noteSkip): before the first turn, and in all for the debug
+    // report. Here so that a session read again from the top (main.js restart) starts at none.
+    skippedHead: null, skipped: null,
+    // Calls waiting for their result ("x"), by call id: the call's record (a group's info) and
+    // its turn.
+    calls: new Map(),
   };
 }
 
@@ -65,6 +71,15 @@ function clockEnd(s, turn, e) {
   if (c.end == null && typeof e.at === "number") c.end = e.at;
   if (c.end != null) { turn.durationMs = Math.max(0, c.end - c.start); turn.endTs = c.end; }
 }
+
+// An event's time in ms, or null.
+const ms = (ts) => {
+  const n = typeof ts === "string" ? Date.parse(ts) : Number.NaN;
+  return Number.isFinite(n) ? n : null;
+};
+
+// How many calls wait for a result at most: past it the waiting list starts again.
+const CALLS_KEEP = 5000;
 
 // A tag's attribute value, or null: attr('<hc from="t7 review">', "from") is "t7 review".
 // One pattern per attribute name, made once.
@@ -242,6 +257,8 @@ function newTurn(s, e) {
     // the tool calls in a row between texts, each call by its tool name and its id (ids). The
     // reply is the text after the last group, so it is not a step.
     steps: [],
+    // When the text after the last call began (the reply's or the next text step's start).
+    afterAt: null,
     usage: {},
     // Codex names the model before the prompt it applies to (a "ctx" event).
     model: s.ctx?.m ?? null,
@@ -274,16 +291,22 @@ function newTurn(s, e) {
 // names and counts the rest. Past STEP_MAX steps, later text is dropped (counted) and
 // calls join the last group, so a turn of thousands of calls stays small. STEP_TEXT is under
 // ui.js MD_MAX, the size the reply's Markdown blocks are cut to.
+//
+// Times: a text step's at is when its first text was written. A group with a call that has an
+// input summary or a time keeps a record per call (info, beside ids): in, the input in up to
+// 120 characters; at, when the call was made; rt, when its result was written; f, whether it
+// failed (null when the result does not say). A result ("x") fills rt and f by the call's id.
 export const STEP_TEXT = 3400;
 export const STEP_CALLS = 200;
 export const STEP_MAX = 300;
 // A subagent call's name, as ui.js toolKind sees it (kept here: turns.js imports nothing).
 const AGENT_CALL = /^(task|agent|subagent|spawn(_\w+)?|delegate(_\w+)?)$/i;
-function addStep(turn, name, id = null) {
+// owner: the turn a call's result belongs to, when the steps are a wake-up's (keepWakes).
+function addStep(s, turn, name, id = null, e = null, owner = turn) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   if (text) {
-    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT });
+    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
     else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
@@ -299,6 +322,18 @@ function addStep(turn, name, id = null) {
     const ok = typeof id === "string" && /^[0-9A-Za-z_.:|-]{1,200}$/.test(id);
     if (ok && !g.ids) g.ids = g.calls.slice(0, -1).map(() => null);
     if (g.ids) g.ids.push(ok ? id : null);
+    const input = typeof e?.in === "string" && e.in ? e.in.slice(0, 120) : null;
+    const at = ms(e?.ts);
+    if ((input || at != null) && !g.info) g.info = g.calls.slice(0, -1).map(() => null);
+    if (g.info) {
+      const info = input || at != null ? { in: input, at, rt: null, f: null } : null;
+      g.info.push(info);
+      if (info && ok) {
+        s.calls ??= new Map();
+        if (s.calls.size >= CALLS_KEEP) s.calls.clear();
+        s.calls.set(id, { info, turn: owner });
+      }
+    }
   }
   g.count++;
 }
@@ -353,8 +388,9 @@ function closeOpen(s, cur, end, e) {
   for (const t of s.open) {
     t.done = true;
     if (end) t.endTs = end;
-    // Answered together with a later prompt: its reply is on that row.
-    if (t !== cur && !t.after.length) t.answeredBy = cur.n;
+    // Answered together with a later prompt: its reply is on that row. Not a turn with a line
+    // left out (noteSkip): its reply may be the line itself.
+    if (t !== cur && !t.after.length && !t.skipped) t.answeredBy = cur.n;
   }
   if (s.clock) for (const t of s.open) clockEnd(s, t, e);
   s.open = [];
@@ -375,6 +411,7 @@ export function apply(s, e) {
   applyOne(s, e);
   const v = s.version;
   if (e.k === "r" || e.k === "n") { s.agentVer = v; return; }
+  if (e.k === "x") { if (s.xTurn) s.xTurn.v = v; s.xTurn = null; return; }
   if (NO_TURN.has(e.k)) return;
   if (cur) cur.v = v;
   const last = s.turns[s.turns.length - 1];
@@ -391,7 +428,7 @@ function applyOne(s, e) {
   // Only between turns: a command line logged during a turn (a local /usage), with no text
   // of its own for the model, is not what the model is working on, so it never takes a row.
   if (s.pendingCmd && !s.open.length && !s.followActive && (e.k === "t" || e.k === "u" || e.k === "m" || e.k === "e")) promote(s);
-  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n") s.pendingCmd = null;
+  if (s.pendingCmd && e.k !== "c" && e.k !== "title" && e.k !== "an" && e.k !== "r" && e.k !== "n" && e.k !== "x") s.pendingCmd = null;
   const cur = s.turns[s.turns.length - 1];
   switch (e.k) {
     case "p": {
@@ -420,17 +457,24 @@ function applyOne(s, e) {
         // This wake-up's own clock and tool count, apart from the prompt's.
         s.followSince = e.ts ? Date.parse(e.ts) : null;
         cur.wakeTools = 0;
+        // The ATIF export (s.keepWakes) keeps each wake-up's texts and calls as steps of its
+        // own. The panel never sets it: it shows a wake-up as its last text only.
+        if (s.keepWakes) (cur.wakes ??= []).push({ steps: [], after: [], afterAt: null });
         startModelTurn(s, e);
       }
       return;
     }
     case "t":
       if (!cur || !e.t) return;
-      if (s.seg === "own") cur.after.push(e.t);
-      else {
+      if (s.seg === "own") {
+        if (!cur.after.length) cur.afterAt = ms(e.ts);
+        cur.after.push(e.t);
+      } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
+        const w = s.keepWakes ? cur.wakes?.at(-1) : null;
+        if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
       }
       return;
     case "u":
@@ -438,12 +482,17 @@ function applyOne(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-      if (s.seg === "own") { addStep(cur, e.n, e.id); cur.after = []; }
-      else cur.latestParts = [];
+      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; }
+      else {
+        cur.latestParts = [];
+        const w = s.keepWakes ? cur.wakes?.at(-1) : null;
+        if (w) { addStep(s, w, e.n, e.id, e, cur); w.after = []; w.afterAt = null; }
+      }
       return;
     case "m":
       if (!cur) return;
-      cur.usage[e.id] = e.u;
+      // w: the context window the agent stated with this count (Codex only), kept beside it.
+      cur.usage[e.id] = e.w > 0 ? { ...e.u, w: e.w } : e.u;
       if (e.m) cur.model = e.m;
       if (e.e) cur.effort = e.e;
       if (typeof e.a === "string" && e.a) cur.by = e.a;
@@ -461,7 +510,7 @@ function applyOne(s, e) {
       const a = s.agentIds.get(e.a) ?? { st: null, ms: null, tok: null };
       a.id = e.id;
       a.m = typeof e.m === "string" ? e.m : null;
-      if (!a.st) a.st = e.st === "async_launched" ? "running" : String(e.st);
+      if (!a.st && typeof e.st === "string") a.st = e.st === "async_launched" ? "running" : e.st;
       s.agents.set(e.id, a);
       s.agentIds.set(e.a, a);
       return;
@@ -521,6 +570,16 @@ function applyOne(s, e) {
     case "c":
       if (cur) cur.compactions++;
       return;
+    case "x": {
+      // A call's result: when it was written and whether it failed. Only its own turn changes.
+      const c = typeof e.id === "string" ? s.calls?.get(e.id) : null;
+      if (!c) return;
+      s.calls.delete(e.id);
+      c.info.rt = ms(e.ts);
+      c.info.f = typeof e.f === "boolean" ? e.f : null;
+      s.xTurn = c.turn;
+      return;
+    }
     case "title":
       if (e.t) s.title = e.t;
       return;
@@ -542,6 +601,25 @@ function applyOne(s, e) {
 // OpenCode rewrites its last turn in place while it streams, so a read gets that turn again
 // each time: rows after the last settled one are dropped before the new events apply. The
 // turn numbers come out the same.
+// A line the reader skipped (extract.sh's line_max): counted on the newest turn read so far,
+// or on the session's head before the first turn, so the pane can say where in byte order a
+// line was left out. Only by turn: the line's own type and time are not read.
+export function noteSkip(s, bytes) {
+  if (!(bytes > 0)) return;
+  const t = s.turns[s.turns.length - 1];
+  const at = t ?? s;
+  const key = t ? "skipped" : "skippedHead";
+  at[key] = { lines: (at[key]?.lines ?? 0) + 1, bytes: (at[key]?.bytes ?? 0) + bytes };
+  s.version++;
+}
+
+// The note for skipped lines: "A line of 300 MB was left out here, too long to read". From
+// 1 GB up the size is in GB with one decimal.
+export function skipNote(k) {
+  const size = k.bytes >= 1073741824 ? `${(k.bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(k.bytes / 1048576))} MB`;
+  return k.lines === 1 ? `A line of ${size} was left out here, too long to read` : `${k.lines} lines, ${size} in all, were left out here, too long to read`;
+}
+
 export function rewindTail(s) {
   s.turns.length = Math.min(s.turns.length, s.settled ?? 0);
   s.open = [];
@@ -563,7 +641,7 @@ export function parseLine(out, line) {
   if (!line) return;
   const e = JSON.parse(line);
   if (e.k === "file") { out.size = e.size; out.head = e.head ?? null; if ("anchor" in e) out.anchor = e.anchor; }
-  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); }
+  else if (e.k === "chunk") { out.used = e.used; out.rewind = Boolean(e.rewind); if (e.noperl) out.noPerl = true; if (e.skipped > 0) out.skipped = e.skipped; }
   else if (e.k === "missing") out.missing = true;
   else out.events.push(e);
 }
@@ -599,6 +677,42 @@ export function stats(turn) {
     tokens: fresh,
     cachePct: cachePct(cacheRead, prompt),
   };
+}
+
+// The status line's sums over one session's turns: tool calls; tokens, counted as the reply
+// stats count them (new input, cache writes and output); the share of the prompt read from
+// cache; and context, the prompt of the newest model response (its input, cache reads and
+// cache writes). With no usage in any turn (Cursor records none) the three are null, never 0.
+export function sessionStats(turns) {
+  return sumsStats(turnSums(turns));
+}
+
+// sessionStats in two steps, so the pane sums the done turns once and only the newest again:
+// turnSums adds turns from..to onto a copy of base, and sumsStats turns the sums into stats.
+export function turnSums(turns, from = 0, to = turns.length, base = null) {
+  const a = base ? { ...base } : { tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, any: false, context: null, window: null };
+  for (let k = from; k < to; k++) {
+    const t = turns[k];
+    a.tools += t.tools ?? 0;
+    for (const u of Object.values(t.usage ?? {})) {
+      a.any = true;
+      a.input += u.i ?? 0;
+      a.output += u.o ?? 0;
+      a.cacheRead += u.cr ?? 0;
+      a.cacheWrite += u.cc ?? 0;
+      a.context = (u.i ?? 0) + (u.cr ?? 0) + (u.cc ?? 0);
+      // The window stated with the same count, or none: never one from an earlier count.
+      a.window = u.w > 0 ? u.w : null;
+    }
+  }
+  return a;
+}
+export function sumsStats(a) {
+  if (!a.any) return { tools: a.tools, tokens: null, cachePct: null, context: null, contextPct: null };
+  const context = a.context > 0 ? a.context : null;
+  // The context as a whole percent of the window, only where the transcript states the window.
+  const contextPct = context != null && a.window > 0 ? Math.round((context * 100) / a.window) : null;
+  return { tools: a.tools, tokens: a.input + a.cacheWrite + a.output, cachePct: cachePct(a.cacheRead, a.input + a.cacheWrite + a.cacheRead), context, contextPct };
 }
 
 // Share of the prompt read from cache, floored to one decimal: 100 only when every prompt

@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -40,7 +40,11 @@ test("assembles turns from the fixture", () => {
   expect(plain.tools).toBe(0);
   expect(reply(plain)).toStartWith("It fires when a test skips logout");
   expect(fix.tools).toBe(3);
-  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false }, { k: "group", calls: ["Read", "Bash", "Edit"], ids: ["toolu_000002_Read", "toolu_000003_Bash", "toolu_000004_Edit"], count: 3 }]);
+  // Each step with its time, each call with its input in short, when it was made, when its
+  // result came and whether it failed.
+  const ms = (t) => Date.parse(`2026-11-01T09:13:${t}.000Z`);
+  expect(fix.steps).toEqual([{ k: "text", t: "Let me look at the test first.", cut: false, at: ms("08") }, { k: "group", calls: ["Read", "Bash", "Edit"], ids: ["toolu_000002_Read", "toolu_000003_Bash", "toolu_000004_Edit"], count: 3,
+    info: [{ in: "tests/login.spec.ts", at: ms(12), rt: ms(14), f: false }, { in: "bun test login", at: ms(18), rt: ms(20), f: false }, { in: "tests/login.spec.ts", at: ms(24), rt: ms(26), f: false }] }]);
   expect(reply(fix)).toStartWith("The test raced the redirect.");
   expect(reply(fix)).not.toContain("Let me look");
   expect(reply(fix)).not.toContain("background build");
@@ -201,13 +205,13 @@ test("usage of a message split over block lines counts once", () => {
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test("the new extractor gives the old event stream, less repeated usage, non-own text, call ids and the newer events", () => {
+test("the new extractor gives the old event stream, less repeated usage, non-own text, call ids, times, input summaries, results and the newer events", () => {
   // The first release's extractor, kept as a fixture to compare against.
   const before = join(root, "test/fixtures/v1-extractor/extract.sh");
   const file = made("--peer", "--notify");
   const norm = (list) => {
     const seen = new Set();
-    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
+    return list.filter((e) => e.k !== "s" && e.k !== "b" && e.k !== "an" && e.k !== "x" && (e.k !== "m" || (!seen.has(e.id) && seen.add(e.id)))).map((e) => (e.cmd ? { ...e, u: undefined } : e)).map((e) => (e.k === "u" ? { ...e, id: undefined, ts: undefined, in: undefined } : e)).map((e) => (e.k === "t" ? { ...e, ts: undefined } : e)).map((e) => JSON.stringify({ ...e, t: e.k === "p" && e.o === "task-notification" ? null : e.t }));
   };
   expect(norm(events(file))).toEqual(norm(events(file, before)));
 });
@@ -551,22 +555,34 @@ test("senderOf's hc and peer splits match the old patterns on every fixture prom
   expect(checked).toBeGreaterThan(1300);
 });
 
-// Under the interpreter's speed (BUN_JSC_useJIT=0, set for a child bun) the 1,306 busy
-// prompts take under 5 ms (the old pattern took about 46 ms).
-test("senderOf stays under 5 ms for the busy fixture's prompts with JIT off", () => {
+// Under the interpreter's speed (BUN_JSC_useJIT=0, set for a child bun), senderOf and the old
+// split (oldSender, above) are timed one after the other over the same 1,306 busy prompts in
+// the same child, best of five rounds each, and the old split must take at least 4 times as
+// long. A fixed limit failed on runner timing alone: 5.027 ms against 5 ms in CI at commit
+// 8866382, then a pass on rerun (issue #160). Contention slows both loops together, so the
+// ratio holds: 10.58 or more across 200 idle and loaded runs, while a senderOf regressed to
+// the old split in one branch or both measures 0.97 to 1.95. oldSender uses nothing from
+// turns.js, so a change there moves only senderOf's side. The JIT stays off: with it on, the
+// ratio is 3.4 to 4.0.
+test("senderOf stays at least 4x faster than the pre-round-3 split on the busy fixture with JIT off", () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-sender-"));
   const file = join(dir, "p.json");
   writeFileSync(file, JSON.stringify(prompts("--busy", "130").map((e) => [e.o, e.t])));
   const script = join(dir, "time.js");
   writeFileSync(script, `import { senderOf } from ${JSON.stringify(join(root, "mods/agent-threads/core/turns.js"))};
+${oldSender}
 const ps = JSON.parse(require("fs").readFileSync(${JSON.stringify(file)}, "utf8"));
-for (const [o, t] of ps.slice(0, 50)) senderOf(o, t);
-let best = Infinity;
-for (let r = 0; r < 5; r++) { const a = performance.now(); for (const [o, t] of ps) senderOf(o, t); best = Math.min(best, performance.now() - a); }
-console.log(JSON.stringify({ n: ps.length, ms: best }));`);
+for (const [o, t] of ps.slice(0, 50)) { senderOf(o, t); oldSender(o, t); }
+let msNew = Infinity, msOld = Infinity;
+for (let r = 0; r < 5; r++) {
+  let a = performance.now(); for (const [o, t] of ps) senderOf(o, t); msNew = Math.min(msNew, performance.now() - a);
+  a = performance.now(); for (const [o, t] of ps) oldSender(o, t); msOld = Math.min(msOld, performance.now() - a);
+}
+console.log(JSON.stringify({ n: ps.length, msNew, msOld }));`);
   const out = JSON.parse(execFileSync("bun", [script], { encoding: "utf8", env: { ...process.env, BUN_JSC_useJIT: "0" } }));
+  console.log(`senderOf timing, JIT off: n=${out.n} msNew=${out.msNew.toFixed(2)} msOld=${out.msOld.toFixed(2)} ratio=${(out.msOld / out.msNew).toFixed(2)}`);
   expect(out.n).toBeGreaterThan(1300);
-  expect(out.ms).toBeLessThan(5);
+  expect(out.msOld / out.msNew).toBeGreaterThanOrEqual(4);
 });
 
 // ---- round 3: C3 ------------------------------------------------------------------------------
@@ -699,4 +715,25 @@ test("a turn's version moves only when an event may change it", () => {
   apply(s, { k: "s", ts: ts(4) });
   expect(t2.v).toBeGreaterThan(v3);
   expect(t1.v).toBe(v1);
+});
+
+test("sessionStats: the status line's sums over a session, and nothing for what no turn recorded", () => {
+  // Two turns with usage, as Claude Code, Codex, OpenCode and Pi record it.
+  const a = { tools: 3, usage: { m1: { i: 100, o: 50, cr: 0, cc: 900 }, m2: { i: 10, o: 40, cr: 1000, cc: 0 } } };
+  const b = { tools: 2, usage: { m3: { i: 20, o: 30, cr: 1500, cc: 100 } } };
+  const st = sessionStats([a, b]);
+  expect(st.tools).toBe(5);
+  // New input, cache writes and output, as the reply stats count tokens.
+  expect(st.tokens).toBe(100 + 10 + 20 + 900 + 100 + 50 + 40 + 30);
+  // Cache reads over the whole prompt: 2500 of 3630.
+  expect(st.cachePct).toBe(68.8);
+  // The newest response's prompt: its input, cache reads and cache writes.
+  expect(st.context).toBe(20 + 1500 + 100);
+  // Antigravity records no cache writes: the same sums, with writes 0.
+  expect(sessionStats([{ tools: 1, usage: { s1: { i: 300, o: 20, cr: 700, cc: 0 } } }])).toEqual({ tools: 1, tokens: 320, cachePct: 70, context: 1000, contextPct: null });
+  // Cursor records no tokens: tool calls only, and null for the rest, never 0.
+  expect(sessionStats([{ tools: 4, usage: {} }, { tools: 1, usage: {} }])).toEqual({ tools: 5, tokens: null, cachePct: null, context: null, contextPct: null });
+  expect(sessionStats([])).toEqual({ tools: 0, tokens: null, cachePct: null, context: null, contextPct: null });
+  // A turn with no usage after one with usage leaves the context at the last response.
+  expect(sessionStats([b, { tools: 0, usage: {} }]).context).toBe(1620);
 });

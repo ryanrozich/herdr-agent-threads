@@ -1,0 +1,153 @@
+{
+ "schema_version": "ATIF-v1.7",
+ "session_id": "ses_0003acme",
+ "agent": {
+  "name": "opencode",
+  "version": "unknown",
+  "model_name": "glm-5.3",
+  "extra": {
+   "reader": "agent-threads"
+  }
+ },
+ "steps": [
+  {
+   "step_id": 1,
+   "timestamp": "2026-11-01T09:10:00.000Z",
+   "source": "user",
+   "message": "Rename useCart to useBasket everywhere",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793524200|1o3dmdg|1"
+   }
+  },
+  {
+   "step_id": 2,
+   "source": "agent",
+   "model_name": "glm-5.3",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "call_grep",
+     "function_name": "grep",
+     "arguments": {}
+    },
+    {
+     "tool_call_id": "call_edit",
+     "function_name": "edit",
+     "arguments": {}
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "call_grep",
+      "extra": {
+       "no_result": true
+      }
+     },
+     {
+      "source_call_id": "call_edit",
+      "extra": {
+       "no_result": true
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793524200|1o3dmdg|1"
+   }
+  },
+  {
+   "step_id": 3,
+   "source": "agent",
+   "model_name": "glm-5.3",
+   "message": "Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`.",
+   "extra": {
+    "turn": 1,
+    "turn_id": "1793524200|1o3dmdg|1",
+    "end_ts": "2026-11-01T09:10:38.000Z",
+    "duration_ms": 38000
+   },
+   "metrics": {
+    "prompt_tokens": 52400,
+    "completion_tokens": 540,
+    "cached_tokens": 22000,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 1
+    }
+   }
+  },
+  {
+   "step_id": 4,
+   "timestamp": "2026-11-01T09:11:35.000Z",
+   "source": "user",
+   "message": "Update the README example too",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793524295|gyotob|1"
+   }
+  },
+  {
+   "step_id": 5,
+   "source": "agent",
+   "model_name": "glm-5.3",
+   "message": "",
+   "tool_calls": [
+    {
+     "tool_call_id": "call_edit",
+     "function_name": "edit",
+     "arguments": {}
+    }
+   ],
+   "observation": {
+    "results": [
+     {
+      "source_call_id": "call_edit",
+      "extra": {
+       "no_result": true
+      }
+     }
+    ]
+   },
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793524295|gyotob|1"
+   }
+  },
+  {
+   "step_id": 6,
+   "source": "agent",
+   "model_name": "glm-5.3",
+   "message": "The README's **Cart state** example now imports `useBasket`.",
+   "extra": {
+    "turn": 2,
+    "turn_id": "1793524295|gyotob|1",
+    "end_ts": "2026-11-01T09:11:52.000Z",
+    "duration_ms": 17000
+   },
+   "metrics": {
+    "prompt_tokens": 61800,
+    "completion_tokens": 210,
+    "cached_tokens": 30000,
+    "extra": {
+     "cache_creation_input_tokens": 0,
+     "scope": "turn",
+     "model_messages": 1
+    }
+   }
+  }
+ ],
+ "notes": "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
+ "final_metrics": {
+  "total_prompt_tokens": 114200,
+  "total_completion_tokens": 750,
+  "total_cached_tokens": 52000,
+  "total_steps": 6
+ },
+ "extra": {
+  "title": "Rename useCart"
+ }
+}

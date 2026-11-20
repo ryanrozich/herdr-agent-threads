@@ -1,6 +1,6 @@
 # agent-threads extractor for Antigravity CLI conversations (<data>/brain/<id>/
 # .system_generated/logs/transcript_full.jsonl, data being ~/.gemini/antigravity-cli): lines in
-# (jq -R, whole lines only), the same compact events as extract.jq out, one JSON object per
+# (one JSON string each, from lines.sh; whole lines only), the same compact events as extract.jq out, one JSON object per
 # line, in file order:
 #   p      a prompt  {o: "human", ts, t}
 #   ctx    the model chosen for the turns that follow  {m, e}

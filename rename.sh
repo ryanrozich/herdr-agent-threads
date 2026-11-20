@@ -12,7 +12,7 @@ old=$(basename "$(ls -d mods/*/ | head -n 1)")
 git mv "mods/$old" "mods/$new"
 # Whole-word uses only: mods/<old>, data/<old>, <old>.command, mod.open:<old>. Not the
 # repository slug (owner/<old>) or temp-file prefixes (/tmp/<old>.XXXXXX, <old>-img).
-files=$(git ls-files README.md RECIPE.md keys.json .gitignore docs/usage.md docs/develop.md docs/listing.md 'test/*.js' "mods/$new/*")
+files=$(git ls-files README.md RECIPE.md AGENTS.md ICONS.md keys.json .gitignore docs/usage.md docs/develop.md docs/listing.md docs/reference.md docs/release-notes.md release-please-config.json .github/workflows/release.yml '.claude/skills/*/SKILL.md' 'test/*.js' "mods/$new/*")
 OLD=$old NEW=$new perl -i -pe '
   next if /PREVIOUS =/;
   s{(\b[\w.-]+/)?(?<![\w.-])\Q$ENV{OLD}\E(?![\w-])}{

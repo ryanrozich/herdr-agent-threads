@@ -1,0 +1,58 @@
+[project]
+linear_team = "TRD"
+
+[project.linear.states]
+dispatch = "Todo"
+intake = "Intake"
+research = "Research"
+plan = "Plan"
+implement = "Implement"
+remediate = "Remediate"
+verify = "Validate"
+review = "Validate"
+pr = "PR"
+done = "Done"
+canceled = "Canceled"
+
+[merge]
+policy = "checks-and-threads"
+queue = "mergify"
+required_checks = ["check"]
+
+[environment]
+toolchains = [{ name = "bun", version = "1.4.2" }]
+system_packages = [
+  { name = "gitleaks" },
+  { name = "jq" },
+  { name = "lsof" },
+  { name = "perl" },
+  { name = "procps" },
+  { name = "rsync" },
+  { name = "shellcheck" },
+  { name = "sqlite3" },
+  { name = "tesseract-ocr" },
+]
+
+[[environment.verify]]
+name = "lint"
+run = ["bunx", "@biomejs/biome@2.6.4", "lint"]
+
+[[environment.verify]]
+name = "shellcheck"
+run = ["sh", "-ec", "git ls-files -z '*.sh' | xargs -0 shellcheck -S warning"]
+
+[[environment.verify]]
+name = "extractor-syntax"
+run = ["sh", "-ec", "for f in mods/*/core/extract*.jq; do echo '\"x\"' | jq -R -f \"$f\" > /dev/null; done"]
+
+[[environment.verify]]
+name = "tests"
+run = ["sh", "test/leftover-check.sh"]
+timeout_seconds = 600
+
+[thoughts]
+repo_owner = "ryanrozich"
+repo_name = "thoughts"
+default_branch = "main"
+repos_subdir = "repos"
+directory = "herdr-agent-threads"

@@ -38,7 +38,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 
 Your prompt is a quiet bubble on the right. A grey line under it says how long the agent worked, and the reply follows. Every message shows in full unless you turn on Shorten long messages in the settings. Point at a message for its time, and select a turn for the copy, pin and quote icons. A band marks each day. Open a turn to see the whole reply, with code, lists and links formatted. A code block wraps and shows its first 12 rows, with Show all under it for the rest. A Mermaid block has View diagram under it, which opens the diagram drawn as text in a viewer over the window.
 
-On Herdr 0.1.13 or newer, drag across any turn's text, open or closed, to highlight it, and press `Cmd-C` to copy it. A drag never opens or closes a turn; only a click that does not move does.
+On Herdr 0.1.13 or newer, drag across any turn's text, open or closed, to highlight it, and press `Cmd-C` to copy it. A drag or a double press never opens or closes a turn; only a click that does not move does. A click on a closed turn opens it after 0.3 s, so a double press can select a word first.
 
 <a href="docs/screenshots/open-turn.png"><img src="docs/screenshots/open-turn.png" alt="An open turn: the prompt in a bubble, then a formatted reply with a list, a code block and stats" width="400"></a>
 
@@ -92,13 +92,13 @@ At the top left of the pane, the agent's state says Working, Needs you, Done or 
 
 Images you pasted show as tiles over your message. Click a tile to open the image viewer at that image, on a closed turn, an open one or the running one. The viewer fills the window with the image and puts your prompt and the reply beside it, so you can read the reply against each screenshot. `←` `→` step through the images, `j` `k` scroll the reply, `i` hides it and `Esc` closes the viewer.
 
-<a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message, and larger under it" width="300"></a> <a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer: a screenshot on the left, the prompt and the reply in a panel on the right" width="500"></a>
+<a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" alt="A pasted image as a tile over the message; one press opens the image viewer" width="300"></a> <a href="docs/screenshots/viewer.png"><img src="docs/screenshots/viewer.png" alt="The image viewer: a screenshot on the left, the prompt and the reply in a panel on the right" width="500"></a>
 
 ### See agent messages
 
 Press `a` to show messages other agents sent the session, such as a subagent's report. They are hidden by default. When the agent wrote a reply to one of them on its own, that reply still shows, under one folded line that names the sender ("helper-a · agent message"). Click the line to see the message, and again to fold it.
 
-<a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as a plum bubble on the left" width="400"></a>
+<a href="docs/screenshots/agent-messages.png"><img src="docs/screenshots/agent-messages.png" alt="A subagent report as an amber bubble on the left" width="400"></a>
 
 ### Read wide tables
 
@@ -106,7 +106,7 @@ A table in a reply can run wider than the reading line when the pane has room be
 
 ### Make it yours
 
-Press `,` for settings, a card over the list with one page: text size, your message color, Shorten long messages and its lines, and the time; agent messages, their rail ticks and their color; the reading width (Comfortable, Wide or Full, which `Shift w` also steps), the rail's side and the key hints; link rules and the quote key; and the file. A change shows in the list behind the card as you make it. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
+Press `,` for settings, a card over the list with one page: text size, your message color, Shorten long messages and its lines, and the time; agent messages, their rail ticks and their color; the reading width (Comfortable, Wide or Full, which `Shift w` also steps), the rail's side, the key hints and the status line, the chat's turns, tool calls, tokens, cache hit and context in one row at the pane's foot; link rules and the quote key; and the file. A change shows in the list behind the card as you make it. Every message shows in full; turn on Shorten long messages to show the first lines of each, with Show more. You can also turn ticket and PR numbers into links: pull request numbers link out of the box, and the Link rules page adds your own. [Settings in detail](docs/usage.md#settings-in-detail) has every option.
 
 ## Keys
 
@@ -132,7 +132,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `t` | Go to the terminal |
 | `a` | Show or hide agent messages |
 | `w` | Fit the pane to the reading width |
-| `,` | Settings |
+| `,` | Settings; while the card is open, `↑` `↓` `j` `k`, `Page Up` `Page Down` `Space`, `Home` and `End` scroll it |
 | `Shift w` | Step the reading width |
 | `?` | Every key |
 | `Esc` | Back out |
@@ -162,8 +162,11 @@ Amp keeps its conversations on its own servers, not on your computer. Reading th
 - [More screenshots](docs/usage.md#more-screenshots)
 - [Developing](docs/develop.md): tests, fixtures and trying it in a separate Herdr window.
 - [RECIPE.md](RECIPE.md): what the pane draws and how it is built.
+- [Reference](docs/reference.md): every surface the pane draws, and how each agent's session is found and read, in full.
 - [Listing](docs/listing.md): what the herdr.dev/mods listing reads.
 
 ## License
 
 [MIT](LICENSE).
+
+Catalyst Cloud enabled

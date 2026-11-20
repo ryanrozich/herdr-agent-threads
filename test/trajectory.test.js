@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail, sessionStats } from "../mods/agent-threads/core/turns.js";
 import { trajectory, trajectories } from "../mods/agent-threads/core/trajectory.js";
 
 const root = join(import.meta.dir, "..");
@@ -78,14 +78,20 @@ for (const [name, read] of AGENTS) {
     // Each turn has its stable id, and no two share one.
     expect(new Set(got.map((t) => t.id)).size).toBe(got.length);
     expect(got.every((t) => typeof t.id === "string" && t.id.split("|").length === 3)).toBe(true);
-    // Every cell has a start and an end, a number or null; a tool's result is joined by its id.
+    // Every cell has a start and an end, a number or null; a tool's result is joined by its id
+    // and ends with it, failed or not or unknown, never before the call started.
     for (const t of got) {
       expect(t.groups[0]).toMatchObject({ title: "Message", cells: [{ kind: "user" }] });
       for (const g of t.groups) for (const c of g.cells) {
         if (c.kind === "more") continue;
         expect(c.start === null || Number.isFinite(c.start)).toBe(true);
         expect(c.end === null || Number.isFinite(c.end)).toBe(true);
-        if (c.kind === "tool" && c.call) expect(c.result).toEqual({ call: c.call });
+        if (c.kind === "tool" && c.call) {
+          expect(c.result).toEqual({ call: c.call, end: c.end, failed: c.result.failed });
+          expect([true, false, null]).toContain(c.result.failed);
+        }
+        if (c.kind === "tool") expect(c.input === null || (typeof c.input === "string" && c.input.length <= 120)).toBe(true);
+        if (c.start != null && c.end != null) expect(c.end).toBeGreaterThanOrEqual(c.start);
       }
     }
     same(`${name}.json`, got);
@@ -94,6 +100,19 @@ for (const [name, read] of AGENTS) {
     same(`turns-${name}.json`, s.turns);
   });
 }
+
+test("trajectory: Claude Code's and Codex's calls carry their input, start, result time and whether they failed; texts their start", () => {
+  for (const [file, harness, bad] of [[claude, "claude", "bun test login"], [codex, "codex", "bun test cart/total.test.ts"]]) {
+    const s = readFile(file, harness);
+    const cells = trajectories(s).flatMap((t) => t.groups.flatMap((g) => g.cells));
+    const tools = cells.filter((c) => c.kind === "tool" && c.call);
+    expect(tools.length).toBeGreaterThan(0);
+    expect(tools.every((c) => c.input && c.start != null && c.end != null && c.end >= c.start)).toBe(true);
+    // The one call made up to fail, and only it.
+    expect(tools.filter((c) => c.result.failed).map((c) => c.input)).toEqual([bad]);
+    expect(cells.filter((c) => c.kind === "message").every((c) => c.start != null)).toBe(true);
+  }
+});
 
 test("trajectory: a Claude Code subagent call carries its run, joined by the call's id", () => {
   const s = readFile(claude, "claude");
@@ -130,4 +149,31 @@ test("stable ids: a session read again from the top, or whose tail is rewritten,
   rewindTail(s);
   for (const e of events.slice(6)) apply(s, e);
   expect(ids(s)).toEqual(first);
+});
+
+// The status line's context figure, from each agent's own token fields, as each fixture writes
+// them: the newest response's whole prompt. Claude Code's is input, cache reads and cache
+// writes. Codex's input_tokens already counts the cached tokens. OpenCode (tokens.input,
+// cache.read), Pi (input, cacheRead) and Antigravity (input_tokens, cache_read_tokens) count
+// them apart, so the reader adds them. Cursor records no tokens.
+test("context: each agent's newest prompt size, from its own token fields", () => {
+  const ctx = (s) => sessionStats(s.turns).context;
+  expect(ctx(readFile(claude, "claude"))).toBe(6 + 42000 + 1800); // input, cache reads, cache writes
+  expect(ctx(readFile(codex, "codex"))).toBe(52100); // input_tokens 52100, of them cached 47000
+  expect(ctx(readOpencode(oc))).toBe(31800 + 30000);
+  expect(ctx(readFile(pi, "pi"))).toBe(10400 + 9500);
+  expect(ctx(readFile(cursor, "cursor"))).toBe(null);
+  expect(ctx(readFile(agy, "antigravity"))).toBe(2800 + 10600);
+});
+
+// The ring's percent: only where the transcript states the model's window, which only Codex
+// does (model_context_window on each count). No agent gets a window guessed from its model.
+test("contextPct: Codex's context as a share of its stated window, and none for the others", () => {
+  const pct = (s) => sessionStats(s.turns).contextPct;
+  expect(pct(readFile(codex, "codex"))).toBe(Math.round((52100 * 100) / 258400)); // 20
+  expect(pct(readFile(claude, "claude"))).toBe(null);
+  expect(pct(readOpencode(oc))).toBe(null);
+  expect(pct(readFile(pi, "pi"))).toBe(null);
+  expect(pct(readFile(cursor, "cursor"))).toBe(null);
+  expect(pct(readFile(agy, "antigravity"))).toBe(null);
 });

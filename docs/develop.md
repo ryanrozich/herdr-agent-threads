@@ -8,7 +8,7 @@ bun test/make-big.js out.jsonl 600 [real|noisy|dense]   # very large synthetic t
 sh test/scan-private.sh                    # before committing: no home paths, names, emails, real ids or sidebars (PNGs via tesseract)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. The test run also writes a JUnit report (`junit.xml`, ignored by git), which the next step sends to Mergify Test Engine with the job's own ID token; no secret is stored. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
 
 Each `bun test` run keeps its temp files in one folder, `threads-run-<pid>-*` under `$TMPDIR`, and removes it, along with any process it started that is still alive, when it ends or is stopped (`test/preload.js`, loaded through `bunfig.toml`). Tests make temp folders with `mkdtempSync(join(tmpdir(), ...))` as before; they land in the run's folder.
 
@@ -48,6 +48,42 @@ printf '{"pid":%s,"sessionId":"<idA>","cwd":"/private/tmp/threads-demo"}\n' <dec
 
 To act out `/clear`, write a second fixture made with `--clear` into the same project folder and point the record at its id. Kill the decoy to see "claude exited". With no record and two transcripts in the folder, the pane guesses and offers "Choose from 2…".
 
+## Merging
+
+Pull requests merge to main through Mergify's merge queue (`.mergify.yml`), and main is what people get: the herdr.dev/mods listing installs main's head (as of 2026-11-18, each index entry names the default branch and its head commit, and no tag or release). A pull request enters the queue when it gets the `queue` label or a `@mergifyio queue` comment, and only once it is out of draft, has no conflict, has a passing `check`, has no unresolved review thread and has a title in the form below. Mergify waits up to 1 minute to fill a batch of up to 10 queued pull requests, builds one draft pull request with them on top of main, runs `check` on that, and squashes each one into a single commit on main. Pull requests whose checks are still pending after 15 minutes leave the queue, and a failed check gets one fresh run on a new draft pull request before its pull requests leave the queue.
+
+**Titles.** The squash commit takes the pull request's title and number, `feat: the settings card shows the version (#154)`, with its description as the body. A release tool reads those titles (release-please is the one planned, in #156), so a title is a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/): a type, an optional scope in parentheses, an optional `!` for a breaking change, a colon and a space, then what changes for the person using the mod.
+
+| Type | For |
+|---|---|
+| `feat` | something new a user can see or do (a minor release) |
+| `fix`, `perf`, `revert` | a bug fixed, something faster, a change taken back (a patch release) |
+| `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style` | everything else (no release of its own) |
+
+`feat!:` or `fix(settings)!:` marks a breaking change (a major release). The title check (`.github/workflows/pr-title.yml`) says at once whether a title fits, and the queue will not take one that does not. The commits on a branch can say anything, since only the title reaches main. Commits from before the switch to squash keep their merge commits.
+
+A pull request opened before the switch with a plain-sentence title, such as "Link rules: one slow run no longer turns a plain rule off", cannot be queued until it is retitled in this form: `fix(links): one slow run no longer turns a plain rule off`. Retitle it when it is next worked on. GitHub's Revert button titles its pull request `Revert "feat: ..."`, which the queue refuses. Retitle it `revert: feat: ...`, the original title after `revert: `.
+
+**Releases.** Merging to main does not release. The Release workflow (`.github/workflows/release.yml`) keeps one release pull request open with the next version and its changelog, and updates it after each merge. It stays open between releases; that is normal. It opens as a draft (`"draft-pull-request": true` in `release-please-config.json`), and the queue refuses a draft, so a `queue` label added by mistake does nothing. It is marked ready and merged only when the repo's owner asks for a release: an agent never marks it ready, labels it `queue` or merges it on its own judgement, and a green `check` is not a reason to. Nothing queues it on its own: the `queue` label (or `@mergifyio queue`) is the only way into the queue.
+
+When one pull request has to land after another, put a `Depends-On:` line in the later one's description, with the reference alone on the line:
+
+```text
+Depends-On: #136
+```
+
+Mergify's docs say it holds that pull request until #136 has merged, with its Merge Protections check pending meanwhile, so a whole set can be labeled at once and still land in order. They also say a line that holds anything besides the reference is ignored, and that a dependency closed without merging, or a loop, never clears. See Mergify's [built-in merge protections](https://docs.mergify.com/merge-protections/builtin/).
+
+**Stacks.** A squash commit holds none of the branch's commits, so a branch built on another still carries the lower one's commits after it lands. Base each pull request on main, give the upper one `Depends-On:` for the lower one, and once the lower one has merged, move the upper branch onto main before it is queued:
+
+```sh
+git fetch origin
+git rebase --onto origin/main <the lower branch's last commit> <upper branch>
+git push --force-with-lease
+```
+
+The upper pull request then shows only its own change, and its checks run again on the new head.
+
 ## Regenerating the screenshots
 
 `preview.png` and `docs/screenshots/` show a staged session on a made-up project, with no retouching. `test/make-hero.js` writes the transcript, `test/hero/screen.c` is a stand-in for Claude Code in the left terminal (it builds on macOS), and `test/hero/render.py` draws what that terminal shows. A quote really pastes: the stand-in turns on bracketed paste and logs what it receives, and the renderer redraws the prompt from that log.
@@ -77,15 +113,15 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 |---|---|---|---|
 | `preview.png` | 1460x1150, `render.py` running | `open` | `552 96 2912 2232` |
 | `panel.png` | the same shot | | `1808 96 2912 2232` |
-| `open-turn.png` | the same shot | | `1808 1140 2912 2090` |
+| `open-turn.png` | the same shot | | `1808 1178 2912 2102`, which ends under the code block so no line is cut |
 | `light.png` | 1460x1150, `"appearance": "light"` in `settings.json` and `--light` on `render.py` | `open` | `552 96 2912 2232` |
-| `days.png` | 1460x1150, `days.jsonl` | `search:#3`, `open`, `open`, so the list scrolls into the first day and its pill sits in the strip | `1808 96 2912 2232` |
+| `days.png` | 1460x1150, `"debug": true`, `days.jsonl` | `search:#3`, `open`, `open`, `debugDayPill`, so the list is in the first day and its pill shows at the top for the shot (it goes 1.5 s after a scroll otherwise) | `1808 96 2912 2232` |
 | `search.png` | 1460x700 | `search:tests` | `1808 96 2912 1332` |
 | `images.png` | 1460x1150, `"debug": true` | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5` | `1808 242 2912 2232`, below the header, which shows timings in debug |
-| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5 and a reply with a list, code and a table for the reading panel) | `search:#5`, `open`, `open`, `debugClick:500:imgs:0:5`, `debugClick:300:img:0:5:0` | none, the whole window |
+| `viewer.png` | 1460x1150, `"debug": true`, a `pair` transcript (`make-hero.js pair.jsonl … pair`, two images on turn 5 and a reply with a list, code and a table for the reading panel) | `search:#5`, `open`, `open`, `debugClick:300:imgs:0:5` (a press on the first tile opens the viewer; there is no `img:` press any more) | none, the whole window |
 | `agent-messages.png` | 1460x1150 | `agents:on`, `search:#4`, `open`, `open`, then `agents:off` after the shot | `1808 96 2912 2232` |
 | `quote.png` | 1460x1150, `"debug": true`, `render.py` running | `search:#6`, `open`, `open`, `debugQuote` | `552 1418 2912 2232` |
-| `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1904 96 3512 2232` |
+| `pinned.png` | 1760x1150, a `days` transcript started two days before the shot (`make-hero.js pdays.jsonl … <two days ago>T15:05:00Z days`), so the pins span Yesterday and Today and show oldest first (#3, #5, #7) | `search:#3`, `open`, `pin`, `search:#7`, `open`, `pin`, `search:#5`, `open`, `pin` | `1704 96 3512 2232` |
 | `updating.png` | 1460x1150, a `wake` transcript written just before (`make-hero.js wake.jsonl … wake`) and `printf '\033]7501;state=working:app=claude-code\007'` in the stand-in's screen | `latest` | `1808 96 2912 2232` |
 | `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
 | `work.png` | 1460x1150, `"debug": true`, a transcript made with the cwd `/home/dev/acme-web` (`make-hero.js herodev.jsonl /home/dev/acme-web …`), because level 3 shows each call's whole file path | `search:#7`, `escape`, `deeper`, `deeper`, `debugClick:100:cl:0:7:0:4`, so turn 7's line and its run open and the test command's output shows | `1808 242 2912 2232`, below the header, which shows timings in debug |
@@ -93,6 +129,8 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
 | `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
-`quote.png`, `images.png` and `work.png` need `"debug": true` in the props, because `debugQuote` and `debugClick` run only with it, and debug adds a timing text to the pane header, which those crops leave out. `agents:on` saves to settings, so turn it off before the next shot.
+The stand-in has to run as a program named `claude` (copy the build to `bin/claude`), or Threads does not treat the terminal as Claude Code and a quote does not paste. Use the 1.0 defaults for every shot (the settings file holds only the two link rules): blue user bubbles, amber agent bubbles, and no key-hints row, so `keys.png` is reached with the `keys` command (the `?` key).
+
+`quote.png`, `images.png`, `days.png` and `work.png` need `"debug": true` in the props, because `debugQuote` and `debugClick` run only with it, and debug adds a timing text to the pane header, which those crops leave out. `agents:on` saves to settings, so turn it off before the next shot.
 
 After changing an image, run `sh test/scan-private.sh` with its line removed from `test/scan-approved.txt`, so OCR reads it, and pin the new hash only once the owner has approved it.

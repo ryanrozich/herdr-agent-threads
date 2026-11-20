@@ -4,13 +4,14 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
+  statusGroups, statusWidth, ringStep,
   keyAction, alpha, spans, around, searchPreview, langFor, clipPrompt, wrappedLines, dayKey, jumpTarget,
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, mix, labelColor, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX,
-  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks,
+  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
+  keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
 
 const key = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
@@ -313,6 +314,224 @@ test("row heights follow the clipped line counts at 240 and 380 px", () => {
   expect(rowHeight(1, 1, 0, 25)).toBe(rowHeight(1, 1) + 6);
   expect(bubbleMax(380)).toBe(Math.floor(348 * 0.82));
   expect(bubbleMax(280)).toBe(Math.floor(248 * 0.9));
+});
+
+// ---- pasted output and line breaks in closed rows (TRD-10, issue 93) ----
+
+// The issue's own example: a sentence, a blank line, then a wrapper holding a 7-line table.
+const PASTE_TABLE = [
+  "Jobs over the last hour:",
+  "┌──────────┬────────┬───────┐",
+  "│ job      │ runs   │ p95   │",
+  "├──────────┼────────┼───────┤",
+  "│ build    │ 12     │ 4m 10s│",
+  "│ e2e      │ 9      │ 2m 05s│",
+  "└──────────┴────────┴───────┘",
+].join("\n");
+const ISSUE_PROMPT = `How did the build get so slow? Output below.\n\n<pasted_content id="example">\n${PASTE_TABLE}\n</pasted_content>`;
+
+test("promptParts: a pasted block is a verbatim paste run, its wrapper lines gone", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  expect(runs('a\n<pasted_content id="x">\n> npm test\nb  c\n</pasted_content>\nd')).toEqual([
+    ["c", ["a"]],
+    ["p", ["> npm test", "b  c"]],
+    ["c", ["d"]],
+  ]);
+  // An unclosed paste runs to the end of the text (a prompt the reader clipped).
+  expect(runs("note\n<pasted_content>\nbody")).toEqual([["c", ["note"]], ["p", ["body"]]]);
+  // A stray closing line is dropped, not shown as text.
+  expect(runs("before\n</pasted_content>\nafter")).toEqual([["c", ["before", "after"]]]);
+  // A wrapper inside a fenced code block stays literal text (the fence wins).
+  expect(runs("```\n<pasted_content>\n```")).toEqual([["c", ["```", "<pasted_content>", "```"]]]);
+  // An empty paste leaves nothing to draw.
+  expect(runs('<pasted_content id="e">\n</pasted_content>')).toEqual([]);
+  // Any or no attributes, up to three leading spaces.
+  expect(runs("   <pasted_content>\nline\n   </pasted_content>")).toEqual([["p", ["line"]]]);
+});
+
+test("promptParts: inside a paste, the closing tag closes it wherever it is on its line", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  const open = 'Look:\n<pasted_content id="x">\n$ make\nok 12 files';
+  const want = [["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["c", ["Why?"]]];
+  // A paste that did not end in a line break: the tag ends its last line.
+  expect(runs(`${open}</pasted_content>\nWhy?`)).toEqual(want);
+  // Text typed after the tag on the same line is the person's own line after the paste.
+  expect(runs(`${open}\n</pasted_content> Why?`)).toEqual(want);
+  expect(runs(`${open}</pasted_content>Why?`)).toEqual(want);
+  // Spaces after the tag, or more than three before it.
+  expect(runs(`${open}\n</pasted_content>  \nWhy?`)).toEqual(want);
+  expect(runs(`${open}\n      </pasted_content>\nWhy?`)).toEqual(want);
+  // What follows the tag on its line is read as a line: a quote is a quote.
+  expect(runs(`${open}</pasted_content>> said\nWhy?`)).toEqual([["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["q", ["said"]], ["c", ["Why?"]]]);
+  // The paste's last line keeps its own spaces before the tag; a body of one line works.
+  expect(runs('<pasted_content>\n  a  b  </pasted_content>')).toEqual([["p", ["  a  b"]]]);
+  // A second closing tag after the paste, in the person's text, is text.
+  expect(runs(`${open}</pasted_content> see </pasted_content>`)).toEqual([["c", ["Look:"]], ["p", ["$ make", "ok 12 files"]], ["c", ["see </pasted_content>"]]]);
+});
+
+test("promptParts: a closing tag alone on its line wins over one the pasted text mentions", () => {
+  const runs = (t) => promptParts(t).map((r) => [r.paste ? "p" : r.quote ? "q" : "c", r.lines]);
+  // The pasted text names the tag mid-line; the paste ends at the tag alone on its line.
+  expect(runs("<pasted_content>\nthe tag</pasted_content> closes it\nmore pasted\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["the tag</pasted_content> closes it", "more pasted"]],
+    ["c", ["Why?"]],
+  ]);
+  // The same inside a fenced block within the paste.
+  expect(runs("<pasted_content>\n```\nx = '</pasted_content>'\n```\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["```", "x = '</pasted_content>'", "```"]],
+    ["c", ["Why?"]],
+  ]);
+  // The search stops at the next opener: a first paste whose tag ends its last line does not
+  // run on to a second paste's closing line.
+  expect(runs("A:\n<pasted_content>\none</pasted_content>\nB:\n<pasted_content>\ntwo\n</pasted_content>\nWhy?")).toEqual([
+    ["c", ["A:"]], ["p", ["one"]], ["c", ["B:"]], ["p", ["two"]], ["c", ["Why?"]],
+  ]);
+  // A paste with no closing tag before the next opener line: as on main, the next closing
+  // line closes it, and the opener line in between is pasted text.
+  expect(runs("<pasted_content>\none\n<pasted_content>\ntwo\n</pasted_content>\nWhy?")).toEqual([
+    ["p", ["one", "<pasted_content>", "two"]],
+    ["c", ["Why?"]],
+  ]);
+});
+
+test("pasted prompts: an opener right after a closing tag opens a paste in the pin and the outline too", () => {
+  const p = "A:\n<pasted_content>\none\n</pasted_content><pasted_content>\ntwo\n</pasted_content>\nWhy?";
+  // After a tag, what follows on its line is read as a line: here a second paste's opener.
+  expect(promptParts(p).map((r) => [r.paste ? "p" : "c", r.lines])).toEqual([["c", ["A:"]], ["p", ["one"]], ["p", ["two"]], ["c", ["Why?"]]]);
+  expect(pinPromptText(p)).toBe("A: one two Why?");
+  expect(outlineText(p)).toBe("A:");
+  expect(outlineText("<pasted_content>\none\n</pasted_content><pasted_content>\ntwo\n</pasted_content>")).toBe("one");
+  expect(pinPromptText("<pasted_content>\nthe tag</pasted_content> closes it\n</pasted_content>\nWhy?")).toBe("the tag</pasted_content> closes it Why?");
+  // Two pastes on lines of their own, one straight after the other, are two runs (two labels).
+  expect(promptParts("<pasted_content>\none\n</pasted_content>\n<pasted_content>\ntwo\n</pasted_content>").map((r) => r.lines)).toEqual([["one"], ["two"]]);
+});
+
+test("pasted prompts: the text after a closing tag is carried, never spliced into the line list", () => {
+  // Splicing each tail back into the list of lines made a prompt of many closing tags read in
+  // quadratic time (755 ms for 80,000 in the review, against 4 ms before the change). This
+  // checks for the splice, not a time: in Catalyst's runner image at 1 CPU, the one-pass
+  // code's time for eight times the pastes ran 6 to 62 times as long inside bun test, which
+  // overlaps the spliced code's 58 to 71, so no time bound can tell them apart there.
+  const p = Array.from({ length: 50 }, () => "<pasted_content>\nx</pasted_content> > y").join("\n");
+  const splice = Array.prototype.splice;
+  let calls = 0;
+  Array.prototype.splice = function (...a) { calls++; return splice.apply(this, a); };
+  try {
+    outlineText(p);
+    pinPromptText(p);
+    promptParts(p); // the bubble and the open bubble (promptMd) read it
+  } finally { Array.prototype.splice = splice; }
+  expect(calls).toBe(0);
+});
+
+test("rowShape: a closed row keeps source line breaks for every prompt", () => {
+  const multi = "First point.\nSecond point.\n\nThird after a blank.";
+  for (const w of [240, 380, 545]) {
+    const sh = rowShape({ prompt: multi, reply: "Done.", width: w, promptLines: 1000, replyLines: 3 });
+    expect(sh.kinds, `at ${w}`).toBe(null);
+    expect(sh.prompt, `at ${w}`).toEqual(["First point.", "Second point.", "", "Third after a blank."]);
+    expect(sh.p, `at ${w}`).toBe(4);
+    expect(sh.pMore, `at ${w}`).toBe(false);
+    expect(sh.height, `at ${w}`).toBe(rowHeight(sh.p, sh.r, 0));
+    // Leading and trailing blank lines drop; a run of blanks is one row.
+    const edge = rowShape({ prompt: `\n\n${multi}\n\n\n`, reply: "x", width: w, promptLines: 1000, replyLines: 1 });
+    expect(edge.prompt, `at ${w}`).toEqual(sh.prompt);
+  }
+  // A long line still word-wraps with the greedy logic, each wrapped row its own row.
+  const long = "Why does the checkout job fail when the staging deploy runs after the nightly migration and the cache is cold, and what would make it pass?";
+  const sh = rowShape({ prompt: `${long}\nshort`, reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(sh.prompt.length).toBeGreaterThanOrEqual(4);
+  expect(sh.prompt[sh.prompt.length - 1]).toBe("short");
+  expect(sh.prompt.slice(0, -1).join(" ")).toBe(long);
+  expect(sh.p).toBe(sh.prompt.length);
+});
+
+test("rowShape: a pasted block is one quiet label row plus one mono row per body line", () => {
+  for (const w of [380, 545]) {
+    const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "Done.", width: w, promptLines: 1000, replyLines: 3 });
+    const at = sh.kinds.indexOf("pl");
+    expect(at, `at ${w}`).toBeGreaterThan(0);
+    expect(sh.prompt[at], `at ${w}`).toBe("Pasted · 7 lines");
+    expect(sh.kinds.slice(at + 1), `at ${w}`).toEqual(["p", "p", "p", "p", "p", "p", "p"]);
+    // Each source line its own row, its inner spacing kept, no wrapper anywhere.
+    expect(sh.prompt.slice(at + 1), `at ${w}`).toEqual(PASTE_TABLE.split("\n"));
+    expect(sh.prompt.join("\n"), `at ${w}`).not.toContain("pasted_content");
+    expect(sh.p, `at ${w}`).toBe(sh.prompt.length);
+    expect(sh.bubbleW, `at ${w}`).toBeLessThanOrEqual(bubbleMax(w));
+    expect(sh.height, `at ${w}`).toBe(rowHeight(sh.p, sh.r, 0));
+  }
+  // A row wider than the widest bubble clips with a trailing ellipsis, never wraps.
+  const wide = `<pasted_content>\n${"x".repeat(200)} tail\n</pasted_content>`;
+  const clip = rowShape({ prompt: wide, reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(clip.kinds).toEqual(["pl", "p"]);
+  expect(clip.prompt[1].endsWith("…")).toBe(true);
+  expect(clip.prompt[1].length).toBeLessThanOrEqual(Math.floor(rowTextWidth(380) / (MONO_EM * 12.5)) + 1);
+  expect(clip.prompt[1]).not.toContain("\n");
+  // A paste that is the whole prompt: the label, then the rows, and no other text.
+  const only = rowShape({ prompt: `<pasted_content id="only">\n${PASTE_TABLE}\n</pasted_content>`, reply: "x", width: 545, promptLines: 1000, replyLines: 1 });
+  expect(only.kinds).toEqual(["pl", ...Array(7).fill("p")]);
+  // An unclosed paste runs to the end: label plus body rows, no closing tag anywhere.
+  const unclosed = rowShape({ prompt: "head\n<pasted_content id=\"c\">\nalpha\nbeta", reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(unclosed.kinds).toEqual(["c", "pl", "p", "p"]);
+  expect(unclosed.prompt.join("\n")).not.toContain("pasted_content");
+});
+
+test("rowShape: '>' lines inside a paste are body rows, not quotes", () => {
+  const sh = rowShape({ prompt: '<pasted_content id="s">\n> npm test\n> jest --ci\n</pasted_content>\n\nWhich failed?', reply: "x", width: 380, promptLines: 1000, replyLines: 1 });
+  expect(sh.kinds).toEqual(["pl", "p", "p", "c"]);
+  expect(sh.prompt[1]).toBe("> npm test");
+  expect(sh.prompt[2]).toBe("> jest --ci");
+  expect(sh.q).toBe(0);
+  expect(sh.pMore).toBe(false);
+});
+
+test("rowShape: heights stay arithmetic over paste rows at many widths, sizes and budgets", () => {
+  for (const w of [320, 380, 545, 700]) {
+    for (const size of [12, 18]) {
+      for (const promptLines of [4, 1000]) {
+        const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "Done.", width: w, promptLines, replyLines: 3, size });
+        const where = `${w} px, size ${size}, ${promptLines} lines`;
+        expect(sh.p, where).toBe(sh.prompt.length);
+        expect(sh.height, where).toBe(rowHeight(sh.p, sh.r, (sh.pMore ? 1 : 0) + (sh.rMore ? 1 : 0), readType(size).line));
+      }
+    }
+  }
+});
+
+test("rowShape: the Prompt lines budget counts label and paste rows", () => {
+  for (const promptLines of [1, 2, 4]) {
+    const sh = rowShape({ prompt: ISSUE_PROMPT, reply: "x", width: 380, promptLines, replyLines: 1 });
+    expect(sh.prompt.length, `${promptLines} lines`).toBeLessThanOrEqual(promptLines);
+    expect(sh.p, `${promptLines} lines`).toBe(Math.max(1, sh.prompt.length));
+    expect(sh.pMore, `${promptLines} lines`).toBe(true);
+    expect(sh.prompt[sh.prompt.length - 1].endsWith("…"), `${promptLines} lines`).toBe(true);
+  }
+  // Shorten long messages off: the whole prompt shows, no Show more anywhere.
+  const all = rowShape({ prompt: ISSUE_PROMPT, reply: "x", width: 380, promptLines: 100000, replyLines: 1 });
+  expect(all.pMore).toBe(false);
+  expect(all.prompt.length).toBe(10);
+});
+
+test("pin and outline prompts drop the paste wrapper", () => {
+  const withPaste = `See this:\n<pasted_content id="t">\nalpha\nbeta\n</pasted_content>`;
+  expect(pinPromptText(withPaste)).toBe("See this: alpha beta");
+  expect(outlineText(withPaste)).toBe("See this:");
+  // The tag at the end of the paste's last line, text after it, or CRLF line ends.
+  expect(pinPromptText('See this:\n<pasted_content id="t">\nalpha\nbeta</pasted_content> Why?')).toBe("See this: alpha beta Why?");
+  expect(pinPromptText('See this:\r\n<pasted_content id="t">\r\nalpha\r\n</pasted_content>\r\nWhy?')).toBe("See this: alpha Why?");
+  expect(outlineText('<pasted_content id="o">\nonly body</pasted_content>')).toBe("only body");
+  expect(outlineText('<pasted_content id="o">\nbody\n</pasted_content> Why is this slow?')).toBe("Why is this slow?");
+  // A paste that is the whole prompt: its body is the fallback, never the tag.
+  expect(pinPromptText('<pasted_content id="o">\nonly\n</pasted_content>')).toBe("only");
+  expect(outlineText('<pasted_content id="o">\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
+  // A paste body that starts with a blank line (npm test output often does): the first
+  // text line is the fallback, as fenced code already skips blanks, never an empty row.
+  expect(outlineText('<pasted_content id="o">\n\nfirst body\nsecond\n</pasted_content>')).toBe("first body");
+  // A wrapper inside a fenced code block stays text: the outline keeps looking for the
+  // person's own words past it.
+  expect(outlineText("```\n<pasted_content>\n```\nWhat went wrong here?")).toBe("What went wrong here?");
+  expect(pinPromptText("plain prompt")).toBe("plain prompt");
+  expect(outlineText("plain prompt")).toBe("plain prompt");
 });
 
 test("reading type: 14 px on 22 px lines by default, and a line of about 70 characters at any width", () => {
@@ -703,7 +922,7 @@ test("the key sheet lists every key the panel takes, and a pin key gives way to 
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
-  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "View"]);
+  expect(keySheet("q").map(([g]) => g)).toEqual(["List", "Open turn", "Pins", "Image viewer", "Settings card", "View"]);
   expect(shown("p").has("p")).toBe(true); // as the quote key
   expect(keySheet("p").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "p")).toBe(false);
   expect(keySheet("u").find(([g]) => g === "Pins")[1].some(([k]) => k[0] === "u")).toBe(false);
@@ -1120,4 +1339,104 @@ test("cutPath: a path cut from its start at a slash, so it begins with a whole f
   expect(cutPath(p, 30)).toBe("…/agent-threads/settings.json");
   // The file's name stays whole when it alone is longer.
   expect(cutPath(p, 8)).toBe("…/settings.json");
+});
+
+test("cardKey: the keys that scroll the settings card; cardScroll: where each takes the view, by which mark", () => {
+  const ev = (key, mods = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...mods } });
+  expect(["down", "j", "up", "k", "pagedown", "space", "pageup", "home", "end"].map((k) => cardKey(ev(k))))
+    .toEqual(["down", "down", "up", "up", "pagedown", "pagedown", "pageup", "home", "end"]);
+  expect(cardKey(ev("escape"))).toBe(null);
+  expect(cardKey(ev(","))).toBe(null);
+  expect(cardKey(ev("j", { platform: true }))).toBe(null);
+  expect(cardKey(ev("space", { shift: true }))).toBe(null);
+  // Rows that fit: nothing to scroll.
+  expect(cardScroll("down", 0, 300, 400)).toBe(null);
+  // 1,000 px of rows in a 400 px view: a line, then the end, and back.
+  const marks = cardMarks(1000);
+  const down = cardScroll("down", 0, 1000, 400);
+  expect(down.y).toBe(marks[down.mark] + 1 - 400);
+  expect(Math.abs(down.y - CARD_LINE)).toBeLessThanOrEqual(CARD_MARK / 2);
+  expect(cardScroll("pagedown", 0, 1000, 400).y).toBeCloseTo(360, -1);
+  expect(cardScroll("end", 0, 1000, 400)).toEqual({ y: 600, mark: marks.length - 1 });
+  expect(cardScroll("end", 600, 1000, 400)).toBe(null);
+  expect(cardScroll("home", 600, 1000, 400)).toEqual({ y: 0, mark: 0 });
+  const up = cardScroll("up", 600, 1000, 400);
+  expect(up.y).toBe(marks[up.mark]);
+  expect(up.y).toBe(560);
+  expect(cardScroll("pageup", 100, 1000, 400)).toEqual({ y: 0, mark: 0 });
+  expect(cardScroll("sideways", 0, 1000, 400)).toBe(null);
+});
+
+// The owner (TRD-17): the number of tokens in the context window always shows, with the
+// percent where the agent states its window. So the context count is the last to go.
+test("statusGroups: the status line's groups, and what gives way first in a narrow pane", () => {
+  const full = { turns: 12, hidden: 3, tools: 41, tokens: 1234567, cachePct: 87.4, context: 142000 };
+  const text = (gs) => gs.map((g) => `${g.icon}: ${g.text}`);
+  expect(text(statusGroups(full, 2000))).toEqual(["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens · 87.4% cache hit", "cpu: 142k context"]);
+  // Narrower and narrower: the cache hit, the hidden count and the tokens go; then "tool
+  // calls" shortens, the tool count goes, and the turns go; the context count stays.
+  const steps = [
+    ["12 turns · 3 hidden · 41 tool calls", "1.2M tokens", "142k context"],
+    ["12 turns · 41 tool calls", "1.2M tokens", "142k context"],
+    ["12 turns · 41 tool calls", "142k context"],
+    ["12 turns · 41 tools", "142k context"],
+    ["12 turns", "142k context"],
+    ["142k context"],
+  ];
+  let w = statusWidth(statusGroups(full, 2000));
+  for (const want of steps) {
+    // The widest pane where the step before no longer fits.
+    while (statusGroups(full, w).map((g) => g.text).join("|") !== want.join("|") && w > 0) w--;
+    expect(statusGroups(full, w).map((g) => g.text)).toEqual(want);
+    expect(statusWidth(statusGroups(full, w))).toBeLessThanOrEqual(w);
+    w--;
+  }
+  // Even the context count alone wider than the pane: it stays, and the row truncates it.
+  expect(text(statusGroups(full, 10))).toEqual(["cpu: 142k context"]);
+  // Cursor: no tokens, so no token group and no context, never "0 tokens"; the turns stay.
+  const cursor = { turns: 1, hidden: 0, tools: 1, tokens: null, cachePct: null, context: null };
+  expect(text(statusGroups(cursor, 2000))).toEqual(["messages: 1 turn · 1 tool call"]);
+  expect(text(statusGroups(cursor, 10))).toEqual(["messages: 1 turn"]);
+  // No tool calls: the count is left out, and 0% cache hit is a real number, so it shows.
+  expect(statusGroups({ turns: 2, hidden: 0, tools: 0, tokens: 900, cachePct: 0, context: 450 }, 2000).map((g) => g.text)).toEqual(["2 turns", "900 tokens · 0% cache hit", "450 context"]);
+});
+
+test("statusGroups: with a stated window the context reads its count and percent behind the ring, and the count goes last", () => {
+  const full = { turns: 12, hidden: 3, tools: 41, tokens: 1234567, cachePct: 87.4, context: 142000, contextPct: 55 };
+  const text = (gs) => gs.map((g) => `${g.icon}: ${g.text}`);
+  expect(text(statusGroups(full, 2000))).toEqual(["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens · 87.4% cache hit", "ring-4: 142k context · 55%"]);
+  // The other stats go first, as without a window; then the ring and percent (the count keeps
+  // the chip icon), then the turns; the count stays.
+  const steps = [
+    ["messages: 12 turns · 3 hidden · 41 tool calls", "database: 1.2M tokens", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tool calls", "database: 1.2M tokens", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tool calls", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns · 41 tools", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns", "ring-4: 142k context · 55%"],
+    ["messages: 12 turns", "cpu: 142k context"],
+    ["cpu: 142k context"],
+  ];
+  let w = statusWidth(statusGroups(full, 2000));
+  for (const want of steps) {
+    while (text(statusGroups(full, w)).join("|") !== want.join("|") && w > 0) w--;
+    expect(text(statusGroups(full, w))).toEqual(want);
+    expect(statusWidth(statusGroups(full, w))).toBeLessThanOrEqual(w);
+    w--;
+  }
+  expect(text(statusGroups(full, 10))).toEqual(["cpu: 142k context"]);
+  // No window stated: the count alone, behind the chip icon.
+  expect(text(statusGroups({ ...full, contextPct: null }, 2000)).at(-1)).toBe("cpu: 142k context");
+  // A tiny stated window (a crafted transcript): shown as 999% at most, with a full ring.
+  expect(text(statusGroups({ ...full, contextPct: 14200000 }, 2000)).at(-1)).toBe("ring-8: 142k context · 999%");
+  expect(text(statusGroups({ ...full, contextPct: 999 }, 2000)).at(-1)).toBe("ring-8: 142k context · 999%");
+  expect(text(statusGroups({ ...full, contextPct: 101 }, 2000)).at(-1)).toBe("ring-8: 142k context · 101%");
+  // 0% is a real share, so it shows, with an empty ring.
+  expect(text(statusGroups({ ...full, context: 300, contextPct: 0 }, 2000)).at(-1)).toBe("ring-0: 300 context · 0%");
+});
+
+test("ringStep: the ring's eighths, empty only at 0% and full only at 100%", () => {
+  expect([0, 1, 6, 7, 19, 25, 50, 62, 75, 93, 94, 99, 100, 130].map(ringStep)).toEqual([0, 1, 1, 1, 2, 2, 4, 5, 6, 7, 7, 7, 8, 8]);
+  expect([null, undefined, -5, Number.NaN].map(ringStep)).toEqual([0, 0, 0, 0]);
+  // Each step has its icon.
+  for (let k = 0; k <= 8; k++) expect(existsSync(join(import.meta.dir, `../mods/agent-threads/ring-${k}.svg`))).toBe(true);
 });

@@ -1,0 +1,54 @@
+name: Release
+
+# release-please keeps one release pull request open with the next version and its changelog
+# entry, built from the Conventional Commit titles merged since the last release. Merging it
+# through the queue (label queue) makes the tag (v1.0.1) and the GitHub release on the next
+# run. The pieces: release-please-config.json, .release-please-manifest.json, CHANGELOG.md,
+# and mods/agent-threads/version.js, the version the settings card shows.
+# Merging to main does not release: it only updates that pull request, which stays open
+# between releases. It opens as a draft, which the queue refuses, and is marked ready and
+# merged only when the repo's owner asks for a release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# contents, issues and pull-requests are the three the action's README asks for (it labels
+# its pull request "autorelease: pending"); actions lets the step below start ci.yml.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+
+      # A pull request the Actions token opens or updates gets its pull_request runs only in
+      # an approval-required state: they wait until someone with write access approves them,
+      # so the queue's `check` would wait too. A dispatch with that token runs at once, so this
+      # runs ci.yml on the release branch, and its `check` lands on the branch's head, which is
+      # the release pull request's head.
+      # The runner evaluates a step's env before its if, and an error there fails the step. The
+      # action sets `pr` only when it opened or updated a pull request, so env takes it as a
+      # plain string (empty when unset) and the script reads the branch from it. A push that
+      # leaves the release pull request as it is then passes, and starts nothing.
+      - name: Run CI on the release pull request
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.release.outputs.pr }}
+        run: |
+          BRANCH=$(printf '%s' "$PR" | jq -r '.headBranchName // empty' 2>/dev/null || true)
+          if [ -z "$BRANCH" ]; then echo "No release pull request was opened or updated"; exit 0; fi
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "Started ci.yml on $BRANCH"

@@ -6,9 +6,9 @@ import { test, expect, mock } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest } from "../mods/agent-threads/core/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -18,11 +18,15 @@ const app = mkdtempSync(join(tmpdir(), "threads-render-"));
 let calls = 0;
 // With rec set, every element method call is recorded as [name, ...args].
 let rec = null;
-// Methods the stub's elements lack, as an older Herdr's do: `name in el` answers false and
-// a call throws, as Herdr's "not a function".
+// Element methods by what a test says the running Herdr has, for code that asks with
+// "name in el". `lacking`: an older Herdr's gap, so `name in el` answers false and a call
+// throws, as Herdr's "not a function". `stubHas`: a method only a newer Herdr has (NEWER),
+// which answers true only while a test adds it.
 const lacking = new Set();
+const stubHas = new Set();
+const NEWER = new Set(["mode"]);
 const el = new Proxy(() => {}, {
-  has(_t, name) { return !lacking.has(String(name)); },
+  has(_t, name) { const n = String(name); return !lacking.has(n) && (!NEWER.has(n) || stubHas.has(n)); },
   get(_t, name) {
     if (name === "then") return undefined;
     if (lacking.has(String(name))) return undefined;
@@ -195,6 +199,14 @@ function fixture(...flags) {
   const file = join(dir, "f.jsonl");
   execFileSync("bun", [join(root, "test/make-fixture.js"), file, "00000000-0000-4000-8000-000000000009", "/tmp/threads-demo", ...flags], { stdio: "ignore" });
   return file;
+}
+
+// A press on a closed turn opens it OPEN_WAIT_MS (300) after the release, unless a second
+// press comes first (issue 131). This runs that wait and nothing else.
+function afterPress(cx) {
+  const due = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  for (const x of due) x.fn(cx);
 }
 
 function makeCx() {
@@ -1341,6 +1353,73 @@ test("on Herdr 0.1.16 q in Select view quotes the editor's highlight with no ⌘
   expect(v.selectHint()).toBe("q quotes the highlight · s returns");
 });
 
+test("q quotes what ⌘C copied from another turn on screen, from that turn, and names it; text from outside the pane is still refused", async () => {
+  const { v, cx } = await quotePane();
+  const [k1, k2] = v.turnKeys(v.rows());
+  expect(v.sel).toBe(k1);
+  const t2 = v.findTurn(k2);
+  // Words from the next turn's reply (a closed row shows its start), not in the open one.
+  const part = "no test changes";
+  expect(v.replyText(t2)).toContain(part);
+  expect(v.replyText(v.findTurn(k1))).not.toContain(part);
+  const quoteNow = async () => {
+    log = [];
+    v.quoteAt = 0;
+    v.key(keyEv("q"), cx);
+    cx.flush();
+    await settleCx(cx);
+  };
+  // A press and drag in the list, then ⌘C: the clipboard changed since the press.
+  const copy = (text) => { cx.clip = "older text"; v.notePress(cx); cx.clip = text; };
+  // Select view on the open turn, Herdr 0.1.16: its editor has nothing highlighted.
+  v.toggleSelect(k1, cx);
+  v.selEditor.st.selected_range = () => ({ start: 0, end: 0 });
+  drawRange(v, 0); // both turns on screen
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual(["clipboard", 'pane.focus {"pane":"p1"}', "terminal.paste"]);
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: true, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted the selection from #${t2.n} into t4`));
+  // The other turn's message too.
+  copy("Bump Playwright");
+  await quoteNow();
+  expect(cx.clip).toBe("> Bump Playwright\n\n");
+  expect(v.lastQuote).toMatchObject({ fromTurn: t2.n, pasted: true });
+  // Text from outside the pane: nothing is pasted, as before.
+  copy("rm -rf / from some other window");
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // A turn that is not on screen is not a source.
+  v.viewRange = [0, v.rowIndex(k2)];
+  copy(part);
+  await quoteNow();
+  expect(writes()).toEqual([]);
+  expect(v.toast.text).toBe("Nothing highlighted: select text, then q");
+  // Out of Select view: the open turn is still selected, the copy came from the closed one.
+  // ⌘ released says q quotes it and selects that turn; q quotes it, not the open reply.
+  v.endSelect();
+  drawRange(v, 0);
+  copy(part);
+  v.toast = null;
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(v.toast?.text).toBe("Copied 3 words · q quotes them");
+  expect(v.sel).toBe(k2);
+  v.sel = k1; // the ⌘ release can be missed: q finds the turn itself
+  await quoteNow();
+  expect(cx.clip).toBe(`> ${part}\n\n`);
+  expect(v.lastQuote).toMatchObject({ source: "selection", selectView: false, fromTurn: t2.n, pasted: true });
+  expect(v.toast.text).toMatch(new RegExp(`^Quoted the selection from #${t2.n} into t4`));
+  // Copied from the selected turn itself: the toast names no turn.
+  v.sel = k2;
+  copy(part);
+  await quoteNow();
+  expect(v.lastQuote).toMatchObject({ fromTurn: null, pasted: true });
+  expect(v.toast.text).toMatch(/^Quoted the selection into t4/);
+});
+
 test("in Select view q quotes what ⌘C copied from the reply, and never the whole reply", async () => {
   const { v, cx } = await quotePane();
   const key = v.sel;
@@ -1602,9 +1681,10 @@ test("a closed turn's message and reply start select by drag, a click that does 
   v.key(keyEv("q"), cx);
   await settleCx(cx);
   expect(v.lastQuote).toMatchObject({ source: "reply", pasted: true });
-  // A click that does not move opens it.
+  // A click that does not move opens it, once the wait for a second press is over.
   v.pressMoved = 0; v.pressCount = 1;
   v.click(k, cx);
+  afterPress(cx);
   expect(v.open.has(k)).toBe(true);
   // TextView draws only in the theme's text colour, so a line in any other colour (a quote, an
   // agent's message, a stop's reason) stays a plain line, in its own colour.
@@ -1801,6 +1881,78 @@ test("prompt quotes: rows draw a bar line within the budget, the card draws Mark
   expect(src).toMatch(/\*… 50,003 more characters not shown\*$/);
   t3b.prompt = keep;
   v.full.clear();
+});
+
+test("pasted output: closed rows keep line breaks, hide the wrapper, draw mono paste rows", async () => {
+  const { v, cx } = await pane(fixture("--only", "0", "--paste"));
+  v.width = 380;
+  draw(v, cx);
+  const snap = () => state.shared["threads.debug"].t4;
+  const turn = (n) => snap().detail.find((d) => d.startsWith(`turn#${n} `));
+  const rowsText = () => snap().detail.filter((d) => /^turn#\d /.test(d)).join("\n");
+  const strings = (fn) => { rec = []; fn(); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  // The issue's example: the label row, then the table's own lines, no wrapper anywhere.
+  const d1 = turn(1);
+  expect(d1).toMatch(/^turn#1 p10\/r\d h\d+ /);
+  expect(d1).toContain("Pasted · 7 lines");
+  expect(d1).toContain("│ job      │ runs   │ p95   │");
+  expect(rowsText()).not.toContain("pasted_content");
+  // A plain multi-line message keeps its line breaks and its blank row.
+  expect(turn(3)).toContain("First point. ⏎ Second point. ⏎  ⏎ Third point after a blank line.");
+  // ">" inside a paste stays a body row, not a quote.
+  expect(turn(2)).toContain("> npm test");
+  expect(turn(2)).not.toContain("▎");
+  // Heights match a fresh rowShape for the pasted turn and the plain multi-line one.
+  const { rowShape } = await import("../mods/agent-threads/ui.js");
+  for (const t of [v.current().turns[0], v.current().turns[2]]) {
+    expect(v.shape(t).height).toBe(rowShape({ prompt: t.prompt, reply: v.shape(t).reply.join(" "), width: 380, promptLines: 100000, replyLines: 100000 }).height);
+    expect(v.shape(t).p).toBe(v.shape(t).prompt.length);
+  }
+  // The quiet label row is a fixed 12.5 px: it does not follow the reading size, as the
+  // open turn's label and docs/reference.md say.
+  rec = [];
+  v.promptBlock(theme, v.current().turns[0], { kinds: ["pl", "p"], prompt: ["Pasted · 7 lines", "body"], p: 2 });
+  const pasteSizes = rec.filter((e) => e[0] === "text_size").map((e) => e[1]);
+  rec = null;
+  expect(pasteSizes).toEqual([12.5, 12.5]);
+  // Shorten long messages on: label and paste rows count against Prompt lines, cut, with
+  // Show more under the bubble.
+  v.prefs = { ...v.prefs, truncate: true, promptLines: 4 };
+  draw(v, cx);
+  const t1 = v.current().turns[0];
+  expect(turn(1)).toMatch(/^turn#1 p4\/r\d /);
+  expect(v.shape(t1).pMore).toBe(true);
+  const row = () => v.rows().find((r) => r.turn === t1 && r.kind === "turn");
+  expect(strings(() => v.rowItem(theme, row(), false))).toContain("Show more");
+  v.prefs = { ...v.prefs, truncate: false };
+  draw(v, cx);
+  // The plain look draws the open card's prompt as Markdown: one fenced block, wrapper gone.
+  v.prefs = { ...v.prefs, bubbleColor: "plain", agentBubbleColor: "plain" };
+  mdSources.length = 0;
+  v.open = new Set(["0:1"]);
+  draw(v, cx);
+  const you = mdSources.find(([id]) => id === "th-you-you:0:1");
+  expect(you[1]).toContain("```\nJobs over the last hour:");
+  expect(you[1]).not.toContain("pasted_content");
+  expect(snap().detail.find((d) => d.startsWith("you#1"))).toMatch(/^you#1 USER md q0 code1 links0 h\d+/);
+  v.open.clear();
+  // Turn 2's paste holds ">" body lines: code inside the fence, never a quote.
+  v.open = new Set(["0:2"]);
+  draw(v, cx);
+  const you2 = mdSources.find(([id]) => id === "th-you-you:0:2");
+  expect(you2[1]).toContain("```\n> npm test\n> jest --ci\n```");
+  expect(snap().detail.find((d) => d.startsWith("you#2"))).toMatch(/^you#2 USER md q0 code1 links0 h\d+/);
+  v.open.clear();
+  // The default coloured bubble draws the paste as a mono block under the quiet label,
+  // with no Markdown view and no wrapper text.
+  v.prefs = { ...v.prefs, bubbleColor: "blue", agentBubbleColor: "amber" };
+  mdSources.length = 0;
+  v.open = new Set(["0:1"]);
+  const kids = strings(() => draw(v, cx));
+  expect(mdSources.some(([id]) => id === "th-you-you:0:1")).toBe(false);
+  expect(kids).toContain("Pasted · 7 lines");
+  expect(kids.join(" ")).not.toContain("pasted_content");
+  v.open.clear();
 });
 
 test("link rules in a coloured bubble: the open turn lists the prompt's links under the bubble (issue 116)", async () => {
@@ -2107,18 +2259,31 @@ test("S1: before the first chunk the header says Reading… with no percentage, 
 test("S1: a read that dies mid-step restarts after 4 s, with no duplicate turns", async () => {
   let dead = 1;
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = () => (dead-- > 0 ? never() : new Promise((r) => setTimeout(r, 0))); }, 0);
-  await until(() => dead < 0 || (v.reading && dead === 0), "the dead step");
+  await until(() => dead < 0 || (v.reading && dead === 0), "the dead step", 6000);
   await new Promise((r) => setTimeout(r, 50));
   expect(v.reading).toBe(true);
   expect(v.current().loaded).toBeFalsy();
   const before = v.current().turns.length;
-  // The 1 s timer at 3 s does nothing; at 5 s it restarts the read.
+  // The 1 s timer, on a clock the test moves from the hung read's last beat: at 1, 2 and 3 s
+  // it does nothing, at 4 s (READ_STALL) it restarts the read. Ticks taken from the real
+  // clock counted the test's own run time too: on a slow machine the "3 s" tick already
+  // restarted the read, and the "5 s" one then judged the restarted read a second stall.
   const tick = cx.everies.find((x) => x.ms === 1000).fn;
   const real = Date.now;
+  const beat = v.readBeat;
+  const gen = v.readGen ?? 0;
   try {
-    Date.now = () => real() + 3000; tick(cx);
+    for (let s = 1; s <= 3; s++) {
+      Date.now = () => beat + s * 1000;
+      tick(cx);
+      expect(v.readGen ?? 0).toBe(gen);
+    }
     expect(v.reading).toBe(true);
-    Date.now = () => real() + 5000; tick(cx);
+    Date.now = () => beat + 4000;
+    tick(cx);
+    // Judged once (readGen moves, and again when the new read starts), a first stall.
+    expect(v.readGen ?? 0).toBeGreaterThan(gen);
+    expect(v.readStalls).toBe(1);
   } finally { Date.now = real; }
   await settle(v, 1000);
   const turns = v.current().turns;
@@ -2128,7 +2293,9 @@ test("S1: a read that dies mid-step restarts after 4 s, with no duplicate turns"
   expect(before).toBeLessThan(1305);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).toMatch(/^1,?\d{3} turns|^\d+ turns/);
-});
+  // Two reads of a 1305-turn session: more than bun's 5 s default on a slow machine. The
+  // limit only ends a hung run; every wait above ends on what it checks.
+}, 60000);
 
 test("S1: a second stall shows Read failed with Retry, and Retry reads the session", async () => {
   let dead = 2;
@@ -2136,11 +2303,23 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = () => { if (deadNow) { deadNow = false; return never(); } return new Promise((r) => setTimeout(r, 0)); }; }, 0);
   const tick = cx.everies.find((x) => x.ms === 1000).fn;
   const real = Date.now;
+  // The 1 s timer, on a clock the test moves: one tick a second from now until the watcher
+  // judges the hung read (readGen moves), as the real timer would. Real time between the
+  // two stalls (the restarted read reaching its dead step, slow on a busy machine) is then
+  // never a gap between ticks, so the watcher cannot take it for a sleep (TICK_GAP) and
+  // pass over the stall. The bounds only end a run that never gets there.
   const stall = async () => {
     deadNow = true;
-    await until(() => !deadNow, "the dead step");
-    await new Promise((r) => setTimeout(r, 30));
-    try { Date.now = () => real() + 11000; tick(cx); } finally { Date.now = real; }
+    await until(() => !deadNow, "the dead step", 6000);
+    const gen = v.readGen ?? 0;
+    const base = real();
+    try {
+      for (let s = 1; (v.readGen ?? 0) === gen; s++) {
+        if (s > 40) throw new Error("the watcher never judged the read stalled");
+        Date.now = () => base + s * 1000;
+        tick(cx);
+      }
+    } finally { Date.now = real; }
     dead--;
   };
   // The first read dies before its first chunk is in, then the restarted one does too.
@@ -2165,7 +2344,9 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   expect(v.current().turns.length).toBe(1305);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).not.toBe("Read failed");
-});
+  // Three reads of a 1305-turn session: more than bun's 5 s default on a busy machine. The
+  // limit only ends a hung run; every wait above ends on what it checks.
+}, 60000);
 
 // F1: a stall in the middle of applying a chunk, twice. The session must not keep the
 // half-applied events, or the next read (a poll, the 5 s timer) applies them again.
@@ -2186,11 +2367,24 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
     }, 0);
     const tick = cx.everies.find((x) => x.ms === 1000).fn;
     const real = Date.now;
+    // The 1 s timer, on a clock the test moves, one tick a second until the watcher judges
+    // the hung read (readGen moves), as the real timer would. One tick 5 s ahead of the real
+    // clock per stall left the real time between the stalls as the gap between two ticks;
+    // on a slow machine that passed TICK_GAP, the watcher took it for a sleep and never
+    // judged the second stall. The bounds only end a run that never gets there.
     const stall = async (n) => {
-      await until(() => kills >= n, `stall ${n}`);
+      await until(() => kills >= n, `stall ${n}`, 6000);
       await new Promise((r) => setTimeout(r, 30));
       expect(v.current().partial).toBe(true);
-      try { Date.now = () => real() + 5000; tick(cx); } finally { Date.now = real; }
+      const gen = v.readGen ?? 0;
+      const base = real();
+      try {
+        for (let s = 1; (v.readGen ?? 0) === gen; s++) {
+          if (s > 40) throw new Error("the watcher never judged the read stalled");
+          Date.now = () => base + s * 1000;
+          tick(cx);
+        }
+      } finally { Date.now = real; }
     };
     await stall(1);
     expect(v.current().partial).toBe(false); // started over
@@ -2208,7 +2402,9 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
     expect(turns.map((t) => t.n)).toEqual(turns.map((_, i) => i + 1));
     expect(v.current().error).toBe(null);
   } finally { performance.now = realPerf; }
-});
+  // Three reads of a 1305-turn session, two of them cut short: more than bun's 5 s default
+  // on a slow machine. The limit only ends a hung run.
+}, 60000);
 
 // F1, the other path: apply throws midway. The error shows, and no later read repeats events.
 test("S1: a throw mid-apply drops the half-applied chunk", async () => {
@@ -2227,7 +2423,7 @@ test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   };
   try {
     v.retryRead(cx);
-    await until(() => !v.reading, "the failed read");
+    await until(() => !v.reading, "the failed read", 6000);
   } finally { performance.now = realPerf; }
   expect(thrown).toBe(true);
   expect(v.current().error).toBe("synthetic failure");
@@ -2237,7 +2433,9 @@ test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   await settle(v, 1000);
   expect(v.current().turns.length).toBe(1305);
   expect(v.current().error).toBe(null);
-});
+  // Three reads of a 1305-turn session, one cut short: more than bun's 5 s default on a slow
+  // machine. The limit only ends a hung run.
+}, 60000);
 
 // F4: a loaded session whose extractor call is slow, or a computer that slept, keeps its turns.
 test("S1: a slow extractor call or a sleep never wipes a loaded session", async () => {
@@ -2412,7 +2610,9 @@ test("V3b: the open card's text parts are measured in the probe, and the list us
       for (const r of parts) {
         const i = lastList.keys.indexOf(r.key);
         const H = fed.get(r.key);
-        const design = r.kind === "latest" ? 6 + H : H;
+        // The flat preview's box is drawn 6 px under the heading; the Markdown form (Shorten
+        // long messages off) is measured with its margin in it.
+        const design = r.kind === "latest" && !r.md ? 6 + H : H;
         expect(v.height(rows[i])).toBe(design);
         expect(lastList.sizes[i]).toBe(Math.ceil(design));
         // No slot is below its measure.
@@ -2560,6 +2760,89 @@ test("C5: LATEST UPDATE is one wrapped block, clamped to whole lines, with Show 
       v.full.clear();
     }
   } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+// The owner, 18 Nov, on the fourth test build: LATEST UPDATE drew as one flat paragraph (a
+// table and lists joined with " · ", no bold, no breaks), and with Shorten long messages off
+// (the default) there was no Show all to reach the Markdown. Off, it draws as Markdown from the
+// start, like the reply above it, with no Show all or Show less; on, the clamped preview stays.
+test("LATEST UPDATE draws as Markdown with Shorten long messages off, whole and with no Show all or Show less; on, the clamped preview with Show all", async () => {
+  const { v, cx } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  const md = "The nightly run finished.\n\n| job | before | after |\n| --- | --- | --- |\n| build | 4m | 3m |\n| tests | 9m | 6m |\n\n**Still open:**\n\n- the flaky cart test\n- the cache key\n\nSee `ci/nightly.yml`.";
+  t.latest = md;
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  const strs = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  // Off (the default): the Markdown, whole.
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); let calls = rec; rec = null;
+  expect(calls.some((e) => e[0] === "TextView" && String(e[1]).startsWith(`th-lmd-${r.key}`))).toBe(true);
+  expect(strs(calls)).not.toContain("Show all");
+  expect(strs(calls)).not.toContain("Show less");
+  expect(strs(calls).some((x) => x.includes(" · "))).toBe(false);
+  expect(v.height(r)).toBe(6 + v.mdHeight(md));
+  // A click on it changes nothing: there is nothing to show or hide.
+  v.click(r.key, cx);
+  expect(v.full.has(`l:${key}`)).toBe(false);
+  // Past 12,000 characters the rest is not drawn, and a note says how much.
+  const long = `${md}\n\n${"More detail on the cart totals. ".repeat(500)}`;
+  t.latest = long;
+  s.version++;
+  r = lt();
+  expect(r.md.length).toBeLessThanOrEqual(12000);
+  expect(r.md.endsWith(" …")).toBe(true);
+  expect(r.left).toBe(long.trim().length - r.md.replace(/\s*…$/, "").length);
+  expect(r.left).toBeGreaterThan(3000);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain(`… ${r.left.toLocaleString()} more characters not shown`);
+  // On: the clamped one-block preview, as before, with Show all past 6 lines.
+  t.latest = md;
+  s.version++;
+  v.prefs = { ...v.prefs, truncate: true };
+  r = lt();
+  expect(r.md).toBe(null);
+  expect(r.text).not.toContain("|");
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(md);
+  rec = []; v.partContent(theme, r, false); calls = rec; rec = null;
+  expect(strs(calls)).toContain("Show less");
+});
+
+// The outside review of the fifth build: the Markdown update's measure key held only its length,
+// so a measure taken with Shorten long messages off (no Show less row) carried over to Show all
+// with it on (a Show less row, 22 px taller), and Show less sat over the next item.
+test("LATEST UPDATE: a measure taken whole is not reused after Shorten long messages and Show all, nor across the 12,000 character note", async () => {
+  const { v } = await pane(fixture("--extra", "1", "--latest"));
+  const s = v.sessions.at(-1);
+  const t = s.turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `${v.sessions.length - 1}:${t.n}`;
+  t.latest = "The run finished.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- one\n- two";
+  s.version++;
+  v.open = new Set([key]);
+  const lt = () => { v.rowsKey = null; return v.rows().find((r) => r.kind === "latest" && r.key === `lt:${key}`); };
+  v.prefs = { ...v.prefs, truncate: false };
+  let r = lt();
+  v.meas = new Map([[r.key, { h: 120, sig: v.partSig(r) }]]);
+  expect(v.measured(r)).toBe(120);
+  v.prefs = { ...v.prefs, truncate: true };
+  v.full.add(`l:${key}`);
+  r = lt();
+  expect(r.md).toBe(t.latest);
+  expect(r.whole).toBe(false);
+  expect(v.measured(r)).toBe(null);
+  // A cut text and the same length uncut are different layouts too (the note's line).
+  v.full.clear();
+  v.prefs = { ...v.prefs, truncate: false };
+  r = lt();
+  const sigWhole = v.partSig(r);
+  expect(v.partSig({ ...r, left: 500 })).not.toBe(sigWhole);
 });
 
 // ---- round 3: C2, what the chips mean ------------------------------------------------------
@@ -2935,6 +3218,14 @@ test("opening a card brings its last part on screen, then its head; closing scro
   calls.length = 0;
   const key = v.turnKeys(v.rows()).at(-3);
   v.toggle(key, cx);
+  // The scroll waits while the card's parts are still to be measured (issue 131)...
+  expect(v.probeDue().length).toBeGreaterThan(0);
+  v.render(cx);
+  cx.flush();
+  expect(calls).toEqual([]);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  // ...and runs once they are.
+  v.probeDue = () => [];
   v.render(cx);
   cx.flush();
   const rows = v.rows();
@@ -4322,6 +4613,7 @@ test("a compact pin opens as a card with Enter, a click or its digit, and closes
   v.key(keyEv("escape"), cx);
   expect(kinds(k[2])).toEqual(["pin"]);
   v.click(k[4], cx);
+  afterPress(cx);
   expect(v.open.has(k[4])).toBe(true);
   expect(kinds(k[4])).toContain("head");
   v.click(k[4], cx);
@@ -5121,6 +5413,8 @@ test("a 10,000-word reply with no code fence opens whole as Markdown, lands on i
   cx.flush();
   v.sel = key;
   calls.length = 0;
+  // Every part measured, so the scroll does not wait for the probe.
+  v.probeDue = () => [];
   v.key(keyEv("enter"), cx);
   v.render(cx);
   cx.flush();
@@ -5459,6 +5753,29 @@ test("the image viewer: a fenced code block in the reply gets the language, a Co
   expect(text()).not.toContain("Copied");
   // Still one scroll part per block, so j and k count it.
   expect(g.galleryParts()).toBe(6);
+});
+
+// Issue 117: a long code line ran past the panel's right edge. The viewer's code wraps as
+// the open turn's does: the editor's soft_wrap is on and the box is as tall as the wrapped
+// rows at the panel's text width (452 px at 1460 wide: 58 characters a row).
+test("the image viewer: a long code line in the reply wraps inside the panel, and the box has room for its rows", () => {
+  editors.length = 0;
+  const code = "@media (min-width: 640px) {\n  .filters { display: flex; flex-wrap: nowrap; overflow-x: auto; }\n}";
+  const md = `The fix:\n\n\`\`\`css\n${code}\n\`\`\``;
+  const { calls, size } = viewer({ turn: { ...VIEW_TURN, md } });
+  size(1460, 1150);
+  expect(editors.at(-1).opts).toMatchObject({ value: code, readonly: true, soft_wrap: true });
+  // Three lines, the middle one two rows: four rows of 20 px and the 16 px inset.
+  const box = afterId(calls(), "th-gallery-code-copy-1");
+  expect(box.some(([n, x]) => n === "h" && x === 4 * 20 + 16)).toBe(true);
+  // A plain block (no editor) wraps too, and scrolls only down.
+  const plain = viewer({ turn: { ...VIEW_TURN, md } });
+  plain.g.gal.code[1].st = false;
+  plain.size(1460, 1150);
+  const drawn = afterId(plain.calls(), "th-gallery-code-1");
+  expect(drawn.some(([n]) => n === "whitespace_nowrap")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_scroll")).toBe(false);
+  expect(drawn.some(([n]) => n === "overflow_y_scroll")).toBe(true);
 });
 
 test("the image viewer opens with the panel as settings.json last left it, and a running turn says its reply is as of the open", () => {
@@ -6121,7 +6438,8 @@ test("the Jump to latest pill floats while the end of the list is off screen, wi
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   rec = []; v.toastView(theme); const tb2 = rec.find((e) => e[0] === "bottom")?.[1]; rec = null;
-  expect(tb2).toBe(38 + 6 + 28 + 10);
+  // Above the key hints and the status line (24 px).
+  expect(tb2).toBe(38 + 24 + 6 + 28 + 10);
   expect(tb).toBeGreaterThan(38);
   v.toast = null;
   // Not in the outline or the Pinned view, and never in the header.
@@ -6403,10 +6721,12 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  v.rootH = 1100;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 5 * 22 + 31 * 25 + 4 * 12 + 8);
+  // Six groups (the settings card's keys among them), 35 rows.
+  v.rootH = 1300;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 35 * 25 + 5 * 12 + 8);
   v.rootH = 500;
-  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 6);
+  // Above the key hints and the status line (24 px).
+  expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
 });
 
 // A press on the list, the pointer's moves while it is held, and the click the list sends on
@@ -6461,7 +6781,144 @@ test("a drag that selects text never closes or collapses anything; a click that 
   gesture(v, cx, key, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
   expect(v.open.has(key)).toBe(false);
   gesture(v, cx, key);
+  afterPress(cx);
   expect(v.open.has(key)).toBe(true);
+});
+
+// Issue 131: the first press of a double press on a closed turn's reply opened the turn, so
+// the second press landed on whatever text took the reply's place, often the turn above.
+test("a press on a closed turn selects it at once and opens it after the wait; a second press or a drag keeps it closed", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const closed = keys.filter((k) => !v.open.has(k) && v.rows().find((r) => r.key === k)?.kind === "turn");
+  expect(closed.length).toBeGreaterThanOrEqual(3);
+  const [a, b, c] = closed;
+  v.sel = keys.find((k) => !closed.includes(k)) ?? null;
+  // A single press: selected now, opened only once the wait is over.
+  cx.timers = [];
+  gesture(v, cx, a);
+  expect([v.sel, v.open.has(a)]).toEqual([a, false]);
+  expect(cx.timers.map((x) => x.ms)).toContain(300);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(true);
+  // A double press: the first release would open it, the second press keeps it closed, and the
+  // second release selects the turn under it, as a selection does.
+  cx.timers = [];
+  gesture(v, cx, b);
+  gesture(v, cx, b, { count: 2 });
+  afterPress(cx);
+  expect([v.sel, v.open.has(b)]).toEqual([b, false]);
+  // The second press lands on the turn above after all: nothing opens, that turn is selected.
+  cx.timers = [];
+  gesture(v, cx, c);
+  gesture(v, cx, b, { count: 2 });
+  afterPress(cx);
+  expect([v.sel, v.open.has(b), v.open.has(c)]).toEqual([b, false, false]);
+  // A press, then a drag before the wait is over: nothing opens.
+  cx.timers = [];
+  gesture(v, cx, c);
+  gesture(v, cx, c, { from: { x: 120, y: 620 }, to: { x: 380, y: 410 } });
+  afterPress(cx);
+  expect(v.open.has(c)).toBe(false);
+  // A press on another closed turn during the wait opens the first at once; the second
+  // follows after its own wait.
+  cx.timers = [];
+  gesture(v, cx, b);
+  gesture(v, cx, c);
+  expect([v.open.has(b), v.open.has(c), v.sel]).toEqual([true, false, c]);
+  afterPress(cx);
+  expect(v.open.has(c)).toBe(true);
+  // Enter opens at once: only the pointer waits.
+  v.toggle(c, cx);
+  v.toggle(b, cx);
+  v.sel = b;
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(b)).toBe(true);
+});
+
+// From the review of #172: a key or a search after a press wins over the pending open.
+test("a key or a search after a press on a closed turn wins: the turn is not opened behind it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  const closed = keys.filter((k) => !v.open.has(k) && v.rows().find((r) => r.key === k)?.kind === "turn");
+  const [a, b] = closed;
+  // Press, then j: j moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("j"), cx);
+  const moved = v.sel;
+  expect(moved).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, moved]);
+  // Press, Enter, Enter: opened by the first Enter, closed by the second, and left closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(true);
+  v.key(keyEv("enter"), cx);
+  expect(v.open.has(a)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then Esc: closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.key(keyEv("escape"), cx);
+  afterPress(cx);
+  expect(v.open.has(a)).toBe(false);
+  // Press, then a command bound in keys.json (it comes through nextCommand, not key()): it
+  // moves on, and the pressed turn stays closed.
+  cx.timers = [];
+  gesture(v, cx, a);
+  v.command("next", cx);
+  const next = v.sel;
+  expect(next).not.toBe(a);
+  afterPress(cx);
+  expect([v.open.has(a), v.sel]).toEqual([false, next]);
+  // Press, then a search started from its button (no key reaches the panel): closed.
+  cx.timers = [];
+  gesture(v, cx, b);
+  v.action("filter", cx);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+  v.filtering = false;
+  // Press, then the turn is hidden by a search kept from before: not opened.
+  v.filtering = true;
+  cx.timers = [];
+  gesture(v, cx, b);
+  const other = v.findTurn(a).prompt.split(/\s+/).find((w) => w.length > 4 && !v.findTurn(b).prompt.includes(w) && !v.replyText(v.findTurn(b)).includes(w));
+  v.query = other;
+  v.rowsKey = null;
+  expect(v.rows().some((r) => r.key === b)).toBe(false);
+  afterPress(cx);
+  expect(v.open.has(b)).toBe(false);
+});
+
+test("opening a turn scrolls to its card once its parts are measured, or after 400 ms when they never are", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--latest", "--langs"));
+  const calls = [];
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { calls.push([i, how]); } };
+  v.render(cx);
+  cx.flush();
+  const key = v.turnKeys(v.rows()).at(-3);
+  v.toggle(key, cx);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  expect(v.scrollTo.until).toBeGreaterThan(Date.now());
+  // Still measuring: no scroll, and the pane looks again in 60 ms.
+  calls.length = 0;
+  cx.timers = [];
+  v.render(cx);
+  expect(v.scrollTo).toMatchObject({ key, how: "card" });
+  expect(cx.timers.map((x) => x.ms)).toContain(60);
+  cx.flush();
+  expect(calls).toEqual([]);
+  // A measure that never comes: once the wait is over it scrolls anyway, from the estimates.
+  v.scrollTo.until = Date.now() - 1;
+  v.render(cx);
+  cx.flush();
+  expect(v.scrollTo).toBe(null);
+  expect(calls.at(-1)).toEqual([v.rows().findIndex((r) => r.key === key), "top"]);
 });
 
 test("a drag ending on Collapse under a long reply or on the strip under it does nothing; a click on Collapse closes the turn", async () => {
@@ -7556,7 +8013,11 @@ test("level 3: a group claims no check or red mark until its calls are read; onc
 test("level 3 while a turn runs: the running group names what runs now; an open call read before its output reads it again once the session grows", async () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
   const file = join(dir, "00000000-0000-4000-8000-00000000000d.jsonl");
-  const ts = (s) => new Date(Date.now() - 60000 + s * 1000).toISOString();
+  // One base time for every stamp: taken from the clock at each call, the 19 s between the
+  // call and its output grew by however long the test took between the two, and a slow run
+  // read 20 s.
+  const t0 = Date.now() - 60000;
+  const ts = (s) => new Date(t0 + s * 1000).toISOString();
   const use = { type: "assistant", timestamp: ts(1), message: { id: "msg_b1", role: "assistant", content: [{ type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "bun run e2e" } }] } };
   writeFileSync(file, `${JSON.stringify(use)}\n`);
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
@@ -7635,15 +8096,18 @@ test("the floating top: no header row, the state top left at every width, icons 
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
   v.h.is_focused = () => false;
-  // Settings open: a card over the list, not in its flow (the list does not move), with the
-  // agent, the counts and the title at its foot.
+  // Settings open: a card over the list, not in its flow (the list does not move). Its foot
+  // holds the version line, not the chat's agent, counts and title (the owner, 2026-11-19:
+  // the version belongs at the bottom of the settings, the chat's stats somewhere else).
   v.settingsOpen = true;
   calls = drawn();
   ids = idsOf(calls);
   expect(ids).not.toContain("th-top");
   expect(ids.indexOf("th-set-card")).toBeGreaterThan(ids.indexOf("threads-listbox"));
-  expect(ids.indexOf("th-about")).toBeGreaterThan(ids.indexOf("th-set-card"));
-  expect(strs(calls).some((x) => /^\d+ turns/.test(x))).toBe(true);
+  expect(ids).not.toContain("th-about");
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  // The turn count is in the status line at the pane's foot, not in the card.
+  expect(strs(cardOf(v)).some((x) => /^\d+ turns/.test(x))).toBe(false);
   v.settingsOpen = false;
   // A search field opens under the band too.
   v.filtering = true;
@@ -8847,12 +9311,12 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
   const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
   expect(v.prefsDiffer()).toBe(false);
   expect(reset()).toContainEqual(["opacity", 0.45]);
-  for (const a of ["agents", "keyHints", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
+  for (const a of ["agents", "keyHints", "statusLine", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
   v.prefs = { ...v.prefs, width: "wide" };
   expect(v.prefsDiffer()).toBe(true);
   expect(reset()).not.toContainEqual(["opacity", 0.45]);
   v.action("resetSettings", cx);
-  for (const k of ["textSize", "railSide", "keyHints", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
   expect(v.quoteKey).toBe("y");
   expect(v.links.length).toBe(1);
   await new Promise((r) => setTimeout(r, 20));
@@ -8887,6 +9351,37 @@ test("the file: its path with Copy path, which says Copied in its own place with
   expect(strsOf(cardOf(v))).toContain("Copy path");
   expect(log.filter((x) => x[0] === "open")).toEqual([]);
   expect(v.action("openSettingsFile", cx)).toBe(false);
+});
+
+test("the card's foot: the mod's name and version as a plain line, with the commit when install.sh found one, then ? keys; not a control", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const { VERSION } = await import("../mods/agent-threads/version.js");
+  v.action("settings", cx);
+  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
+  // The repo's own build.js, or a copy made without install.sh: the commit is not known, and
+  // the tooltip says what that means. (The section's heading is recorded after its rows.)
+  let line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION} (commit not known)`);
+  expect(tooltips(v, cx)).toContain("Copied without ./install.sh, so the commit is not known: this release or a later commit on main.");
+  expect(line.some((e) => e[0] === "on_click" || e[0] === "on_mouse_down")).toBe(false);
+  // Installed from the release's tag, then from three commits after it with a change.
+  v.build = `v${VERSION}-0-gd7c9cfb`;
+  line = own(cardOf(v), "th-set-version");
+  expect(strsOf(line)[0]).toBe(`Agent Threads ${VERSION}`);
+  v.build = `v${VERSION}-3-gabc1234-dirty`;
+  expect(strsOf(own(cardOf(v), "th-set-version"))[0]).toBe(`Agent Threads ${VERSION}, commit: abc1234, with local changes`);
+  // A narrow card cuts the line short, so its tooltip is the whole line, with the count.
+  expect(tooltips(v, cx)).toContain(`Agent Threads ${VERSION}, commit: abc1234, with local changes, 3 commits after the ${VERSION} release`);
+  // It is the card's last row: in the foot under the scroll, after Reset, before "? keys",
+  // and it truncates rather than pushing the keys out at a narrow card.
+  const c = cardOf(v);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids.indexOf("th-set-version")).toBeGreaterThan(ids.indexOf("th-set-foot"));
+  expect(ids.indexOf("th-set-version")).toBeLessThan(ids.indexOf("th-set-keys"));
+  const gs = strsOf(c);
+  expect(gs.indexOf("Reset to defaults")).toBeLessThan(gs.indexOf(`Agent Threads ${VERSION}, commit: abc1234, with local changes`));
+  expect(own(c, "th-set-version").some((e) => e[0] === "truncate")).toBe(true);
+  draw(v, cx);
 });
 
 test("a field that leaves the screen gives the keyboard back: the Link rules row, Back, or a command, after typing in the quote key field", async () => {
@@ -9013,7 +9508,8 @@ test("key hints at the bottom are off by default; the switch brings the row back
   const { v, cx } = await pane(fixture("--extra", "3"));
   expect(v.prefs.keyHints).toBe(false);
   expect(idsIn(frame(v, cx))).not.toContain("th-footer");
-  expect(v.footSpace()).toBe(0);
+  // Only the status line's 24 px.
+  expect(v.footSpace()).toBe(24);
   v.action("settings", cx);
   let c = frame(v, cx);
   onOf(c, "th-set-keys", "on_click")({}, cx);
@@ -9025,11 +9521,11 @@ test("key hints at the bottom are off by default; the switch brings the row back
   expect(v.prefs.keyHints).toBe(true);
   v.footerH = 38;
   expect(idsIn(frame(v, cx))).toContain("th-footer");
-  expect(v.footSpace()).toBe(38);
+  expect(v.footSpace()).toBe(38 + 24);
   await new Promise((r) => setTimeout(r, 20));
 });
 
-test("the card leaves a 160 px strip of the list under it, except in a pane under 514 px tall", async () => {
+test("the card leaves a 160 px strip of the list under it from 514 px up; under that the strip shrinks with the pane", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.width = 545; v.paneW = 573;
   v.action("settings", cx);
@@ -9040,17 +9536,91 @@ test("the card leaves a 160 px strip of the list under it, except in a pane unde
   expect(bodyH()).toBe(800 - 32 - 160 - (40 + 40 + 2));
   v.rootH = 514;
   expect(bodyH()).toBe(514 - 32 - 160 - (40 + 40 + 2));
-  // Under 514 px the card takes the height, 12 px above the bottom.
+  // TRD-6 (#141): under 514 px the strip shrinks a pixel for each pixel the pane loses, so the
+  // card keeps its height, down to 12 px above the status line (24 px), at 390 px. Under that
+  // the card takes the height.
   v.rootH = 513;
-  expect(bodyH()).toBe(513 - 32 - 12 - (40 + 40 + 2));
+  expect(bodyH()).toBe(513 - 32 - 159 - (40 + 40 + 2));
+  v.rootH = 390;
+  expect(bodyH()).toBe(390 - 32 - 24 - 12 - (40 + 40 + 2));
+  v.rootH = 389;
+  expect(bodyH()).toBe(389 - 32 - 24 - 12 - (40 + 40 + 2));
+});
+
+// TRD-6 (#141): at 514 px the strip used to drop from 160 px to the foot's space at once, so a
+// pane going from 514 to 513 px made the card about 147 px taller.
+test("the card never grows when the pane shrinks, with the key hints on or off", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  const box = () => {
+    const c = cardOf(v);
+    const card = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card");
+    const top = c.slice(card).find((e) => e[0] === "top")[1];
+    const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+    return { top, height: 40 + 40 + 2 + c.slice(at).find((e) => e[0] === "h")[1] };
+  };
+  for (const hints of [false, true]) {
+    v.prefs = { ...v.prefs, keyHints: hints };
+    if (hints) v.footerH = 38;
+    let last = Infinity;
+    // Down to 94 px, the head and foot (82 px) and the gap: under that the card cannot fit.
+    for (let h = 900; h >= 94; h--) {
+      v.rootH = h;
+      const { top, height } = box();
+      // A pixel less of pane is never a taller card, and the card stays inside the pane.
+      expect([hints, h, height <= last]).toEqual([hints, h, true]);
+      expect([hints, h, top + height <= h - 12]).toEqual([hints, h, true]);
+      last = height;
+    }
+  }
+});
+
+// TRD-7 (#142): in a pane under about 224 px the card ran past the bottom, cutting off its foot.
+test("in a very short pane the card stays inside it: the rows shrink first, then the card moves up, and the head and foot always show", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 545; v.paneW = 573;
+  v.action("settings", cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 2000, width: 400 }, cx);
+  const box = () => {
+    const c = cardOf(v);
+    const card = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-card");
+    const top = c.slice(card).find((e) => e[0] === "top")[1];
+    const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+    return { top, bodyH: c.slice(at).find((e) => e[0] === "h")[1] };
+  };
+  const fixed = 40 + 40 + 2;
+  // 224 px and up: as before, the card under the top band, 12 px above the bottom.
+  v.rootH = 224;
+  expect(box()).toEqual({ top: 32, bodyH: 224 - 32 - 12 - fixed });
+  for (const h of [223, 200, 160, 126]) {
+    v.rootH = h;
+    const b = box();
+    expect([h, b.top, b.bodyH]).toEqual([h, 32, h - 32 - 12 - fixed]);
+    expect(b.top + fixed + b.bodyH).toBeLessThanOrEqual(h - 12);
+  }
+  // Too short for the head and foot under the top band: the rows are gone, and the card moves
+  // up over the icons, so its head and foot stay inside the pane.
+  for (const h of [125, 110, 94]) {
+    v.rootH = h;
+    expect([h, box()]).toEqual([h, { top: h - 12 - fixed, bodyH: 0 }]);
+  }
+  // The key hints keep their room only while the card fits above them.
+  v.rootH = 200;
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  expect(box().bodyH).toBe(200 - 32 - 12 - fixed);
 });
 
 test("the card's rows scroll inside it: as tall as they are, up to the room above the key hints", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 573; v.rootH = 400;
+  // 360 px: under the strip's ramp (TRD-6), so the card ends 12 px above the status line.
+  v.width = 545; v.paneW = 573; v.rootH = 360;
   v.action("settings", cx);
   const bodyH = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main")); return c.slice(at).find((e) => e[0] === "h")[1]; };
-  const room = 400 - 32 - 12 - (40 + 40 + 2);
+  // 12 px above the status line (24 px).
+  const room = 360 - 32 - 24 - 12 - (40 + 40 + 2);
   expect(bodyH()).toBe(room);
   // Measured shorter than the room: the card is as tall as its rows.
   const c = cardOf(v);
@@ -9062,6 +9632,179 @@ test("the card's rows scroll inside it: as tall as they are, up to the room abov
   v.prefs = { ...v.prefs, keyHints: true };
   v.footerH = 38;
   expect(bodyH()).toBe(room - 38);
+});
+
+// The outside review of PR 128: the card is one long page, and it scrolled only with a wheel
+// or trackpad. The arrows, j, k, Page Up, Page Down, Space, Home and End now scroll it, through
+// a ScrollHandle and the 1 px marks after its rows (cardMarks): Herdr can only bring a direct
+// child into view, with the smallest scroll.
+test("the settings card scrolls by keys: a line, a page, the top or the end; the list under it stays put, and each opening starts at the top", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 800;
+  v.key(keyEv(","), cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 758, width: 440 }, cx);
+  const c = cardOf(v);
+  const viewH = 800 - 32 - 160 - 82;
+  const maxY = 758 - viewH;
+  expect(v.cardPlace("main").viewH).toBe(viewH);
+  // The marks: 1 px boxes down the rows, after them in the scroll area.
+  const marks = cardMarks(758);
+  expect(marks[0]).toBe(0);
+  expect(marks.at(-1)).toBe(757);
+  expect(c.filter((e) => e[0] === "top").map((e) => e[1]).filter((y) => y >= 0 && marks.includes(y)).length).toBeGreaterThanOrEqual(marks.length);
+  const h = v.cardScrolls.main;
+  const y = () => v.cardPlace("main").y;
+  // Where the asked mark puts the view's top: brought up to the bottom edge going down, down
+  // to the top edge going up.
+  const topBy = (down) => { const m = marks[h.asked.at(-1) - 1]; return down ? m + 1 - viewH : m; };
+  const sel = v.sel;
+  const asks = () => h.asked.length;
+  const press = (k) => { const n = asks(); v.key(keyEv(k), cx); return asks() > n; };
+  expect(press("j")).toBe(true);
+  expect(Math.abs(y() - 40)).toBeLessThanOrEqual(4);
+  expect(topBy(true)).toBe(y());
+  expect(press("down")).toBe(true);
+  expect(Math.abs(y() - 80)).toBeLessThanOrEqual(8);
+  expect(press("k")).toBe(true);
+  expect(topBy(false)).toBe(y());
+  expect(Math.abs(y() - 40)).toBeLessThanOrEqual(8);
+  expect(press("up")).toBe(true);
+  expect(y()).toBe(0);
+  expect(press("up")).toBe(false); // at the top already
+  // A page is the view less a line; here the rows end first.
+  expect(press("pagedown")).toBe(true);
+  expect(Math.abs(y() - maxY)).toBeLessThanOrEqual(1);
+  expect(press("pagedown")).toBe(false);
+  expect(press("home")).toBe(true);
+  expect(y()).toBe(0);
+  expect(h.asked.at(-1)).toBe(1);
+  expect(press("space")).toBe(true);
+  expect(press("pageup")).toBe(true);
+  expect(y()).toBe(0);
+  expect(press("end")).toBe(true);
+  expect(Math.abs(y() - maxY)).toBeLessThanOrEqual(1);
+  // The list under the card did not move, and the card is still open.
+  expect(v.sel).toBe(sel);
+  expect(v.settingsOpen).toBe(true);
+  // The same as commands, for key bindings and for a window no keys reach.
+  expect(v.action("settingsScroll:home", cx)).toBe(true);
+  expect(y()).toBe(0);
+  // The wheel moves the card's place, and the keys go on from there. The rows and the area
+  // both hear one wheel event; it counts once.
+  const wheel = { delta: { x: 0, y: -100 }, position: { x: 300, y: 300 }, touch_phase: "moved" };
+  const c2 = cardOf(v);
+  onOf(c2, "th-set-rows-main", "on_scroll_wheel")(wheel, cx);
+  onOf(c2, `th-set-body-main-${v.cardOpens}`, "on_scroll_wheel")(wheel, cx);
+  expect(y()).toBe(100);
+  press("j");
+  expect(Math.abs(y() - 140)).toBeLessThanOrEqual(4);
+  // Esc still closes; each opening starts at the top on both pages.
+  v.key(keyEv("escape"), cx);
+  expect(v.settingsOpen).toBe(false);
+  expect(v.action("settingsScroll:down", cx)).toBe(false);
+  v.key(keyEv(","), cx);
+  expect(y()).toBe(0);
+  expect(h.asked.at(-1)).toBe(1);
+  expect(v.cardScrolls.links.asked.at(-1)).toBe(1);
+  // A field with the keyboard keeps its letters: j goes to the field, not the scroll.
+  v.fieldFocused = "quote";
+  expect(press("j")).toBe(false);
+  v.fieldFocused = null;
+  // The Link rules page has its own place and handle.
+  v.action("settingsPage:links", cx);
+  onOf(cardOf(v), "th-set-rows-links", "on_size_change")({ height: 1400, width: 440 }, cx);
+  cardOf(v);
+  const lh = v.cardScrolls.links;
+  const n = lh.asked.length;
+  v.key(keyEv("end"), cx);
+  expect(lh.asked.length).toBe(n + 1);
+  expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
+  expect(y()).toBe(0);
+});
+
+test("on a Herdr with no ScrollHandle the card's keys do nothing to it or to the list, and it has no marks", async () => {
+  const { v, cx } = await pane(fixture("--extra", "4"));
+  v.width = 545; v.paneW = 573; v.rootH = 800;
+  v.cardScrolls = null;
+  frame(v, cx);
+  v.key(keyEv(","), cx);
+  onOf(cardOf(v), "th-set-rows-main", "on_size_change")({ height: 758, width: 440 }, cx);
+  const c = cardOf(v);
+  const at = c.findIndex((e) => e[0] === "id" && String(e[1]).startsWith("th-set-body-main"));
+  expect(c.slice(at).some((e) => e[0] === "track_scroll")).toBe(false);
+  expect(c.filter((e) => e[0] === "w" && e[1] === 1).length).toBe(0);
+  const sel = v.sel;
+  expect(sel).toBeTruthy();
+  // The selection is on the newest turn: k and Home would move it, were they the list's.
+  for (const k of ["k", "up", "home", "j", "pagedown", "end"]) { v.key(keyEv(k), cx); expect(v.sel).toBe(sel); }
+  expect(v.cardPlace("main").y).toBe(0);
+  expect(v.settingsOpen).toBe(true);
+});
+
+test("the card's scrollbar is drawn all the time where Herdr has Scrollbar and its mode, in a strip at the right edge; otherwise the scroll area's own bar", async () => {
+  const shown = async () => {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.width = 545; v.paneW = 573; v.rootH = 800;
+    v.key(keyEv(","), cx);
+    return cardOf(v);
+  };
+  let c = await shown();
+  expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  expect(c.some((e) => e[0] === "mode")).toBe(false);
+  stubHas.add("mode");
+  try {
+    c = await shown();
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scroll")).toBe(true);
+    expect(c).toContainEqual(["mode", "always"]);
+    expect(c).toContainEqual(["w", 10]);
+  } finally {
+    stubHas.delete("mode");
+  }
+});
+
+// TRD-8 (#143): the Page Up, Page Down and Space chips wrapped onto three lines in a 92 px key
+// column, and in a 1150 px window the sheet was cut with nothing to say there was more.
+test("the keys sheet: the page keys sit on one line, and a sheet taller than its room draws its scrollbar all the time", async () => {
+  const { keySheet } = await import("../mods/agent-threads/ui.js");
+  const page = keySheet("q").find(([g]) => g === "Settings card")[1].find(([, what]) => what === "Scroll it a page");
+  expect(page[0]).toEqual(["PgUp", "PgDn", "Space"]);
+  const sheet = async (h, paneW = 573) => {
+    const { v, cx } = await pane(fixture("--extra", "2"));
+    v.width = paneW - 28; v.paneW = paneW; v.rootH = h;
+    v.action("keys", cx);
+    // The whole frame: the sheet is the only card open, and its list is built before it.
+    return frame(v, cx);
+  };
+  // The key column: 128 px, wide enough for the three chips (about 40, 40 and 45 px, 3 px apart).
+  let c = await sheet(500);
+  expect(c).toContainEqual(["w", 128]);
+  expect(c.some((e) => e[0] === "w" && e[1] === 92)).toBe(false);
+  // A pane under 520 px keeps the 92 px column, so the descriptions do not wrap more.
+  c = await sheet(500, 519);
+  expect(c).toContainEqual(["w", 92]);
+  expect(c.some((e) => e[0] === "w" && e[1] === 128)).toBe(false);
+  c = await sheet(500, 520);
+  expect(c).toContainEqual(["w", 128]);
+  c = await sheet(500);
+  // No Scrollbar mode (Herdr before it): the list's own bar, shown while it scrolls.
+  expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  expect(c.some((e) => e[0] === "mode")).toBe(false);
+  stubHas.add("mode");
+  try {
+    // Taller than its room (a 500 px pane): the bar is drawn all the time, in a 10 px strip.
+    c = await sheet(500);
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scroll")).toBe(true);
+    expect(c).toContainEqual(["mode", "always"]);
+    expect(c).toContainEqual(["w", 10]);
+    // It fits (a 1300 px pane): no bar until it scrolls, as before.
+    c = await sheet(1300);
+    expect(c.some((e) => e[0] === "mode")).toBe(false);
+    expect(c.some((e) => e[0] === "overflow_y_scrollbar")).toBe(true);
+  } finally {
+    stubHas.delete("mode");
+  }
 });
 
 // The owner, 17 Nov: pointing at the settings card near the rail set the rail off under it.
@@ -9845,6 +10588,93 @@ test("a Delete that is not saved because the file's rules changed offers no Undo
   } finally { done(v); }
 });
 
+// Issue 114: a refused Keep rule said why only on the File line at the foot of the page, which
+// a tall open rule can push out of view. The same line shows in the open rule too, under its
+// buttons. inRule counts it between Keep rule and the File group, onFile after the File note.
+const FILE_NOTE = "Rules are kept under \"links\" in the settings file. A change made there shows here within a second.";
+const NOT_LIST_NOTE = "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed.";
+function reasonsOf(c, why) {
+  const at = c.flatMap((e, i) => (e[0] === "child" && e[1] === why ? [i] : []));
+  const file = c.findIndex((e) => e[0] === "child" && (e[1] === FILE_NOTE || e[1] === NOT_LIST_NOTE));
+  const keep = c.findIndex((e) => e[0] === "id" && e[1] === "th-rule-keep");
+  return { inRule: at.filter((i) => keep >= 0 && i > keep && i < file).length, onFile: at.filter((i) => i > file).length };
+}
+
+test("a Keep rule refused because \"links\" is not a list says why in the open rule too, until the file is fixed or the rule closes", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    // In an editor "links" becomes a string, and the pane reads it: the open rule stays open.
+    const oops = JSON.stringify({ textSize: 15, links: "oops" });
+    recordFiles[v.prefsPath()] = oops;
+    v.applyPrefs(oops);
+    settingsWrites.length = 0;
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.ruleEdit).not.toBe(null);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 1, onFile: 1 });
+    // Discard: the reason stays on the File line only.
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 1 });
+    // Refused again, then the file fixed: the reason goes from both places, the next Keep is written.
+    const fixed = JSON.stringify({ textSize: 15, links: RULES });
+    recordFiles[v.prefsPath()] = fixed;
+    v.applyPrefs(fixed);
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-8.", cx);
+    v.applyPrefs(oops);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 1, onFile: 1 });
+    v.applyPrefs(fixed);
+    expect(reasonsOf(cardOf(v), NOT_LIST)).toEqual({ inRule: 0, onFile: 0 });
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastLinks().map((r) => r.example)).toEqual(["Fixed in ACME-8.", RULES[0].example, RULES[1].example]);
+    expect(strsOf(cardOf(v))).not.toContain(NOT_LIST);
+  } finally { done(v); }
+});
+
+test("a Keep rule whose save finds the file's rules changed opens the rule again with what was typed, and says why in it", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    settingsStale = true;
+    onOf(cardOf(v), "th-rule-1", "on_click")({}, cx);
+    typeIn(v, "example", "Fixed in ACME-7.", cx);
+    const X = { name: "X", pattern: "\\bX-(\\d+)\\b", url: "https://x.example/$1" };
+    const edited = JSON.stringify({ textSize: 15, links: [X, ...RULES] });
+    recordFiles[v.prefsPath()] = edited; // an editor adds a rule as Keep rule is pressed
+    settingsWrites.length = 0;
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    expect(v.ruleEdit).toBe(null); // closed at once, as for a Keep that is written
+    await settleAll(cx);
+    expect(settingsWrites).toEqual([]);
+    expect(v.linkList.map((r) => r.name)).toEqual(["X", "Ticket", "Hash"]);
+    expect(v.ruleEdit?.at).toBe(1);
+    expect(v.ruleInputs.example.value()).toBe("Fixed in ACME-7.");
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 1, onFile: 1 });
+    // From the list it now shows, the same Keep is written, and the reason goes.
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit).toBe(null);
+    expect(lastLinks()).toEqual([X, { ...RULES[0], example: "Fixed in ACME-7." }, RULES[1]]);
+    expect(strsOf(cardOf(v))).not.toContain(MOVED);
+    // Refused again and closed with Discard: the reason stays on the File line only.
+    recordFiles[v.prefsPath()] = JSON.stringify({ textSize: 15, links: [X, RULES[1]] });
+    onOf(cardOf(v), "th-rule-3", "on_click")({}, cx);
+    typeIn(v, "example", "See #59.", cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(v.ruleEdit?.at).toBe(1);
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 1, onFile: 1 });
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(reasonsOf(cardOf(v), MOVED)).toEqual({ inRule: 0, onFile: 1 });
+  } finally { done(v); }
+});
+
 // Review of PR 97, L2: the open rule's example follows the session's repository.
 test("the open rule's example is worked out again when the session's repository changes", async () => {
   const PR = { name: "PR", type: "pull-request", pattern: "(?<![\\w&/#])#(\\d{1,5})\\b", url: "https://github.com/{repo}/pull/$1", example: "Merged in #58." };
@@ -10441,4 +11271,310 @@ test("no sender rules: the two examples in dashed boxes, and Use opens a new rul
     v.applyPrefs(bare);
     expect(strsOf(cardOf(v)).filter((x) => x === "From {name}: ").length).toBe(2);
   } finally { done(v); }
+});
+
+
+// Issue 131, the owner's third report: in an open turn whose reply ends in a numbered list, above
+// its LATEST UPDATE, a press in the list's fourth item jumped the list so the item went above the
+// top of the pane. The pane was following the newest turn, a prompt just sent, and its reply came
+// in during the drag. A drag that selects text left following on, so the growing reply (and then
+// a new turn) pulled the view to the bottom under the pointer.
+function selectFixture() {
+  const file = fixture("--only", "1", "--latest");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const reply = "Here is where things stand.\n\n**Waiting on you:**\n\n1. The staging login: press Enter, then approve it.\n2. The chart colours: pick one of the three.\n3. A word on the cache change.\n4. The old `acme-web-v1` folder: keep it or remove it.";
+  const update = "The nightly export ran clean and stays on.\n\nTwo of the four changes are in. The other two follow, then the docs.\n\nThe staging login still waits for you.";
+  for (const j of lines) {
+    const c = j.message?.content;
+    if (j.type !== "assistant" || !Array.isArray(c)) continue;
+    for (const b of c) {
+      if (b.type !== "text") continue;
+      if (b.text.startsWith("Started the export")) b.text = reply;
+      else if (b.text.startsWith("The export finished")) b.text = update;
+    }
+  }
+  const human = lines.find((j) => j.type === "user" && j.origin?.kind === "human");
+  const said = lines.findLast((j) => j.type === "assistant" && j.message?.content?.some?.((b) => b.type === "text"));
+  const last = lines.findLast((j) => j.uuid);
+  const id = (n) => `00000000-0000-4000-9000-0000000009${String(n).padStart(2, "0")}`;
+  const next = { ...human, promptId: id(1), uuid: id(2), parentUuid: last.uuid, timestamp: "2026-11-01T09:25:00.000Z", turnPosition: { promptIndex: 3, turnIndex: 4 }, message: { role: "user", content: "Merge the cache change when it is ready" } };
+  const text = (n, t, at) => ({ ...said, uuid: id(n), parentUuid: id(n - 1), timestamp: at, requestId: `req_9${n}`, message: { ...said.message, id: `msg_9${n}`, stop_reason: null, content: [{ type: "text", text: t }] } });
+  const body = lines.filter((j) => j.type !== "last-prompt");
+  writeFileSync(file, `${[...body, next].map((j) => JSON.stringify(j)).join("\n")}\n`);
+  const grow = `${JSON.stringify(text(3, "Checking the cache change now. The tests are running.", "2026-11-01T09:25:20.000Z"))}\n`;
+  return { file, grow };
+}
+
+test("a drag that selects text in an open turn stops following: the newest reply growing under it does not move the list (issue 131)", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, grow } = selectFixture();
+  const { v, cx } = await pane(file);
+  const turns = v.current().turns;
+  expect(turns.length).toBe(3);
+  const t = turns.find((x) => x.latest && x.latest !== v.replyText(x));
+  const key = `0:${t.n}`;
+  expect(v.replyText(t)).toContain("4. The old `acme-web-v1` folder");
+  expect(t.latest.split("\n\n").length).toBe(3);
+  v.open = new Set([key]);
+  expect(v.follow).toBe(true);
+  atBottom(v, cx);
+  const md = v.rows().find((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`));
+  expect(md).toBeTruthy();
+  expect(v.rows().some((r) => r.kind === "latest" && r.key === `lt:${key}`)).toBe(true);
+  // The frames so far asked for the bottom (following, on load): those scrolls run first.
+  cx.flush();
+  const scrolls = [];
+  v.scroll = { scroll_to_bottom() { scrolls.push("bottom"); }, scroll_to_item(i, how) { scrolls.push([i, how]); } };
+  // The press in item 4 and a drag along it, past DRAG_SLOP. The release has not come yet.
+  const calls = frame(v, cx);
+  const ev = (p) => ({ position: p, local_position: p, bounds: { width: v.width, height: 800 }, modifiers: {} });
+  handlerAfterId(calls, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  for (let i = 1; i <= 6; i++) handlerAfterId(calls, "threads-body", "on_mouse_move")(ev({ x: 120 + 30 * i, y: 300 }), cx);
+  expect(v.selectGesture()).toBe(true);
+  // The newest turn's reply comes in during the drag.
+  appendFileSync(file, grow);
+  v.read(cx);
+  await settle(v);
+  expect(v.current().turns.at(-1).reply ?? v.replyText(v.current().turns.at(-1))).toContain("The tests are running");
+  draw(v, cx);
+  cx.flush();
+  expect(v.toBottom).toBe(false);
+  expect(v.follow).toBe(false);
+  expect(scrolls).not.toContain("bottom");
+  // The release lands on the reply: the open turn is selected and stays where it is.
+  v.click(md.key, cx);
+  expect(v.sel).toBe(key);
+  expect(v.open.has(key)).toBe(true);
+  // A scroll to the bottom asked for by the frame just before the drag (its 16 ms timer still
+  // queued when the drag passes DRAG_SLOP) does not run either.
+  v.follow = true;
+  atBottom(v, cx);
+  cx.flush();
+  scrolls.length = 0;
+  v.toBottom = true;
+  const calls1 = frame(v, cx);
+  expect(v.toBottom).toBe(false);
+  handlerAfterId(calls1, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  for (let i = 1; i <= 6; i++) handlerAfterId(calls1, "threads-body", "on_mouse_move")(ev({ x: 120 + 30 * i, y: 300 }), cx);
+  cx.flush();
+  expect(scrolls).not.toContain("bottom");
+  v.click(md.key, cx);
+  // The hold is counted, not timed (the review of 6224a42). A clock that steps back after a
+  // hold, or a hold and a request in the same millisecond, must not drop a later request.
+  const realNow = Date.now;
+  try {
+    const t = realNow();
+    Date.now = () => t;
+    v.follow = true;
+    v.holdForSelect();
+    v.follow = true;
+    v.toBottom = true;
+    scrolls.length = 0;
+    frame(v, cx);
+    cx.flush();
+    expect(scrolls).toContain("bottom");
+    Date.now = () => t - 60000;
+    v.follow = true;
+    v.toBottom = true;
+    scrolls.length = 0;
+    frame(v, cx);
+    cx.flush();
+    expect(scrolls).toContain("bottom");
+  } finally { Date.now = realNow; }
+  // A double press (a word) stops following straight away, before any move.
+  v.follow = true;
+  atBottom(v, cx);
+  const calls2 = frame(v, cx);
+  handlerAfterId(calls2, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 2 }, cx);
+  expect(v.follow).toBe(false);
+  // A press that does not move is not a selection: following stays as it was until the click.
+  v.follow = true;
+  atBottom(v, cx);
+  const calls3 = frame(v, cx);
+  handlerAfterId(calls3, "threads-body", "on_mouse_down")({ ...ev({ x: 120, y: 300 }), button: "left", click_count: 1 }, cx);
+  handlerAfterId(calls3, "threads-body", "on_mouse_move")(ev({ x: 121, y: 300 }), cx);
+  expect(v.follow).toBe(true);
+});
+
+// The status line (the owner, 2026-11-19: the chat's stats in a slim line at the very bottom).
+test("the status line: the chat's stats in one row at the very bottom, on by default, under the key hints; its switch takes it and its room away", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 640;
+  expect(v.prefs.statusLine).toBe(true);
+  const row = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status");
+    if (at < 0) return null;
+    let end = c.findIndex((e, i) => i > at && e[0] === "id" && !String(e[1]).startsWith("th-status"));
+    if (end < 0) end = c.length;
+    return c.slice(at, end);
+  };
+  const c = frame(v, cx);
+  const r = row(c);
+  expect(r).not.toBe(null);
+  const s = v.current();
+  const n = v.counts();
+  const turns = `${n.shownCur} turns`;
+  const texts = r.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(texts[0].startsWith(turns)).toBe(true);
+  // The same numbers the reply stats use, summed over the session.
+  expect(v.statusStats()).toEqual({ turns: n.shownCur, hidden: n.hiddenCur, ...sessionStatsForTest(s.turns) });
+  // Summed once: the same object until the session changes, then the new turn counts too.
+  expect(v.statusStats().tools).toBe(v.statusStats().tools);
+  const memo = v.statusMemo;
+  v.statusStats();
+  expect(v.statusMemo).toBe(memo);
+  s.turns.push({ ...s.turns[s.turns.length - 1], tools: 5, usage: { zz: { i: 7, o: 3, cr: 0, cc: 0 } } });
+  s.version++;
+  expect(v.statusStats().tools).toBe(sessionStatsForTest(s.turns).tools);
+  expect(v.statusStats().context).toBe(7);
+  expect(v.statusStats().tokens).toBe(sessionStatsForTest(s.turns).tokens);
+  s.turns.pop();
+  s.version++;
+  expect(v.statusStats()).toEqual({ turns: v.counts().shownCur, hidden: v.counts().hiddenCur, ...sessionStatsForTest(s.turns) });
+  // One centred, small, muted row of a fixed height, and nothing in it takes a click.
+  expect(r).toContainEqual(["justify_center"]);
+  expect(r).toContainEqual(["h", 24]);
+  expect(r.some((e) => e[0] === "on_click" || e[0] === "on_mouse_down" || e[0] === "tooltip")).toBe(false);
+  expect(v.footSpace()).toBe(24);
+  // Under the list, and under the key hints when they are on.
+  let ids = idsIn(c);
+  expect(ids.indexOf("th-status")).toBeGreaterThan(ids.indexOf("threads-listbox"));
+  v.prefs = { ...v.prefs, keyHints: true };
+  v.footerH = 38;
+  ids = idsIn(frame(v, cx));
+  expect(ids.indexOf("th-status")).toBeGreaterThan(ids.indexOf("th-footer"));
+  expect(v.footSpace()).toBe(38 + 24);
+  // The settings switch takes the row away, and the room it took.
+  v.action("statusLine", cx);
+  expect(v.prefs.statusLine).toBe(false);
+  expect(idsIn(frame(v, cx))).not.toContain("th-status");
+  expect(v.footSpace()).toBe(38);
+  // The card names it in Layout.
+  v.action("settings", cx);
+  expect(idsIn(frame(v, cx))).toContain("th-set-status");
+  await new Promise((res) => setTimeout(res, 20));
+});
+
+test("the status line shows nothing before the session is read, and at 360 px keeps the turns and drops the rest in order", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 360;
+  const texts = () => { const c = frame(v, cx); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status"); return at < 0 ? null : c.slice(at).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  expect(texts()[0]).toBe(statusGroupsForTest(v.statusStats(), 360)[0].text);
+  expect(v.statusGroupsShown().map((g) => g.text)).toEqual(statusGroupsForTest(v.statusStats(), 360).map((g) => g.text));
+  const s = v.current();
+  s.loaded = false;
+  expect(texts()).toBe(null);
+  expect(v.footSpace()).toBe(0);
+  s.loaded = true;
+});
+
+test("the status line's sums follow a session switch, a rewind and a session read again with the same counts", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const s = v.current();
+  const want = (x) => ({ turns: v.counts().shownCur, hidden: v.counts().hiddenCur, ...sessionStatsForTest(x.turns) });
+  expect(v.statusStats()).toEqual(want(s));
+  // Another session becomes the current one: its own sums, not the first one's.
+  const other = { ...s, id: "other-session", turns: s.turns.slice(0, 2).map((t) => ({ ...t, tools: t.tools + 4 })), version: s.version };
+  v.sessions = [...v.sessions, other];
+  expect(v.statusStats()).toEqual(want(other));
+  v.sessions = v.sessions.slice(0, -1);
+  expect(v.statusStats()).toEqual(want(s));
+  // A rewind cuts the list back to its settled turns; the turns read again differ.
+  const n = s.turns.length;
+  s.turns.length = 1;
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  while (s.turns.length < n) s.turns.push({ ...s.turns[0], done: true, tools: 9, usage: { r: { i: 11, o: 2, cr: 0, cc: 0 } } });
+  s.version++;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(11);
+  // Read again from the start (a new turns list) to the same id, version and count.
+  const version = s.version;
+  s.turns = s.turns.map((t) => ({ ...t, tools: 1, usage: { q: { i: 3, o: 1, cr: 0, cc: 0 } } }));
+  s.version = version;
+  expect(v.statusStats()).toEqual(want(s));
+  expect(v.statusStats().context).toBe(3);
+});
+
+// TRD-17: where the newest count states the model's window (Codex), the status line ends with a
+// ring filled to the share used and the percent; with no window stated, no ring.
+test("the status line ends with Codex's context ring and percent, and has none without a stated window", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.paneW = 900;
+  const s = v.current();
+  const row = () => { const c = frame(v, cx); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status"); return at < 0 ? [] : c.slice(at); };
+  const rings = () => row().filter((e) => e[0] === "svg" && /\/ring-\d\.svg$/.test(String(e[1]))).map((e) => String(e[1]).split("/").pop());
+  const texts = () => row().filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(rings()).toEqual([]);
+  const last = s.turns[s.turns.length - 1];
+  last.usage = { ...last.usage, zz: { i: 51680, o: 4, cr: 0, cc: 0, w: 258400 } };
+  s.version++;
+  expect(rings()).toEqual(["ring-2.svg"]);
+  // The count and the percent in one group, behind the ring (TRD-17: the count always shows).
+  expect(texts().at(-1)).toBe("51.7k context · 20%");
+  // In the text's colour, where the other icons are dim.
+  const r = row();
+  const at = r.findIndex((e) => e[0] === "svg" && String(e[1]).endsWith("/ring-2.svg"));
+  expect(r.slice(at, at + 4)).toContainEqual(["text_color", theme.muted]);
+  // At 360 px the count and percent still show, with the turns.
+  v.paneW = 360;
+  expect(rings()).toEqual(["ring-2.svg"]);
+  expect(texts().at(-1)).toBe("51.7k context · 20%");
+  v.paneW = 900;
+  // A newer count with no window: the ring goes, the context count stays.
+  last.usage = { ...last.usage, zzz: { i: 52000, o: 4, cr: 0, cc: 0 } };
+  s.version++;
+  expect(rings()).toEqual([]);
+  expect(texts().at(-1)).toBe("52k context");
+});
+
+// TRD-31: a line the reader skipped shows as one dim note after the turn it fell in, or at the
+// session's head before the first turn, and nowhere in the outline or a search.
+test("a skipped line shows as one dim note after its turn, or at the head", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  draw(v, cx);
+  const s = v.current();
+  const turn = s.turns[1];
+  const keyOf = `${v.sessions.indexOf(s)}:${turn.n}`;
+  const base = v.rows().filter((r) => r.kind === "note").length;
+  turn.skipped = { lines: 1, bytes: 300 * 1048576 };
+  s.version++;
+  let rows = v.rows();
+  const at = rows.findIndex((r) => r.key === `skip:${keyOf}`);
+  expect(at).toBeGreaterThan(0);
+  expect(rows[at]).toMatchObject({ kind: "note", text: "A line of 300 MB was left out here, too long to read" });
+  // After the turn's own rows and before the next turn.
+  expect(rows.slice(0, at).some((r) => r.key === keyOf)).toBe(true);
+  const next = `${v.sessions.indexOf(s)}:${s.turns[2].n}`;
+  expect(rows.slice(at).some((r) => r.key === next)).toBe(true);
+  expect(rows.filter((r) => r.kind === "note").length).toBe(base + 1);
+  // Drawn as the other notes are: dim text, and not a turn the keys stop on.
+  rec = [];
+  v.item(theme, rows[at], false);
+  const c = rec;
+  rec = null;
+  expect(c).toContainEqual(["text_color", theme.dim]);
+  expect(v.turnKeys(rows)).not.toContain(`skip:${keyOf}`);
+  // Before the first turn: at the head.
+  s.skippedHead = { lines: 1, bytes: 70 * 1048576 };
+  s.version++;
+  rows = v.rows();
+  const head = rows.findIndex((r) => r.key === `skip:${v.sessions.indexOf(s)}:head`);
+  expect(head).toBeGreaterThanOrEqual(0);
+  expect(head).toBeLessThan(rows.findIndex((r) => r.kind === "turn" && r.s === s));
+  // A search shows matching turns only: no notes.
+  v.query = s.turns[1].prompt.slice(0, 12);
+  expect(v.filterText()).not.toBe("");
+  expect(v.rows().some((r) => r.key === keyOf)).toBe(true);
+  expect(v.rows().some((r) => String(r.key).startsWith("skip:"))).toBe(false);
+  v.query = "";
+  // The outline is one line per turn: no notes.
+  v.action("outline", cx);
+  expect(v.rows().some((r) => String(r.key).startsWith("skip:"))).toBe(false);
+  v.action("outline", cx);
+  // A restart (the session read again from the top) clears the head note and the debug count,
+  // so the re-read counts the line once.
+  s.skipped = { lines: 1, bytes: 70 * 1048576 };
+  v.restart(s);
+  expect([s.skippedHead, s.skipped]).toEqual([null, null]);
 });

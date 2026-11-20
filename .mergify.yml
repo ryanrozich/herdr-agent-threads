@@ -1,0 +1,50 @@
+# Merge queue for main. Nothing is queued on its own: a pull request enters
+# only after someone adds the `queue` label or comments `@mergifyio queue`.
+#
+# Every condition is written with no space around the operator (base=main). Mergify reads
+# both spellings the same, but Catalyst's reader of this file takes only the compact one
+# (test/titles.test.js keeps them so).
+
+queue_rules:
+  - name: main
+    queue_conditions:
+      - base=main
+      - -draft
+      - -conflict
+      - check-success=check
+      # Every review thread on the pull request is resolved.
+      - "#review-threads-unresolved=0"
+      # The title is a Conventional Commit (type, optional scope, optional !), because it
+      # becomes the squash commit's title, which the release tool reads. The same pattern is
+      # the title check in .github/workflows/pr-title.yml (test/titles.test.js keeps them equal).
+      # Checked only on the pull requests we queue, not on Mergify's batch draft pull requests,
+      # which merge_conditions cover.
+      - "title~=^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\\([a-z0-9][a-z0-9-]*\\))?!?: [^ ]"
+    # Checked on the batch draft pull request that Mergify builds on top of
+    # the latest main, so every batch runs `check` again before it merges.
+    merge_conditions:
+      - check-success=check
+    # One commit per pull request: its title and number ("feat: ... (#154)") with the
+    # description as the body. Commits on main before this change keep their merge commits.
+    merge_method: squash
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+    batch_size: 10
+    batch_max_wait_time: 1 minute
+    # Pull requests whose checks are still pending after 15 minutes leave the queue.
+    checks_timeout: 15 minutes
+    # A failed check gets one fresh run, on a new draft pull request, before its
+    # pull requests leave the queue.
+    max_checks_retries: 1
+
+merge_queue:
+  # No "Queue this pull request" checkbox comment on every open pull request.
+  queue_controls_comment: false
+
+pull_request_rules:
+  - name: queue a pull request labeled queue
+    conditions:
+      - label=queue
+    actions:
+      queue:
