@@ -67,7 +67,7 @@ import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pi
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
 import { MOD } from "./name.js";
 import {
-  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse,
+  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes,
   trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
   BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT,
 } from "./ledger.js";
@@ -9770,8 +9770,7 @@ export default class Threads extends View {
     if (r.kind === "trh") return this.ledgerHead(t, r, on, inks);
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
     const ink = inks[k.ink] ?? t.dim;
-    const start = r.start != null ? startText(r.start) : r.startQ ? "?" : "";
-    const dur = r.dur != null ? durText(r.dur) : r.durQ ? "?" : "";
+    const { start, dur } = rowTimes(r);
     const words = r.tool
       ? h_flex().flex_1().min_w(0).gap(6).items_center()
         .child(div().flex_none().font_family(mono).text_size(12).text_color(t.foreground).child(r.tool))
@@ -9809,7 +9808,7 @@ export default class Threads extends View {
   ledgerBar(r, ink, inks) {
     const slot = div().flex_none().w(BAR_W).h(BAR_H);
     if (r.open) return slot.child(this.slantBar(inks.open, BAR_W, BAR_H, BAR_SLANT));
-    if (r.dur == null || r.lk === "more") return slot;
+    if (!rowTimes(r).bar) return slot;
     const c = r.failed ? inks.failed : r.lk === "subagent" ? alpha(inks.sub, SUB_ALPHA) : ink;
     return slot.child(div().h(BAR_H).w(Math.max(2, Math.round(BAR_W * barFrac(r.dur)))).rounded(1).bg(c));
   }
