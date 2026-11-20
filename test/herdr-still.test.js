@@ -17,8 +17,11 @@ const DISPLAY = ["xvfb", "libgl1", "libegl1", "libgl1-mesa-dri", "mesa-vulkan-dr
 const MARK = "install-herdr: Herdr did not install";
 const pin = (k) => new RegExp(`^${k}=(\\S+)$`, "m").exec(install)?.[1];
 
+// The shell Linux runs as sh (dash), where it exists, so a Mac run takes the same paths: dash
+// exits on a failed redirection of a special built-in such as ":", where bash goes on.
+const SH = existsSync("/bin/dash") ? "/bin/dash" : "/bin/sh";
 function stub(dir, name, body) {
-  writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+  writeFileSync(join(dir, name), `#!${SH}\n${body}\n`);
   chmodSync(join(dir, name), 0o755);
 }
 // GNU timeout's part that matters here: the command in a group of its own, the group ended
@@ -186,7 +189,8 @@ function fakeRig() {
   stub(join(rig, "bin"), "timeout", TIMEOUT);
   stub(join(rig, "bin"), "herdr-core", "exit 0");
   stub(join(rig, "bin"), "herdr-app", `log=${JSON.stringify(join(d, "app.log"))}
-if { : >&3; } 2> /dev/null; then echo "fd 3 open: $*" >> ${JSON.stringify(join(d, "fd3.log"))}; fi
+# In a subshell: dash ends the whole script when ":" cannot open fd 3.
+if ( : >&3 ) 2> /dev/null; then echo "fd 3 open: $*" >> ${JSON.stringify(join(d, "fd3.log"))}; fi
 [ $# -eq 0 ] && { env > ${JSON.stringify(join(d, "launch-env.txt"))}; exec sleep 30; }
 echo "$*" >> "$log"
 echo "$DISPLAY $HC_SESSION $*" >> ${JSON.stringify(join(d, "env.log"))}
@@ -217,7 +221,7 @@ exit 0`);
   return { d, rig, bin };
 }
 function still(args, f, env = {}) {
-  return spawnSync("sh", [join(root, "test/herdr-still.sh"), ...args], {
+  return spawnSync(SH, [join(root, "test/herdr-still.sh"), ...args], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${f.bin}:${process.env.PATH}`, HERDR_RIG: f.rig, HERDR_STILL_X11: join(f.d, "x11"), ...env },
   });
