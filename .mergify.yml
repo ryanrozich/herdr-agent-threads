@@ -63,7 +63,8 @@ pull_request_rules:
   # define this gate: the Mergify configuration, the workflows, Catalyst's settings, the
   # files that decide what `check` runs (test/leftover-check.sh, bunfig.toml and the
   # test/preload.js it loads, a biome or shellcheck config at any depth, a root gitleaks
-  # config or ignore file) and the files agents follow (AGENTS.md or
+  # config or ignore file, and a .env file at any depth, which bun loads into every run on
+  # its own) and the files agents follow (AGENTS.md or
   # CLAUDE.md anywhere, the skills folder). A files
   # condition is true when any changed file matches, and the minus negates it; a renamed
   # file counts at both its paths. #files is GitHub's own count, so a change too big for the
@@ -85,6 +86,7 @@ pull_request_rules:
       - -files~=^test/preload\.js$
       - -files~=(^|/)(biome\.jsonc?|\.shellcheckrc)$
       - -files~=^\.gitleaks
+      - -files~=(^|/)\.env
       - -files~=(^|/)(AGENTS|CLAUDE)\.md$
     actions:
       queue:

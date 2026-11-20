@@ -116,6 +116,7 @@ test("the Catalyst rule queues only the app's own ticket branches, never a chang
     "-files~=^test/preload\\.js$",
     "-files~=(^|/)(biome\\.jsonc?|\\.shellcheckrc)$",
     "-files~=^\\.gitleaks",
+    "-files~=(^|/)\\.env",
     "-files~=(^|/)(AGENTS|CLAUDE)\\.md$",
   ]);
   // The rule only queues: the queue rule's conditions (check, title, threads, holds) decide.
@@ -132,11 +133,13 @@ test("the Catalyst rule's files lines pass an ordinary change and refuse one to 
   expect(passes(["docs/AGENTS.md.txt", "mods/agent-threads/claude-mark.svg", "github/notes.md"])).toBe(true);
   expect(passes(["test/leftover-check.test.js", "test/bunfig.toml", "docs/biome.jsonc.md", "docs/gitleaks.md", "test/.gitleaks.toml"])).toBe(true);
   expect(passes(["test/preload.test.js", "docs/biome.json.md", "mods/shellcheckrc.txt", "test/fixtures/preload.js"])).toBe(true);
+  expect(passes(["docs/env.md", "mods/agent-threads/environment.js", "test/fixtures/dotenv.txt", "docs/x.env.md"])).toBe(true);
   const gate = [
     ".mergify.yml", ".mergify/config.yml", ".github/workflows/ci.yml", ".github/mergify.yml", ".catalyst/catalyst.toml",
     ".claude/skills/cut-a-release/SKILL.md", ".agents/skills/x/SKILL.md", "AGENTS.md", "CLAUDE.md", "mods/agent-threads/AGENTS.md", "test/CLAUDE.md",
     "test/leftover-check.sh", "bunfig.toml", "biome.jsonc", ".gitleaks.toml", ".gitleaksignore",
     "test/preload.js", "biome.json", "mods/biome.json", "mods/agent-threads/biome.jsonc", ".shellcheckrc", "test/.shellcheckrc",
+    ".env", ".env.local", ".env.test", ".envrc", "test/.env", "mods/agent-threads/.env.production",
   ];
   for (const f of gate) expect([f, passes(["mods/agent-threads/main.js", f])]).toEqual([f, false]);
   // A gate file moved elsewhere counts at both paths, so it does not pass.
