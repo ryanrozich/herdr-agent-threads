@@ -12467,3 +12467,20 @@ test("in the Trajectory, a bound command the ledger does not mean does nothing: 
   expect(v.keysOpen).toBe(true);
   v.command("open", cx);
 });
+
+test("entering the Trajectory in the Chat's own pane with the search open closes the search", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 420;
+  v.paneW = 420;
+  v.filtering = true;
+  v.input.set_value("needle");
+  v.query = "needle";
+  v.action("trajectory", cx);
+  expect(v.traj).toBe(true);
+  expect([v.filtering, v.query]).toEqual([false, ""]);
+  draw(v, cx);
+  // Back in the Chat, no search is left open or filtering the list.
+  v.key(keyEv("escape"), cx);
+  expect(v.traj).toBe(false);
+  expect([v.filtering, v.query]).toEqual([false, ""]);
+});
