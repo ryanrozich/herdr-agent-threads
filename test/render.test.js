@@ -9720,6 +9720,19 @@ test("the settings card scrolls by keys: a line, a page, the top or the end; the
   expect(lh.asked.length).toBe(n + 1);
   expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
   expect(y()).toBe(0);
+  // So has the Sender rules page, and its command takes the card there.
+  expect(v.action("settingsPage:senders", cx)).toBe(true);
+  expect(v.setPage).toBe("senders");
+  onOf(cardOf(v), "th-set-rows-senders", "on_size_change")({ height: 1200, width: 440 }, cx);
+  cardOf(v);
+  const sh = v.cardScrolls.senders;
+  const m = sh.asked.length;
+  v.key(keyEv("end"), cx);
+  expect(sh.asked.length).toBe(m + 1);
+  expect(lh.asked.length).toBe(n + 1);
+  expect(Math.abs(v.cardPlace("senders").y - (1200 - v.cardPlace("senders").viewH))).toBeLessThanOrEqual(1);
+  expect(Math.abs(v.cardPlace("links").y - (1400 - v.cardPlace("links").viewH))).toBeLessThanOrEqual(1);
+  expect(y()).toBe(0);
 });
 
 test("on a Herdr with no ScrollHandle the card's keys do nothing to it or to the list, and it has no marks", async () => {
