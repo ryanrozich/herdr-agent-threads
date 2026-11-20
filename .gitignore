@@ -3,5 +3,8 @@ junit.xml
 mods/agent-threads/gpui-kit.d.ts
 mods/agent-threads/jsconfig.json
 
+# The pinned Herdr that test/herdr-install.sh puts in a checkout for test/herdr-still.sh.
+/.herdr-rig/
+
 # Local HumanLayer notes.
 /thoughts/
