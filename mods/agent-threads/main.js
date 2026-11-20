@@ -1030,7 +1030,9 @@ export default class Threads extends View {
   report() {
     const s = this.current();
     if (s?.loaded && !this.renders) this.measure(); // render() measures when it draws
-    const rows = this.res.kind === "found" || s ? this.rows() : [];
+    // The Trajectory draws no Chat rows, so its report builds none (they cost a draw's time
+    // in a long session); its part is traj.
+    const rows = !this.traj && (this.res.kind === "found" || s) ? this.rows() : [];
     const snap = {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
