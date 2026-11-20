@@ -479,6 +479,49 @@ test("the probe is clipped and transparent, never invisible()", async () => {
 });
 
 // A session built from extractor events, put in place of the fixture's.
+// test/herdr-still.sh cannot tell from Herdr whether a --do command did anything: Herdr answers
+// ok for any agent-threads.<name>. A debug pane says, in its report, which command came last
+// and whether the panel acted on it; a pane without debug keeps nothing.
+test("a debug pane reports the last command and whether it acted; an unknown one did not", async () => {
+  const { v, cx } = await pane(join(root, "test/fixtures/session.jsonl"));
+  const last = () => { v.report(); return state.shared["threads.debug"].t4.command; };
+  expect(last()).toBeNull();
+  v.command("pin", cx);
+  expect(last()).toEqual({ n: 1, name: "pin", acted: true });
+  v.command("no-such-command", cx);
+  expect(last()).toEqual({ n: 2, name: "no-such-command", acted: false });
+  v.command("latest", cx);
+  expect(last()).toEqual({ n: 3, name: "latest", acted: true });
+  // A command with an argument is reported by its own name, the part before the colon; the
+  // argument's text never reaches the report.
+  v.command("outline:on", cx);
+  expect(last()).toMatchObject({ n: 4, name: "outline" });
+  v.command("pick:words typed in a search", cx);
+  expect(last()).toMatchObject({ n: 5, name: "pick" });
+  expect(JSON.stringify(state.shared["threads.debug"])).not.toContain("words typed");
+  v.debug = false;
+  v.command("first", cx);
+  expect(v.lastCommand.n).toBe(5);
+});
+
+// The Pinned pane reports under its own key, so the Chat's entry (and its command record,
+// which test/herdr-still.sh reads) is never replaced by the Pinned pane's.
+test("a debug Pinned pane reports under the terminal plus :pinned; the Chat's entry stays", async () => {
+  const { v, cx } = await pane(join(root, "test/fixtures/session.jsonl"));
+  v.command("pin", cx);
+  v.report();
+  const chat = state.shared["threads.debug"].t4;
+  expect(chat.command).toMatchObject({ name: "pin", acted: true });
+  state.props = { ...state.props, view: "pinned" };
+  const w = new Threads();
+  w.init(state.props, makeCx());
+  await settle(w);
+  expect(w.pinnedPane).toBe(true);
+  w.report();
+  expect(state.shared["threads.debug"]["t4:pinned"]).toBeDefined();
+  expect(state.shared["threads.debug"].t4).toEqual(chat);
+});
+
 async function scripted(events) {
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
