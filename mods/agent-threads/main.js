@@ -9433,7 +9433,7 @@ export default class Threads extends View {
         this.selSent = e.key;
         if (this.trajPane) {
           if (this.turnOfRow(this.tsel) !== e.key) { this.tsel = e.key; this.tscrollTo = e.key; return true; }
-        } else if (this.sel !== e.key) { this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
+        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
         return false;
       }
     }
@@ -9443,6 +9443,13 @@ export default class Threads extends View {
     const keep = Object.fromEntries(Object.entries(map).filter(([k, v]) => k !== this.terminal && Date.now() - (v?.at ?? 0) < DAY_MS));
     setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, by: this.selId, at: Date.now() } });
     return false;
+  }
+
+  // Whether the Chat's list shows a turn: one it hides (an agent turn while those are hidden,
+  // one outside a search) is never selected from the Trajectory, which would leave the Chat
+  // a selection it does not draw.
+  chatShows(key) {
+    return Boolean(this.baseRows) && this.turnKeys(this.baseRows).includes(key);
   }
 
   // The ledger's rows for every session (ledger.js ledgerTurn), with a divider between

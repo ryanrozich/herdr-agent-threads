@@ -12523,3 +12523,30 @@ test("Trajectory keys: Space shows and hides the detail; Esc with nothing left t
   expect(stops).toBe(1);
   expect(w.trajPane).toBeTruthy();
 });
+
+test("the shared selection never selects a turn the Chat hides; a turn it shows is selected", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--agents"));
+  v.width = 700;
+  v.paneW = 700;
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // Agent turns with no reply of their own: hidden while agent turns are.
+  for (const turn of v.current().turns) if (turn.agent) turn.after = [];
+  v.current().version++;
+  draw(v, cx);
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const shown = v.turnKeys(v.rows());
+  const hidden = v.ledger().rows.filter((r) => r.kind === "trh" && !shown.includes(r.key)).map((r) => r.key);
+  expect(hidden.length).toBeGreaterThan(0);
+  expect(v.findTurn(hidden[0])).toBeTruthy();
+  const before = v.sel;
+  state.shared["threads.turnSel"] = { t4: { key: hidden[0], by: "other", at: Date.now() + 1000 } };
+  expect(v.syncSel()).toBe(false);
+  expect(v.sel).toBe(before);
+  const pick = shown.find((k) => k !== before);
+  state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000 } };
+  expect(v.syncSel()).toBe(true);
+  expect(v.sel).toBe(pick);
+});
