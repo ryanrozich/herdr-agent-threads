@@ -95,22 +95,20 @@
      {
       "source_call_id": "toolu_000002_Read",
       "extra": {
-       "result_ts": "2026-11-01T09:13:14.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:13:14.000Z"
       }
      },
      {
       "source_call_id": "toolu_000003_Bash",
       "extra": {
        "result_ts": "2026-11-01T09:13:20.000Z",
-       "failed": true
+       "tool_result_is_error": true
       }
      },
      {
       "source_call_id": "toolu_000004_Edit",
       "extra": {
-       "result_ts": "2026-11-01T09:13:26.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:13:26.000Z"
       }
      }
     ]
@@ -189,8 +187,7 @@
      {
       "source_call_id": "toolu_000007_Bash",
       "extra": {
-       "result_ts": "2026-11-01T09:14:32.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:14:32.000Z"
       }
      }
     ]
@@ -254,15 +251,13 @@
      {
       "source_call_id": "toolu_000008_Grep",
       "extra": {
-       "result_ts": "2026-11-01T09:15:59.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:15:59.000Z"
       }
      },
      {
       "source_call_id": "toolu_000009_Read",
       "extra": {
-       "result_ts": "2026-11-01T09:16:05.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:16:05.000Z"
       }
      }
     ]
@@ -329,8 +324,7 @@
      {
       "source_call_id": "toolu_000011_Edit",
       "extra": {
-       "result_ts": "2026-11-01T09:16:56.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:16:56.000Z"
       }
      }
     ]
@@ -436,15 +430,13 @@
      {
       "source_call_id": "toolu_000013_Bash",
       "extra": {
-       "result_ts": "2026-11-01T09:17:36.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:17:36.000Z"
       }
      },
      {
       "source_call_id": "toolu_000014_Agent",
       "extra": {
        "result_ts": "2026-11-01T09:17:42.000Z",
-       "failed": false,
        "subagent": {
         "agent": "a0000000000000014",
         "state": "completed",
@@ -457,7 +449,6 @@
       "source_call_id": "toolu_000015_Agent",
       "extra": {
        "result_ts": "2026-11-01T09:17:48.000Z",
-       "failed": false,
        "subagent": {
         "agent": "a0000000000000015",
         "state": "completed",
@@ -470,7 +461,6 @@
       "source_call_id": "toolu_000016_Agent",
       "extra": {
        "result_ts": "2026-11-01T09:17:54.000Z",
-       "failed": false,
        "subagent": {
         "agent": "a0000000000000016",
         "state": "failed",
@@ -482,8 +472,7 @@
      {
       "source_call_id": "toolu_000017_Bash",
       "extra": {
-       "result_ts": "2026-11-01T09:18:00.000Z",
-       "failed": false
+       "result_ts": "2026-11-01T09:18:00.000Z"
       }
      }
     ]

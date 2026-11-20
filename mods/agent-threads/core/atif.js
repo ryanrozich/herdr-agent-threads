@@ -16,7 +16,7 @@
 //   (metrics.extra.scope "turn").
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
-//   (result_ts) and whether it failed. The panel's reader keeps no arguments, so arguments
+//   (result_ts). A failed result uses Harbor's tool_result_is_error. The panel's reader keeps no arguments, so arguments
 //   is {} unless the caller read them (the command line does, from calls.sh); a call whose
 //   input was not JSON, or was not read, keeps {} and says so (extra.arguments_unread).
 // - A call with no result yet keeps its observation result, with no content and
@@ -76,9 +76,9 @@ function turnMetrics(turn) {
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
 // that its input is not JSON (unread); and for a subagent call its trajectory (sub) or that
 // its transcript was not found (subMissing).
-function turnSteps(turn, tr, next, results) {
+function turnSteps(turn, tr, next, results, helperId) {
   const steps = [];
-  const base = clean({ turn: turn.n, turn_id: tr.id });
+  const base = clean({ turn: turn.n, turn_id: tr.id, agent_id: helperId, is_sidechain: helperId ? true : undefined });
   const agentStep = (fields, extra) => {
     const st = clean({
       step_id: next + steps.length,
@@ -125,7 +125,7 @@ function turnSteps(turn, tr, next, results) {
       const args = got?.args && typeof got.args === "object" && !Array.isArray(got.args) ? got.args : null;
       const unread = results && !args ? (got?.unread ? "not JSON" : "not read") : undefined;
       toolCalls.push(clean({ tool_call_id: id, function_name: c.tool, arguments: args ?? {},
-        extra: clean({ input: c.input ?? undefined, arguments_unread: unread, id_from_reader: c.call ? undefined : true, started: iso(c.start) }) }));
+        extra: clean({ input: c.input ?? undefined, arguments_unread: unread, id_from_reader: c.call ? undefined : true, started: iso(c.start), raw_arguments: got?.raw }) }));
       if (!c.call) return;
       res.push(clean({
         source_call_id: c.call,
@@ -136,7 +136,7 @@ function turnSteps(turn, tr, next, results) {
           subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end),
-          failed: c.result?.failed ?? undefined,
+          tool_result_is_error: c.result?.failed === true ? true : undefined,
           no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
@@ -186,10 +186,10 @@ function turnSteps(turn, tr, next, results) {
 
 // The whole session as one trajectory. agent: the harness name (claude, codex, ...). Returns
 // null when the session has no turn (ATIF needs a step).
-export function atif(s, { agent = "claude", version = "unknown", results = null, id = undefined, trajectoryId = undefined, children = [] } = {}) {
+export function atif(s, { agent = "claude", version = "unknown", results = null, id = undefined, trajectoryId = undefined, children = [], helperId = undefined } = {}) {
   const trs = trajectories(s);
   const steps = [];
-  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results)); });
+  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results, helperId)); });
   if (!steps.length) return null;
   const held = steps.filter((st) => st.extra?.reasoning_withheld).length;
   // Withheld reasoning with no step after it to carry the mark (a turn that is only that).
@@ -336,7 +336,7 @@ async function main(argv) {
         if (typeof x?.id !== "string") continue;
         const r = results.get(x.id) ?? {};
         if (x.k === "out") r.out = x.out;
-        else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; }
+        else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; if (Object.hasOwn(x, "raw")) r.raw = x.raw; }
         results.set(x.id, r);
       }
     }
@@ -577,7 +577,7 @@ const LINE_MAX = Number(process.env.THREADS_LINE_MAX) > 0 ? Number(process.env.T
       if (t) r.sub = t; else r.subMissing = true;
       results.set(c.call, r);
     }
-    return atif(s, { agent, results, id: opts.id ?? root, trajectoryId: opts.trajectoryId, version: typeof version === "string" && version ? version.slice(0, 40) : "unknown" });
+    return atif(s, { agent, results, id: opts.id ?? root, trajectoryId: opts.trajectoryId, helperId: agent === "claude" ? opts.trajectoryId : undefined, version: typeof version === "string" && version ? version.slice(0, 40) : "unknown" });
   };
 
   if (agent !== "opencode" && !fs.existsSync(file)) { console.error("no transcript"); return 3; }
