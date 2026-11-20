@@ -473,6 +473,24 @@ test("the probe is clipped and transparent, never invisible()", async () => {
 });
 
 // A session built from extractor events, put in place of the fixture's.
+// test/herdr-still.sh cannot tell from Herdr whether a --do command did anything: Herdr answers
+// ok for any agent-threads.<name>. A debug pane says, in its report, which command came last
+// and whether the panel acted on it; a pane without debug keeps nothing.
+test("a debug pane reports the last command and whether it acted; an unknown one did not", async () => {
+  const { v, cx } = await pane(join(root, "test/fixtures/session.jsonl"));
+  const last = () => { v.report(); return state.shared["threads.debug"].t4.command; };
+  expect(last()).toBeNull();
+  v.command("pin", cx);
+  expect(last()).toEqual({ n: 1, name: "pin", acted: true });
+  v.command("no-such-command", cx);
+  expect(last()).toEqual({ n: 2, name: "no-such-command", acted: false });
+  v.command("latest", cx);
+  expect(last()).toEqual({ n: 3, name: "latest", acted: true });
+  v.debug = false;
+  v.command("first", cx);
+  expect(v.lastCommand.n).toBe(3);
+});
+
 async function scripted(events) {
   const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
   const { v, cx } = await pane(fixture("--only", "1"));
