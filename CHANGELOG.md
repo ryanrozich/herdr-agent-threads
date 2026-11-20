@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.1.0...v1.2.0) (2026-11-20)
+
+
+### Features
+
+* **atif:** TRD-40 — keep the model's thinking in the export and run Harbor's own Claude and Codex cases against it ([#222](https://github.com/ryanrozich/herdr-agent-threads/issues/222)) ([87cdcf2](https://github.com/ryanrozich/herdr-agent-threads/commit/87cdcf206d7be8c1c6fd5a2b963c749fe4a0bdce))
+* **atif:** TRD-41 — failed calls, helper steps and raw inputs use Harbor's field names ([#232](https://github.com/ryanrozich/herdr-agent-threads/issues/232)) ([5f30763](https://github.com/ryanrozich/herdr-agent-threads/commit/5f3076306e565be55a1c8b07742a172c055c040f))
+* **search:** step through matches newest first with n and Shift n (TRD-37) ([#221](https://github.com/ryanrozich/herdr-agent-threads/issues/221)) ([715bd53](https://github.com/ryanrozich/herdr-agent-threads/commit/715bd53e19038efee94ff97d0df0fbaf82da7d5f))
+* **senders:** a Sender rules page, the mark on a matched message, and a refused Keep that keeps what was typed ([#135](https://github.com/ryanrozich/herdr-agent-threads/issues/135)) ([24e0ddf](https://github.com/ryanrozich/herdr-agent-threads/commit/24e0ddf4abb60b56e5842c177042855e06544db4))
+
+
+### Bug Fixes
+
+* **atif:** TRD-51 — a Codex subagent rollout read alone starts at its own history ([#225](https://github.com/ryanrozich/herdr-agent-threads/issues/225)) ([b47a13b](https://github.com/ryanrozich/herdr-agent-threads/commit/b47a13b47a06057141742754adabbf80573aa9ee))
+* open turns break a long hyphenated token after a "-", not inside a word ([#122](https://github.com/ryanrozich/herdr-agent-threads/issues/122)) ([2b5d4d0](https://github.com/ryanrozich/herdr-agent-threads/commit/2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c))
+
 ## [1.1.0](https://github.com/ryanrozich/herdr-agent-threads/compare/v1.0.0...v1.1.0) (2026-11-19)
 
 
