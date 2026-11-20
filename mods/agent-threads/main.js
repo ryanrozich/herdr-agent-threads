@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -1346,6 +1346,7 @@ export default class Threads extends View {
   ringTo(id) {
     const field = (this.cardStops ?? []).find((s) => s.id === id)?.field ?? null;
     this.cardRing = id;
+    this.ringShow = true;
     if (field) { this.fieldFocused = field.name; field.input.focus(); }
     else if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
   }
@@ -1358,7 +1359,7 @@ export default class Threads extends View {
     return true;
   }
   // Where the ring goes when a press takes its control away; nothing while it is not shown.
-  ringMove(id) { if (this.cardRing && id) this.cardRing = id; }
+  ringMove(id) { if (this.cardRing && id) { this.cardRing = id; this.ringShow = true; } }
   // A control the ring can reach, in the order drawn: what Enter and Space do (its click), and
   // for a text field its input and the name fieldFocused takes. The ring is 2 px of the accent,
   // 3 px outside the control and round its corners, over nothing, so the control does not move;
@@ -6413,7 +6414,7 @@ export default class Threads extends View {
     // Tab's order as drawn.
     this.cardStops = [];
     const head = this.cardHead(t, page, close, pad);
-    const rows = page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w);
+    const rows = () => (page === "links" ? this.linkRulesRows(t, w) : page === "senders" ? this.senderRulesRows(t, w) : this.settingsRows(t, w));
     const place = this.cardPlace(key);
     place.viewH = bodyH;
     const handle = this.cardScrolls?.[key] ?? null;
@@ -6425,13 +6426,12 @@ export default class Threads extends View {
       .when(this.cardBar, (el) => el.overflow_y_scroll()).when(!this.cardBar, (el) => el.overflow_y_scrollbar())
       .when(Boolean(handle), (el) => el.track_scroll(handle))
       .on_scroll_wheel(wheel("area"))
-      .child(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
+      .child(this.cardCol(v_flex().id(`th-set-rows-${key}`).flex_none().px(pad).py(16).gap(20)
         .on_size_change((size, cx) => {
           const h = size.height / this.zoom();
           if (this.cardBody?.key !== key || Math.abs(this.cardBody.h - h) > 1) { this.cardBody = { key, h }; cx.notify(); }
         })
-        .on_scroll_wheel(wheel("rows"))
-        .children(rows))
+        .on_scroll_wheel(wheel("rows")), 20, 16, rows(), key))
       .children(marks.map((y) => div().absolute().top(y).left(0).w(1).h(1)));
     const card = div().id("th-set-catch").absolute().top(0).left(0).right(0).bottom(0)
       .on_click(close)
@@ -6452,7 +6452,93 @@ export default class Threads extends View {
           : body)
         .child(this.cardFoot(t, pad)));
     this.placeRing(cx);
+    this.revealRing(cx, key);
     return card;
+  }
+  // A column of the card's rows whose controls the card can scroll into view for the ring.
+  // Its kids (elements, or functions that build an element or a list of them) are built in
+  // order, so the ring's stops each one adds are known (from and to in cardStops), and each
+  // element's height is kept as it draws (cardSizes, by its place: the page, then each
+  // column's index). A kid that is itself a column is linked, so a control is found inside
+  // it. top is the column's padding and border above its first kid; gap the space between.
+  cardCol(el, gap, top, kids, path = this.cardKidPath ?? "card") {
+    const node = { el: null, gap, top, path, items: [] };
+    const els = [];
+    for (const k of kids) {
+      const from = (this.cardStops ?? []).length;
+      const at = els.length;
+      this.cardKidPath = `${path}/${at}`;
+      this.cardColLast = null;
+      const out = typeof k === "function" ? k() : k;
+      const inner = this.cardColLast;
+      const list = [out].flat().filter(Boolean);
+      if (!list.length) continue;
+      els.push(...list);
+      node.items.push({ from, to: (this.cardStops ?? []).length, first: at, last: els.length - 1, child: list.length === 1 && inner?.el === list[0] ? inner : null });
+    }
+    this.cardKidPath = null;
+    const sizes = (this.cardSizes ??= {});
+    const sized = els.map((x, i) => {
+      const k = `${path}/${i}`;
+      const onSize = (size, cx) => {
+        const h = size.height / this.zoom();
+        if (Math.abs((sizes[k] ?? -1) - h) <= 0.5) return;
+        sizes[k] = h;
+        if (this.ringShow) cx.notify();
+      };
+      onSize.cardPath = k;
+      return x.on_size_change(onSize);
+    });
+    node.el = el.children(sized);
+    this.cardColLast = node;
+    // The rows' own column (a page's key, no slash) is where a search for the ring starts.
+    if (!path.includes("/") && path !== "card") this.cardRoot = node;
+    return node.el;
+  }
+  // Where the control at stop i is in the card's rows: [top, bottom] from the rows' top, or
+  // null when it is not in them (the head and foot always show) or a height it needs has not
+  // been measured yet.
+  ringSpan(node, i, y = 0) {
+    const it = node?.items.find((x) => i >= x.from && i < x.to);
+    if (!it) return null;
+    const sizes = this.cardSizes ?? {};
+    let at = y + node.top;
+    for (let j = 0; j < it.first; j++) {
+      const h = sizes[`${node.path}/${j}`];
+      if (h == null) return null;
+      at += h + node.gap;
+    }
+    const inner = it.child ? this.ringSpan(it.child, i, at) : null;
+    if (inner) return inner;
+    let end = at;
+    for (let j = it.first; j <= it.last; j++) {
+      const h = sizes[`${node.path}/${j}`];
+      if (h == null) return null;
+      end += h + (j < it.last ? node.gap : 0);
+    }
+    return [at, end];
+  }
+  // After the ring moves (ringShow), the card scrolls so the control with it shows in full
+  // (cardReveal), by bringing one mark into view as the keys do, from the next frame. Nothing
+  // moves when it shows already, or for a control in the head or foot. It waits for the
+  // heights it needs; nothing else shows.
+  revealRing(cx, key) {
+    if (!this.ringShow) return;
+    const i = this.cardRing ? this.cardStops.findIndex((s) => s.id === this.cardRing) : -1;
+    const root = this.cardRoot;
+    const handle = this.cardScrolls?.[key] ?? null;
+    if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = false; return; }
+    const h = this.cardBody?.key === key ? this.cardBody.h : null;
+    const span = h ? this.ringSpan(root, i) : null;
+    if (!span) return;
+    this.ringShow = false;
+    const place = this.cardPlace(key);
+    const r = cardReveal(span[0], span[1], place.y, h, place.viewH);
+    if (!r) return;
+    place.y = r.y;
+    const go = () => handle.scroll_to_item(1 + r.mark);
+    if (cx?.timer) cx.timer.after(0, (cx) => { go(); cx.notify(); });
+    else go();
   }
   // The ring's control was not drawn this time (a press or a file change took it away, and no
   // press said where the ring goes): the ring goes to the control that now follows where it
@@ -6470,6 +6556,7 @@ export default class Threads extends View {
     const stops = this.cardStops;
     while (i < stops.length && stops[i].field) i++;
     this.cardRing = stops[i]?.id ?? [...stops].reverse().find((s) => !s.field)?.id ?? null;
+    this.ringShow = true;
     this.ringIds = ids;
     cx?.timer.after(0, (cx) => cx.notify());
   }
@@ -6534,9 +6621,9 @@ export default class Threads extends View {
   cardKit(t) {
     const label = (text) => div().flex_1().min_w(0).text_size(13).text_color(t.foreground).child(text);
     const note = (text, color = t.muted) => div().text_size(12).line_height("16px").text_color(color).child(text);
-    const group = (title, kids) => v_flex().gap(4)
-      .child(div().mb(2).text_size(11).font_semibold().text_color(t.muted).child(title))
-      .children(kids.filter(Boolean));
+    // A group is a column (cardCol); its kids may be functions that build them.
+    const group = (title, kids) => this.cardCol(v_flex().gap(4), 4, 0,
+      [div().pb(2).text_size(11).font_semibold().text_color(t.muted).child(title), ...kids]);
     // 32 by 18 with a 14 px knob. Off, the track has a `muted` outline, since the track alone
     // barely shows on the card (full `muted`, so the edge reaches 3:1 on light themes too); the
     // outline takes a px of the padding so the knob stays put.
@@ -6641,7 +6728,7 @@ export default class Threads extends View {
         .when(Boolean(qn), (el) => el.child(note(qn, this.quoteDraft != null && this.quoteDraft !== this.quoteKey ? t.muted : t.blocked)))],
       file: () => [this.fileRow(t, w), this.prefsError ? note(this.prefsError, t.blocked) : null],
     };
-    return [...CARD_SECTIONS.map(([name, keys]) => group(name, keys.flatMap((k) => rows[k]()))), this.resetRow(t)];
+    return [...CARD_SECTIONS.map(([name, keys]) => () => group(name, keys.map((k) => () => rows[k]()))), () => this.resetRow(t)];
   }
 
   // A row that opens a rules page: its name, how many rules the file holds (or None), how
@@ -6771,21 +6858,21 @@ export default class Threads extends View {
     const slots = list.map((_r, i) => (e?.at === i ? "edit" : i));
     if (e && e.at == null) slots.splice(Math.min(e.insertAt, slots.length), 0, "edit");
     if (this.ruleUndo?.kind === "links") slots.splice(Math.min(this.ruleUndo.at, slots.length), 0, "undo");
-    const rows = slots.map((x) => (x === "edit" ? this.ruleEditor(t) : x === "undo" ? this.undoLine(t) : this.ruleRow(t, list[x], x, edit)));
+    const rows = slots.map((x) => () => (x === "edit" ? this.ruleEditor(t) : x === "undo" ? this.undoLine(t) : this.ruleRow(t, list[x], x, edit)));
     const add = (_e, cx) => { this.openRule(null); cx.notify(); };
     return [
       note("A link rule turns text in a reply into a link. A rule can make ACME-412 open its ticket.", t.muted),
-      group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
-      !list.length && !e && edit ? this.ruleExamples(t) : null,
+      () => group(`Rules${list.length ? ` · ${list.length}` : ""}`, [() => (rows.length ? this.cardCol(v_flex().gap(8), 8, 0, rows) : note("No rules yet."))]),
+      () => (!list.length && !e && edit ? this.ruleExamples(t) : null),
       ...other.map((n) => note(n, t.blocked)),
       list.length >= 2 ? note("When two rules match the same text, the higher one wins.") : null,
-      edit && !e && list.length < MAX_RULES
-        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null,
-      group("File", [
+      () => (edit && !e && list.length < MAX_RULES
+        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null),
+      () => group("File", [
         note(edit ? "Rules are kept under \"links\" in the settings file. A change made there shows here within a second."
           : writable(this.prefsRaw) ? "\"links\" in the settings file is not a list now, so rules change only in the file until it is fixed."
             : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
-        this.fileRow(t, w),
+        () => this.fileRow(t, w),
         this.prefsError ? note(this.prefsError, t.blocked) : null,
       ]),
     ].filter(Boolean);
@@ -6909,9 +6996,8 @@ export default class Threads extends View {
     const field = ([k, name]) => this.ruleField(t, e, k, name, hints[k]);
     const typeRows = (isNew && !e.touched) || e.typeOpen;
     const tpl = LINK_TEMPLATES[d.type] ?? LINK_TEMPLATES.custom;
-    const typeBlock = typeRows
-      ? v_flex().gap(4).child(label("Type"))
-        .children(LINK_TYPES.map((k) => {
+    const typeBlock = () => (typeRows
+      ? this.cardCol(v_flex().gap(4), 4, 0, [label("Type"), ...LINK_TYPES.map((k) => () => {
           const on = d.type === k;
           const x = LINK_TEMPLATES[k];
           const choose = (_e, cx) => { cx.stop_propagation(); this.chooseType(k); cx.notify(); };
@@ -6922,16 +7008,15 @@ export default class Threads extends View {
             .child(svg(ICON(LINK_ICON[k])).size(13).flex_none().text_color(on ? t.foreground : t.dim))
             .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(x.word))
             .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(x.line)), t, `th-rule-type-${k}`, choose, { radius: 5, role: "radio_button", label: x.word });
-        }))
-        .when(!isNew || e.touched, (el) => el.child(note("The label changes; the fields stay.")))
+        }), !isNew || e.touched ? note("The label changes; the fields stay.") : null])
       : h_flex().gap(6).items_center()
         .child(label("Type"))
         .child(svg(ICON(LINK_ICON[d.type] ?? "regex")).size(13).flex_none().text_color(t.dim))
         .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(tpl.word))
-        .child(this.miniStop(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-rule-type-${d.type}`); cx.notify(); }, "Change the type"));
-    const fields = RULE_FIELDS.map(field);
+        .child(this.miniStop(t, "th-rule-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-rule-type-${d.type}`); cx.notify(); }, "Change the type")));
+    const fields = RULE_FIELDS.map((f) => () => field(f));
     const r = e.stale ? e.lastGood : e.result;
-    const result = r
+    const result = () => r
       ? v_flex().id("th-rule-result").gap(2).when(e.stale, (el) => el.opacity(0.45))
         .child(this.examplePieces(t, r))
         .when(Boolean(r.under), (el) => el.child(h_flex().gap(6).items_center()
@@ -6939,12 +7024,8 @@ export default class Threads extends View {
           .when(Boolean(r.url) && !e.stale, (el2) => el2.child(this.miniStop(t, "th-rule-open", "Open", (_e, cx) => { cx.open_url?.(r.url); }, "Open the example's link")))))
         .when(Boolean(r.beaten) && !e.stale, (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this text first"), t.muted)))
       : null;
-    return this.ruleShell(t, e)
-      .child(typeBlock)
-      .children(fields)
-      .when(Boolean(result), (el) => el.child(result))
-      .child(this.ruleButtons(t, e))
-      .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
+    return this.ruleShell(t, e, [typeBlock, ...fields, result, () => this.ruleButtons(t, e),
+      () => (this.refusedHere(e) ? this.cardKit(t).note(e.refused, t.blocked) : null)]);
   }
 
   // The parts both rule editors share. A field's label.
@@ -6981,11 +7062,13 @@ export default class Threads extends View {
     return `${name} is higher in the list and ${what}. ${e.at != null && e.at > 0 ? "Move up puts this rule above it." : "Keep this rule, then Move up to put it above."}`;
   }
   // The open rule's box: the accent border, and over a new rule the line that says it is not kept.
-  ruleShell(t, e) {
+  // A column (cardCol), 10 px in and a 1 px edge, its parts 10 px apart.
+  ruleShell(t, e, kids) {
     const isNew = e.at == null;
-    return v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent)
-      .when(isNew, (el) => el.child(div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
-        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet")));
+    return this.cardCol(v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent), 10, 11, [
+      isNew ? div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
+        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet") : null,
+      ...kids]);
   }
   // Keep rule, Discard, and on a kept rule Move up (not the first), Duplicate and Delete.
   // Whether the open rule shows why its Keep rule was not saved: while the File line shows
@@ -7020,21 +7103,21 @@ export default class Threads extends View {
     const slots = list.map((_r, i) => (e?.at === i ? "edit" : i));
     if (e && e.at == null) slots.splice(Math.min(e.insertAt, slots.length), 0, "edit");
     if (this.ruleUndo?.kind === "senders") slots.splice(Math.min(this.ruleUndo.at, slots.length), 0, "undo");
-    const rows = slots.map((x) => (x === "edit" ? this.senderEditor(t) : x === "undo" ? this.undoLine(t) : this.senderRow(t, list[x], x, edit)));
+    const rows = slots.map((x) => () => (x === "edit" ? this.senderEditor(t) : x === "undo" ? this.undoLine(t) : this.senderRow(t, list[x], x, edit)));
     const add = (_e, cx) => { this.openRule(null, null, null, "senders"); cx.notify(); };
     return [
       note("A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.", t.muted),
-      group(`Rules${list.length ? ` · ${list.length}` : ""}`, [rows.length ? v_flex().gap(8).children(rows) : note("No rules yet.")]),
-      !list.length && !e && edit ? this.senderExamples(t) : null,
+      () => group(`Rules${list.length ? ` · ${list.length}` : ""}`, [() => (rows.length ? this.cardCol(v_flex().gap(8), 8, 0, rows) : note("No rules yet."))]),
+      () => (!list.length && !e && edit ? this.senderExamples(t) : null),
       list.length >= 2 ? note("When two rules match the same prompt, the higher one wins.") : null,
-      edit && !e && list.length < MAX_RULES
-        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null,
+      () => (edit && !e && list.length < MAX_RULES
+        ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null),
       ...other.map((n) => note(n, t.blocked)),
-      group("File", [
+      () => group("File", [
         note(edit ? "Rules are kept under \"senders\" in the settings file. A change made there shows here within a second."
           : writable(this.prefsRaw) ? "\"senders\" in the settings file is not a list now, so rules change only in the file until it is fixed."
             : "The settings file does not read as settings now, so rules change only in the file until it is fixed."),
-        this.fileRow(t, w),
+        () => this.fileRow(t, w),
         this.prefsError ? note(this.prefsError, t.blocked) : null,
       ]),
     ].filter(Boolean);
@@ -7151,9 +7234,8 @@ export default class Threads extends View {
     };
     const field = (k) => this.ruleField(t, e, k, SENDER_FIELDS.find((x) => x[0] === k)[1], hints[k]);
     const type = SENDER_TYPES.find(([k]) => k === d.by) ?? SENDER_TYPES[0];
-    const typeBlock = e.at == null || e.typeOpen
-      ? v_flex().gap(4).child(label("Type"))
-        .children(SENDER_TYPES.map(([k, word, icon, line]) => {
+    const typeBlock = () => (e.at == null || e.typeOpen
+      ? this.cardCol(v_flex().gap(4), 4, 0, [label("Type"), ...SENDER_TYPES.map(([k, word, icon, line]) => () => {
           const on = d.by === k;
           const choose = (_e, cx) => { cx.stop_propagation(); this.chooseSenderType(k); cx.notify(); };
           return this.cardStop(h_flex().id(`th-sender-type-${k}`).p(6).gap(8).items_center().rounded(5).cursor_pointer().border_1()
@@ -7163,27 +7245,23 @@ export default class Threads extends View {
             .child(svg(ICON(icon)).size(13).flex_none().text_color(on ? t.foreground : t.dim))
             .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(word))
             .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(line)), t, `th-sender-type-${k}`, choose, { radius: 5, role: "radio_button", label: word });
-        }))
+        })])
       : h_flex().gap(6).items_center()
         .child(label("Type"))
         .child(svg(ICON(type[2])).size(13).flex_none().text_color(t.dim))
         .child(div().flex_1().min_w(0).text_size(12.5).text_color(t.foreground).child(type[1]))
-        .child(this.miniStop(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-sender-type-${d.by}`); cx.notify(); }, "Change the type"));
-    const fields = ["name", d.by, "example"].map(field);
+        .child(this.miniStop(t, "th-sender-type-change", "Change", (_e, cx) => { e.typeOpen = true; this.ringMove(`th-sender-type-${d.by}`); cx.notify(); }, "Change the type")));
+    const fields = ["name", d.by, "example"].map((k) => () => field(k));
     const r = e.stale ? null : e.result;
-    const result = r
+    const result = () => r
       ? v_flex().id("th-rule-result").gap(4)
         .when(Boolean(r.label), (el) => el.child(this.examplePieces(t, r)).child(this.matchedLine(t, r.label, "Matches. It shows as")))
         .when(!r.label, (el) => el.child(note("No match. This prompt would stay yours.")))
         .when(Boolean(r.beaten), (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this prompt first"))))
         .when(Boolean(r.past), (el) => el.child(note(`Only the first ${RULE_TEXT} characters of the first line are read.`)))
       : null;
-    return this.ruleShell(t, e)
-      .child(typeBlock)
-      .children(fields)
-      .when(Boolean(result), (el) => el.child(result))
-      .child(this.ruleButtons(t, e))
-      .when(this.refusedHere(e), (el) => el.child(this.cardKit(t).note(e.refused, t.blocked)));
+    return this.ruleShell(t, e, [typeBlock, ...fields, result, () => this.ruleButtons(t, e),
+      () => (this.refusedHere(e) ? this.cardKit(t).note(e.refused, t.blocked) : null)]);
   }
 
   // Why a rule that needs the session's repository links nothing here, or null.

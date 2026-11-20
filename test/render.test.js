@@ -9275,7 +9275,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const gs = strsOf(g);
   // The page as the owner approved it: each section with its rows, in order. Moving a row or
   // renaming a section is one line here (and one in CARD_SECTIONS). A section's heading is
-  // recorded after its rows, so a row belongs to the first heading that follows it.
+  // recorded before its rows, so a row belongs to the last heading before it.
   const PAGE = [
     ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color", "Sender rules"]],
@@ -9286,17 +9286,16 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const heads = PAGE.map(([name]) => gs.indexOf(name));
   expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
   expect(heads).toEqual([...heads].sort((a, b) => a - b));
-  let last = -1;
   PAGE.forEach(([name, labels], n) => {
+    let last = heads[n];
     for (const label of labels) {
       const at = gs.indexOf(label);
-      expect([name, label, at > last && at < heads[n]]).toEqual([name, label, true]);
+      expect([name, label, at > last && at < (heads[n + 1] ?? Infinity)]).toEqual([name, label, true]);
       last = at;
     }
-    last = heads[n];
   });
   // Then Reset, once, with its line, at the end.
-  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
+  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(gs.indexOf("Copy path"));
   expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
@@ -12130,6 +12129,105 @@ test("card keys: the Link rules page goes Back, Close, then each rule's Edit, De
     // No rules: the examples' Use buttons, then Add rule.
     v.applyPrefs(JSON.stringify({ textSize: 15, links: [] }));
     expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-rule-use-ticket", "th-rule-use-pull-request", "th-rule-add", "th-set-copy", "th-set-keys"]);
+  } finally { done(v); }
+});
+
+// The card's columns report their heights (cardCol); each handler carries its place.
+const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = rec; rec = null; return c; };
+const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
+// Heights for a frame: each part that holds no measured part is leaf(path) tall; a column is
+// its parts and its gaps (gap(path)) tall. Returns the heights, and reports them.
+function feedSizes(c, cx, leaf, gap) {
+  const fns = sizeHandlers(c);
+  const paths = Object.keys(fns);
+  const kids = (p) => paths.filter((q) => q.startsWith(`${p}/`) && !q.slice(p.length + 1).includes("/")).sort((a, b) => Number(a.split("/").at(-1)) - Number(b.split("/").at(-1)));
+  const H = {};
+  const height = (p) => {
+    if (H[p] != null) return H[p];
+    const ks = kids(p);
+    H[p] = ks.length ? ks.reduce((s, k) => s + height(k), 0) + gap(p) * (ks.length - 1) : leaf(p);
+    return H[p];
+  };
+  for (const p of paths) fns[p]({ width: 400, height: height(p) }, cx);
+  return { H, kids };
+}
+
+test("card ring: a move to a control out of view scrolls the card to show it in full; one in view, or in the head or foot, scrolls nothing", async () => {
+  const { v, cx } = await cardPane();
+  try {
+    v.rootH = 600;
+    const handle = v.cardScrolls.main;
+    // Every row 28 px and every heading 16; a section's parts 4 px apart.
+    const leaf = (p) => (p.split("/").length === 3 && p.endsWith("/0") ? 16 : 28);
+    const { H, kids } = feedSizes(cardWithCx(v, cx), cx, leaf, () => 4);
+    const top = kids("main");
+    const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
+    onOf(cardWithCx(v, cx), "th-set-rows-main", "on_size_change")({ height: rowsH, width: 400 }, cx);
+    cardWithCx(v, cx);
+    const place = v.cardPlace("main");
+    expect(place.viewH).toBeLessThan(rowsH);
+    // By hand: Text size sits under the first heading; Copy path under the File heading, after
+    // four sections and their 20 px gaps; Reset after the five.
+    const before = (n) => 16 + top.slice(0, n).reduce((s, k) => s + H[k] + 20, 0);
+    const at = (id) => v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === id));
+    expect(at("th-textSize-minus")).toEqual([16 + 16 + 4, 16 + 16 + 4 + 28]);
+    expect(at("th-set-copy")).toEqual([before(4) + 16 + 4, before(4) + 16 + 4 + 28]);
+    expect(at("th-set-reset")).toEqual([before(5), before(5) + 28]);
+    expect(at("th-set-close")).toBeNull();
+    expect(at("th-set-keys")).toBeNull();
+    // Tab through every control and back: after each move the control shows in full, and the
+    // card moves only when it did not.
+    const toast = v.toast;
+    const ids = v.cardStops.map((s) => s.id);
+    let moves = 0;
+    for (const shift of [...ids.map(() => false), ...ids.map(() => true)]) {
+      const was = place.y;
+      const asked = handle.asked.length;
+      pressKey(v, cx, "tab", tabEv(shift));
+      cardWithCx(v, cx);
+      cx.flush(0);
+      const span = at(v.cardRing);
+      if (!span) { expect([v.cardRing, handle.asked.length]).toEqual([v.cardRing, asked]); continue; }
+      expect([v.cardRing, span[0] >= place.y && span[1] <= place.y + place.viewH]).toEqual([v.cardRing, true]);
+      const shown = span[0] >= was && span[1] <= was + place.viewH;
+      expect([v.cardRing, handle.asked.length - asked]).toEqual([v.cardRing, shown ? 0 : 1]);
+      if (!shown) moves++;
+    }
+    expect(moves).toBeGreaterThan(1);
+    expect(v.toast).toBe(toast);
+  } finally { done(v); }
+});
+
+test("card ring: on a rules page the card scrolls to a control inside an open rule, not to the rule's top", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.rootH = 560;
+    v.openRule(null);
+    const handle = v.cardScrolls.links;
+    const gap = () => 10;
+    const { H } = feedSizes(cardWithCx(v, cx), cx, () => 28, gap);
+    const top = Object.keys(H).filter((p) => p.split("/").length === 2);
+    const rowsH = 16 + top.reduce((s, k) => s + H[k], 0) + 20 * (top.length - 1) + 16;
+    onOf(cardWithCx(v, cx), "th-set-rows-links", "on_size_change")({ height: rowsH, width: 400 }, cx);
+    cardWithCx(v, cx);
+    const place = v.cardPlace("links");
+    const at = (id) => v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === id));
+    // Keep rule is one 28 px row of the open rule, found inside it.
+    const keep = at("th-rule-keep");
+    expect(keep[1] - keep[0]).toBe(28);
+    expect(keep[0]).toBeGreaterThan(at("th-rule-type-custom")[0]);
+    expect(at("th-rule-f-example")[0]).toBeGreaterThan(at("th-rule-f-url")[0]);
+    expect(rowsH).toBeGreaterThan(place.viewH + 200);
+    // Shift-Tab from no ring goes to the last control (? keys, in the foot), then back up.
+    for (let i = 0; i < 40 && v.cardRing !== "th-rule-keep"; i++) { pressKey(v, cx, "tab", tabEv(true)); cardWithCx(v, cx); cx.flush(0); }
+    expect(v.cardRing).toBe("th-rule-keep");
+    expect(keep[0] >= place.y && keep[1] <= place.y + place.viewH).toBe(true);
+    for (const id of ["th-rule-f-name", "th-rule-type-custom"]) {
+      for (let i = 0; i < 40 && v.cardRing !== id; i++) { pressKey(v, cx, "tab", tabEv(true)); cardWithCx(v, cx); cx.flush(0); }
+      const s = at(id);
+      expect([id, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([id, true]);
+    }
+    expect(handle.asked.length).toBeGreaterThan(1);
   } finally { done(v); }
 });
 

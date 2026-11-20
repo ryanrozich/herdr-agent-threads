@@ -1554,3 +1554,36 @@ test("keyInstaller: the card's keys are installed once whatever Herdr answers; o
   expect(cx2.calls).toEqual([B, B]);
   expect(k2.answer).toBe("failed: two");
 });
+
+test("cardReveal: the card's view moves only as far as shows the control with the ring in full, by a mark 8 px apart", async () => {
+  const { cardReveal, cardMarks } = await import("../mods/agent-threads/ui.js");
+  const h = 1000, viewH = 300;
+  const marks = cardMarks(h);
+  // Shown already, or nowhere to move: null.
+  expect(cardReveal(100, 128, 0, h, viewH)).toBeNull();
+  expect(cardReveal(0, 28, 0, h, viewH)).toBeNull();
+  expect(cardReveal(100, 128, 0, 0, viewH)).toBeNull();
+  expect(cardReveal(100, 128, 0, h, 0)).toBeNull();
+  expect(cardReveal(100, 128, 0, 200, viewH)).toBeNull();
+  // Below the view: its bottom edge comes just past the control, a mark brought up to it.
+  const shows = (r, y0, y1) => r.y <= y0 && y1 <= r.y + viewH;
+  const down = cardReveal(500, 528, 0, h, viewH);
+  expect(shows(down, 500, 528)).toBe(true);
+  expect(down.y + viewH).toBe(marks[down.mark] + 1);
+  expect(down.y + viewH - 528).toBeLessThan(8);
+  // Above it: its top edge comes to the mark at or above the control's top.
+  const up = cardReveal(203, 231, 600, h, viewH);
+  expect(shows(up, 203, 231)).toBe(true);
+  expect(up.y).toBe(marks[up.mark]);
+  expect(203 - up.y).toBeLessThan(8);
+  // Taller than the view, below it: its top comes to the top edge.
+  const tall = cardReveal(400, 900, 0, h, viewH);
+  expect(tall.y).toBeGreaterThanOrEqual(400);
+  expect(tall.y - 400).toBeLessThan(8);
+  // At the end: the view stops at the rows' end, on the last mark.
+  const end = cardReveal(980, 1000, 0, h, viewH);
+  expect(end).toEqual({ y: h - viewH, mark: marks.length - 1 });
+  // Partly shown counts as not shown.
+  expect(cardReveal(290, 318, 0, h, viewH)).not.toBeNull();
+  expect(cardReveal(-4, 24, 10, h, viewH)).toEqual({ y: 0, mark: 0 });
+});

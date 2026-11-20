@@ -596,6 +596,30 @@ export function cardScroll(kind, y, h, viewH) {
   const i = near(to);
   return { y: marks[i], mark: i };
 }
+// The settings card's ring (issue 104) on a control the view does not show in full: the
+// view's new place, so [y0, y1] of the rows (the control) shows, from y, with h the rows'
+// height and viewH the view's. { y, mark } as cardScroll gives, or null when the control shows
+// already or the view cannot move. A control above the view comes to its top edge; one below
+// comes to its bottom edge, or to the top edge when it is taller than the view. The marks are
+// 8 px apart, so the edge lands up to 7 px further on, never short of the control.
+export function cardReveal(y0, y1, y, h, viewH) {
+  if (!(h > 0) || !(viewH > 0)) return null;
+  const maxY = Math.max(0, h - viewH);
+  let to = y;
+  if (y0 < y) to = y0;
+  else if (y1 > y + viewH) to = y1 - y0 > viewH ? y0 : y1 - viewH;
+  to = Math.max(0, Math.min(maxY, to));
+  if (Math.abs(to - y) < 1) return null;
+  const marks = cardMarks(h);
+  if (to < y) {
+    let i = 0;
+    while (i + 1 < marks.length && marks[i + 1] <= to) i++;
+    return { y: marks[i], mark: i };
+  }
+  let i = marks.findIndex((m) => m >= to + viewH - 1);
+  if (i < 0) i = marks.length - 1;
+  return { y: Math.max(0, Math.min(maxY, marks[i] + 1 - viewH)), mark: i };
+}
 // One line of a prompt as pieces: plain text, and each pasted-image label ([Image #3]) with
 // its number. A label inside an inline code span stays text.
 export function labelPieces(line) {
