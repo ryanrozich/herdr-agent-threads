@@ -169,24 +169,29 @@ h "do" pane.focus --pane "$TP" > /dev/null || fail "pane.focus failed"
 sleep 3
 # A command that fails stops here: no still of the state before it. Herdr answers ok and
 # exits 0 for any agent-threads.<name>, one the mod has or not, so for those the pane's debug
-# report (props debug) says whether the mod acted on it: a new entry with that name, within
-# 6 s (the report is written once a second).
+# report (props debug) says whether the mod acted on it: a new entry with that name (the part
+# before any colon), within 6 s (the report is written once a second). Any command that names
+# this mod, in any case, takes that check. The loop's own names (cmd, was, seen, want) never
+# reuse n, which holds the display number for every call to Herdr.
 said() { jq -r --arg t "$T" ".\"threads.debug\"[\$t].command.$1 // empty" "$A/shared.json" 2> /dev/null || true; }
 printf '%s' "$DOS" > "$R/do.txt"
-while IFS= read -r c; do
-  [ -n "$c" ] || continue
+while IFS= read -r cmd; do
+  cmd=$(printf '%s' "$cmd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  [ -n "$cmd" ] || continue
   was=$(said n)
-  h "do" "$c" > "$R/do.out" 2> "$R/do.err" || fail "--do $c failed: $(tail -2 "$R/do.err") $(tail -c 300 "$R/do.out")"
-  case $c in
+  h "do" "$cmd" > "$R/do.out" 2> "$R/do.err" || fail "--do $cmd failed: $(tail -2 "$R/do.err") $(tail -c 300 "$R/do.out")"
+  case $(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]') in
     agent-threads.*)
+      want=$(printf '%s' "$cmd" | cut -c 15-)
+      want=${want%%:*}
       i=0
-      while n=$(said n) && { [ -z "$n" ] || [ "$n" = "$was" ]; }; do
+      while seen=$(said n) && { [ -z "$seen" ] || [ "$seen" = "$was" ]; }; do
         i=$((i + 1))
-        [ $i -le 6 ] || fail "--do $c: the Threads pane did not report it"
+        [ $i -le 6 ] || fail "--do $cmd: the Threads pane did not report it"
         sleep 1
       done
-      [ "$(said name)" = "${c#agent-threads.}" ] && [ "$(said acted)" = true ] \
-        || fail "--do $c: the mod did not act on it (not one of its commands, or nothing to do)"
+      [ "$(said name)" = "$want" ] && [ "$(said acted)" = true ] \
+        || fail "--do $cmd: the mod did not act on it (not one of its commands, or nothing to do)"
       ;;
   esac
   sleep 1

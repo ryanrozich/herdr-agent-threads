@@ -4917,9 +4917,10 @@ export default class Threads extends View {
   command(name, cx) {
     this.openWait = null;
     const acted = this.action(name, cx);
-    // props().debug: the last command and whether it acted, in the debug report, for
-    // test/herdr-still.sh: Herdr answers ok for any agent-threads.<name>, one we have or not.
-    if (this.debug) this.lastCommand = { n: (this.lastCommand?.n ?? 0) + 1, name, acted: Boolean(acted) };
+    // props().debug: the last command's own name (the part before any colon, so a search's
+    // text never reaches the report) and whether it acted, for test/herdr-still.sh: Herdr
+    // answers ok for any agent-threads.<name>, one we have or not.
+    if (this.debug) this.lastCommand = { n: (this.lastCommand?.n ?? 0) + 1, name: String(name).split(":")[0], acted: Boolean(acted) };
     if (acted) cx.notify();
   }
 
