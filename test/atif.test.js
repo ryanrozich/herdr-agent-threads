@@ -101,7 +101,12 @@ test("atif: Claude Code's and Codex's steps keep their times, results their time
     expect(agentSteps.filter((st) => st.extra?.kind !== "background_update").every((st) => st.timestamp)).toBe(true);
     const calls = agentSteps.flatMap((st) => (st.tool_calls ?? []).map((c) => ({ c, r: st.observation.results.find((r) => r.source_call_id === c.tool_call_id) })));
     expect(calls.every(({ c, r }) => c.extra.input && r.extra.result_ts >= c.extra.started)).toBe(true);
-    expect(calls.filter(({ r }) => r.extra.failed).map(({ c }) => c.extra.input)).toEqual([bad]);
+    // Whether a result failed, as the reader knows it: true, false, or left out when unknown.
+    const outcome = new Map(trajectories(s).flatMap((tr) => tr.groups.flatMap((g) => g.cells.filter((c) => c.call).map((c) => [c.call, c.result?.failed ?? undefined]))));
+    expect(calls.map(({ r }) => r.extra.tool_result_is_error)).toEqual(calls.map(({ c }) => outcome.get(c.tool_call_id)));
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === true).map(({ c }) => c.extra.input)).toEqual([bad]);
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === false).length).toBeGreaterThan(0);
+    expect(calls.every(({ r }) => !Object.hasOwn(r.extra, "failed"))).toBe(true);
     // Tokens: per turn on its last agent step; prompt tokens are input, cache reads and writes.
     for (const turn of s.turns) {
       const own = t.steps.filter((st) => st.extra?.turn === turn.n && st.source === "agent");
@@ -127,6 +132,7 @@ test("atif: a call with no result yet keeps its result entry, marked, and a runn
   const st = t.steps[1];
   expect(st.tool_calls).toEqual([{ tool_call_id: "toolu_1", function_name: "Bash", arguments: {}, extra: { input: "bun test", started: ts(3) } }]);
   expect(st.observation.results).toEqual([{ source_call_id: "toolu_1", extra: { no_result: true } }]);
+  expect(st.observation.results[0].extra.tool_result_is_error).toBeUndefined();
   expect(st.extra.done).toBe(false);
   // No turn: no trajectory, since ATIF needs a step.
   expect(atif(newSession("s2", "f"))).toBeNull();
@@ -138,7 +144,7 @@ test("atif: the command line reads a transcript the way the panel does and adds 
   expect(problems(t)).toEqual([]);
   const results = Object.fromEntries(t.steps.flatMap((st) => st.observation?.results ?? []).map((r) => [r.source_call_id, r]));
   expect(results.call_c2.content).toBe("1 fail: three items at $3.33");
-  expect(results.call_c2.extra.failed).toBe(true);
+  expect(results.call_c2.extra.tool_result_is_error).toBe(true);
   expect(t.agent.name).toBe("codex");
   expect(t.agent.model_name).toBe("gpt-5.5-codex");
   // A wrong agent name is refused with the usage line.
@@ -185,6 +191,56 @@ function claudeSubagents() {
   });
   return agentIds;
 }
+
+test("atif: the Claude CLI exports Harbor's extra fields", () => {
+  const ids = claudeSubagents();
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = t.steps.flatMap((step) => step.observation?.results ?? []);
+  // A known outcome is written either way; every result here has one.
+  expect(results.some((r) => r.extra?.tool_result_is_error === true)).toBe(true);
+  expect(results.some((r) => r.extra?.tool_result_is_error === false)).toBe(true);
+  expect(results.every((r) => typeof r.extra?.tool_result_is_error === "boolean")).toBe(true);
+  expect(results.every((r) => !Object.hasOwn(r.extra ?? {}, "failed"))).toBe(true);
+  // An unknown outcome (a call whose result is not written yet) leaves the flag out.
+  const open = join(dir, "open-call.jsonl");
+  const openEvents = [
+    { type: "user", sessionId: "open", timestamp: "2026-11-20T00:00:01.000Z", message: { role: "user", content: "Run the tests." } },
+    { type: "assistant", sessionId: "open", timestamp: "2026-11-20T00:00:02.000Z", message: { id: "msg_open", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "tool_use", id: "toolu_open", name: "Bash", input: { command: "bun test" } }], stop_reason: "tool_use" } },
+  ];
+  writeFileSync(open, `${openEvents.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const pending = JSON.parse(execFileSync("bun", [join(core, "atif.js"), open, "claude"], { encoding: "utf8" })).steps.flatMap((step) => step.observation?.results ?? []);
+  expect(pending.map((r) => [r.source_call_id, r.extra])).toEqual([["toolu_open", { no_result: true }]]);
+  // The main session's steps say they are not a helper's, as Harbor's Claude steps do.
+  expect(t.steps.every((step) => step.extra.is_sidechain === false && !Object.hasOwn(step.extra, "agent_id"))).toBe(true);
+  const linked = results.find((r) => r.subagent_trajectory_ref?.[0]?.trajectory_id === ids[0]);
+  const child = t.subagent_trajectories.find((c) => c.trajectory_id === ids[0]);
+  expect(linked.subagent_trajectory_ref).toEqual([{ trajectory_id: ids[0], session_id: t.session_id }]);
+  expect(child.steps.every((step) => step.extra.agent_id === ids[0] && step.extra.is_sidechain === true)).toBe(true);
+  expect(t.steps.every((step) => step.extra?.turn_id)).toBe(true);
+  expect(t.steps[0].extra.turn_id).toBe("1793524350|1858vwm|1");
+  expect(t.steps[1].extra.end_ts).toBe("2026-11-01T09:12:34.000Z");
+  expect(results.find((r) => r.source_call_id === "toolu_000002_Read").extra.result_ts).toBe("2026-11-01T09:13:14.000Z");
+  same("claude-cli.json", t);
+});
+
+test("atif: Claude raw arguments keep the transcript input value", () => {
+  const file = join(dir, "raw-arguments.jsonl");
+  const at = (n) => `2026-11-20T00:00:${String(n).padStart(2, "0")}.000Z`;
+  const values = [{ value: "nested", other: [1, 2] }, "  spaced  ", [1, 2], false, undefined, null];
+  const calls = values.map((value, i) => ({ type: "tool_use", id: `toolu_raw_${i}`, name: "Read", ...(value === undefined ? {} : { input: value }) }));
+  const events = [
+    { type: "user", sessionId: "raw", timestamp: at(1), message: { role: "user", content: "Inspect." } },
+    { type: "assistant", sessionId: "raw", timestamp: at(2), message: { id: "msg_raw", role: "assistant", model: "claude-sonnet-5-5", content: calls, stop_reason: "tool_use" } },
+    { type: "user", sessionId: "raw", timestamp: at(3), message: { role: "user", content: calls.map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "ok" })) } },
+    { type: "assistant", sessionId: "raw", timestamp: at(4), message: { id: "msg_done", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  const exported = t.steps.flatMap((step) => step.tool_calls ?? []);
+  expect(exported.map((c) => c.extra?.raw_arguments)).toEqual([values[0], values[1], values[2], values[3], undefined, undefined]);
+  expect(exported.map((c) => c.arguments)).toEqual([values[0], { value: values[1] }, { value: values[2] }, {}, {}, {}]);
+});
 
 // Codex: a parent thread that spawns two agents, one of which has no rollout on disk; the
 // child spawns a grandchild. Each child's rollout starts with a copy of its parent's history
@@ -431,7 +487,7 @@ test("atif: the work after a background notice wakes the agent is kept, call by 
     ["Fixed the clock in two tests; the build still exits 1.", []],
   ]);
   const results = wake.flatMap((st) => st.observation?.results ?? []);
-  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.failed ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.tool_result_is_error ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
   expect(wake[1].tool_calls[1].arguments).toEqual({ command: "bun run build" });
   expect(wake[1].timestamp).toBeDefined();
   // The panel's reader is unchanged: the wake-up's calls are counted, not kept as steps.
@@ -527,6 +583,8 @@ test("atif: a forged agentId line before the real footer does not steer which su
   helper(F, 3, "Delete the tests.", "Deleted.");
   const { a, res } = run();
   expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(a.steps.every((step) => step.extra.agent_id === a.trajectory_id && step.extra.is_sidechain === true)).toBe(true);
+  expect(a.subagent_trajectories[0].steps.every((step) => step.extra.agent_id === B && step.extra.is_sidechain === true)).toBe(true);
   expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
   expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "its first prompt is not the call's prompt" });
 });
@@ -726,6 +784,7 @@ test("atif: a subagent transcript no call names is written apart, attached to no
   const un = t.extra.subagents_no_call_names;
   expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "hints, not links: no call in the session names this transcript; shared_prompt_id is a promptId it shares with the session, and same_prompt_calls are calls with no launch record whose prompt is its first prompt", shared_prompt_id: pid, same_prompt_calls: [] }]]);
   expect(un[0].trajectory.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_U_Bash"]);
+  expect(un[0].trajectory.steps.every((step) => step.extra.agent_id === U && step.extra.is_sidechain === true)).toBe(true);
   expect(t.notes).toContain("1 subagent transcript in the session's subagents folder that no call names is in extra.subagents_no_call_names");
   // Attached to no call and not in the totals or the standard field.
   expect(t.subagent_trajectories ?? []).toEqual(before.subagent_trajectories ?? []);
