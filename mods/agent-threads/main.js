@@ -1005,7 +1005,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys.answer } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys.answer, ...this.cardView() } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
@@ -6454,6 +6454,15 @@ export default class Threads extends View {
     this.placeRing(cx);
     this.revealRing(cx, key);
     return card;
+  }
+  // For the debug report: where the card's view is on its page (view: y from the rows' top,
+  // and its height) and where the control with the ring is in the rows (ringAt: top and
+  // bottom, or null in the head or foot or before it is measured).
+  cardView() {
+    const key = this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main";
+    const place = this.cardPlace(key);
+    const i = this.cardRing ? (this.cardStops ?? []).findIndex((s) => s.id === this.cardRing) : -1;
+    return { view: { y: place.y, h: place.viewH }, ringAt: i >= 0 && this.cardRoot ? this.ringSpan(this.cardRoot, i) : null };
   }
   // A column of the card's rows whose controls the card can scroll into view for the ring.
   // Its kids (elements, or functions that build an element or a list of them) are built in

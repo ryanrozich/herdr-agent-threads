@@ -12195,6 +12195,14 @@ test("card ring: a move to a control out of view scrolls the card to show it in 
     }
     expect(moves).toBeGreaterThan(1);
     expect(v.toast).toBe(toast);
+    // The debug report says where the view is and where the ringed control is in the rows.
+    v.report();
+    const card = state.shared["threads.debug"].t4.settingsCard;
+    expect(card.view).toEqual({ y: place.y, h: place.viewH });
+    expect(card.ringAt).toEqual(at(v.cardRing));
+    v.cardRing = "th-set-close";
+    v.report();
+    expect(state.shared["threads.debug"].t4.settingsCard.ringAt).toBeNull();
   } finally { done(v); }
 });
 
