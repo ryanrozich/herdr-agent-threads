@@ -4974,7 +4974,8 @@ export default class Threads extends View {
       }
       case "undoUnpin": return this.undoUnpin(cx);
       case "pinned": return this.openPinned(cx);
-      case "trajectory": return this.openTraj();
+      // Not from the Pinned view or the Pinned column: nothing there offers it.
+      case "trajectory": return this.pinnedPane || this.view === "pinned" ? false : this.openTraj();
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
       case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "fit": return this.fitToReading(cx);
