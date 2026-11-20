@@ -66,10 +66,20 @@ appenv() {
 # In the background with wait, so the deadline's signal ends a call that hangs at once; the
 # subshell execs, so HPID is the timeout process, which passes a kill on to the call.
 HPID=""
-h() { (X="exec"; appenv timeout -k 5 30 "$APP" "$@") & HPID=$!; wait "$HPID"; }
+# HPID is cleared once the call is reaped, so cleanup never signals a reaped pid.
+h() {
+  (X="exec"; appenv timeout -k 5 30 "$APP" "$@") &
+  HPID=$!
+  wait "$HPID"
+  hs=$?
+  HPID=""
+  return "$hs"
+}
 WPID=""
 DONE=""
 cleanup() {
+  # A deadline that passes during cleanup cannot cut it short.
+  trap '' USR1
   [ -n "$DONE" ] && return
   DONE=1
   [ -n "$WPID" ] && kill "$WPID" 2> /dev/null

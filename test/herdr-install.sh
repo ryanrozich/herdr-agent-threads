@@ -21,16 +21,25 @@ RELEASES=https://releases.herdr.dev
 
 miss() { echo "install-herdr: Herdr did not install: $*" >&2; exit 1; }
 cd "$(dirname "$0")/.." || miss "no checkout"
-CO=$(pwd)
+CO=$(pwd -P)
 D=${HERDR_RIG:-$CO/.herdr-rig}
 # It removes and replaces folders in D, so D is a folder inside the checkout, never the
 # checkout itself, never outside it, and never with a ".." step.
-case $D in
-  *..* | . | ./* | */. | */./*) miss "HERDR_RIG has a . or .. step: $D" ;;
-  "$CO"/?*) ;;
-  /*) miss "HERDR_RIG is outside this checkout: $D" ;;
-  *) D=$CO/$D ;;
-esac
+case $D in *..* | . | ./* | */. | */./*) miss "HERDR_RIG has a . or .. step: $D" ;; esac
+case $D in /*) ;; *) D=$CO/$D ;; esac
+# Compared as physical paths (on a Mac /var is a link to /private/var): the nearest folder
+# of D that exists, with its links resolved, then the rest. So a link inside the checkout
+# that points outside it is outside.
+phys() {
+  p=$1
+  rest=""
+  while [ ! -d "$p" ]; do rest="/${p##*/}$rest"; p=${p%/*}; [ -n "$p" ] || p=/; done
+  p=$(cd "$p" && pwd -P) || return 1
+  [ "$p" = / ] && p=""
+  printf '%s%s' "$p" "$rest"
+}
+D=$(phys "$D") || miss "cannot read HERDR_RIG: $D"
+case $D in "$CO"/?*) ;; *) miss "HERDR_RIG is outside this checkout: $D" ;; esac
 [ "$(uname -s)" = Linux ] || miss "this installs the Linux build, and this is $(uname -s)"
 case $(uname -m) in
   x86_64 | amd64) arch=x86_64 app_sha=$APP_SHA256_X86_64 core_sha=$CORE_SHA256_X86_64 ;;

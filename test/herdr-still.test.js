@@ -5,7 +5,7 @@
 // sha256sum, tar, timeout, Xvfb and a fake Herdr) and start nothing real.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,8 +67,8 @@ test("the install pins one release, and every download it makes is checked again
 });
 
 // The setup step's own command, run in a copy of the two scripts, with stand-ins. "__CO__" in
-// an env value is that copy's path.
-function runStep(curl, { sums = null, tar = null, env = {} } = {}) {
+// an env value is that copy's path and "__D__" the folder around it; pre(co, d) runs first.
+function runStep(curl, { sums = null, tar = null, env = {}, pre = null } = {}) {
   const d = mkdtempSync(join(tmpdir(), "herdr-step-"));
   const bin = join(d, "bin");
   const co = join(d, "co");
@@ -80,7 +80,8 @@ function runStep(curl, { sums = null, tar = null, env = {} } = {}) {
   stub(bin, "timeout", TIMEOUT);
   stub(bin, "sha256sum", sums ? `case $1 in *app*) echo "${sums.app}  $1" ;; *) echo "${sums.core}  $1" ;; esac` : 'shasum -a 256 "$1"');
   if (tar) stub(bin, "tar", tar);
-  const r = spawnSync("sh", ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2", ...Object.fromEntries(Object.entries(env).map(([k, x]) => [k, x.replace("__CO__", co)])) } });
+  if (pre) pre(co, d);
+  const r = spawnSync("sh", ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2", ...Object.fromEntries(Object.entries(env).map(([k, x]) => [k, x.replace("__CO__", co).replace("__D__", d)])) } });
   const curlLog = existsSync(join(d, "curl.log")) ? readFileSync(join(d, "curl.log"), "utf8") : "";
   return { ...r, d, co, curlLog, marks: r.stderr.split("\n").filter((l) => l.startsWith(MARK)) };
 }
@@ -139,6 +140,16 @@ test("the install refuses a HERDR_RIG outside the checkout, the checkout itself 
     expect([rig, r.marks.length]).toEqual([rig, 1]);
     expect(r.marks[0]).toContain("download failed");
   }
+  // Paths are compared physically, as on a Mac, where the temp folder is under a link: the
+  // checkout reached through a link is inside, and a link inside it that points out is not.
+  const links = (co, d) => { symlinkSync(co, join(d, "co-link")); mkdirSync(join(d, "elsewhere")); symlinkSync(join(d, "elsewhere"), join(co, "out")); };
+  let r = runStep("exit 7", { env: { HERDR_RIG: "__D__/co-link/deep/rig" }, pre: links });
+  expect(r.marks[0]).toContain("download failed");
+  for (const rig of ["out/rig", "__CO__/out/rig", "__D__/co-link/out/rig"]) {
+    r = runStep("exit 7", { env: { HERDR_RIG: rig }, pre: links });
+    expect([rig, r.status, r.marks.length, r.curlLog]).toEqual([rig, 0, 1, ""]);
+    expect(r.marks[0]).toContain("outside this checkout");
+  }
 });
 
 test("the setup step installs the pinned archives once both checksums match", () => {
@@ -175,11 +186,12 @@ function fakeRig() {
   stub(join(rig, "bin"), "timeout", TIMEOUT);
   stub(join(rig, "bin"), "herdr-core", "exit 0");
   stub(join(rig, "bin"), "herdr-app", `log=${JSON.stringify(join(d, "app.log"))}
+if { : >&3; } 2> /dev/null; then echo "fd 3 open: $*" >> ${JSON.stringify(join(d, "fd3.log"))}; fi
 [ $# -eq 0 ] && { env > ${JSON.stringify(join(d, "launch-env.txt"))}; exec sleep 30; }
 echo "$*" >> "$log"
 case "$1 $2" in
   "--version "*) echo "herdr-app 0.1.16" ;;
-  "status "*) [ -e ${JSON.stringify(join(d, "hang"))} ] && exec sleep 60; echo '{"overlays":[],"errors":[]}' ;;
+  "status "*) [ -e ${JSON.stringify(join(d, "hang"))} ] && exec perl -e 'sleep 60' ${JSON.stringify(`hang-${d}`)}; echo '{"overlays":[],"errors":[]}' ;;
   "ls "*) echo '{"spaces":[{"name":"still","tabs":[{"terminals":[{"pane":"p1","terminal":"t1"}]}]}]}' ;;
   "do pane.split") echo '{"pane":"p2"}' ;;
   "do agent-threads.nope") echo "unknown command agent-threads.nope" >&2; exit 1 ;;
@@ -247,6 +259,10 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   expect(r.status).toBe(1);
   expect(r.stderr).toContain("herdr-still: --do agent-threads.nope failed: unknown command agent-threads.nope");
   expect(existsSync(png2)).toBe(false);
+  // The deadline's message goes to the script's own stderr on fd 3; no Herdr process,
+  // the app included, is given fd 3.
+  expect(calls.length).toBeGreaterThan(0);
+  expect(existsSync(join(f.d, "fd3.log")) ? readFileSync(join(f.d, "fd3.log"), "utf8") : "").toBe("");
 }, 30000);
 
 test("herdr-still.sh has one deadline for the whole run: a Herdr call that hangs ends there, with exit 4, its own line and no still", () => {
@@ -260,6 +276,13 @@ test("herdr-still.sh has one deadline for the whole run: a Herdr call that hangs
   // The hung call (its own limit is 30 s) did not hold the run past the deadline.
   expect(took).toBeLessThan(12);
   expect(existsSync(png)).toBe(false);
+  // The hung call itself is gone: the call's subshell execs, so the pid the deadline signals is
+  // the timeout process, which ends the call. (On Linux the cleanup's sweep of processes
+  // holding the run's folder would also end it, so the text check below pins the exec there.)
+  const gone = () => spawnSync("pgrep", ["-f", `hang-${f.d}`]).status === 1;
+  for (let i = 0; i < 30 && !gone(); i++) spawnSync("sleep", ["0.1"]);
+  expect(gone()).toBe(true);
+  expect(readFileSync(join(root, "test/herdr-still.sh"), "utf8")).toMatch(/^ {2}\(X="exec"; appenv timeout -k 5 30 "\$APP" "\$@"\) &$/m);
   // A deadline that is not a number of seconds is a usage error.
   expect(still([fx, png], f, { HERDR_STILL_DEADLINE: "soon" }).status).toBe(2);
 }, 30000);
