@@ -22,8 +22,8 @@ export const LEDGER_FILTERS = 34;
 
 // Each kind of row: its mark (an icon file, or a drawn "dot", "ring", "square"), the theme
 // colour of its words (tone, a theme key) and whether the words are in the code face; its ink
-// (the bar, the icon square's tint and the tag, trajInks), the word on its tag in a pane
-// TAG_MIN px or wider, and its lane (null: none).
+// (the bar, the icon square's tint and the detail's tag, trajInks), the word on that tag, and
+// its lane (null: none).
 export const LEDGER_KINDS = Object.freeze({
   you: { mark: "user", tone: "foreground", ink: "user", tag: "User", lane: "input", label: "User message" },
   agent: { mark: "bot", tone: "muted", ink: "agent", tag: "Agent", lane: "input", label: "Agent message" },
@@ -116,13 +116,13 @@ export function slantPoints(a, z, h, d) {
 }
 
 // The pane's parts at a width (round 8): the start column from 420 px, the bar from 500 px,
-// the filter bar from 540 px, and from 900 px the kind as a word tag, the filters' long words
-// and the detail to the right of the ledger (under it when narrower).
+// the filter bar from 540 px, and from 900 px the filters' long words and counts and the
+// detail to the right of the ledger (under it when narrower).
 export const FILTER_MIN = 540;
 export const WIDE_MIN = 900;
 export function ledgerCols(width) {
   const w = Number.isFinite(width) ? width : 0;
-  return { start: w >= 420, bar: w >= 500, filters: w >= FILTER_MIN, tags: w >= WIDE_MIN, detailRight: w >= WIDE_MIN };
+  return { start: w >= 420, bar: w >= 500, filters: w >= FILTER_MIN, detailRight: w >= WIDE_MIN };
 }
 
 // The first line of a text, flattened from Markdown, at most 200 characters.
@@ -267,9 +267,10 @@ export function ledgerTurn(s, turn, si, live = false) {
   const t1 = tr.end ?? lastEnd;
   const span = t0 != null && t1 != null ? t1 - t0 : null;
   // A turn with no end record that is not running: unknown. Its calls with no result stop at
-  // the last recorded event, and the rows say when that was.
-  const stale = !live && !tr.done && tr.end == null && !tr.interrupted;
-  const lastAt = stale ? lastEnd ?? null : null;
+  // the last recorded event, and the rows say when that was. (An unfinished turn's end time is
+  // only its latest model message, so it is activity, not an end.)
+  const stale = !live && !tr.done && !tr.interrupted;
+  const lastAt = stale ? (lastEnd != null || tr.end != null ? Math.max(lastEnd ?? tr.end, tr.end ?? lastEnd) : null) : null;
   if (lastAt != null) for (const r of rows) if (r.lk === "noresult" || (r.open && !live)) r.lastAt = lastAt;
   const open = openAt.map((a) => [a, Math.max(a, t1)]);
   const opens = openSub.map((a) => [a, Math.max(a, t1)]);
@@ -289,7 +290,7 @@ export function ledgerTurn(s, turn, si, live = false) {
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
-    tokens: stats(turn).tokens, total: tr.end != null && t0 != null ? tr.end - t0 : null,
+    tokens: stats(turn).tokens, total: tr.end != null && t0 != null && (tr.done || tr.interrupted) ? tr.end - t0 : null,
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),

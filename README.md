@@ -76,6 +76,10 @@ Press `p` to pin a turn. Your pins show in a column beside the list, oldest firs
 
 <a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns in the Pinned column beside the list" width="560"></a>
 
+### See what the agent did, step by step
+
+Press `y` for the Trajectory: a pane beside the chat with one row per step of each turn. Your message, each text the agent wrote, each tool call, the reply. Each row has when it started in the turn, how long it took and a small bar for that. Failed calls are red, and `f` steps through them. `m` steps through your own messages. The buttons at the top hide or show the input, model and tool rows. `Enter` shows a row's detail. The Chat and the Trajectory select the same turn. In a pane under 480 px wide, the Trajectory shows in the same pane, and `y`, `Esc` or its Chat button goes back.
+
 ### Quote a reply back to the agent
 
 Press `q`. The reply goes into your prompt as a `>` quote, with a blank line under it for your comment. Agent Threads never presses Enter for you. To quote only part of a reply, select it, press `Cmd-C`, then `q`.
@@ -126,6 +130,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `u` | Undo the last unpin |
 | `v` | Show the Pinned column |
 | `-` `=` | Make the Pinned column narrower or wider |
+| `y` | Open or go to the Trajectory |
 | `g` | Go to a turn number |
 | `[` `]` | Previous or next day |
 | `End` or `G` | Newest turn |
