@@ -11,8 +11,8 @@ import { problems } from "../atif-schema.js";
 // prompt, no turn · R4 user text not normalized Harbor's way · R5a we write no files and
 // results are text · R5b non-text blocks leave no marker · R6 tokens per turn, llm_call_count
 // never written · R7 a call with no result keeps a marked observation entry · R8 no cost
-// fields · R9 a Codex web_search_call loses its id · R10 a lone Codex rollout read by itself
-// ignores its own history boundary · R11 cache writes are kept per turn as
+// fields · R9 a Codex web_search_call loses its id · R10 a lone Codex subagent rollout keeps
+// its own prompt as a step · R11 cache writes are kept per turn as
 // cache_creation_input_tokens, with no cache_write_input_tokens and no session total.
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
@@ -53,7 +53,7 @@ export const EXPECTED_DIFFERENCES = [
   { id: "codex: images_are_never_written_through_a_planted_symlink[1]", reason: "R5a", kind: "not handled", note: "Agent Threads writes no files, so nothing is written through the planted path; but the image leaves no [image omitted] marker in the tool output text, which Harbor writes." },
   { id: "codex: images_are_never_written_through_a_planted_symlink[2]", reason: "R5a", kind: "not handled", note: "Agent Threads writes no files, so nothing is written through the planted path; but the image leaves no [image omitted] marker in the tool output text, which Harbor writes." },
   { id: "codex: input_image_data_url_is_saved_next_to_trajectory", reason: "R5a", kind: "by design", note: "Agent Threads writes no files; only the text part of the tool output survives." },
-  { id: "codex: loaded_orphan_subagent_excludes_copied_history", reason: "R10", kind: "by design", note: "Listed because the port adds a prompt step to the orphan (Agent Threads needs a prompt to start a turn), and the orphan keeps it. A top-level export does not apply the ordinal boundary; the copied history is left out only because it comes before that prompt." },
+  { id: "codex: loaded_orphan_subagent_excludes_copied_history", reason: "R10", kind: "by design", note: "Listed because the port adds a prompt step to the orphan (Agent Threads needs a prompt to start a turn), and the orphan keeps it. Read alone, the export starts at the rollout's own subagent_history_start_ordinal, so the copied history, its copied parent prompt included, is left out." },
   { id: "codex: mcp_image_block_is_saved", reason: "R5a", kind: "by design", note: "Agent Threads writes no files; only the text part of the tool output survives." },
   { id: "codex: missing_root_usage_keeps_combined_totals_unknown", reason: "R2", kind: "not handled", note: "A child no spawn_agent call names is not attached; Harbor links by parent_thread_id alone." },
   { id: "codex: one_step_per_api_call_with_bundled_tool_calls", reason: "R6", kind: "not handled", note: "Agent Threads puts token totals on the turn's last step and does not write llm_call_count per API call." },
