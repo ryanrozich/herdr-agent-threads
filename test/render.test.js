@@ -11927,3 +11927,111 @@ test("a compact pin draws no search match fill, selected or not", async () => {
     expect(c.filter((e) => e[0] === "bg" && String(e[1]).startsWith(theme.working))).toEqual([]);
   }
 });
+
+// Issue 112: an open bubble's long hyphenated token broke inside a word, since Herdr wraps
+// that text itself and never after a "-". The drawn text gets HYPHEN_BREAK after the "-"s of
+// a token too long for the line; the copy, the quote, search and the size estimates use the
+// message itself.
+test("an open coloured bubble draws a long hyphenated token with breaks, a plain one's Markdown never; copy, quote, search and the size use the message", async () => {
+  const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
+  const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const PROMPT = `Why does src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js round down, and does ${TOKEN} see it?`;
+  const { v, cx } = await quotePane();
+  const key = v.sel;
+  const turn = v.findTurn(key);
+  const setPrompt = (p) => { turn.prompt = p; turn.youMemo = null; turn.shapeKey = null; };
+  const you = () => v.youMd(v.rows().find((r) => r.kind === "you" && r.turn === turn));
+  setPrompt(PROMPT);
+  // Blue (the default): plain text, the breaks only in what is drawn.
+  expect(v.prefs.bubbleColor).toBe("blue");
+  let y = you();
+  expect(y.plain).toBe(true);
+  expect(y.text).toBe(PROMPT);
+  expect(y.parts[0].draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+  expect(y.parts[0].draw.replaceAll(B, "")).toBe(PROMPT);
+  expect(y.parts[0].rows).toBeNull();
+  rec = [];
+  draw(v, cx);
+  const drawn = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  rec = null;
+  expect(drawn).toContain(y.parts[0].draw);
+  expect(drawn).not.toContain(PROMPT);
+  // The width and height estimates are those of the message: the same as for one with "_"
+  // in place of each "-" (same lengths, no breaks).
+  const est = { bw: y.bw, bodyH: y.bodyH, long: y.long };
+  setPrompt(PROMPT.replaceAll("-", "_"));
+  expect(you().parts[0].draw).toBe(PROMPT.replaceAll("-", "_"));
+  expect({ bw: you().bw, bodyH: you().bodyH, long: you().long }).toEqual(est);
+  setPrompt(PROMPT);
+  // Search across a hyphen: still a match, the hit is the query's characters.
+  v.setQuery("merge-check", cx);
+  y = you();
+  expect(y.hl).toBe(true);
+  const hits = y.parts[0].rows.flat().filter((p) => p.hit);
+  expect(hits.map((p) => p.t.replaceAll(B, ""))).toEqual(["merge-check"]);
+  // Each word is an element that does not wrap inside: the long token is cut after its breaks.
+  rec = [];
+  draw(v, cx);
+  const words = rec.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  rec = null;
+  expect(words).toContain(`nightly-${B}`);
+  expect(words).toContain(`totals-${B}`);
+  expect(words.filter((w) => w.includes(B)).every((w) => w.endsWith(B) || w === `merge-${B}check`)).toBe(true);
+  v.setQuery("", cx);
+  // Plain bubble: Markdown, which can be selected and which Herdr copies as drawn, so it gets
+  // no breaks and keeps Herdr's mid-word break (option 2); the message is unchanged.
+  v.action("bubbleColor:plain", cx);
+  y = you();
+  expect(y.plain).toBe(false);
+  expect(y.text).toBe(PROMPT);
+  expect(y.md.includes(B)).toBe(false);
+  expect(y.md).toContain(TOKEN.replaceAll("-", "\\-"));
+  mdSources.length = 0;
+  draw(v, cx);
+  const youMd = mdSources.filter(([id]) => id.startsWith("th-you-"));
+  expect(youMd.length).toBeGreaterThan(0);
+  expect(youMd.some(([, md]) => md.includes(B))).toBe(false);
+  // The copy icon under the message copies it as typed.
+  log = [];
+  v.copyPrompt(key, cx);
+  expect(cx.clip).toBe(PROMPT);
+  // ⌘C on the drawn Markdown: Herdr copies it as drawn, which is the message, and the panel
+  // never writes the clipboard on its own; q quotes it as typed.
+  cx.clip = "older text";
+  v.notePress(cx);
+  cx.clip = `does ${TOKEN} see`;
+  log = [];
+  v.cmdUp({ modifiers: { platform: false } }, cx);
+  cx.flush();
+  expect(cx.clip).toBe(`does ${TOKEN} see`);
+  expect(log.filter((e) => e[0] === "clipboard")).toEqual([]);
+  v.quoteAt = 0;
+  v.key(keyEv("q"), cx);
+  cx.flush();
+  await settleCx(cx);
+  expect(cx.clip).toBe(`> does ${TOKEN} see\n\n`);
+  expect(cx.clip.includes(B)).toBe(false);
+  v.action("bubbleColor:blue", cx);
+});
+
+// Issue 112 meets the pasted block (issue 93): a pasted block is drawn as code, and code keeps
+// what was typed (as promptMd does for fenced and inline code), so its long hyphenated tokens
+// get no HYPHEN_BREAK; the message's own text around it still does.
+test("a pasted block keeps its long hyphenated tokens as typed, while the message around it gets breaks", async () => {
+  const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
+  const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
+  const PROMPT = `Does ${TOKEN} see it? Output below.\n\n<pasted_content id="log">\nFAIL ${TOKEN} 2 of 40\nPASS lint\n</pasted_content>`;
+  const { v } = await quotePane();
+  const turn = v.findTurn(v.sel);
+  turn.prompt = PROMPT;
+  turn.youMemo = null;
+  turn.shapeKey = null;
+  const y = v.youMd(v.rows().find((r) => r.kind === "you" && r.turn === turn));
+  expect(y.plain).toBe(true);
+  const paste = y.parts.find((p) => p.paste);
+  const typed = y.parts.find((p) => !p.paste && !p.quote);
+  expect(paste.draw).toBe(`FAIL ${TOKEN} 2 of 40\nPASS lint`);
+  expect(paste.draw.includes(B)).toBe(false);
+  expect(paste.rows).toBeNull();
+  expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
+});
