@@ -10,6 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
+import { trajInks, TRAJ_INKS } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -12384,4 +12385,34 @@ test("the ledger is built newest turn first, one slice a draw: the newest turns 
   const done = v.ledger();
   expect(done.partial).toBe(false);
   expect(done.rows.map((r) => r.key)).toEqual(whole);
+});
+
+test("the bars: an unfinished call's row bar is grey with a 5 px slant; the heading line's unfinished end is teal with a 4 px slant", async () => {
+  const { v } = await pane(fixture("--only", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const L = v.ledger();
+  const inks = trajInks(theme, true);
+  const grey = TRAJ_INKS.open.dark;
+  const teal = TRAJ_INKS.tools.dark;
+  const slants = [];
+  const bar = v.slantBar.bind(v);
+  v.slantBar = (c, w, h, d) => { slants.push(["bar", c, w, h, d]); return bar(c, w, h, d); };
+  const end = v.slantEnd.bind(v);
+  v.slantEnd = (c, d, h) => { slants.push(["end", c, d, h]); return end(c, d, h); };
+  // A running call and one with no result: the same grey bar.
+  const call = L.rows.find((r) => r.lk === "tool");
+  for (const lk of ["running", "noresult"]) v.ledgerBar({ ...call, lk, open: true, dur: null }, inks.tools, inks);
+  expect(slants).toEqual([["bar", grey, 64, 4, 5], ["bar", grey, 64, 4, 5]]);
+  // The heading's line: the unfinished stretch teal, ending in one 4 px slant; nothing grey.
+  const head = { ...L.rows.find((r) => r.kind === "trh"), line: { tools: [[0, 0.3]], sub: [], model: [], red: [], open: [[0.5, 1]], openSub: [] } };
+  slants.length = 0;
+  rec = [];
+  v.ledgerHead(theme, head, false, inks);
+  const bgs = rec.filter((e) => e[0] === "bg").map((e) => e[1]);
+  rec = null;
+  expect(slants).toEqual([["end", teal, 4, 3]]);
+  expect(bgs).toContain(teal);
+  expect(bgs).not.toContain(grey);
 });
