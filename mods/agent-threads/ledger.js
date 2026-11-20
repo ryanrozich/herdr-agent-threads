@@ -231,6 +231,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     } else if (c.kind === "tool") {
       calls++;
       r.tool = String(c.tool ?? "tool");
+      r.call = c.call ?? null;
       r.text = String(c.input ?? "").replace(/\s+/g, " ").trim();
       // A failed call: its result says so, or, for a subagent, its run ended failed (the
       // launch itself succeeds). A run stopped or killed is not a failure.

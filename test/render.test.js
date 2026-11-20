@@ -12314,3 +12314,28 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(920);
 });
+
+test("a subagent that finishes after its turn ended changes its row: kept rows follow the turn's and the agents' versions", async () => {
+  const { v, cx } = await pane(fixture("--subagents"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const row = () => v.ledger().rows.find((r) => r.sub && r.turn.done);
+  const first = row();
+  const s = v.sessions[first.si];
+  const a = s.agents.get(first.call);
+  expect(a).toBeTruthy();
+  // The notification has not come yet: the run was last seen launched.
+  Object.assign(a, { st: "async_launched", ms: null, tok: null });
+  s.agentVer = (s.agentVer ?? 0) + 1;
+  expect(row()).toMatchObject({ key: first.key, status: "no result", noResult: true });
+  // It comes after the turn ended: the row says how the run went.
+  Object.assign(a, { st: "completed", ms: 90000, tok: 21000 });
+  s.agentVer += 1;
+  const done = row();
+  expect(done.key).toBe(first.key);
+  expect(done.noResult).toBeUndefined();
+  expect(done.sub.state).toBe("completed");
+  expect(done.dur).toBe(90000);
+  draw(v, cx);
+});
