@@ -9853,6 +9853,14 @@ export default class Threads extends View {
   enterTraj() {
     this.traj = true;
     this.keysOpen = false;
+    // The search closes, as Esc closes it: its field is not drawn in the Trajectory, and the
+    // keys go to the pane.
+    if (this.filtering || this.query) {
+      this.input?.set_value("");
+      this.query = "";
+      this.filtering = false;
+      this.h?.focus();
+    }
     this.tsel = this.sel && this.findTurn(this.sel) ? this.sel : null;
     this.tscrolled = false;
     this.tscrollTo = this.tsel;
