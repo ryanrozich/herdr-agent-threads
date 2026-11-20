@@ -58,7 +58,7 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
+  focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
@@ -4849,6 +4849,22 @@ export default class Threads extends View {
       case "next": go(at < 0 ? keys.length - 1 : at + 1); return true;
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
+      // A search: the next match back in time (older) or forward (newer). With no match
+      // selected, either goes to the newest. At either end the selection stays: the search
+      // field already says it is the first mention or the newest, and nothing wraps.
+      case "olderMatch":
+      case "newerMatch": {
+        const mk = this.matchKeys(keys);
+        if (!mk.length) return false;
+        const i = mk.indexOf(this.sel);
+        const j = i < 0 ? mk.length - 1 : i + (name === "olderMatch" ? -1 : 1);
+        if (j < 0 || j >= mk.length) return true;
+        go(keys.indexOf(mk[j]));
+        // A step never follows, even onto the last row: a match streaming in must not move
+        // the reader (setQuery does the same).
+        this.follow = false;
+        return true;
+      }
       case "open":
         // Enter in a "#12" jump: keep the turn selected and leave the field.
         if (jumpTarget(this.query) != null) { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); return true; }
@@ -6162,26 +6178,53 @@ export default class Threads extends View {
         .child(svg(ICON("search")).size(13).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().min_w(0).h_full().text_size(12.5).text_color(t.foreground))
         .when(!q, (el) => el.child(this.kbd(t, "/")))
-        .when(Boolean(q), (el) => el.child(div().flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
+        .when(Boolean(q), (el) => el.child(div().id("th-search-count").flex_none().text_size(11.5).font_family(this.mono()).text_color(t.dim)
           .child(this.filterCount())))
+        .when(Boolean(this.filterText()) && this.matchPlace().n > 0, (el) => el.children(this.stepButtons(t)))
         .child(this.iconButton(t, "th-clear", "x", "Clear (Esc)", (_e, cx) => { this.input.set_value(""); this.query = ""; this.filtering = false; this.h.focus(); cx.notify(); }));
   }
 
-  // "3 of 41 · 2 hidden": matching shown turns of all shown turns across every session in
-  // the pane, and matches among hidden agent messages. For "#12": where it went.
+  // The search field's two steps: older (up, the way back through the list) and newer. The
+  // one with no match left that way is dimmed, takes no press, and its tooltip says so.
+  stepButtons(t) {
+    const { at, n } = this.matchPlace();
+    const step = (id, icon, tip, name, off, none) => off
+      ? div().id(id).flex_none().size(24).flex().items_center().justify_center().opacity(0.35).text_color(t.dim).tooltip(none).child(svg(ICON(icon)).size(14))
+      : this.iconButton(t, id, icon, tip, (_e, cx) => { this.action(name, cx); cx.notify(); });
+    return [
+      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n, "No older match"),
+      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1, "No newer match"),
+    ];
+  }
+
+  // Where the selection is among the search's matches, counted from the newest, and what the
+  // older step reaches: "2 of 7 · newest first", "7 of 7 · first mention", "1 of 1 · only
+  // mention", or "7 matches" with no match selected; then matches among hidden agent
+  // messages. In a pane under 420 px, the place alone ("first" at the oldest). For "#12":
+  // where it went.
   filterCount() {
     const n = jumpTarget(this.query);
     if (n != null) return !n ? "turn #" : this.jumpKey(n) ? `turn ${n}` : `no turn ${n}`;
     const q = this.filterText();
     if (!q) return null;
     const status = this.status();
-    let shown = 0, hit = 0, hiddenHit = 0;
-    this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
+    let hit = 0, hiddenHit = 0;
+    // The Pinned view shows every pin, agent message or not, and nothing else: the matches
+    // are the pins the search matches.
+    if (this.view === "pinned") hit = this.matchKeys().length;
+    else this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
       const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status), turns: s.turns });
       const m = threadMatches(s.turns, t, q);
-      if (on) { shown++; if (m) hit++; } else if (m) hiddenHit++;
+      if (on) { if (m) hit++; } else if (m) hiddenHit++;
     }));
-    return `${hit} of ${shown}${hiddenHit ? ` · ${hiddenHit} hidden` : ""}`;
+    const hidden = hiddenHit ? ` · ${hiddenHit} hidden` : "";
+    if (!hit) return `No matches${hidden}`;
+    const { at, n: all } = this.matchPlace();
+    const tight = this.pw() < 420;
+    if (!at) return `${all.toLocaleString()} ${all === 1 ? "match" : "matches"}${hidden}`;
+    const end = all === 1 ? "only mention" : at === all ? "first mention" : "newest first";
+    if (tight) return `${at} of ${all}${at === all && all > 1 ? " · first" : ""}`;
+    return `${at} of ${all} · ${end}${hidden}`;
   }
 
   // ---- the settings card (, or the sliders icon) ----
@@ -6954,6 +6997,24 @@ export default class Threads extends View {
 
   // The text the list is filtered by: none while the field holds a "#12" jump.
   filterText() { return jumpTarget(this.query) == null ? this.query.trim() : ""; }
+  // The keys of the turns the search matches, oldest first, from the list's turn keys: a
+  // pin's visit can show a turn that does not match, which is not a match to step to.
+  matchKeys(keys = this.turnKeys(this.rows())) {
+    const q = this.filterText();
+    if (!q) return [];
+    return keys.filter((k) => {
+      const s = this.sessions[Number(k.split(":")[0])];
+      const t = this.findTurn(k);
+      return Boolean(s && t && threadMatches(s.turns, t, q));
+    });
+  }
+  // Where the selection is among the matches, counted from the newest: { at (1 for the
+  // newest, 0 when no match is selected), n }.
+  matchPlace() {
+    const mk = this.matchKeys();
+    const i = mk.indexOf(this.sel);
+    return { at: i < 0 ? 0 : mk.length - i, n: mk.length };
+  }
 
   // Turn n of the newest session that has one.
   jumpKey(n) {
@@ -6966,6 +7027,16 @@ export default class Threads extends View {
   setQuery(text, cx) {
     this.query = text ?? "";
     const n = jumpTarget(this.query);
+    // A search starts at its newest match: the selection moves there unless it is on a match.
+    if (n == null && this.filterText()) {
+      const mk = this.matchKeys();
+      if (mk.length && !mk.includes(this.sel)) {
+        this.sel = mk[mk.length - 1];
+        this.follow = false;
+        this.scrollTo = { key: this.sel, how: "center" };
+      }
+      return;
+    }
     const key = n ? this.jumpKey(n) : null;
     if (!key) return;
     if (cx && this.findTurn(key)?.agent && !this.prefs.agentTurns && !this.turnKeys(this.rows()).includes(key)) this.setAgents(true, cx);
@@ -7382,15 +7453,15 @@ export default class Threads extends View {
   }
 
   // One line of text with the filter's matches marked; the start is cut so the first match
-  // shows. The last piece truncates.
-  hlLine(t, text, color) {
+  // shows. The last piece truncates. under: the opaque colour the line is drawn on (hlFill).
+  hlLine(t, under, text, color) {
     const q = this.filterText();
     if (!q || !text.toLowerCase().includes(q.toLowerCase()))
       return div().flex_1().min_w(0).truncate().text_color(color).child(text);
     const parts = spans(around(text, q), q);
     const nb = (s) => s.replace(/^ | $/g, "\u00a0");
     return h_flex().flex_1().min_w(0).overflow_hidden().children(parts.map((p, i) => p.hit
-      ? div().flex_none().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)
+      ? div().flex_none().rounded(3).bg(this.hlFill(t, under)).text_color(t.foreground).child(p.t)
       : (i === parts.length - 1 ? div().flex_1().min_w(0).truncate() : div().flex_none()).text_color(color).child(nb(p.t))));
   }
 
@@ -7406,9 +7477,9 @@ export default class Threads extends View {
   // any other colour (a quote, an agent's message, a coloured bubble, a stop's reason) stay
   // plain lines, as do lines while a search marks its hits, or where Herdr cannot select.
   // TextView sets its text half a px lower than a centred line (rig, 2x), hence mt(-0.5).
-  selLines(t, id, lines, color, size, lh, hard = null) {
+  selLines(t, under, id, lines, color, size, lh, hard = null) {
     const ink = String(theme().foreground ?? "").toLowerCase();
-    if (this.liteDraw || !this.replySelectable() || this.filterText() || String(color ?? "").toLowerCase() !== ink) return this.lines(t, lines, color, size, lh);
+    if (this.liteDraw || !this.replySelectable() || this.filterText() || String(color ?? "").toLowerCase() !== ink) return this.lines(t, under, lines, color, size, lh);
     // Escaped once per line list (the shape's, kept on the turn), and split as a long reply is,
     // since one TextView holds at most MD_MAX bytes. A drag selects within one of them.
     const memo = (this.htmlMemo ??= new WeakMap());
@@ -7418,14 +7489,14 @@ export default class Threads extends View {
       .child(TextView.html(chunks.length > 1 ? `${id}-${i}` : id, c.html).selectable(true).w_full().mt(-0.5));
     return v_flex().flex_1().min_w(0).text_size(size).line_height(`${lh}px`).text_color(color).children(chunks.map(block));
   }
-  lines(t, lines, color, size, lh) {
+  lines(t, under, lines, color, size, lh) {
     const q = this.filterText();
     return v_flex().flex_1().min_w(0).text_size(size).children(lines.map((l) => {
       const row = h_flex().h(lh).min_w(0).items_center().overflow_hidden();
       if (!q || !l.toLowerCase().includes(q.toLowerCase())) return row.child(div().flex_1().min_w(0).truncate().text_color(color).child(l));
       const parts = spans(l, q);
       return row.children(parts.map((p, i) => p.hit
-        ? div().flex_none().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)
+        ? div().flex_none().rounded(3).bg(this.hlFill(t, under)).text_color(t.foreground).child(p.t)
         : (i === parts.length - 1 ? div().flex_1().min_w(0).truncate() : div().flex_none()).text_color(color).child(p.t.replace(/^ | $/g, "\u00a0"))));
     }));
   }
@@ -7442,11 +7513,11 @@ export default class Threads extends View {
   // under 4.5:1 on the row's background, selected or not: ui.js commandColor), no fill and
   // no hue; the leading "/" and the mono face mark it. A bare command (no arguments) draws
   // its name in foreground. Long names are cut in the middle. A filter hit keeps its tint.
-  chip(t, label, maxW, bare = false, selected = false) {
+  chip(t, under, label, maxW, bare = false, selected = false) {
     const q = this.filterText().toLowerCase();
     const hit = Boolean(q) && label.toLowerCase().includes(q);
     return div().flex_none().h(18).max_w(maxW).flex().items_center().rounded(4)
-      .when(hit, (el) => el.px(3).bg(alpha(t.working, 0.32)))
+      .when(hit, (el) => el.px(3).bg(this.hlFill(t, under)))
       .text_size(12.5).font_family(this.mono()).text_color(hit || bare ? t.foreground : this.cmdColor(t, selected))
       .child(div().min_w(0).overflow_hidden().whitespace_nowrap().text_ellipsis_middle().child(label));
   }
@@ -7461,13 +7532,32 @@ export default class Threads extends View {
     return div().flex_none().w(2).h(h).rounded(1).bg(agent ? t.dim : alpha(t.foreground, 0.28));
   }
 
+  // A search match's fill: the working colour at 32%, and stronger in the selected turn's rows
+  // (item sets hlCur), so the match the reader is on stands out among the others: up to 60%,
+  // as far as the text on it still reads at 4.5:1 (ui.js matchFill; a bubble's theme has its
+  // own text). under is the opaque colour the match is drawn on, which every caller passes:
+  // the background, the selected fill over it, or a bubble's fill over it (bubbleLook under).
+  // It is a fill only, so no height changes and nothing is reshaped.
+  hlFill(t, under) {
+    if (under == null) throw new Error("hlFill: no backdrop");
+    const k = `${t.working}|${t.foreground}|${under}|${this.hlCur ? 1 : 0}`;
+    this.fillMemo ??= new Map();
+    let f = this.fillMemo.get(k);
+    if (f == null) {
+      f = matchFill(t.working, t.foreground, under, Boolean(this.hlCur));
+      if (this.fillMemo.size > 16) this.fillMemo.clear();
+      this.fillMemo.set(k, f);
+    }
+    return f;
+  }
+
   // Wrapped text with the filter's matches marked, word by word.
-  hlBlock(t, text, color) {
+  hlBlock(t, under, text, color) {
     const q = this.filterText();
     if (!q || !text.toLowerCase().includes(q.toLowerCase())) return div().text_color(color).child(text);
     return v_flex().children(text.split("\n").map((line) => h_flex().flex_wrap().min_h(LINE).children(
       spans(line, q).flatMap((p) => p.hit
-        ? [div().rounded(3).bg(alpha(t.working, 0.32)).text_color(t.foreground).child(p.t)]
+        ? [div().rounded(3).bg(this.hlFill(t, under)).text_color(t.foreground).child(p.t)]
         : p.t.split(/(?<=\s)/).filter(Boolean).map((w) => div().text_color(color).child(w.replace(/\s$/, " ")))))));
   }
 
@@ -7960,6 +8050,7 @@ export default class Threads extends View {
   // invisible(): gpui may skip painting a hidden element's subtree, and a size report made
   // at paint would then never come. The zero-height clip and opacity 0 hide it (R3-1).
   probe(t, due) {
+    this.hlCur = false;
     const hash = (x) => { let h = 5381; for (let i = 0; i < x.length; i++) h = ((h * 33) ^ x.charCodeAt(i)) >>> 0; return h.toString(36); };
     return div().absolute().top(0).left(0).w(this.width).h(0).overflow_hidden().opacity(0)
       .child(v_flex().w(this.width).children(due.map(([r, sig]) => v_flex().id(`th-probe-${r.key}-${hash(sig)}`).flex_none().w(this.inner())
@@ -8118,6 +8209,8 @@ export default class Threads extends View {
   }
 
   item(t, r, focusedPanel, size) {
+    // The selected turn's search matches get the stronger fill (hlFill) while its rows draw.
+    this.hlCur = r.turn != null && Boolean(this.sel) && r.turn === this.findTurn(this.sel);
     switch (r.kind) {
       case "spacer": return div();
       case "gap": return div();
@@ -8359,7 +8452,7 @@ export default class Threads extends View {
   // and the theme its text is drawn with. On a coloured fill the bubble's ink stands in for
   // the text, muted and accent colours, so a quote, a command's name and Show more read on
   // it. Plain keeps the pane's theme: the person's bubble is the text colour at 8% over
-  // whatever is under it, so it shows on a selected exchange's fill too.
+  // whatever is under it. under is that fill drawn over the background, for hlFill.
   bubbleLook(t, agent) {
     const v = agent ? this.prefs.agentBubbleColor : this.prefs.bubbleColor;
     const k = `${agent ? 1 : 0}|${v}|${t.foreground}|${t.background}|${t.muted}|${t.dim}|${t.border}`;
@@ -8369,7 +8462,8 @@ export default class Threads extends View {
       const style = bubbleStyle(v, t, agent);
       const plain = style.outline || style.ink === t.foreground;
       const theme = plain ? t : { ...t, foreground: style.ink, muted: style.sub, dim: style.sub, accent: style.ink, background: style.fill, selected: style.fill, border: style.bar };
-      look = { style, theme };
+      // What a match in this bubble is drawn on: its fill over the row's (rows have no fill).
+      look = { style, theme, under: over(style.fill, t.background) };
       if (this.bubbleMemo.size > 8) this.bubbleMemo.clear();
       this.bubbleMemo.set(k, look);
     }
@@ -8408,8 +8502,9 @@ export default class Threads extends View {
   }
 
   // A command's chip, then its arguments wrapping to its right.
-  promptBlock(t, turn, sh, sel = false, key = null) {
-    const sl = (id, ls, c, sz, hard = null) => (key ? this.selLines(t, `th-sp-${id}-${key}`, ls, c, sz, lh, hard) : this.lines(t, ls, c, sz, lh));
+  // t is the bubble's theme and under what its text is drawn on (bubbleLook).
+  promptBlock(t, under, turn, sh, sel = false, key = null) {
+    const sl = (id, ls, c, sz, hard = null) => (key ? this.selLines(t, under, `th-sp-${id}-${key}`, ls, c, sz, lh, hard) : this.lines(t, under, ls, c, sz, lh));
     const agent = turn.agent;
     const color = agent ? t.muted : t.foreground;
     const rt = this.rt();
@@ -8417,7 +8512,7 @@ export default class Threads extends View {
     const lh = rt.line;
     if (sh.chip) {
       return h_flex().gap(6).items_start().min_w(0)
-        .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
+        .child(div().flex_none().h(lh).flex().items_center().child(this.chip(t, under, sh.chip.label, sh.chip.chipW, sh.prompt.length === 0, sel)))
         .when(sh.prompt.length > 0, (el) => el.child(sl("p", sh.prompt, color, size, sh.pHard)));
     }
     // A prompt that quotes something: each quote line behind a bar, muted at 12.5 px; a
@@ -8458,14 +8553,14 @@ export default class Threads extends View {
       ...(r.fold === "folded" ? [] : [this.youGroup(t, turn, key, sel, [
         ...(sh.thumbs && !r.split ? [this.thumbStrip(t, turn, key)] : []),
         this.bubble(t, turn, [
-          this.promptBlock(bt, turn, sh, sel, key),
+          this.promptBlock(bt, this.bubbleLook(t, turn.agent).under, turn, sh, sel, key),
           ...(sh.pMore ? [this.moreLine(bt)] : []),
         ], sh.bubbleW),
       ])]),
       r.running || r.live ? this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn))
         : div().w_full().child(this.workLine(t, turn, r.pinNo ?? this.pinNumber(turn), false, this.lineIcon(t, key, key, false))),
       v_flex().min_w(0).max_w(this.prose())
-        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line, sh.rHard))
+        .child(sh.md != null ? this.cmdBlock(sh.md, `th-cmd-cmd:${key}`, this.tableExtra(r)) : this.selLines(t, t.background, `th-sr-${key}`, sh.reply, color, this.rt().size, this.rt().line, sh.rHard))
         .when(sh.rMore, (el) => el.child(this.moreLine(t))),
       this.actsStrip(t, turn, key, sel),
     ], r.split || r.fold ? ROW.GAP : ROW.PAD_T);
@@ -8536,7 +8631,7 @@ export default class Threads extends View {
       .when(!this.narrow(), (el) => el.child(div().flex_none().w(62).text_size(11.5).whitespace_nowrap().text_color(r.running ? t.working : t.dim).child(r.running ? "now" : fmtTime(turn.ts))))
       .when(Boolean(icon), (el) => el.child(icon))
       .child(h_flex().flex_1().min_w(0).text_size(turn.agent ? rt.small : rt.size).when(!turn.agent, (el) => el.font_medium())
-        .child(this.hlLine(t, r.text || " ", turn.agent ? t.muted : t.foreground)))
+        .child(this.hlLine(t, sel ? over(t.selected, t.background) : t.background, r.text || " ", turn.agent ? t.muted : t.foreground)))
       .when(pinned, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_size(11.5).text_color(t.accent)
         .child(svg(ICON("pin")).size(11))
         .when(pinNo != null, (x) => x.child(String(pinNo)))));
@@ -8659,7 +8754,7 @@ export default class Threads extends View {
     const bt = this.bubbleLook(t, turn.agent).theme;
     return this.rowFrame(t, sel, focusedPanel, true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
-      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, turn, sh, false, key), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
+      this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, this.bubbleLook(t, turn.agent).under, turn, sh, false, key), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
       this.liveLine(t, turn),
       this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · ")),
     ], r.split ? ROW.GAP : ROW.PAD_T);
@@ -8810,7 +8905,7 @@ export default class Threads extends View {
         return div();
       case "you": {
         const y = this.youMd(r);
-        const { style, theme: bt } = this.bubbleLook(t, turn.agent);
+        const { style, theme: bt, under } = this.bubbleLook(t, turn.agent);
         const c = { text: y.text, more: y.more };
         // A prompt taller than YOU_MAX shows its first YOU_MAX px, cut, and Show all; the
         // bubble is one list item, so a press on it opens the rest (click, "you"). Nothing in
@@ -8825,11 +8920,11 @@ export default class Threads extends View {
         const text = y.plain
           ? v_flex().gap(6).children(y.parts.map((p) => p.quote
             ? div().relative().pl(QUOTE_INSET).child(div().absolute().left(0).top(2).bottom(2).w(2).rounded(1).bg(turn.agent ? bt.dim : alpha(bt.foreground, 0.28)))
-              .child(this.hlBlock(bt, p.lines.join("\n"), bt.muted))
+              .child(this.hlBlock(bt, under, p.lines.join("\n"), bt.muted))
             : p.paste
               ? v_flex().min_w(0).child(div().text_size(12.5).text_color(bt.muted).child(pasteLabel(p.lines.length)))
-                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, p.lines.join("\n"), bt.muted)))
-              : this.hlBlock(bt, p.lines.join("\n"), bt.foreground)).concat(y.cut
+                .child(div().min_w(0).font_family(mono).text_size(12.5).text_color(bt.muted).child(this.hlBlock(bt, under, p.lines.join("\n"), bt.muted)))
+              : this.hlBlock(bt, under, p.lines.join("\n"), bt.foreground)).concat(y.cut
             ? [div().text_size(11.5).italic().text_color(bt.dim).child(`… ${y.cut.toLocaleString()} more characters not shown`)] : []))
           : this.mdView(tv(`th-you-${r.key}`), y.md, this.replySelectable());
         const cmd = commandParts(turn);
@@ -8846,7 +8941,7 @@ export default class Threads extends View {
             .when(agent, (el) => el.child(h_flex().gap(5).items_center().min_w(0).text_size(11.5)
               .child(svg(ICON(senderIcon(turn.sender))).size(11).flex_none().text_color(ac))
               .child(this.labelView(this.youParts(turn), ac, null))))
-            .when(Boolean(cmd), (el) => el.child(h_flex().h(this.rt().line).child(this.chip(bt, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
+            .when(Boolean(cmd), (el) => el.child(h_flex().h(this.rt().line).child(this.chip(bt, under, middle(cmd.name, Math.floor((y.bw - 32) / ROW.CHIP_CHAR)), y.bw - 20, !cmd.args))))
             .when(Boolean(c.text), (el) => el.child(box.text_size(this.rt().size).line_height(`${this.rt().line}px`).text_color(bt.foreground).child(text)))
             .when(c.more > 0, (el) => el.child(h_flex().h(18).gap(4).items_center().text_size(12).text_color(bt.accent)
               .child(`Show all · ${plural(c.more, "more line")}`).child(svg(ICON("chevron-down")).size(12))))
