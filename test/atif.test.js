@@ -826,14 +826,6 @@ test("atif: redacted thinking stays out of the export whole", () => {
   const output = execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" });
   expect(output).not.toContain("opaque-ciphertext");
 });
-<<<<<<< HEAD
-test("atif: the panel's reader keeps no thinking text", () => {
-  const plain = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8" });
-  const exportRead = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8", env: { ...process.env, THREADS_REASONING: "1" } });
-  expect(plain).not.toContain('"k":"h"');
-  expect(exportRead).toContain('"k":"h"');
-});
-=======
 test("atif: the panel's reader keeps no thinking text, whatever the environment exports", () => {
   // The switch is extract.sh's fifth argument, which only the export passes: a shell that
   // exports THREADS_REASONING changes nothing for the pane.
@@ -943,7 +935,6 @@ test("atif: a text step dropped past the step limit counts its reasoning as with
   expect(marked[0].tool_calls.map((c) => c.tool_call_id)).toContain("toolu_150");
   expect(t.notes).toContain("1 step has model reasoning that is not in this file");
 });
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
 test("atif: a Codex reasoning item becomes the next step's reasoning_content", () => {
   const file = join(dir, "reason-codex.jsonl");
   const event = (timestamp, type, payload) => ({ timestamp, type, payload });
