@@ -358,7 +358,7 @@ export const CODEX_CASES = [{
       approx(t.final_metrics.total_cost_usd, 0.22);
       assert.equal(t.final_metrics.total_steps, t.steps.length);
       assert.equal(t.final_metrics.extra.total_tokens, 242);
-      assert.ok(t.final_metrics.total_cost_usd == null);
+      // Harbor's second conversion re-runs these files under a price mock that leaves the beta child unpriced and asserts total_cost_usd is None (test_codex_trajectory.py:228-238); one conversion here covers the priced run only.
     },
     diff: { reason: "R3", kind: "by design", check: (t) => {
       assert.equal(t.session_id, "root");

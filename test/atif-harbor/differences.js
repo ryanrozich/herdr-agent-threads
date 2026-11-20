@@ -35,7 +35,7 @@ export const EXPECTED_DIFFERENCES = [
   { id: "claude: tool_use_without_result_renders_call_without_observation", reason: "R7", kind: "by design", note: "Agent Threads retains a marked observation for a call that has no result." },
   { id: "claude: verbatim_production_layout", reason: "R2", kind: "by design", note: "The unnamed helper lands in extra.subagents_no_call_names instead of flat sidechain steps." },
   { id: "codex: codex_grandchild_is_nested_under_its_parent", reason: "R3", kind: "by design", note: "The child and grandchild keep their own prompt steps; Harbor's hold only their work steps." },
-  { id: "codex: codex_subagent_rollouts_use_atif_children_without_copied_history", reason: "R3", kind: "by design", note: "Each child keeps its own prompt step and its nickname lands in extra.agent_name; Harbor's child holds only its work step." },
+  { id: "codex: codex_subagent_rollouts_use_atif_children_without_copied_history", reason: "R3", kind: "by design", note: "Each child keeps its own prompt step and its nickname lands in extra.agent_name; Harbor's child holds only its work step. The export also writes no total_cost_usd (R8)." },
   { id: "codex: codex_uses_active_turn_model_for_steps_and_pricing", reason: "R8", kind: "not handled", note: "Step models match, but Agent Threads writes no cost_usd anywhere." },
   { id: "codex: data_url_containing_a_url_is_not_treated_as_remote", reason: "R5a", kind: "by design", note: "The image part leaves no marker in the tool output text." },
   { id: "codex: data_url_parameters_do_not_hide_the_media_type", reason: "R5a", kind: "by design", note: "Agent Threads writes no files; only the text part of the tool output survives." },
