@@ -817,6 +817,16 @@ test("codeRows: a code line wrapped word by word, a long word split across rows"
   expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
 });
 
+test("columnResize for the Trajectory pane: the same steps and Threads' 240 px, with no 640 px cap", () => {
+  expect(columnResize(920, 600, 40, Infinity)).toEqual({ column: 960, main: 560 });
+  expect(columnResize(920, 600, -40, Infinity)).toEqual({ column: 880, main: 640 });
+  expect(columnResize(920, 260, 40, Infinity)).toEqual({ column: 940, main: 240 });
+  expect(columnResize(920, 240, 40, Infinity)).toBeNull();
+  expect(columnResize(212, 700, -40, Infinity)).toEqual({ column: 200, main: 712 });
+  // The Pinned column's own cap is unchanged.
+  expect(columnResize(620, 700, 40)).toEqual({ column: 640, main: 680 });
+});
+
 test("columnResize: the column by d and Threads by -d, within 200 to 640 px and Threads at least 240", () => {
   expect(columnResize(252, 700, 40)).toEqual({ column: 292, main: 660 });
   expect(columnResize(252, 700, -40)).toEqual({ column: 212, main: 740 });
