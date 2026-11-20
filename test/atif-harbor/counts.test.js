@@ -25,8 +25,8 @@ test("harbor: a wrong value fails a case by name", () => {
   expect(() => checkCase(item, { schema_version: "ATIF-v1.7", agent: { name: "Claude Code", version: "1" }, steps: [{ step_id: 1, source: "user", message: "What is up" }, { step_id: 2, source: "agent", message: "Final answer.", reasoning_content: "wrong" }] })).toThrow(item.id);
 });
 test("harbor: the subagent rollout case accepts Harbor's own trajectory", () => {
-  // Pins that this case's facts is satisfiable: the recheck of TRD-40 found it asserting
-  // 0.22 and null for one conversion's total_cost_usd, which no trajectory can satisfy.
+  // This test shows the case's facts can pass. It asserted 0.22 and null for one
+  // conversion's total_cost_usd, which no trajectory can satisfy.
   const item = CODEX_CASES.find((candidate) => candidate.id === "codex: codex_subagent_rollouts_use_atif_children_without_copied_history");
   const nicknames = { alpha: "Alpha", beta: "Beta" };
   const harborShaped = {
