@@ -273,6 +273,7 @@ function newTurn(s, e) {
     answeredBy: null,
     answeredIn: null,
     latest: "", // the final text of the last background update that said something
+    latestAt: null, // when that text began: the time of its first part
     latestParts: [],
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
     // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
@@ -493,6 +494,7 @@ function applyOne(s, e) {
         cur.after.push(e.t);
       } else {
         // A background update's text: kept apart, so the reply to the prompt stays the reply.
+        if (!cur.latestParts.length) cur.latestAt = ms(e.ts);
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;

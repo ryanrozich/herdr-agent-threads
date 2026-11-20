@@ -1,5 +1,5 @@
 // bun test: the Trajectory pane's rows as data (ledger.js): a heading and a row per step of a
-// turn, the start and duration cells, "?" for a time the transcript does not give, "no
+// turn, the start and duration cells, blank for a time the transcript does not give, "no
 // times" for a turn with none, failures, the bar's scale, the turn's line, the filters, the
 // detail, the status line and the running rule. The turns are made up here in the reader's
 // shape (turns.js), as small as each case needs.
@@ -50,16 +50,20 @@ test("ledger: a turn is a heading keyed as the chat's turn, then a 24 px row per
   for (const r of rows.slice(1)) expect(LEDGER_KINDS[r.lk]).toBeTruthy();
 });
 
-test("ledger times: the start from the turn's start, the duration, '?' for a time not given, none where a kind has none", () => {
+test("ledger times: the start from the turn's start, the duration, blank for a time not given (the detail says not recorded), none where a kind has none", () => {
   const t = turn(1, ["Thinking.", [["Read", "a", 2000, 2300], ["Grep", "b", null, 9000], ["Edit", "c", 12000, null]]]);
   const r = ledgerTurn(S, t, 0).rows;
-  const cell = (x) => [x.start != null ? startText(x.start) : x.startQ ? "?" : "", x.dur != null ? durText(x.dur) : x.durQ ? "?" : ""];
+  const cell = (x) => [rowTimes(x).start, rowTimes(x).dur];
   // The prompt starts at 0:00 and has no duration; a text starts and has none.
   expect(cell(r[1])).toEqual(["0:00", ""]);
   expect(cell(r[2])).toEqual(["0:01", ""]);
   expect(cell(r[3])).toEqual(["0:02", "0.3s"]);
-  // A call with no start: "?" for the start and the duration, never 0 and never a neighbour's.
-  expect(cell(r[4])).toEqual(["?", "?"]);
+  // A call with no start: blank start and duration, never 0 and never a neighbour's, and no
+  // "?" either: the detail says neither was recorded.
+  expect(cell(r[4])).toEqual(["", ""]);
+  expect(detailOf(r[4]).fields).toContainEqual(["Started", "not recorded"]);
+  expect(detailOf(r[4]).fields).toContainEqual(["Took", "not recorded"]);
+  expect(detailOf(r[4]).fields).toContainEqual(["Result", "not recorded"]);
   // A call with no result time in a turn whose calls have them: "no result", no duration.
   expect([r[5].lk, r[5].status, ...cell(r[5])]).toEqual(["noresult", "no result", "0:12", ""]);
   // The reply: its start and how long it took to write (afterAt to the turn's end).
@@ -102,6 +106,34 @@ test("ledger: an agent's message is marked apart from the person's, with its sen
   expect(rows[0]).toMatchObject({ agent: true, key: "1:7", calls: 40 });
   expect(rows.find((r) => r.lk === "more").text).toBe("and 39 more calls");
   expect(rows.at(-1)).toMatchObject({ lk: "context", text: "Build finished", startQ: true });
+});
+
+test("ledger: a background update's row starts when its text began, on either reader's path; with no time it is blank, never ?", () => {
+  // The Chat's reader keeps the latest update and when its first text came (latestAt).
+  const t = turn(22, [[["Read", "a", 1000, 1200]]], { latest: "Build finished" });
+  t.latestAt = T0 + 70000;
+  const row = (x) => ledgerTurn(S, x, 0).rows.find((r) => r.lk === "context");
+  expect(row(t)).toMatchObject({ start: 70000, startQ: false });
+  expect(rowTimes(row(t))).toMatchObject({ start: startText(70000), dur: "" });
+  expect(detailOf(row(t)).fields).toContainEqual(["Started", `${startText(70000)} into the turn`]);
+  // The export's reader (keepWakes): each wake-up's last text, at its afterAt.
+  const w = turn(23, [[["Read", "a", 1000, 1200]]]);
+  w.wakes = [{ steps: [], after: ["Deploy done"], afterAt: T0 + 90000 }];
+  expect(row(w)).toMatchObject({ text: "Deploy done", start: 90000 });
+  // An update with no time recorded: blank, and the detail says so.
+  const u = turn(24, [[["Read", "a", 1000, 1200]]], { latest: "Build finished" });
+  expect(rowTimes(row(u)).start).toBe("");
+  expect(detailOf(row(u)).fields).toContainEqual(["Started", "not recorded"]);
+  // No "?" in any column or detail field of these turns.
+  for (const x of [t, w, u, turn(25, [[["Grep", "b", null, null]]], { done: false, end: null, reply: null })]) {
+    for (const r of ledgerTurn(S, x, 0).rows) {
+      if (r.kind === "trh") continue;
+      expect(`${rowTimes(r).start}|${rowTimes(r).dur}`).not.toContain("?");
+      expect(JSON.stringify(detailOf(r).fields)).not.toContain("?");
+    }
+  }
+  // A row with no turn number leaves the Turn field out.
+  expect(detailOf({ ...row(t), turn: null }).fields.map((f) => f[0])).not.toContain("Turn");
 });
 
 test("ledger: a subagent call is one row with its run's time, state and tokens", () => {
