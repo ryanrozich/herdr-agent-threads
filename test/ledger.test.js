@@ -345,3 +345,19 @@ test("ledger: a dead turn killed during its only call says no result, when the a
   expect(sessionHasEnds({ ...S, turns: [t] })).toBe(false);
   expect(ledgerTurn(s, t, 0, false).rows[2].lk).toBe("noresult");
 });
+
+test("ledger detail: no result says 'interrupted' only for a turn marked so, with the last activity where it is known", () => {
+  const field = (r, name) => detailOf(r).fields.find(([k]) => k === name)?.[1];
+  // A done turn whose one call has no result: not interrupted.
+  const done = turn(17, [[["Bash", "bun run e2e", 2000, null]], [["Read", "a", 5000, 5600]]], { end: T0 + 9000 });
+  const d = ledgerTurn(S, done, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
+  expect(field(d, "Result")).toBe("No result");
+  expect(field(d, "Last activity")).toBe(fmtTime(T0 + 9000));
+  expect(field(d, "Took")).toBeUndefined();
+  // A turn marked interrupted says so.
+  const cut = turn(18, [[["Bash", "bun run e2e", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 });
+  const c = ledgerTurn(S, cut, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
+  expect(field(c, "Result")).toBe("No result: the turn was interrupted");
+  // No detail says interrupted for a turn that was not.
+  for (const r of ledgerTurn(S, done, 0, false, { ends: true }).rows) expect(JSON.stringify(detailOf(r).fields)).not.toContain("interrupted");
+});

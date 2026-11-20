@@ -288,8 +288,18 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   // the last recorded event, and the rows say when that was. (An unfinished turn's end time is
   // only its latest model message, so it is activity, not an end.)
   const stale = !live && !tr.done && !tr.interrupted;
-  const lastAt = stale ? (lastEnd != null || tr.end != null ? Math.max(lastEnd ?? tr.end, tr.end ?? lastEnd) : null) : null;
-  if (lastAt != null) for (const r of rows) if (r.lk === "noresult" || r.noResult || (r.open && !live)) r.lastAt = lastAt;
+  // The turn's last recorded activity. The heading shows it for a stale turn; a call with no
+  // result shows it in any turn that is not running, and says "interrupted" only when the
+  // turn is marked so.
+  const activity = lastEnd != null || tr.end != null ? Math.max(lastEnd ?? tr.end, tr.end ?? lastEnd) : null;
+  const lastAt = stale ? activity : null;
+  if (!live) {
+    for (const r of rows) {
+      if (!(r.lk === "noresult" || r.noResult || (r.open && stale))) continue;
+      if (activity != null) r.lastAt = activity;
+      if (tr.interrupted) r.interrupted = true;
+    }
+  }
   const open = openAt.map((a) => [a, Math.max(a, t1)]);
   const opens = openSub.map((a) => [a, Math.max(a, t1)]);
   const line = timed && span > 0
@@ -466,13 +476,13 @@ export function detailOf(r) {
   const call = laneOf(r.lk) === "tools" && r.lk !== "more";
   // A call with no result took no time the transcript knows: Took is left out, and Result says
   // "No result" once.
-  const cut = r.lk === "noresult" || r.noResult || (r.open && r.lastAt != null);
+  const cut = r.lk === "noresult" || r.noResult || (r.open && r.lastAt != null) || r.interrupted;
   if ((call || r.lk === "reply") && !(cut && r.dur == null)) {
     const took = r.dur != null ? durText(r.dur) : r.lk === "running" || r.open ? "still running" : "not recorded";
     F.push(["Took", took]);
   }
   if (call) {
-    const none = r.lastAt != null ? "No result" : "No result: the turn was interrupted";
+    const none = r.interrupted ? "No result: the turn was interrupted" : "No result";
     F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" || r.noResult ? none : r.durQ ? "not recorded" : "ok"]);
     if (r.lastAt != null) F.push(["Last activity", fmtTime(r.lastAt)]);
     if (r.sub) F.push(["Subagent", [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") || "no state recorded"]);
