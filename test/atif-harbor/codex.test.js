@@ -3,6 +3,7 @@
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Cases: CODEX_CASES in codex-cases.js.
 // Changed from Harbor's original: this runner is ours (pytest's role); it runs each case through our export's command line.
 import { expect, test } from "bun:test";
+import { AssertionError } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,5 +38,8 @@ test("harbor codex: the subagent case needs the history boundary", () => {
   }
   const r = spawnSync("bun", [cli, main, "codex"], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr);
-  expect(() => item.diff.check(JSON.parse(r.stdout))).toThrow();
+  const trajectory = JSON.parse(r.stdout);
+  // The check must fail on an assertion that shows the copy, not on bad output or a type error.
+  expect(() => item.diff.check(trajectory)).toThrow(AssertionError);
+  expect(() => item.diff.check(trajectory)).toThrow(/copied parent history/);
 });
