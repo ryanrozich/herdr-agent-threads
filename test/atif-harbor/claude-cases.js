@@ -23,6 +23,16 @@ export function writeSession(dir, name, events) {
   return file;
 }
 
+const userSteps = (t) => t.steps.filter((step) => step.source === "user");
+const agentSteps = (t) => t.steps.filter((step) => step.source === "agent");
+const b64 = (s) => Buffer.from(s).toString("base64");
+const toolResult = (id, content, timestamp) => user([{ type: "tool_result", tool_use_id: id, content }], timestamp);
+
+const sidechain = (event, agentId = "agent-1", uuid = null) => ({ ...event, isSidechain: true, agentId, ...(uuid ? { uuid } : {}) });
+const onModel = (event, model, usage) => ({ ...event, message: { ...event.message, model, usage } });
+const haiku = (content, timestamp, msgId = null) => onModel(assistant(content, timestamp, msgId), "claude-haiku-4-5", { input_tokens: 50, output_tokens: 5 });
+const sidechainStepsOf = (t) => t.steps.filter((step) => step.extra?.is_sidechain);
+
 export const CLAUDE_CASES = [
   promptCase("user_event_text_content_block_unwrapped", [{ type: "text", text: "Base directory for this skill: /logs/agent/sessions/skills/xlsx\n\nAll Excel files must be deterministic." }], "Base directory for this skill: /logs/agent/sessions/skills/xlsx\n\nAll Excel files must be deterministic."),
   promptCase("string_content_preserves_trailing_newline", "Please fix this bug.\n\nThanks,\nuser\n", "Please fix this bug.\n\nThanks,\nuser\n"),
@@ -111,4 +121,359 @@ export const CLAUDE_CASES = [
       assert.deepEqual(call.observation.results.map((result) => result.subagent_trajectory_ref[0].trajectory_id), ["helper-1", "helper-2"]);
     } },
   },
+
+
+  {
+    // Adapted: Harbor converts one tool_call record through _convert_event_to_step; here the
+    // same call and its output are a whole session (prompt, tool_use, tool_result).
+    id: "claude: tool_call_without_message_does_not_fabricate_assistant_text",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      user("Run the command"),
+      assistant([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } }]),
+      toolResult("toolu_1", "/workspace", "2026-01-01T00:00:02Z"),
+    ]) }),
+    facts: (t) => {
+      const step = t.steps.find((s) => s.source === "agent");
+      assert.equal(step.message, "");
+      assert.ok(step.tool_calls != null);
+      assert.equal(step.tool_calls[0].function_name, "Bash");
+      assert.ok(step.observation != null);
+      assert.equal(step.observation.results[0].content, "/workspace");
+    },
+  },
+  {
+    // Adapted: Harbor loops over its three malformed payloads in one test; they share one
+    // assistant event here, beside the one text block each iteration asserted against.
+    id: "claude: redacted_thinking_openrouter_malformed_payload_dropped",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      user("What is up"),
+      assistant([
+        { type: "redacted_thinking", data: "openrouter.reasoning:not-base64!!!" },
+        { type: "redacted_thinking", data: `openrouter.reasoning:${b64("not-json")}` },
+        { type: "redacted_thinking", data: `openrouter.reasoning:${b64('{"type":"reasoning.text"}')}` },
+        text("Fallback message."),
+      ]),
+    ]) }),
+    facts: (t) => {
+      const step = t.steps.find((s) => s.source === "agent");
+      assert.ok(step.reasoning_content == null);
+      assert.equal(step.message, "Fallback message.");
+      assert.ok(!step.message.includes("openrouter.reasoning"));
+    },
+  },
+  {
+    id: "claude: string_content_empty_is_skipped",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user(""), assistant([text("ack")])]) }),
+    facts: (t) => { assert.ok(t != null); assert.deepEqual(userSteps(t), []); },
+    diff: { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) },
+  },
+  {
+    id: "claude: string_content_whitespace_only_is_skipped",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user("   \n  \t"), assistant([text("ack")])]) }),
+    facts: (t) => { assert.ok(t != null); assert.deepEqual(userSteps(t), []); },
+    diff: { reason: "R4", kind: "not handled", check: (t) => { assert.equal(userSteps(t).length, 1); assert.equal(userSteps(t)[0].message, "   \n  \t"); } },
+  },
+  {
+    id: "claude: list_content_empty_and_whitespace_only_parts_filtered",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user([text(""), text("   \n\t"), text("real content with trailing newline\n")])]) }),
+    facts: (t) => { assert.ok(t != null); assert.equal(userSteps(t).length, 1); assert.equal(userSteps(t)[0].message, "real content with trailing newline\n"); },
+    diff: { reason: "R4", kind: "not handled", check: (t) => assert.equal(userSteps(t)[0].message, "\n   \n\t\nreal content with trailing newline\n") },
+  },
+  {
+    id: "claude: fallback_content_non_str_non_list_byte_faithful",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user({ hello: "world", trailing_ws_in_value: "x \n" })]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.equal(userSteps(t).length, 1);
+      assert.equal(userSteps(t)[0].message, "{\"hello\": \"world\", \"trailing_ws_in_value\": \"x \\n\"}");
+    },
+    diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+  },
+  ...[
+    [42, "42"],
+    [["a", "b", "c"], "a\n\nb\n\nc"],
+    [[1, 2, 3], "1\n\n2\n\n3"],
+    [true, "true"],
+  ].map(([weirdContent, expected], index) => ({
+    id: `claude: fallback_branch_stringifies_non_dict_shapes[${index}]`,
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user(weirdContent)]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.equal(userSteps(t).length, 1);
+      assert.equal(userSteps(t)[0].message, expected);
+    },
+    diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+  })),
+  {
+    id: "claude: list_branch_tool_result_path_unchanged",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      user("list the files", "2026-01-01T00:00:00Z"),
+      assistant([{ type: "tool_use", id: "toolu_abc", name: "Bash", input: { command: "ls" } }], "2026-01-01T00:00:01Z"),
+      toolResult("toolu_abc", "file1.py\nfile2.py\n", "2026-01-01T00:00:02Z"),
+    ]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      const toolCallSteps = agentSteps(t).filter((s) => s.tool_calls);
+      assert.equal(toolCallSteps.length, 1, "expected exactly one tool_call step; tool_result may have been absorbed into a different path");
+      const observation = toolCallSteps[0].observation;
+      assert.ok(observation != null, "tool_call step missing observation; tool_result didn't make it through the tool-result handling branch");
+      const observationStr = JSON.stringify(observation);
+      const resultStripped = "file1.py\nfile2.py\n".trim();
+      const resultEscaped = JSON.stringify(resultStripped).slice(1, -1);
+      assert.ok(observationStr.includes(resultStripped) || observationStr.includes(resultEscaped), "observation does not carry the tool_result bytes");
+      assert.equal(userSteps(t).length, 1, "expected exactly one user step (the initial instruction); tool_result may have leaked into user text");
+      assert.equal(userSteps(t)[0].message, "list the files");
+    },
+  },
+  {
+    id: "claude: list_branch_interleaved_text_and_tool_result",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      assistant([{ type: "tool_use", id: "toolu_xyz", name: "Read", input: { file_path: "/tmp/x" } }], "2026-01-01T00:00:00Z"),
+      user([text("before result"), { type: "tool_result", tool_use_id: "toolu_xyz", content: "tool output payload" }, text("after result")], "2026-01-01T00:00:01Z"),
+    ]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.equal(userSteps(t).length, 1, "expected one user step from the two text blocks");
+      assert.equal(userSteps(t)[0].message, "before result\n\nafter result");
+      assert.ok(!userSteps(t)[0].message.includes("tool output payload"), "tool_result payload leaked into the text-joined user step");
+      const toolCallSteps = agentSteps(t).filter((s) => s.tool_calls);
+      assert.equal(toolCallSteps.length, 1);
+      const observation = toolCallSteps[0].observation;
+      assert.ok(observation != null);
+      assert.ok(JSON.stringify(observation).includes("tool output payload"));
+    },
+    diff: { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) },
+  },
+  {
+    // Adapted: Harbor writes each payload to its own session; here all five share one, in
+    // the test's order.
+    id: "claude: stringify_uses_json_dumps_for_non_str",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      user(true),
+      user(false),
+      user({ a: 1, b: "x" }),
+      user({ nested: { inner: [1, 2] } }),
+      user({ 中文: "value", "emoji_🎉": 1 }),
+    ]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      for (const [payload, expected] of [
+        [true, "true"],
+        [false, "false"],
+        [{ a: 1, b: "x" }, "{\"a\": 1, \"b\": \"x\"}"],
+        [{ nested: { inner: [1, 2] } }, "{\"nested\": {\"inner\": [1, 2]}}"],
+        [{ 中文: "value", "emoji_🎉": 1 }, "{\"中文\": \"value\", \"emoji_🎉\": 1}"],
+      ]) {
+        assert.equal(userSteps(t).length, 1, JSON.stringify(payload));
+        assert.equal(userSteps(t)[0].message, expected, `json.dumps semantics expected for ${JSON.stringify(payload)}`);
+      }
+    },
+    diff: { reason: "R5b", kind: "not handled", check: (t) => assert.ok(t == null) },
+  },
+  ...["", "a", "a\n", "\na", "\n", "  \t  ", "a  ", "  a", "a\nb\nc", "a\n\nb", "\x00", "héllo", "🎉", "a".repeat(1000)].map((byteSeq, index) => {
+    const item = {
+      id: `claude: byte_faithful_property_across_inputs[${index}]`,
+      files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user(byteSeq), assistant([text("ack")])]) }),
+      facts: (t) => {
+        assert.ok(t != null);
+        const steps = userSteps(t);
+        if (byteSeq.trim()) { assert.equal(steps.length, 1); assert.equal(steps[0].message, byteSeq); } else assert.deepEqual(steps, []);
+      },
+    };
+    if (byteSeq === "") item.diff = { reason: "R3", kind: "by design", check: (t) => assert.ok(t == null) };
+    if (byteSeq === "\n" || byteSeq === "  \t  ") item.diff = { reason: "R4", kind: "not handled", check: (t) => { assert.equal(userSteps(t).length, 1); assert.equal(userSteps(t)[0].message, byteSeq); } };
+    return item;
+  }),
+  {
+    id: "claude: duplicate_session_uuid_tool_result_is_deduped",
+    files: (dir) => {
+      const toolUse = { ...assistant([{ type: "tool_use", id: "toolu_duplicate", name: "Bash", input: { command: "echo ok" } }], "2026-01-01T00:00:01Z"), uuid: "assistant-tool-use" };
+      const result = { ...toolResult("toolu_duplicate", "ok", "2026-01-01T00:00:02Z"), uuid: "duplicate-tool-result" };
+      return { main: writeSession(dir, "session.jsonl", [
+        user("Run the command", "2026-01-01T00:00:00Z"),
+        toolUse,
+        result,
+        { type: "system", subtype: "compact_boundary", uuid: "compact-boundary", timestamp: "2026-01-01T00:00:03Z" },
+        { ...result },
+        assistant([text("Done.")], "2026-01-01T00:00:04Z"),
+      ]) };
+    },
+    facts: (t) => {
+      assert.ok(t != null);
+      assert.deepEqual(t.steps.map((step) => step.step_id), t.steps.map((_, i) => i + 1));
+      const toolSteps = t.steps.filter((step) => step.tool_calls);
+      assert.equal(toolSteps.length, 1);
+      assert.equal(toolSteps[0].tool_calls[0].function_name, "Bash");
+      assert.ok(toolSteps[0].observation != null);
+      assert.equal(toolSteps[0].observation.results[0].content, "ok");
+    },
+  },
+  {
+    id: "claude: agent_steps_carry_llm_call_count",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [user([text("Fix the bug.")]), assistant([text("Looking.")], "2026-01-01T00:00:01Z", "msg_1")]) }),
+    facts: (t) => {
+      assert.ok(t != null);
+      const userStep = t.steps.find((s) => s.source === "user");
+      const agentStep = t.steps.find((s) => s.source === "agent");
+      assert.ok(userStep.llm_call_count == null);
+      assert.equal(agentStep.llm_call_count, 1);
+    },
+    diff: { reason: "R6", kind: "not handled", check: (t) => {
+      assert.deepEqual(t.steps.map((step) => step.source), ["user", "agent"]);
+      assert.equal(t.steps[0].message, "Fix the bug.");
+      assert.equal(t.steps[1].message, "Looking.");
+      assert.ok(t.steps[1].llm_call_count == null);
+    } },
+  },
+
+
+  {
+    // Adapted: the tool_result gains the launch record toolUseResult.agentId "agent-1", and the
+    // helper file is named agent-agent-1.jsonl in the session's subagents folder; its events are
+    // Harbor's, the first user event doubling as the prompt the Task call is matched against.
+    id: "claude: subagent_file_events_become_sidechain_steps",
+    files: (dir) => {
+      const main = writeSession(dir, "session.jsonl", [
+        user([text("Fix the bug.")], "2026-01-01T00:00:00Z"),
+        onModel(assistant([{ type: "tool_use", id: "toolu_task", name: "Task", input: { prompt: "explore the repo" } }], "2026-01-01T00:00:01Z", "msg_main_1"), "claude-opus-4-6", { input_tokens: 100, output_tokens: 10 }),
+        { ...toolResult("toolu_task", "subagent finished", "2026-01-01T00:00:04Z"), toolUseResult: { agentId: "agent-1", status: "completed" } },
+        onModel(assistant([text("All done.")], "2026-01-01T00:00:05Z", "msg_main_2"), "claude-opus-4-6", { input_tokens: 200, output_tokens: 20 }),
+      ]);
+      writeSession(dir, "session/subagents/agent-agent-1.jsonl", [
+        sidechain(user([text("explore the repo")], "2026-01-01T00:00:02Z")),
+        sidechain(haiku([text("Repo explored.")], "2026-01-01T00:00:03Z", "msg_sub_1")),
+      ]);
+      return { main };
+    },
+    facts: (t) => {
+      assert.ok(t);
+      const sidechainSteps = sidechainStepsOf(t);
+      assert.equal(sidechainSteps.length, 2);
+      assert.deepEqual(new Set(sidechainSteps.map((step) => step.extra.agent_id)), new Set(["agent-1"]));
+      assert.ok(t.steps.filter((step) => !sidechainSteps.includes(step)).every((step) => !("agent_id" in (step.extra ?? {}))));
+      const subagentStep = sidechainSteps.find((step) => step.source === "agent");
+      assert.equal(subagentStep.model_name, "claude-haiku-4-5");
+      assert.ok(subagentStep.metrics != null);
+      assert.equal(subagentStep.metrics.prompt_tokens, 50);
+      assert.ok(t.final_metrics != null);
+      assert.equal(t.final_metrics.total_prompt_tokens, 100 + 200 + 50);
+      assert.equal(t.final_metrics.total_completion_tokens, 10 + 20 + 5);
+      assert.equal(t.agent.model_name, "claude-opus-4-6");
+      const firstUserStep = t.steps.find((step) => step.source === "user");
+      assert.equal(firstUserStep.message, "Fix the bug.");
+      const subagentIndex = t.steps.indexOf(subagentStep);
+      const taskCallIndex = t.steps.findIndex((step) => step.tool_calls);
+      const finalIndex = t.steps.findIndex((step) => step.message === "All done.");
+      assert.ok(taskCallIndex < subagentIndex && subagentIndex < finalIndex);
+    },
+    diff: { reason: "R2", kind: "by design", check: (t) => {
+      assert.deepEqual(t.steps.map((step) => step.message), ["Fix the bug.", "", "All done."]);
+      assert.equal(sidechainStepsOf(t).length, 0);
+      const sub = t.subagent_trajectories[0];
+      assert.equal(sub.trajectory_id, "agent-1");
+      assert.deepEqual(sub.steps.map((step) => step.message), ["explore the repo", "Repo explored."]);
+      assert.equal(sub.steps[1].model_name, "claude-haiku-4-5");
+      assert.equal(sub.steps[1].metrics.prompt_tokens, 50);
+      assert.equal(t.final_metrics.total_prompt_tokens, 350);
+      assert.equal(t.final_metrics.total_completion_tokens, 35);
+      assert.equal(t.agent.model_name, "claude-opus-4-6");
+      const result = t.steps[1].observation.results[0];
+      assert.equal(result.content, "subagent finished");
+      assert.deepEqual(result.subagent_trajectory_ref, [{ trajectory_id: "agent-1", session_id: "session" }]);
+    } },
+  },
+  {
+    // Adapted: the helper file is agent-agent-1.jsonl in the session's subagents folder and gains a
+    // first prompt, since our export reads a subagent only as a transcript of its own; the
+    // duplicated event itself, uuid and all, is Harbor's.
+    id: "claude: subagent_events_deduped_by_uuid_across_files",
+    files: (dir) => {
+      const duplicated = sidechain(haiku([text("Repo explored.")], "2026-01-01T00:00:02Z", "msg_sub_1"), "agent-1", "uuid-sub-1");
+      const main = writeSession(dir, "session.jsonl", [user([text("Fix the bug.")], "2026-01-01T00:00:00Z"), duplicated]);
+      writeSession(dir, "session/subagents/agent-agent-1.jsonl", [sidechain(user([text("explore the repo")], "2026-01-01T00:00:01Z")), duplicated]);
+      return { main };
+    },
+    facts: (t) => {
+      assert.ok(t);
+      assert.equal(t.steps.filter((step) => step.message === "Repo explored.").length, 1);
+      assert.ok(t.final_metrics != null);
+      assert.equal(t.final_metrics.total_prompt_tokens, 50);
+    },
+    diff: { reason: "R2", kind: "by design", check: (t) => {
+      assert.equal(t.steps.filter((step) => step.message === "Repo explored.").length, 0);
+      const sub = t.extra.subagents_no_call_names[0].trajectory;
+      assert.equal(sub.trajectory_id, "agent-1");
+      assert.equal(sub.steps.filter((step) => step.message === "Repo explored.").length, 1);
+      assert.equal(sub.final_metrics.total_prompt_tokens, 50);
+      assert.equal(t.subagent_trajectories, undefined);
+      assert.equal(t.final_metrics.total_prompt_tokens, undefined);
+    } },
+  },
+  {
+    id: "claude: inline_sidechain_events_stay_chronological",
+    files: (dir) => ({ main: writeSession(dir, "session.jsonl", [
+      user([text("Fix the bug.")], "2026-01-01T00:00:00Z"),
+      sidechain(user([text("explore the repo")], "2026-01-01T00:00:01Z")),
+      assistant([text("All done.")], "2026-01-01T00:00:02Z", "msg_main_1"),
+    ]) }),
+    facts: (t) => {
+      assert.ok(t);
+      const firstUserStep = t.steps.find((step) => step.source === "user");
+      assert.equal(firstUserStep.message, "Fix the bug.");
+    },
+  },
+  {
+    // Adapted: the helper file is agent-agent-1.jsonl in the session's subagents folder; Harbor's
+    // rglob finds it with no call naming it, and our export reads it the same way (a transcript no
+    // call names) but builds nothing from it without a prompt, so the main chain decides the model.
+    id: "claude: root_model_prefers_main_chain_over_earlier_sidechain",
+    files: (dir) => {
+      const main = writeSession(dir, "session.jsonl", [
+        user([text("Fix the bug.")], "2026-01-01T00:00:00Z"),
+        assistant([text("Done.")], "2026-01-01T00:00:03Z", "msg_main_1"),
+      ]);
+      writeSession(dir, "session/subagents/agent-agent-1.jsonl", [sidechain(haiku([text("Repo explored.")], "2026-01-01T00:00:01Z", "msg_sub_1"))]);
+      return { main };
+    },
+    facts: (t) => {
+      assert.ok(t);
+      assert.equal(t.agent.model_name, "claude-opus-4-6");
+    },
+  },
+  {
+    // Adapted: Harbor's session uuid and home-style project folder become a 00000000- uuid and a
+    // synthetic path, and the helper file gains a first prompt (our export reads a subagent only as
+    // a transcript of its own); the event sequence, ids and asserted values are Harbor's. Harbor's
+    // logs-dir discovery assertion is carried by files() returning this exact production layout.
+    id: "claude: verbatim_production_layout",
+    files: (dir) => {
+      const sid = "00000000-0000-4708-8d5c-1f453f0eb05c";
+      const main = writeSession(dir, `sessions/projects/-logs-dev-app/${sid}.jsonl`, [
+        { ...user([text("Fix the bug.")], "2026-01-01T00:00:00Z"), sessionId: sid },
+        { ...assistant([text("All done.")], "2026-01-01T00:00:03Z", "msg_main_1"), sessionId: sid },
+      ]);
+      writeSession(dir, `sessions/projects/-logs-dev-app/${sid}/subagents/agent-a4e70aa0cbe15c6ff.jsonl`, [
+        { ...sidechain(user([text("explore the repo")], "2026-01-01T00:00:00Z"), "a4e70aa0cbe15c6ff"), sessionId: sid },
+        { ...sidechain(haiku([text("Repo explored.")], "2026-01-01T00:00:01Z", "msg_sub_1"), "a4e70aa0cbe15c6ff"), sessionId: sid },
+      ]);
+      return { main };
+    },
+    facts: (t) => {
+      assert.ok(t);
+      assert.equal(t.session_id, "00000000-0000-4708-8d5c-1f453f0eb05c");
+      const sidechainSteps = sidechainStepsOf(t);
+      assert.deepEqual(sidechainSteps.map((step) => step.message), ["Repo explored."]);
+      assert.equal(sidechainSteps[0].model_name, "claude-haiku-4-5");
+    },
+    diff: { reason: "R2", kind: "by design", check: (t) => {
+      assert.equal(t.session_id, "00000000-0000-4708-8d5c-1f453f0eb05c");
+      assert.deepEqual(t.steps.map((step) => step.message), ["Fix the bug.", "All done."]);
+      assert.equal(sidechainStepsOf(t).length, 0);
+      const sub = t.extra.subagents_no_call_names[0].trajectory;
+      assert.equal(sub.trajectory_id, "a4e70aa0cbe15c6ff");
+      assert.equal(sub.steps.at(-1).message, "Repo explored.");
+      assert.equal(sub.steps.at(-1).model_name, "claude-haiku-4-5");
+    } },
+  },
+
 ];

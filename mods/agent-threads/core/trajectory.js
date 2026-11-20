@@ -53,7 +53,13 @@ export function trajectory(s, turn, id = null) {
     if (st.k !== "group") continue;
     // Calls with no text before them (the first step, or calls after STEP_MAX) start a step.
     if (!step || step.cells.some((c) => c.kind === "tool")) open();
-    if (st.r) step.cells.push({ kind: "message", text: "", reason: st.r, start: null, end: null });
+    // A group's reasoning joins the step's message cell when it has one (a call that follows a
+    // text step), so it is not lost in a second cell nothing reads.
+    if (st.r) {
+      const m = step.cells.find((c) => c.kind === "message");
+      if (m) m.reason = m.reason ? `${m.reason}\n\n${st.r}` : st.r;
+      else step.cells.push({ kind: "message", text: "", reason: st.r, start: null, end: null });
+    }
     st.calls.forEach((name, i) => {
       const id = st.ids?.[i] ?? null;
       const info = st.info?.[i] ?? null;

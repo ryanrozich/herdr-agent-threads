@@ -800,6 +800,26 @@ test("atif: thinking beside a tool call puts reasoning on the call's step", () =
   expect(t.steps[1].message).toBe("");
   expect(t.steps[1].tool_calls).toHaveLength(1);
 });
+test("atif: thinking before a call that joins a step after text keeps its reasoning", () => {
+  const file = join(dir, "reason-join.jsonl");
+  const call = (ts, msgId, content) => ({ type: "assistant", timestamp: ts, sessionId: "s", message: { id: msgId, role: "assistant", model: "claude-sonnet-5-5", content, stop_reason: "tool_use" } });
+  const result = (ts, id, out) => ({ type: "user", timestamp: ts, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: out }] } });
+  const events = [
+    thinkingEvents[0],
+    call("2026-11-01T09:00:05Z", "msg_1", [{ type: "thinking", thinking: "Thought A." }, { type: "text", text: "I'll read the file." }, { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/app/test.py" } }]),
+    result("2026-11-01T09:00:06Z", "toolu_1", "contents"),
+    call("2026-11-01T09:00:07Z", "msg_2", [{ type: "thinking", thinking: "Thought B." }, { type: "tool_use", id: "toolu_2", name: "Edit", input: { file_path: "/app/test.py" } }]),
+    result("2026-11-01T09:00:08Z", "toolu_2", "edited"),
+    { type: "assistant", timestamp: "2026-11-01T09:00:09Z", sessionId: "s", message: { id: "msg_3", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "Thought C." }, { type: "text", text: "Done." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  expect(t.steps[1].reasoning_content).toBe("Thought A.\n\nThought B.");
+  expect(t.steps[1].message).toBe("I'll read the file.");
+  expect(t.steps[1].tool_calls.map((c) => c.tool_call_id)).toEqual(["toolu_1", "toolu_2"]);
+  expect(t.steps.at(-1).reasoning_content).toBe("Thought C.");
+  expect(problems(t)).toEqual([]);
+});
 test("atif: redacted thinking stays out of the export whole", () => {
   const file = join(dir, "reason-redacted.jsonl");
   writeFileSync(file, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "redacted_thinking", data: "opaque-ciphertext" }, { type: "text", text: "Done." }] } })}\n`);

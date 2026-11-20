@@ -2,7 +2,7 @@
 // and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0).
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Cases: CLAUDE_CASES in claude-cases.js.
 import { test, expect } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,8 +12,9 @@ import { checkCase } from "./differences.js";
 const cli = join(import.meta.dir, "../../mods/agent-threads/core/atif.js");
 for (const item of CLAUDE_CASES) test(`harbor claude: ${item.id.slice(8).replaceAll("_", " ")}`, () => {
   const { main } = item.files(mkdtempSync(join(tmpdir(), "threads-harbor-")));
-  const t = JSON.parse(execFileSync("bun", [cli, main, "claude"], { encoding: "utf8" }));
-  checkCase(item, t);
+  const r = spawnSync("bun", [cli, main, "claude"], { encoding: "utf8" });
+  if (r.status !== 0 && !/no turns/.test(r.stderr)) throw new Error(r.stderr);
+  checkCase(item, r.status === 0 ? JSON.parse(r.stdout) : null);
 });
 
 test("harbor corpus (ours): awkward user strings survive the export byte for byte", () => {
