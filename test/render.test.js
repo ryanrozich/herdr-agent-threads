@@ -13990,3 +13990,42 @@ test("entering the Trajectory in the Chat's own pane with the search open closes
   expect(v.traj).toBe(false);
   expect([v.filtering, v.query]).toEqual([false, ""]);
 });
+
+test("Trajectory keys: Space shows and hides the detail; Esc with nothing left to close and an unbound key pass to Herdr", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  w.width = 560;
+  w.paneW = 560;
+  expect(w.trajPane).toBeTruthy();
+  let stops = 0;
+  cx2.stop_propagation = () => { stops++; };
+  const was = w.detailOpen();
+  w.key(keyEv("space"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([!was, 1]);
+  w.key(keyEv("space"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([was, 2]);
+  // Keys the Trajectory has no use for pass on.
+  stops = 0;
+  for (const k of ["x", "q", "1", "backspace"]) w.key(keyEv(k), cx2);
+  expect(stops).toBe(0);
+  // Esc closes the detail first; with nothing left to close it passes on.
+  if (!w.detailOpen()) w.key(keyEv("space"), cx2);
+  stops = 0;
+  w.key(keyEv("escape"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([false, 1]);
+  w.key(keyEv("escape"), cx2);
+  expect(stops).toBe(1);
+  expect(w.trajPane).toBeTruthy();
+});
