@@ -68,7 +68,7 @@ import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, pars
 import { MOD } from "./name.js";
 import {
   LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse,
-  trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints,
+  trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
   BAR_W, BAR_H, BAR_SLANT, LINE_H,
 } from "./ledger.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -9450,6 +9450,10 @@ export default class Threads extends View {
     const m = this.ledgerMemo;
     if (m?.key === key && m.sessions === this.sessions) return m;
     this.turnLedger ??= new WeakMap();
+    // Whether the agent writes result times (ledger.js sessionHasEnds): Claude Code always
+    // does; another agent shows it by a result time anywhere in the session.
+    const claude = this.agent().key === "claude";
+    const endsOf = this.sessions.map((x) => claude || this.sessionEnds(x));
     const rows = [];
     const lastSi = this.sessions.length - 1;
     this.sessions.forEach((x, si) => {
@@ -9459,7 +9463,7 @@ export default class Threads extends View {
         const kept = turn.done ? this.turnLedger.get(turn) : null;
         let out = kept?.si === si ? kept.out : null;
         if (!out) {
-          out = ledgerTurn(x, turn, si, live);
+          out = ledgerTurn(x, turn, si, live, { ends: endsOf[si] });
           if (turn.done) this.turnLedger.set(turn, { si, out });
         }
         for (const r of out.rows) rows.push(r);
@@ -9468,6 +9472,14 @@ export default class Threads extends View {
     this.ledgerMemo = { key, sessions: this.sessions, rows, totals: ledgerTotals(rows), going };
     this.ledgerShown = null;
     return this.ledgerMemo;
+  }
+  // A session once seen with a result time keeps it; until then it is looked for again.
+  sessionEnds(x) {
+    this.endsSeen ??= new WeakSet();
+    if (this.endsSeen.has(x)) return true;
+    if (!sessionHasEnds(x)) return false;
+    this.endsSeen.add(x);
+    return true;
   }
   // The rows the filter buttons leave, kept until the rows or the filter change.
   ledgerRows() {
