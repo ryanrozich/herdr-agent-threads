@@ -374,24 +374,13 @@ test("breakSpans: search marks the same characters across a hyphen, the drawn pi
   expect(ends[1].t.startsWith(`merge-${B}`)).toBe(true);
 });
 
-test("promptMd with per: breaks in text and link text only, never in code, a URL or a link's address", () => {
-  const B = HYPHEN_BREAK;
+test("promptMd never puts HYPHEN_BREAK in the Markdown, so a selected plain bubble copies as typed", () => {
   const link = { name: "Issue", re: /\bACME-(\d+)\b/g, url: "https://linear.app/acme/issue/ACME-$1", host: "linear.app" };
-  const url = "https://example.com/a-very-long-path-with-many-hyphens-in-it-for-the-test";
-  const code = `\`${TOKEN}\``;
-  const text = `${TOKEN} ${url} ${code} fix-for-ACME-123-and-the-rounding-in-the-nightly-receipt-run`;
-  const plain = promptMd(text, { links: [link] }).md;
-  const md = promptMd(text, { links: [link], per: 30 }).md;
-  expect(plain.includes(B)).toBe(false);
-  expect(md).toContain(TOKEN.replaceAll("-", `\\-${B}`));
-  expect(md).toContain(`<${url}>`);
-  expect(md).toContain(code);
-  // The rule still finds ACME-123 (it runs on the message), and its text is broken, not its address.
-  expect(md).toContain(`for\\-${B}[ACME\\-${B}123](https://linear.app/acme/issue/ACME-123)`);
-  // Without the breaks, it is the Markdown drawn before.
-  expect(md.replaceAll(B, "")).toBe(plain);
-  // Quote lines too.
-  expect(promptMd(`> ${TOKEN}\nok`, { per: 30 }).md).toContain(`> pre\\-${B}merge`);
+  const text = `${TOKEN} fix-for-ACME-123-and-the-rounding-in-the-nightly-receipt-run\n> ${TOKEN}`;
+  const md = promptMd(text, { links: [link] }).md;
+  expect(md.includes(HYPHEN_BREAK)).toBe(false);
+  expect(md).toContain(TOKEN.replaceAll("-", "\\-"));
+  expect(md).toContain("[ACME\\-123](https://linear.app/acme/issue/ACME-123)");
 });
 
 test("quoteText drops HYPHEN_BREAK, so a copied piece of a drawn bubble pastes as typed", () => {

@@ -11932,7 +11932,7 @@ test("a compact pin draws no search match fill, selected or not", async () => {
 // that text itself and never after a "-". The drawn text gets HYPHEN_BREAK after the "-"s of
 // a token too long for the line; the copy, the quote, search and the size estimates use the
 // message itself.
-test("an open bubble draws a long hyphenated token with breaks; copy, quote, search and the size use the message", async () => {
+test("an open coloured bubble draws a long hyphenated token with breaks, a plain one's Markdown never; copy, quote, search and the size use the message", async () => {
   const { HYPHEN_BREAK: B } = await import("../mods/agent-threads/ui.js");
   const TOKEN = "pre-merge-check-for-the-nightly-rounding-and-receipt-totals-run";
   const PROMPT = `Why does src/cart/rounding/order-total/receipt-sum/line-tax/per-item/helpers/median-of-three.js round down, and does ${TOKEN} see it?`;
@@ -11978,28 +11978,33 @@ test("an open bubble draws a long hyphenated token with breaks; copy, quote, sea
   expect(words).toContain(`totals-${B}`);
   expect(words.filter((w) => w.includes(B)).every((w) => w.endsWith(B) || w === `merge-${B}check`)).toBe(true);
   v.setQuery("", cx);
-  // Plain bubble: Markdown with the breaks; the message is unchanged.
+  // Plain bubble: Markdown, which can be selected and which Herdr copies as drawn, so it gets
+  // no breaks and keeps Herdr's mid-word break (option 2); the message is unchanged.
   v.action("bubbleColor:plain", cx);
   y = you();
   expect(y.plain).toBe(false);
   expect(y.text).toBe(PROMPT);
-  expect(y.md).toContain(TOKEN.replaceAll("-", `\\-${B}`));
+  expect(y.md.includes(B)).toBe(false);
+  expect(y.md).toContain(TOKEN.replaceAll("-", "\\-"));
   mdSources.length = 0;
   draw(v, cx);
-  expect(mdSources.some(([id, md]) => id.startsWith("th-you-") && md.includes(`pre\\-${B}merge`))).toBe(true);
+  const youMd = mdSources.filter(([id]) => id.startsWith("th-you-"));
+  expect(youMd.length).toBeGreaterThan(0);
+  expect(youMd.some(([, md]) => md.includes(B))).toBe(false);
   // The copy icon under the message copies it as typed.
   log = [];
   v.copyPrompt(key, cx);
   expect(cx.clip).toBe(PROMPT);
-  // ⌘C on the drawn Markdown copies what Herdr drew, breaks and all: on ⌘ released the panel
-  // puts the message's own text back on the clipboard, and q quotes it without them.
+  // ⌘C on the drawn Markdown: Herdr copies it as drawn, which is the message, and the panel
+  // never writes the clipboard on its own; q quotes it as typed.
   cx.clip = "older text";
   v.notePress(cx);
-  cx.clip = `does ${TOKEN.replaceAll("-", `-${B}`)} see`;
+  cx.clip = `does ${TOKEN} see`;
+  log = [];
   v.cmdUp({ modifiers: { platform: false } }, cx);
   cx.flush();
   expect(cx.clip).toBe(`does ${TOKEN} see`);
-  log = [];
+  expect(log.filter((e) => e[0] === "clipboard")).toEqual([]);
   v.quoteAt = 0;
   v.key(keyEv("q"), cx);
   cx.flush();
