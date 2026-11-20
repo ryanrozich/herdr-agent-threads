@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -14102,4 +14102,77 @@ test("a Trajectory width kept in a wider window is held to what the Chat can giv
   state.shared["threads.trajWidth"] = { px: 12 };
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(200);
+});
+
+// Claude Code's first turn killed during its first call: nothing in the session has a result
+// time yet, and Claude Code always writes them, so the call has no result.
+function killedFirstCall() {
+  const file = fixture("--only", "3");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  const at = lines.findIndex((l) => { const j = JSON.parse(l); return j.type === "assistant" && j.message?.content?.some?.((c) => c.type === "tool_use"); });
+  writeFileSync(file, `${lines.slice(0, at + 1).join("\n")}\n`);
+  return file;
+}
+
+test("Claude Code's first turn killed during its first call: the call says no result in the pane", async () => {
+  const { v } = await pane(killedFirstCall());
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  state.terminals[0].status = "idle";
+  v.ledgerMemo = null;
+  const L = v.ledger();
+  expect(L.going).toBe(false);
+  expect(v.sessions.some((x) => sessionHasEnds(x))).toBe(false);
+  const call = L.rows.find((r) => r.kind === "tr" && laneOf(r.lk) === "tools");
+  expect(call).toMatchObject({ lk: "noresult", status: "no result" });
+});
+
+test("a done turn whose version moves is built again; one that does not keeps its rows", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const s = v.current();
+  const turn = s.turns.find((t) => t.done && !t.interrupted);
+  const key = `0:${turn.n}`;
+  const head = () => v.ledger().rows.find((r) => r.kind === "trh" && r.key === key);
+  const before = head();
+  expect(before.interrupted).toBe(false);
+  // The reader changes the turn and gives it the session's next version.
+  turn.interrupted = true;
+  s.version++;
+  turn.v = s.version;
+  expect(head().interrupted).toBe(true);
+  // A session change that leaves this turn's version alone keeps its rows as they were.
+  turn.interrupted = false;
+  s.version++;
+  expect(head().interrupted).toBe(true);
+});
+
+test("while the ledger's build is unfinished, each draw asks for the next; once done, none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  cx.timers = [];
+  v.render(cx);
+  expect(v.ledgerJob).toBeTruthy();
+  // The next draw is asked for (a 0 ms timer that notifies).
+  expect(v.buildNext).toBe(true);
+  let draws = 1;
+  while (cx.timers.length && draws < 100) {
+    const due = cx.timers.splice(0);
+    for (const x of due) x.fn(cx);
+    v.render(cx);
+    draws++;
+  }
+  expect(v.ledgerJob).toBeNull();
+  expect(v.ledger().partial).toBe(false);
+  expect(draws).toBeGreaterThan(2);
+  expect(v.buildNext).toBe(false);
 });
