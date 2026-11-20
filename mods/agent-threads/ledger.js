@@ -47,7 +47,7 @@ export const TRAJ_INKS = Object.freeze({
   agent: Object.freeze({ light: "#87643A", dark: "#CC9A5E" }),
   model: Object.freeze({ light: "#7A48C0", dark: "#C49BEE" }),
   tools: Object.freeze({ light: "#1C7A6D", dark: "#5DBCAA" }),
-  // The ledger row's small bar for a call with no result (round 7 decisions, section 2).
+  // The ledger row's small bar for an unfinished call, running or with no result.
   open: Object.freeze({ light: "#878C96", dark: "#747882" }),
 });
 export const SUB_ALPHA = 0.45;
@@ -171,8 +171,9 @@ export function sessionHasEnds(s) {
 // heading's key is the turn's own ("<session>:<number>", as in the chat), so the selected
 // turn is the same key in the Chat and the Trajectory; a cell row is "tr:<session>:<number>:<i>".
 // live: the turn is running by the running rule (turnRunning), so a call with no result yet is
-// "running" and its bar reaches now. Otherwise such a call is "no result", and its row and
-// the heading carry the turn's last recorded activity (lastAt, ms).
+// "running". Otherwise such a call is "no result", and its row and the heading carry the
+// turn's last recorded activity (lastAt, ms). Either way its row bar fills the track, and its
+// stretch of the heading's line ends at the turn's last recorded event, not at now.
 // opts.ends: whether the agent writes result times (see sessionHasEnds); left out, this turn
 // or its session decides.
 export function ledgerTurn(s, turn, si, live = false, opts = {}) {

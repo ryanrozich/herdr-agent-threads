@@ -88,7 +88,7 @@ import { MOD } from "./name.js";
 import {
   LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, startText, durText, barFrac, coarse,
   trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
-  BAR_W, BAR_H, BAR_SLANT, LINE_H,
+  BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT,
 } from "./ledger.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
 // build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
@@ -10230,12 +10230,13 @@ export default class Threads extends View {
     return box.child(svg(ICON(k.mark)).size(11).text_color(ink));
   }
 
-  // The row's small bar (round 7, section 2): BAR_W by BAR_H px, as long as the step took on
-  // the session's scale (ledger.js barFrac). An unfinished call fills the track in the open
-  // ink, its right end one BAR_SLANT px slant; a failed call is red; a subagent's at SUB_ALPHA.
+  // The row's small bar: BAR_W by BAR_H px, as long as the step took on the session's scale
+  // (ledger.js barFrac). An unfinished call, running or with no result, fills the track in the
+  // grey open ink, its right end one BAR_SLANT px slant; a failed call is red; a subagent's at
+  // SUB_ALPHA.
   ledgerBar(r, ink, inks) {
     const slot = div().flex_none().w(BAR_W).h(BAR_H);
-    if (r.open) return slot.child(this.slantBar(r.lk === "running" ? inks.tools : inks.open, BAR_W, BAR_H, BAR_SLANT));
+    if (r.open) return slot.child(this.slantBar(inks.open, BAR_W, BAR_H, BAR_SLANT));
     if (r.dur == null || r.lk === "more") return slot;
     const c = r.failed ? inks.failed : r.lk === "subagent" ? alpha(inks.sub, SUB_ALPHA) : ink;
     return slot.child(div().h(BAR_H).w(Math.max(2, Math.round(BAR_W * barFrac(r.dur)))).rounded(1).bg(c));
@@ -10254,10 +10255,23 @@ export default class Threads extends View {
     }
     return div().w(w).h(h).rounded(1).bg(color);
   }
+  // A d by h px end whose top runs d px past its foot, to close a stretch drawn as a box: a
+  // painted path where Herdr has one, else a plain d px end.
+  slantEnd(color, d, h) {
+    const win = globalThis.window;
+    if (PAINT && typeof win?.paint_path === "function") {
+      try {
+        const b = PAINT.PathBuilder.fill().move_to(0, 0).line_to(d, 0).line_to(0, h);
+        return div().flex_none().w(d).h(h).child(win.paint_path(b.close().build(), color).w(d).h(h));
+      } catch { /* the plain end below */ }
+    }
+    return div().flex_none().w(d).h(h).bg(color);
+  }
 
   // A turn's heading: its number and time, the numbers at the right (headParts), and under them
   // the turn's thin line: its calls teal, failed ones red, the reply violet, a subagent's
-  // calls at SUB_ALPHA and unfinished calls in the open ink.
+  // calls at SUB_ALPHA. An unfinished call is teal too, from its start to the turn's last
+  // recorded event, and that end is one LINE_SLANT px slant.
   ledgerHead(t, r, on, inks) {
     const mono = this.mono();
     const p = headParts(r, this.pw());
@@ -10266,6 +10280,9 @@ export default class Threads extends View {
     const line = r.line;
     const seg = (key, list, c) => coarse(list ?? [], 40).map(([a, b], j) => div().id(`${r.key}-${key}-${j}`).absolute().top(0)
       .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H).bg(c));
+    const torn = (key, list, c) => coarse(list ?? [], 40).map(([a, b], j) => h_flex().id(`${r.key}-${key}-${j}`).absolute().top(0)
+      .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H)
+      .child(div().flex_1().min_w(0).h(LINE_H).bg(c)).child(this.slantEnd(c, LINE_SLANT, LINE_H)));
     return div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer()
       .bg(on ? t.raised : alpha(t.foreground, 0.035)).hover((s) => s.bg(t.hover))
       .child(h_flex().h(LEDGER_ROW - LINE_H).px(10).gap(8).items_center()
@@ -10282,7 +10299,7 @@ export default class Threads extends View {
       .when(Boolean(line), (el) => el.child(div().id(`${r.key}-line`).absolute().left(10).right(10).bottom(0).h(LINE_H)
         .children([
           ...seg("tools", line.tools, inks.tools), ...seg("sub", line.sub, alpha(inks.sub, SUB_ALPHA)), ...seg("model", line.model, inks.model),
-          ...seg("open", line.open, inks.open), ...seg("osub", line.openSub, alpha(inks.open, SUB_ALPHA)), ...seg("red", line.red, inks.failed),
+          ...torn("open", line.open, inks.tools), ...torn("osub", line.openSub, alpha(inks.sub, SUB_ALPHA)), ...seg("red", line.red, inks.failed),
         ])));
   }
 
