@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -12277,6 +12277,36 @@ test("card ring: a scroll waiting for heights is dropped by the wheel, the scrol
     w.cx.flush(0);
     expect(w.handle.asked.length).toBe(asked + 1);
   } finally { setSystemTime(); done(w.v); }
+});
+
+test("card ring: a scroll waits for a height not yet measured, a new height asks for a redraw only while one waits, and the card is asked for the mark the reveal chose", async () => {
+  const { v, cx, handle, feed, rowsH, was } = await waitingReveal();
+  try {
+    let notes = 0;
+    cx.notifyHook = () => notes++;
+    // Waiting: the missing height arrives and asks for a redraw; that draw scrolls.
+    feed();
+    expect(notes).toBe(1);
+    const place = v.cardPlace("main");
+    const asked = handle.asked.length;
+    cardWithCx(v, cx);
+    const span = v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === "th-set-copy"));
+    const r = cardReveal(span[0], span[1], was, rowsH, place.viewH);
+    expect(r).not.toBeNull();
+    cx.flush(0);
+    expect(handle.asked.length).toBe(asked + 1);
+    expect(handle.asked.at(-1)).toBe(1 + r.mark);
+    expect(cardMarks(rowsH)[r.mark]).toBe(r.y + place.viewH - 1);
+    expect(place.y).toBe(r.y);
+    expect(v.ringShow).toBeNull();
+    // Nothing waits now: a changed height is kept, and asks for no redraw.
+    const fns = sizeHandlers(cardWithCx(v, cx));
+    notes = 0;
+    const k = Object.keys(fns).find((p) => p.split("/").length === 3);
+    fns[k]({ width: 400, height: 99 }, cx);
+    expect(v.cardSizes[k]).toBe(99);
+    expect(notes).toBe(0);
+  } finally { done(v); }
 });
 
 test("card ring: on a rules page the card scrolls to a control inside an open rule, not to the rule's top", async () => {
