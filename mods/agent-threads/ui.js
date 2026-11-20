@@ -2587,6 +2587,14 @@ export const PIN_COL = Object.freeze([240, 440]);
 export const PIN_COL_WANT = 380;
 export const PIN_MAIN_MIN = 240;
 export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
+// The Trajectory pane's kept width (threads.trajWidth), as the next split asks for it from a
+// Chat width wide: at least 200 px (columnResize's floor) and at most what leaves the Chat its
+// PIN_MAIN_MIN. A width kept in a wide window is more than a narrow one has. Null when none
+// is kept.
+export function trajColumn(width, kept) {
+  if (!(Number.isFinite(kept) && kept > 0)) return null;
+  return Math.max(200, Math.min(Math.round(kept), Math.round(width) - PIN_MAIN_MIN));
+}
 export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
   const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4) + PIN_STEP));
