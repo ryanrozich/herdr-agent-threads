@@ -1045,7 +1045,9 @@ export default class Threads extends View {
     const text = JSON.stringify(snap);
     if (text === this.lastReport) return;
     this.lastReport = text;
-    const key = this.pinnedPane ? `${this.terminal}:pinned` : this.terminal;
+    // Side panes read the same terminal as their Chat: each reports under its own key
+    // ("<terminal>:pinned", "<terminal>:trajectory"), so the Chat's entry is never overwritten.
+    const key = this.pinnedPane ? `${this.terminal}:pinned` : this.trajPane ? `${this.terminal}:trajectory` : this.terminal;
     setShared("threads.debug", { ...(shared("threads.debug") ?? {}), [key]: snap });
   }
 

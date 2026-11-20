@@ -12133,8 +12133,15 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   expect(hasId(c, "th-traj-chat")).toBe(false); // its own pane has no Chat button
   expect(hasId(c, "threads-list")).toBe(false); // no Chat rows drawn
   expect(w.tsel).toBe(turnKey);
+  // Its debug entry is its own: the Chat's, with whatever it carries, stays as it was.
+  v.report();
+  state.shared["threads.debug"].t4.command = "next";
+  const chatEntry = JSON.stringify(state.shared["threads.debug"].t4);
   w.report();
-  const rep = state.shared["threads.debug"].t4.traj;
+  expect(JSON.stringify(state.shared["threads.debug"].t4)).toBe(chatEntry);
+  expect(state.shared["threads.debug"].t4.command).toBe("next");
+  expect(state.shared["threads.debug"].t4.traj.pane).toBe(false);
+  const rep = state.shared["threads.debug"]["t4:trajectory"].traj;
   expect(rep).toMatchObject({ pane: true, inPane: false, sel: turnKey, cols: { start: true, bar: true, filters: true, detailRight: false } });
   // The keys move through the ledger, and the Chat follows the turn.
   w.key(keyEv("j"), cx2);
