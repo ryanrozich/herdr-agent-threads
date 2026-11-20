@@ -216,11 +216,7 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
     trajectory_id: trajectoryId ?? (subs.length ? (id === undefined ? s.id ?? undefined : id ?? undefined) : undefined),
     agent: clean({ name: AGENT_NAMES[agent] ?? agent, version, model_name: model ?? undefined, extra: { reader: "agent-threads" } }),
     steps,
-<<<<<<< HEAD
-    notes: (steps.some((step) => step.reasoning_content) ? "Model thinking is kept as reasoning_content. " : "") + (results
-=======
     notes: (steps.some((step) => step.reasoning_content) ? "Model thinking is kept as reasoning_content. " : "") + (held ? `${held} step${held === 1 ? " has" : "s have"} model reasoning that is not in this file (only a signature, redacted or encrypted, or cut with a step past the step limit), counted in extra.reasoning_withheld. ` : "") + (heldOut ? `${heldOut} more reasoning block${heldOut === 1 ? "" : "s"} with no step after ${heldOut === 1 ? "it" : "them"} ${heldOut === 1 ? "was" : "were"} left out the same way. ` : "") + (results
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text (cut only past 4,194,304 characters, with a marker) are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step. Results are whole, so this file is as sensitive as the transcript: whatever a tool printed, a secret included, is in it."
       : "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step."),
     final_metrics: clean({
@@ -502,7 +498,7 @@ const LINE_MAX = Number(process.env.THREADS_LINE_MAX) > 0 ? Number(process.env.T
   };
 
   const build = (path, opts, depth, seen) => {
-    const s = read(path, { ...opts.env, THREADS_REASONING: "1" }, opts.from ?? 0);
+    const s = read(path, opts.env, opts.from ?? 0);
     if (!s) return null;
     const results = fill(s, path);
     const meta = agent === "codex" ? head(path) : null;

@@ -306,11 +306,6 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
   const steps = turn.steps;
   const text = turn.after.join("\n\n").trim();
   const reason = turn.reasoning?.join("\n\n") || "";
-<<<<<<< HEAD
-  if (text) {
-    if (steps.length < STEP_MAX) steps.push({ k: "text", t: text.length > STEP_TEXT ? `${text.slice(0, STEP_TEXT - 1)}…` : text, cut: text.length > STEP_TEXT, ...(reason ? { r: reason } : {}), ...(turn.afterAt != null ? { at: turn.afterAt } : {}) });
-    else turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
-=======
   // Reasoning the step it precedes does not carry (the ATIF export only): blocks with no text,
   // and a text step's reasoning dropped with it past STEP_MAX. The step that is kept counts it.
   let held = turn.held ?? 0;
@@ -323,7 +318,6 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
       turn.stepsDropped = (turn.stepsDropped ?? 0) + 1;
       if (reason) held += turn.reasoning.length;
     }
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   }
   // A text step ends the group before it; past STEP_MAX no text is added, so calls join it.
   // Subagent calls make a group of their own, apart from the commands and reads around them.
@@ -332,10 +326,7 @@ function addStep(s, turn, name, id = null, e = null, owner = turn) {
   if (g?.k === "group" && Boolean(g.agent) !== agent && steps.length < STEP_MAX) g = null;
   if (g?.k !== "group") { g = { k: "group", calls: [], count: 0 }; if (agent) g.agent = true; steps.push(g); }
   if (!text && reason) g.r = g.r ? `${g.r}\n\n${reason}` : reason;
-<<<<<<< HEAD
-=======
   if (!heldOnText && held) g.h = (g.h ?? 0) + held;
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
   if (g.calls.length < STEP_CALLS) {
     g.calls.push(String(name ?? "tool"));
     // The call's id in the transcript, for calls.sh to find its input and output on demand.
@@ -485,11 +476,6 @@ function applyOne(s, e) {
       }
       return;
     }
-<<<<<<< HEAD
-    case "h":
-      if (cur && e.t && s.seg === "own") (cur.reasoning ??= []).push(e.t);
-      return;
-=======
     case "h": {
       // The model's reasoning (the ATIF export only): kept for the step it precedes, the
       // prompt's own or a background wake-up's (keepWakes); a block with no text (w) is
@@ -500,7 +486,6 @@ function applyOne(s, e) {
       else if (e.w) w.held = (w.held ?? 0) + 1;
       return;
     }
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
     case "t":
       if (!cur || !e.t) return;
       if (s.seg === "own") {
@@ -519,11 +504,7 @@ function applyOne(s, e) {
       // A background wake-up's tool calls are counted apart from the prompt's own.
       // toolNames counts the prompt's own calls by name, so its kinds add up to tools.
       if (s.seg === "follow") { cur.followTools++; cur.wakeTools++; } else { cur.tools++; cur.toolNames[e.n] = (cur.toolNames[e.n] ?? 0) + 1; }
-<<<<<<< HEAD
-      if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; if (cur.reasoning) cur.reasoning = []; }
-=======
       if (s.seg === "own") { addStep(s, cur, e.n, e.id, e); cur.after = []; cur.afterAt = null; if (cur.reasoning) cur.reasoning = []; if (cur.held) cur.held = 0; }
->>>>>>> 2b5d4d031e84e838348f2315f8a5bf83e0ba2f8c
       else {
         cur.latestParts = [];
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
