@@ -70,7 +70,7 @@ export const laneOf = (lk) => LEDGER_KINDS[lk]?.lane ?? null;
 // The status word after a row's words, for the kinds that have one.
 const STATUS = { failed: "failed", running: "running", noresult: "no result" };
 
-// ---- whether a turn is running (round 8, the running rule) ----
+// ---- whether a turn is running (the running rule) ----
 // A missing result does not prove the agent is still at work: a session killed with no turn
 // end written would read as running for ever. So a turn is running only with evidence beyond
 // that: the pane follows a terminal, the agent's process is alive there, the newest turn has
@@ -100,8 +100,8 @@ export function barFrac(ms) {
   const f = (Math.log10(Math.max(ms, 100)) - BAR_LO) / (BAR_HI - BAR_LO);
   return 0.04 + 0.96 * Math.max(0, Math.min(1, f));
 }
-// The ledger row's small bar (round 7 decisions, section 2): 64 by 4 px. An unfinished call's
-// bar fills the track and its right end is one 5 px slant.
+// The ledger row's small bar: 64 by 4 px. An unfinished call's bar fills the track and its
+// right end is one 5 px slant.
 export const BAR_W = 64;
 export const BAR_H = 4;
 export const BAR_SLANT = 5;
@@ -115,7 +115,7 @@ export function slantPoints(a, z, h, d) {
   return [[a, 0], [z, 0], [z - d, h], [a, h]];
 }
 
-// The pane's parts at a width (round 8): the start column from 420 px, the bar from 500 px,
+// The pane's parts at a width: the start column from 420 px, the bar from 500 px,
 // the filter bar from 540 px, and from 900 px the filters' long words and counts and the
 // detail to the right of the ledger (under it when narrower).
 export const FILTER_MIN = 540;

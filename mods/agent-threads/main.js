@@ -807,7 +807,7 @@ export default class Threads extends View {
     // props().view "trajectory": this pane is the Trajectory pane that y split off the Chat. It
     // shows the ledger (ledger.js) only, with its own list, and selects the turn the Chat
     // selects (syncSel). traj: the Trajectory shown in the Chat's own pane instead (y in a
-    // pane too narrow to split, round 8 choice 2), until y, Esc or its Chat button.
+    // pane too narrow to split), until y, Esc or its Chat button.
     this.trajPane = p?.view === "trajectory";
     this.traj = this.trajPane;
     // The selected ledger row (a heading's key is its turn's; sel stays the turn that owns the
@@ -9365,7 +9365,7 @@ export default class Threads extends View {
   }
   // y or the Trajectory button in the Chat: the Trajectory pane beside it, split off to the
   // right from TRAJ_SPLIT_MIN px wide, or focused when it is open already. Narrower, the
-  // Trajectory shows in this pane (round 8, choice 2) with no notice, and y, Esc or its Chat
+  // Trajectory shows in this pane with no notice, and y, Esc or its Chat
   // button goes back. In the Trajectory pane, y goes to the Chat. The bottom dock is TRD-24.
   openTraj() {
     if (this.trajPane) {
@@ -9665,7 +9665,7 @@ export default class Threads extends View {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
-  // The heading (round 8, choice 1): the list icon and "Trajectory", the failures with the
+  // The heading, 40 px: the list icon and "Trajectory", the failures with the
   // previous and next arrows, then the settings button, and the Chat button when the
   // Trajectory shows in the Chat's own pane.
   trajHeading(t, L, shown, i) {
