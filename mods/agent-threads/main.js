@@ -52,11 +52,11 @@ const CARD_BINDINGS = [
   { keystroke: "tab", action: "agent-threads.ringNext", context: CARD_CONTEXT },
   { keystroke: "shift-tab", action: "agent-threads.ringBack", context: CARD_CONTEXT },
 ];
-// Installed once for all the mod's panes (keyInstaller), from init and, only if that call
-// threw, once more when the card first opens; never from render, where Herdr refuses it.
-// cardKeys.answer is what Herdr said, for the debug report.
+// Installed once for all the mod's panes (keyInstaller): by the first pane's init, and, only
+// if that call threw, once more when the card first opens, whatever other panes' inits did
+// in between; never from render, where Herdr refuses it. cardKeys.answer is what Herdr
+// said, for the debug report.
 const cardKeys = keyInstaller(CARD_BINDINGS);
-function bindCardKeys(cx) { cardKeys.ask(cx); }
 // PathBuilder and Background paint the fade under the floating top as a gradient (Herdr
 // 0.1.15); read from the namespace for the same reason, with steps of alpha without them.
 import * as gpuiKit from "gpui-kit";
@@ -838,7 +838,7 @@ export default class Threads extends View {
     this.seen = { turn: null, status: null };
     this.known = new Set();
     this.h = cx.focus_handle();
-    bindCardKeys(cx);
+    cardKeys.ask(cx, "init");
     this.scroll = VirtualListScrollHandle.new();
     // The settings card's scroll positions, one per page, which the arrows, j, k, Page Up,
     // Page Down, Space, Home and End move (cardScroll). Herdr 0.1.15 and newer; before that
@@ -5084,7 +5084,7 @@ export default class Threads extends View {
       case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
-      case "settings": bindCardKeys(cx); return this.setSettings(!this.settingsOpen);
+      case "settings": if (!this.settingsOpen) cardKeys.ask(cx, "open"); return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
       case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;

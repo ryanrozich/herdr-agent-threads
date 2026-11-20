@@ -1518,41 +1518,52 @@ test("ringKey: Tab and Shift-Tab move the card's ring, Enter and Space press whi
   expect(nextStop([], "a", 1)).toBe(null);
 });
 
-test("keyInstaller: the card's keys are installed once whatever Herdr answers; only a call that threw is tried once more", async () => {
+test("keyInstaller: the first init installs the card's keys whatever Herdr answers; only the card's first opening may try again, and only after a throw", async () => {
   const { keyInstaller } = await import("../mods/agent-threads/ui.js");
   const B = [{ keystroke: "tab", action: "a.next", context: "C" }];
   const cxOf = (answers) => {
     const calls = [];
     return { calls, bind_keys(list) { calls.push(list); const a = answers[calls.length - 1]; if (a instanceof Error) throw a; return a; } };
   };
-  // A count, nothing, or an object: installed by the first call, and never asked again.
+  // A count, nothing, or an object: installed by the first init, and never asked again.
   for (const [answer, kept] of [[2, 2], [undefined, "answered undefined"], [{ ok: true }, "answered [object Object]"], ["2", "answered 2"]]) {
     const k = keyInstaller(B);
     const cx = cxOf([answer, answer, answer]);
-    expect(k.ask(cx)).toBe(kept);
-    k.ask(cx); k.ask(cx);
+    expect(k.ask(cx, "init")).toBe(kept);
+    k.ask(cx, "init"); k.ask(cx, "open"); k.ask(cx, "open");
     expect([answer, cx.calls]).toEqual([answer, [B]]);
     expect(k.answer).toBe(kept);
   }
   // No bind_keys: missing, and not asked again.
   const none = keyInstaller(B);
-  expect(none.ask({})).toBe("missing");
+  expect(none.ask({}, "init")).toBe("missing");
   const later = cxOf([2]);
-  expect(none.ask(later)).toBe("missing");
+  expect(none.ask(later, "init")).toBe("missing");
+  expect(none.ask(later, "open")).toBe("missing");
   expect(later.calls).toEqual([]);
-  // The first call threw: the next one tries once more, then nothing.
+  // The init call threw: other panes' inits ask nothing, the card's first opening tries once
+  // more, and later openings and inits ask nothing.
   const k = keyInstaller(B);
   const cx = cxOf([new Error("not from here"), 2, 2]);
-  expect(k.ask(cx)).toBe("failed: not from here");
-  expect(k.ask(cx)).toBe(2);
-  k.ask(cx);
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(cx.calls).toEqual([B]);
+  expect(k.ask(cx, "open")).toBe(2);
+  k.ask(cx, "open"); k.ask(cx, "init");
   expect(cx.calls).toEqual([B, B]);
-  // Threw twice: two calls in all, and the second answer kept.
+  // Threw at init and at the first opening: two calls in all, and the second answer kept.
   const k2 = keyInstaller(B);
   const cx2 = cxOf([new Error("one"), new Error("two"), 2]);
-  k2.ask(cx2); k2.ask(cx2); k2.ask(cx2);
+  k2.ask(cx2, "init"); k2.ask(cx2, "open"); k2.ask(cx2, "open"); k2.ask(cx2, "init");
   expect(cx2.calls).toEqual([B, B]);
   expect(k2.answer).toBe("failed: two");
+  // No init yet: the first opening installs, once.
+  const k3 = keyInstaller(B);
+  const cx3 = cxOf([3, 3]);
+  expect(k3.ask(cx3, "open")).toBe(3);
+  k3.ask(cx3, "open"); k3.ask(cx3, "init");
+  expect(cx3.calls).toEqual([B]);
 });
 
 test("cardReveal: the card's view moves only as far as shows the control with the ring in full, by a mark 8 px apart", async () => {

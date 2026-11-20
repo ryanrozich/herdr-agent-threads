@@ -12600,7 +12600,7 @@ test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the r
   expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
 });
 
-test("card bound keys: when init's call throws, the card's first opening installs the keys, and later openings ask nothing", async () => {
+test("card bound keys: when init's call throws, a second pane's init asks nothing, the card's first opening installs the keys, and later openings ask nothing", async () => {
   // A fresh copy of the mod, so its keys have not been installed by another test's pane.
   const { default: Fresh } = await import("../mods/agent-threads/main.js?card-keys-retry");
   state = {
@@ -12615,6 +12615,12 @@ test("card bound keys: when init's call throws, the card's first opening install
   v.init(state.props, cx);
   await settle(v);
   expect(asked).toEqual([CARD_BOUND]);
+  // Another Threads pane starts before the card opens: its init does not spend the try.
+  const v2 = new Fresh();
+  v2.init(state.props, cx);
+  await settle(v2);
+  expect(asked).toEqual([CARD_BOUND]);
+  done(v2);
   v.action("settings", cx);
   expect(asked).toEqual([CARD_BOUND, CARD_BOUND]);
   v.report();

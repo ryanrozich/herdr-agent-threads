@@ -54,16 +54,15 @@ export function nextStop(ids, cur, step) {
   return ids[(i + step + ids.length) % ids.length];
 }
 // Installs a mod's key bindings once for all its panes (cx.bind_keys works on the app's
-// keymap). ask(cx) runs from init and again when the settings card opens. The first call
-// installs, whatever Herdr answers. Only when that call threw (init may be a place Herdr
-// refuses it) does the next call try once more; after that nothing is asked again. answer is
-// what Herdr said: the count, "missing" (no cx.bind_keys), "failed: <message>", or any other
-// answer as text.
+// keymap). ask(cx, "init") runs from each pane's init, and only the first one calls: it
+// installs, whatever Herdr answers. ask(cx, "open") runs when the settings card opens, and
+// only the first opening may call: it tries once more if the init call threw (init may be a
+// place Herdr refuses it), or installs if no init has called. Another pane's init never
+// spends that try, and after it nothing is asked again. answer is what Herdr said: the
+// count, "missing" (no cx.bind_keys), "failed: <message>", or any other answer as text.
 export function keyInstaller(bindings) {
-  const s = { answer: null, tries: 0 };
-  s.ask = (cx) => {
-    const retry = s.tries === 1 && String(s.answer).startsWith("failed: ");
-    if (s.tries > 0 && !retry) return s.answer;
+  const s = { answer: null, tries: 0, opened: false };
+  const call = (cx) => {
     s.tries++;
     if (!cx || !("bind_keys" in cx)) s.answer = "missing";
     else {
@@ -73,6 +72,15 @@ export function keyInstaller(bindings) {
       } catch (err) { s.answer = `failed: ${err?.message ?? err}`; }
     }
     return s.answer;
+  };
+  s.ask = (cx, from) => {
+    if (from === "open") {
+      if (s.opened) return s.answer;
+      s.opened = true;
+      if (s.tries === 0 || String(s.answer).startsWith("failed: ")) return call(cx);
+      return s.answer;
+    }
+    return s.tries === 0 ? call(cx) : s.answer;
   };
   return s;
 }
