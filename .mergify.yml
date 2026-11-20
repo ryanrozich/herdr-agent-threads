@@ -60,8 +60,10 @@ pull_request_rules:
   # with no person adding `queue`. Catalyst writes that label only after it has checked for
   # a hold, and every queue condition above still applies (check, title, resolved threads,
   # not a draft, no hold or hold:preview label). It never queues a change to the files that
-  # define this gate: the Mergify configuration, the workflows, Catalyst's settings and the
-  # files agents follow (AGENTS.md or CLAUDE.md anywhere, the skills folder). A files
+  # define this gate: the Mergify configuration, the workflows, Catalyst's settings, the
+  # files that decide what `check` runs (test/leftover-check.sh, bunfig.toml, biome.jsonc,
+  # a root gitleaks config or ignore file) and the files agents follow (AGENTS.md or
+  # CLAUDE.md anywhere, the skills folder). A files
   # condition is true when any changed file matches, and the minus negates it; a renamed
   # file counts at both its paths. #files is GitHub's own count, so a change too big for the
   # file list cannot slip a denied file past it. Such pull requests need a person's `queue`.
@@ -77,6 +79,10 @@ pull_request_rules:
       - -files~=^\.github/
       - -files~=^\.catalyst/
       - -files~=^\.(claude|agents)/
+      - -files~=^test/leftover-check\.sh$
+      - -files~=^bunfig\.toml$
+      - -files~=^biome\.jsonc$
+      - -files~=^\.gitleaks
       - -files~=(^|/)(AGENTS|CLAUDE)\.md$
     actions:
       queue:
