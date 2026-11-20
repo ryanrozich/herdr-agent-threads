@@ -194,7 +194,17 @@ case "$1 $2" in
   "status "*) [ -e ${JSON.stringify(join(d, "hang"))} ] && exec perl -e 'sleep 60' ${JSON.stringify(`hang-${d}`)}; echo '{"overlays":[],"errors":[]}' ;;
   "ls "*) echo '{"spaces":[{"name":"still","tabs":[{"terminals":[{"pane":"p1","terminal":"t1"}]}]}]}' ;;
   "do pane.split") echo '{"pane":"p2"}' ;;
-  "do agent-threads.nope") echo "unknown command agent-threads.nope" >&2; exit 1 ;;
+  # As the real Herdr 0.1.16 does: any <mod>.<name> is ok, exit 0, known to the mod or not.
+  # The stand-in mod reports each one in its debug report the way main.js command() does:
+  # acted true for pin, false for anything else; "agent-threads.mute" it never reports.
+  "do agent-threads."*)
+    echo '{"ok":true}'
+    c=\${2#agent-threads.}
+    [ "$c" = mute ] && exit 0
+    n=$(( $(cat ${JSON.stringify(join(d, "cmd.n"))} 2> /dev/null || echo 0) + 1 )); echo $n > ${JSON.stringify(join(d, "cmd.n"))}
+    a=false; [ "$c" = pin ] && a=true
+    printf '{"frame.welcomed":"skipped","threads.debug":{"t1":{"command":{"n":%s,"name":"%s","acted":%s}}}}\n' $n "$c" $a > "$HERDR_APP_HOME/shared.json" ;;
+  "do no.such.thing") echo '{"error":"unknown command \\"no.such.thing\\""}'; exit 1 ;;
   "shot "*) echo png > "$2" ;;
 esac
 exit 0`);
@@ -253,12 +263,26 @@ test("herdr-still.sh with a fake Herdr: a still after its --do commands, and a f
   const launch = readFileSync(join(f.d, "launch-env.txt"), "utf8");
   expect(launch).toContain("DISPLAY=:99\n");
   expect(launch).not.toMatch(/WAYLAND_DISPLAY|DBUS_SESSION/);
-  // A command that fails: named, exit 1, no still.
+  // A mod command the mod does not act on (Herdr itself answers ok and exits 0 for any
+  // agent-threads.<name>, as on the runner image): named, exit 1, no still.
   const png2 = join(f.d, "s2.png");
   r = still([fx, png2, "--do", "agent-threads.nope", "--do", "agent-threads.pin"], f);
   expect(r.status).toBe(1);
-  expect(r.stderr).toContain("herdr-still: --do agent-threads.nope failed: unknown command agent-threads.nope");
+  expect(r.stderr).toBe("herdr-still: --do agent-threads.nope: the mod did not act on it (not one of its commands, or nothing to do)\n");
   expect(existsSync(png2)).toBe(false);
+  // One the pane never reports: exit 1, no still.
+  const png3 = join(f.d, "s3.png");
+  r = still([fx, png3, "--do", "agent-threads.mute"], f);
+  expect(r.status).toBe(1);
+  expect(r.stderr).toBe("herdr-still: --do agent-threads.mute: the Threads pane did not report it\n");
+  expect(existsSync(png3)).toBe(false);
+  // A Herdr command that does not exist fails in Herdr: its reply is named, exit 1, no still.
+  const png4 = join(f.d, "s4.png");
+  r = still([fx, png4, "--do", "no.such.thing"], f);
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain("herdr-still: --do no.such.thing failed: ");
+  expect(r.stderr).toContain("unknown command");
+  expect(existsSync(png4)).toBe(false);
   // The deadline's message goes to the script's own stderr on fd 3; no Herdr process,
   // the app included, is given fd 3.
   expect(calls.length).toBeGreaterThan(0);
