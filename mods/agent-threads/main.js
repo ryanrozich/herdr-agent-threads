@@ -58,7 +58,7 @@ import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, cod
 import {
   keyAction, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
-  focusTarget, contrast, labelColor, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
+  focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
@@ -4860,6 +4860,9 @@ export default class Threads extends View {
         const j = i < 0 ? mk.length - 1 : i + (name === "olderMatch" ? -1 : 1);
         if (j < 0 || j >= mk.length) return true;
         go(keys.indexOf(mk[j]));
+        // A step never follows, even onto the last row: a match streaming in must not move
+        // the reader (setQuery does the same).
+        this.follow = false;
         return true;
       }
       case "open":
@@ -6182,16 +6185,15 @@ export default class Threads extends View {
   }
 
   // The search field's two steps: older (up, the way back through the list) and newer. The
-  // one with no match left that way is dimmed and does nothing.
+  // one with no match left that way is dimmed, takes no press, and its tooltip says so.
   stepButtons(t) {
     const { at, n } = this.matchPlace();
-    const step = (id, icon, tip, name, off) => {
-      const b = this.iconButton(t, id, icon, tip, (_e, cx) => { if (!off) { this.action(name, cx); cx.notify(); } });
-      return off ? b.opacity(0.35) : b;
-    };
+    const step = (id, icon, tip, name, off, none) => off
+      ? div().id(id).flex_none().size(24).flex().items_center().justify_center().opacity(0.35).text_color(t.dim).tooltip(none).child(svg(ICON(icon)).size(14))
+      : this.iconButton(t, id, icon, tip, (_e, cx) => { this.action(name, cx); cx.notify(); });
     return [
-      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n),
-      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1),
+      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n, "No older match"),
+      step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1, "No newer match"),
     ];
   }
 
@@ -6207,7 +6209,10 @@ export default class Threads extends View {
     if (!q) return null;
     const status = this.status();
     let hit = 0, hiddenHit = 0;
-    this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
+    // The Pinned view shows every pin, agent message or not, and nothing else: the matches
+    // are the pins the search matches.
+    if (this.view === "pinned") hit = this.matchKeys().length;
+    else this.sessions.forEach((s, si) => s.turns.forEach((t, ti) => {
       const on = isShown(t, { agentTurns: this.prefs.agentTurns, live: this.isLive(s, si, ti, status), turns: s.turns });
       const m = threadMatches(s.turns, t, q);
       if (on) { if (m) hit++; } else if (m) hiddenHit++;
@@ -7527,10 +7532,21 @@ export default class Threads extends View {
     return div().flex_none().w(2).h(h).rounded(1).bg(agent ? t.dim : alpha(t.foreground, 0.28));
   }
 
-  // A search match's fill: the working colour at 32%, and at 60% in the selected turn's rows
-  // (item sets hlCur), so the match the reader is on stands out among the others. It is a
-  // fill only, so no height changes and nothing is reshaped.
-  hlFill(t) { return alpha(t.working, this.hlCur ? 0.6 : 0.32); }
+  // A search match's fill: the working colour at 32%, and stronger in the selected turn's rows
+  // (item sets hlCur), so the match the reader is on stands out among the others: up to 60%,
+  // as far as the text on it still reads at 4.5:1 (ui.js matchFill; a bubble's theme has its
+  // own text and fill). It is a fill only, so no height changes and nothing is reshaped.
+  hlFill(t) {
+    const k = `${t.working}|${t.foreground}|${t.background}|${this.hlCur ? 1 : 0}`;
+    this.fillMemo ??= new Map();
+    let f = this.fillMemo.get(k);
+    if (f == null) {
+      f = matchFill(t.working, t.foreground, t.background, Boolean(this.hlCur));
+      if (this.fillMemo.size > 16) this.fillMemo.clear();
+      this.fillMemo.set(k, f);
+    }
+    return f;
+  }
 
   // Wrapped text with the filter's matches marked, word by word.
   hlBlock(t, text, color) {

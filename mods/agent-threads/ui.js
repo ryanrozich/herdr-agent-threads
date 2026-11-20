@@ -42,7 +42,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
-      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], ...(quoteKey !== "n" ? [[["n", "Shift n"], "Older or newer search match"]] : []), [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
+      ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
@@ -2518,6 +2518,19 @@ export function contrast(a, b) {
   };
   const [hi, lo] = [lum(x), lum(y)].sort((p, q) => q - p);
   return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+}
+// A search match's fill: the working colour at 32%, and for the selected turn's matches
+// (strong) the strongest fill up to 60%, in 2% steps, that keeps the text on it (fg, over
+// bg) at 4.5:1. Where even 32% does not, the selected match keeps 32%: never less contrast
+// than the others.
+export function matchFill(working, fg, bg, strong) {
+  if (!strong) return alpha(working, 0.32);
+  for (let a = 0.6; a > 0.32; a -= 0.02) {
+    const c = contrast(fg, mix(bg, working, a));
+    if (c == null) break;
+    if (c >= 4.5) return alpha(working, Math.round(a * 100) / 100);
+  }
+  return alpha(working, 0.32);
 }
 // a mixed toward b by t (0..1), as #rrggbb.
 export function mix(a, b, t) {

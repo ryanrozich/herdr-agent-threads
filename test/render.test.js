@@ -11684,6 +11684,80 @@ test("a turn that starts to match while the reader is on a match leaves them the
   expect(v.filterCount()).toBe("3 of 5 · newest first");
 });
 
+test("stepping away from the newest match and back leaves following off, so a newer match streaming in does not move the reader", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  // Back on the newest match, #7, the last row the search shows: a step never follows.
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  // A new last turn, #9, matches too: a step onto it does not follow either.
+  apply(s, { k: "p", o: "human", t: "One more checkout test", ts: at(40) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:7");
+  expect(v.follow).toBe(false);
+  expect(v.filterCount()).toBe("2 of 5 · newest first");
+  v.action("newerMatch", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  v.scrollTo = null;
+  // A newer match streams in: the reader stays on #9 and nothing scrolls.
+  apply(s, { k: "t", t: "Done with take 9." }, { k: "d", ms: 1000, ts: at(41) });
+  apply(s, { k: "p", o: "human", t: "And the checkout test on mobile", ts: at(42) });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:9");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("2 of 6 · newest first");
+});
+
+test("a turn already in the list whose reply starts to match leaves the reader where they are; the count moves", async () => {
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  const { v, cx, s } = await stepPane();
+  apply(s, { k: "p", o: "human", t: "Tidy the footer, take 9", ts: at(40) });
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  v.action("olderMatch", cx);
+  settleRows(v, cx);
+  expect([v.sel, v.filterCount()]).toEqual(["0:5", "2 of 4 · newest first"]);
+  v.scrollTo = null;
+  // #9 was not a match; its reply streams in and names the checkout test.
+  apply(s, { k: "t", t: "The checkout test still fails on the footer." });
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.follow).toBe(false);
+  expect(v.scrollTo).toBeNull();
+  expect(v.filterCount()).toBe("3 of 5 · newest first");
+});
+
+test("in the Pinned view the search counts the pins it matches, and says No matches when it matches none of them", async () => {
+  const { v, cx } = await stepPane();
+  for (const k of ["0:1", "0:3"]) { v.sel = k; v.action("pin", cx); }
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.filterCount()).toBe("No matches");
+  expect(v.matchPlace().n).toBe(0);
+  v.setQuery("", cx);
+  v.setView("all");
+  v.sel = "0:5";
+  v.action("pin", cx);
+  v.setView("pinned");
+  settleRows(v, cx);
+  v.setQuery("checkout test", cx);
+  settleRows(v, cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.filterCount()).toBe("1 of 1 · only mention");
+});
+
 test("the search field's two step buttons: up is older, down is newer, and the one with nothing left that way is dimmed and does nothing", async () => {
   const { v, cx } = await stepPane();
   v.setQuery("checkout test", cx);
@@ -11693,15 +11767,18 @@ test("the search field's two step buttons: up is older, down is newer, and the o
   const older = () => afterId(c, "th-match-older");
   const newer = () => afterId(c, "th-match-newer");
   expect(older()).toContainEqual(["tooltip", "Older match (n)"]);
-  expect(newer()).toContainEqual(["tooltip", "Newer match (Shift n)"]);
-  // At the newest: down is dimmed, and its click leaves the selection.
+  // At the newest: down is dimmed and takes no press: no click, no pointer, no hover tint,
+  // and its tooltip says why.
   expect(newer()).toContainEqual(["opacity", 0.35]);
+  expect(newer()).toContainEqual(["tooltip", "No newer match"]);
+  for (const m of ["on_click", "cursor_pointer", "hover"]) expect(newer().some((e) => e[0] === m)).toBe(false);
   expect(older().some((e) => e[0] === "opacity")).toBe(false);
-  newer().find((e) => e[0] === "on_click").at(-1)({}, cx);
+  expect(older().some((e) => e[0] === "cursor_pointer")).toBe(true);
   expect(v.sel).toBe("0:7");
   older().find((e) => e[0] === "on_click").at(-1)({}, cx);
   expect(v.sel).toBe("0:5");
   c = drawn();
+  expect(newer()).toContainEqual(["tooltip", "Newer match (Shift n)"]);
   expect(newer().some((e) => e[0] === "opacity")).toBe(false);
   expect(older().some((e) => e[0] === "opacity")).toBe(false);
   // No match: no step buttons.
@@ -11712,7 +11789,7 @@ test("the search field's two step buttons: up is older, down is newer, and the o
   expect(newer()).toBeNull();
 });
 
-test("the selected turn's matches get the stronger fill, the other matches the usual one", async () => {
+test("the selected turn's matches get the stronger fill the text allows, the other matches the usual one", async () => {
   const { v, cx } = await stepPane();
   v.setQuery("checkout test", cx);
   settleRows(v, cx);
@@ -11723,12 +11800,20 @@ test("the selected turn's matches get the stronger fill, the other matches the u
     rec = null;
     return c.filter((e) => e[0] === "bg" && String(e[1]).startsWith("#d7a000")).map((e) => e[1]);
   };
-  // The working colour at 60% (99) on the selected turn's match, at 32% (52) on the others.
+  // The matches are in the prompts. In the default blue bubble, white text over the working
+  // colour at 32% (52) is 4.54:1 and any stronger fill would take it under 4.5:1, so the
+  // selected turn's match keeps 32% too (ui.js matchFill).
   expect(v.sel).toBe("0:7");
-  expect(fills("0:7")).toEqual(["#d7a00099"]);
+  expect(fills("0:7")).toEqual(["#d7a00052"]);
+  expect(fills("0:5")).toEqual(["#d7a00052"]);
+  // In a plain bubble the text is the theme's: the selected turn's match is as strong as that
+  // text allows up to 60%, 52% (85) here, since 60% would take it to 3.9:1.
+  v.applyPrefs(JSON.stringify({ bubbleColor: "plain" }));
+  settleRows(v, cx);
+  expect(fills("0:7")).toEqual(["#d7a00085"]);
   expect(fills("0:5")).toEqual(["#d7a00052"]);
   v.action("olderMatch", cx);
   settleRows(v, cx);
-  expect(fills("0:5")).toEqual(["#d7a00099"]);
+  expect(fills("0:5")).toEqual(["#d7a00085"]);
   expect(fills("0:7")).toEqual(["#d7a00052"]);
 });
