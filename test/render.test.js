@@ -14056,3 +14056,34 @@ test("the shared selection never selects a turn the Chat hides; a turn it shows 
   expect(v.syncSel()).toBe(true);
   expect(v.sel).toBe(pick);
 });
+
+// test/herdr-still.sh reads the command record of the pane it drives: a Trajectory pane's
+// commands go through the ledger and are recorded under its own key.
+test("a command sent to a Trajectory pane is recorded under the terminal plus :trajectory, with whether the ledger acted", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.command("latest", cx);
+  v.report();
+  const chat = JSON.stringify(state.shared["threads.debug"].t4);
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  const last = () => { w.report(); return state.shared["threads.debug"]["t4:trajectory"].command; };
+  w.command("prev", cx2);
+  expect(last()).toEqual({ n: 1, name: "prev", acted: true });
+  // A command the ledger does not mean: recorded, not acted on.
+  w.command("pin", cx2);
+  expect(last()).toEqual({ n: 2, name: "pin", acted: false });
+  w.command("open", cx2);
+  expect(last()).toEqual({ n: 3, name: "open", acted: true });
+  expect(JSON.stringify(state.shared["threads.debug"].t4)).toBe(chat);
+});
