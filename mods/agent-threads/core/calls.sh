@@ -11,6 +11,7 @@
 # With THREADS_ARGS=1 (the ATIF export, core/atif.js) it also prints each call's whole input
 # as {"id","k":"args","args"}: an object, a JSON value that is not one as {"value"}, a Codex
 # custom tool's text as {"input"}, or {"id","k":"args","unread":true} when it is not JSON.
+# Claude also carries a non-null original input as "raw" for Harbor's raw_arguments.
 # With THREADS_LINE_MAX=<bytes> (the ATIF export) a Claude Code, Codex or Pi line longer than that
 # is skipped, as the export's own reader skips it.
 # Claude Code: the tool_use and tool_result blocks with these ids. Codex: the calls and outputs
@@ -58,7 +59,8 @@ case $harness in
           {id: .id, k: "in", ts: $l.timestamp,
            in: ((.input // {}) | if type == "object" then (.command // .file_path // .path // .pattern // .query // .url // .description // .prompt // tojson) else . end
                 | tostring | .[0:400])},
-          (select($ENV.THREADS_ARGS == "1") | {id: .id, k: "args", args: ((.input // {}) | if type == "object" then . else {value: .} end)})
+          (select($ENV.THREADS_ARGS == "1") | {id: .id, k: "args", args: ((.input // {}) | if type == "object" then . else {value: .} end)}
+            + (if .input == null then {} else {raw: .input} end))
         elif .type == "tool_result" and (.tool_use_id as $i | $want | index($i)) != null then
           (.content | text) as $o
           | {id: .tool_use_id, k: "out", ts: $l.timestamp, err: (.is_error == true), out: ($o | outcap), lines: ($o | split("\n") | length)}
