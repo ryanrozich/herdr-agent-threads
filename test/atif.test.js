@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } from "../mods/agent-threads/core/turns.js";
 import { trajectories } from "../mods/agent-threads/core/trajectory.js";
-import { atif, ATIF_VERSION } from "../mods/agent-threads/core/atif.js";
+import { atif } from "../mods/agent-threads/core/atif.js";
+import { problems } from "./atif-schema.js";
 
 const root = join(import.meta.dir, "..");
 const core = join(root, "mods/agent-threads/core");
@@ -50,76 +51,6 @@ function readOpencode(ref) {
   return s;
 }
 
-// Harbor's ATIF-v1.7 rules, as its Pydantic models state them (extra fields forbidden).
-const FIELDS = {
-  trajectory: ["schema_version", "session_id", "trajectory_id", "agent", "steps", "notes", "final_metrics", "continued_trajectory_ref", "extra", "subagent_trajectories"],
-  agent: ["name", "version", "model_name", "tool_definitions", "extra"],
-  step: ["step_id", "timestamp", "source", "model_name", "reasoning_effort", "message", "reasoning_content", "tool_calls", "observation", "metrics", "is_copied_context", "llm_call_count", "extra"],
-  tool_call: ["tool_call_id", "function_name", "arguments", "extra"],
-  observation: ["results"],
-  result: ["source_call_id", "content", "subagent_trajectory_ref", "extra"],
-  metrics: ["prompt_tokens", "completion_tokens", "cached_tokens", "cost_usd", "prompt_token_ids", "completion_token_ids", "logprobs", "extra"],
-  final_metrics: ["total_prompt_tokens", "total_completion_tokens", "total_cached_tokens", "total_cost_usd", "total_steps", "extra"],
-  ref: ["trajectory_id", "session_id", "trajectory_path", "extra"],
-};
-const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-const isoOk = (t) => typeof t === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/.test(t) && Number.isFinite(Date.parse(t));
-function problems(t) {
-  const out = [];
-  const only = (o, kind, at) => { for (const k of Object.keys(o)) if (!FIELDS[kind].includes(k)) out.push(`${at}: ${kind} has no field ${k}`); };
-  const intOrNull = (v, at) => { if (v != null && !Number.isInteger(v)) out.push(`${at} is not an integer`); };
-  if (!isObj(t)) return ["not an object"];
-  only(t, "trajectory", "trajectory");
-  if (t.schema_version !== ATIF_VERSION) out.push(`schema_version ${t.schema_version}`);
-  if (!isObj(t.agent) || typeof t.agent.name !== "string" || typeof t.agent.version !== "string") out.push("agent needs a name and a version");
-  else only(t.agent, "agent", "agent");
-  if (!Array.isArray(t.steps) || !t.steps.length) return [...out, "steps must have one step or more"];
-  t.steps.forEach((st, i) => {
-    const at = `steps[${i}]`;
-    only(st, "step", at);
-    if (st.step_id !== i + 1) out.push(`${at}.step_id ${st.step_id}, expected ${i + 1}`);
-    if (!["system", "user", "agent"].includes(st.source)) out.push(`${at}.source ${st.source}`);
-    if (typeof st.message !== "string") out.push(`${at}.message must be a string`);
-    if (st.timestamp != null && !isoOk(st.timestamp)) out.push(`${at}.timestamp ${st.timestamp}`);
-    if (st.source !== "agent") for (const k of ["model_name", "reasoning_effort", "reasoning_content", "tool_calls", "metrics"]) if (st[k] != null) out.push(`${at}.${k} on a ${st.source} step`);
-    const ids = new Set();
-    for (const [j, c] of (st.tool_calls ?? []).entries()) {
-      only(c, "tool_call", `${at}.tool_calls[${j}]`);
-      if (typeof c.tool_call_id !== "string" || typeof c.function_name !== "string" || !isObj(c.arguments)) out.push(`${at}.tool_calls[${j}] needs an id, a name and arguments`);
-      ids.add(c.tool_call_id);
-    }
-    if (st.observation != null) {
-      only(st.observation, "observation", `${at}.observation`);
-      for (const [j, r] of st.observation.results.entries()) {
-        only(r, "result", `${at}.observation.results[${j}]`);
-        if (r.source_call_id != null && !ids.has(r.source_call_id)) out.push(`${at} result for ${r.source_call_id}, no such call in the step`);
-        if (r.content != null && typeof r.content !== "string") out.push(`${at} result content`);
-        for (const [k, ref] of (r.subagent_trajectory_ref ?? []).entries()) {
-          only(ref, "ref", `${at}.observation.results[${j}].subagent_trajectory_ref[${k}]`);
-          if (ref.trajectory_id == null && ref.trajectory_path == null) out.push(`${at} a subagent ref needs a trajectory_id or a trajectory_path`);
-        }
-      }
-    }
-    if (st.metrics != null) {
-      only(st.metrics, "metrics", `${at}.metrics`);
-      for (const k of ["prompt_tokens", "completion_tokens", "cached_tokens"]) intOrNull(st.metrics[k], `${at}.metrics.${k}`);
-    }
-    if (st.extra != null && !isObj(st.extra)) out.push(`${at}.extra`);
-  });
-  if (t.final_metrics != null) {
-    only(t.final_metrics, "final_metrics", "final_metrics");
-    for (const k of ["total_prompt_tokens", "total_completion_tokens", "total_cached_tokens", "total_steps"]) intOrNull(t.final_metrics[k], `final_metrics.${k}`);
-  }
-  // Embedded subagents: each a whole trajectory with its own unique trajectory_id.
-  const subIds = new Set();
-  for (const [i, sub] of (t.subagent_trajectories ?? []).entries()) {
-    if (typeof sub?.trajectory_id !== "string") out.push(`subagent_trajectories[${i}] needs a trajectory_id`);
-    else if (subIds.has(sub.trajectory_id)) out.push(`subagent_trajectories[${i}] repeats ${sub.trajectory_id}`);
-    else subIds.add(sub.trajectory_id);
-    for (const p of problems(sub)) out.push(`subagent_trajectories[${i}]: ${p}`);
-  }
-  return out;
-}
 
 function same(name, value) {
   const file = join(golden, name);
@@ -170,7 +101,12 @@ test("atif: Claude Code's and Codex's steps keep their times, results their time
     expect(agentSteps.filter((st) => st.extra?.kind !== "background_update").every((st) => st.timestamp)).toBe(true);
     const calls = agentSteps.flatMap((st) => (st.tool_calls ?? []).map((c) => ({ c, r: st.observation.results.find((r) => r.source_call_id === c.tool_call_id) })));
     expect(calls.every(({ c, r }) => c.extra.input && r.extra.result_ts >= c.extra.started)).toBe(true);
-    expect(calls.filter(({ r }) => r.extra.failed).map(({ c }) => c.extra.input)).toEqual([bad]);
+    // Whether a result failed, as the reader knows it: true, false, or left out when unknown.
+    const outcome = new Map(trajectories(s).flatMap((tr) => tr.groups.flatMap((g) => g.cells.filter((c) => c.call).map((c) => [c.call, c.result?.failed ?? undefined]))));
+    expect(calls.map(({ r }) => r.extra.tool_result_is_error)).toEqual(calls.map(({ c }) => outcome.get(c.tool_call_id)));
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === true).map(({ c }) => c.extra.input)).toEqual([bad]);
+    expect(calls.filter(({ r }) => r.extra.tool_result_is_error === false).length).toBeGreaterThan(0);
+    expect(calls.every(({ r }) => !Object.hasOwn(r.extra, "failed"))).toBe(true);
     // Tokens: per turn on its last agent step; prompt tokens are input, cache reads and writes.
     for (const turn of s.turns) {
       const own = t.steps.filter((st) => st.extra?.turn === turn.n && st.source === "agent");
@@ -196,6 +132,7 @@ test("atif: a call with no result yet keeps its result entry, marked, and a runn
   const st = t.steps[1];
   expect(st.tool_calls).toEqual([{ tool_call_id: "toolu_1", function_name: "Bash", arguments: {}, extra: { input: "bun test", started: ts(3) } }]);
   expect(st.observation.results).toEqual([{ source_call_id: "toolu_1", extra: { no_result: true } }]);
+  expect(st.observation.results[0].extra.tool_result_is_error).toBeUndefined();
   expect(st.extra.done).toBe(false);
   // No turn: no trajectory, since ATIF needs a step.
   expect(atif(newSession("s2", "f"))).toBeNull();
@@ -207,7 +144,7 @@ test("atif: the command line reads a transcript the way the panel does and adds 
   expect(problems(t)).toEqual([]);
   const results = Object.fromEntries(t.steps.flatMap((st) => st.observation?.results ?? []).map((r) => [r.source_call_id, r]));
   expect(results.call_c2.content).toBe("1 fail: three items at $3.33");
-  expect(results.call_c2.extra.failed).toBe(true);
+  expect(results.call_c2.extra.tool_result_is_error).toBe(true);
   expect(t.agent.name).toBe("codex");
   expect(t.agent.model_name).toBe("gpt-5.5-codex");
   // A wrong agent name is refused with the usage line.
@@ -254,6 +191,56 @@ function claudeSubagents() {
   });
   return agentIds;
 }
+
+test("atif: the Claude CLI exports Harbor's extra fields", () => {
+  const ids = claudeSubagents();
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = t.steps.flatMap((step) => step.observation?.results ?? []);
+  // A known outcome is written either way; every result here has one.
+  expect(results.some((r) => r.extra?.tool_result_is_error === true)).toBe(true);
+  expect(results.some((r) => r.extra?.tool_result_is_error === false)).toBe(true);
+  expect(results.every((r) => typeof r.extra?.tool_result_is_error === "boolean")).toBe(true);
+  expect(results.every((r) => !Object.hasOwn(r.extra ?? {}, "failed"))).toBe(true);
+  // An unknown outcome (a call whose result is not written yet) leaves the flag out.
+  const open = join(dir, "open-call.jsonl");
+  const openEvents = [
+    { type: "user", sessionId: "open", timestamp: "2026-11-20T00:00:01.000Z", message: { role: "user", content: "Run the tests." } },
+    { type: "assistant", sessionId: "open", timestamp: "2026-11-20T00:00:02.000Z", message: { id: "msg_open", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "tool_use", id: "toolu_open", name: "Bash", input: { command: "bun test" } }], stop_reason: "tool_use" } },
+  ];
+  writeFileSync(open, `${openEvents.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const pending = JSON.parse(execFileSync("bun", [join(core, "atif.js"), open, "claude"], { encoding: "utf8" })).steps.flatMap((step) => step.observation?.results ?? []);
+  expect(pending.map((r) => [r.source_call_id, r.extra])).toEqual([["toolu_open", { no_result: true }]]);
+  // The main session's steps say they are not a helper's, as Harbor's Claude steps do.
+  expect(t.steps.every((step) => step.extra.is_sidechain === false && !Object.hasOwn(step.extra, "agent_id"))).toBe(true);
+  const linked = results.find((r) => r.subagent_trajectory_ref?.[0]?.trajectory_id === ids[0]);
+  const child = t.subagent_trajectories.find((c) => c.trajectory_id === ids[0]);
+  expect(linked.subagent_trajectory_ref).toEqual([{ trajectory_id: ids[0], session_id: t.session_id }]);
+  expect(child.steps.every((step) => step.extra.agent_id === ids[0] && step.extra.is_sidechain === true)).toBe(true);
+  expect(t.steps.every((step) => step.extra?.turn_id)).toBe(true);
+  expect(t.steps[0].extra.turn_id).toBe("1793524350|1858vwm|1");
+  expect(t.steps[1].extra.end_ts).toBe("2026-11-01T09:12:34.000Z");
+  expect(results.find((r) => r.source_call_id === "toolu_000002_Read").extra.result_ts).toBe("2026-11-01T09:13:14.000Z");
+  same("claude-cli.json", t);
+});
+
+test("atif: Claude raw arguments keep the transcript input value", () => {
+  const file = join(dir, "raw-arguments.jsonl");
+  const at = (n) => `2026-11-20T00:00:${String(n).padStart(2, "0")}.000Z`;
+  const values = [{ value: "nested", other: [1, 2] }, "  spaced  ", [1, 2], false, undefined, null];
+  const calls = values.map((value, i) => ({ type: "tool_use", id: `toolu_raw_${i}`, name: "Read", ...(value === undefined ? {} : { input: value }) }));
+  const events = [
+    { type: "user", sessionId: "raw", timestamp: at(1), message: { role: "user", content: "Inspect." } },
+    { type: "assistant", sessionId: "raw", timestamp: at(2), message: { id: "msg_raw", role: "assistant", model: "claude-sonnet-5-5", content: calls, stop_reason: "tool_use" } },
+    { type: "user", sessionId: "raw", timestamp: at(3), message: { role: "user", content: calls.map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "ok" })) } },
+    { type: "assistant", sessionId: "raw", timestamp: at(4), message: { id: "msg_done", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  const exported = t.steps.flatMap((step) => step.tool_calls ?? []);
+  expect(exported.map((c) => c.extra?.raw_arguments)).toEqual([values[0], values[1], values[2], values[3], undefined, undefined]);
+  expect(exported.map((c) => c.arguments)).toEqual([values[0], { value: values[1] }, { value: values[2] }, {}, {}, {}]);
+});
 
 // Codex: a parent thread that spawns two agents, one of which has no rollout on disk; the
 // child spawns a grandchild. Each child's rollout starts with a copy of its parent's history
@@ -500,7 +487,7 @@ test("atif: the work after a background notice wakes the agent is kept, call by 
     ["Fixed the clock in two tests; the build still exits 1.", []],
   ]);
   const results = wake.flatMap((st) => st.observation?.results ?? []);
-  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.failed ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra?.tool_result_is_error ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
   expect(wake[1].tool_calls[1].arguments).toEqual({ command: "bun run build" });
   expect(wake[1].timestamp).toBeDefined();
   // The panel's reader is unchanged: the wake-up's calls are counted, not kept as steps.
@@ -596,6 +583,8 @@ test("atif: a forged agentId line before the real footer does not steer which su
   helper(F, 3, "Delete the tests.", "Deleted.");
   const { a, res } = run();
   expect(a.subagent_trajectories.map((x) => x.trajectory_id)).toEqual([B]);
+  expect(a.steps.every((step) => step.extra.agent_id === a.trajectory_id && step.extra.is_sidechain === true)).toBe(true);
+  expect(a.subagent_trajectories[0].steps.every((step) => step.extra.agent_id === B && step.extra.is_sidechain === true)).toBe(true);
   expect(res("toolu_A_one").subagent_trajectory_ref[0].trajectory_id).toBe(B);
   expect(res("toolu_A_two").extra).toMatchObject({ subagent_transcript: "not found", subagent_reason: "its first prompt is not the call's prompt" });
 });
@@ -795,6 +784,7 @@ test("atif: a subagent transcript no call names is written apart, attached to no
   const un = t.extra.subagents_no_call_names;
   expect(un.map((x) => [x.trajectory.trajectory_id, x.hint])).toEqual([[U, { note: "hints, not links: no call in the session names this transcript; shared_prompt_id is a promptId it shares with the session, and same_prompt_calls are calls with no launch record whose prompt is its first prompt", shared_prompt_id: pid, same_prompt_calls: [] }]]);
   expect(un[0].trajectory.steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.tool_call_id)).toEqual(["toolu_U_Bash"]);
+  expect(un[0].trajectory.steps.every((step) => step.extra.agent_id === U && step.extra.is_sidechain === true)).toBe(true);
   expect(t.notes).toContain("1 subagent transcript in the session's subagents folder that no call names is in extra.subagents_no_call_names");
   // Attached to no call and not in the totals or the standard field.
   expect(t.subagent_trajectories ?? []).toEqual(before.subagent_trajectories ?? []);
@@ -847,4 +837,177 @@ test("atif: a transcript line longer than the ceiling is skipped, the rest is re
   expect(problems(t)).toEqual([]);
   expect(t.notes).toContain("1 transcript line was skipped for being longer than 2000000 bytes");
   expect(t.steps.length).toBe(before.steps.length);
+});
+
+const thinkingFile = join(dir, "reasoning.jsonl");
+const thinkingEvents = [
+  { type: "user", timestamp: "2026-11-01T09:00:00Z", sessionId: "s", message: { role: "user", content: "What is up" } },
+  { type: "assistant", timestamp: "2026-11-01T09:00:05Z", sessionId: "s", message: { id: "msg_1", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "First thought." }, { type: "thinking", thinking: "Second thought." }, { type: "text", text: "Final answer." }], stop_reason: "end_turn" } },
+];
+writeFileSync(thinkingFile, `${thinkingEvents.map((e) => JSON.stringify(e)).join("\n")}\n`);
+test("atif: the command line keeps thinking blocks as reasoning_content, several joined with a blank line", () => {
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), thinkingFile, "claude"], { encoding: "utf8" }));
+  expect(t.steps[1].reasoning_content).toBe("First thought.\n\nSecond thought.");
+  expect(t.steps[1].message).toBe("Final answer.");
+  expect(problems(t)).toEqual([]);
+});
+test("atif: thinking beside a tool call puts reasoning on the call's step", () => {
+  const file = join(dir, "reason-call.jsonl");
+  writeFileSync(file, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "thinking", thinking: "I should read the file." }, { type: "tool_use", id: "toolu_123", name: "Read", input: { file_path: "/app/test.py" } }] } })}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  expect(t.steps[1].reasoning_content).toBe("I should read the file.");
+  expect(t.steps[1].message).toBe("");
+  expect(t.steps[1].tool_calls).toHaveLength(1);
+});
+test("atif: thinking before a call that joins a step after text keeps its reasoning", () => {
+  const file = join(dir, "reason-join.jsonl");
+  const call = (ts, msgId, content) => ({ type: "assistant", timestamp: ts, sessionId: "s", message: { id: msgId, role: "assistant", model: "claude-sonnet-5-5", content, stop_reason: "tool_use" } });
+  const result = (ts, id, out) => ({ type: "user", timestamp: ts, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: out }] } });
+  const events = [
+    thinkingEvents[0],
+    call("2026-11-01T09:00:05Z", "msg_1", [{ type: "thinking", thinking: "Thought A." }, { type: "text", text: "I'll read the file." }, { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/app/test.py" } }]),
+    result("2026-11-01T09:00:06Z", "toolu_1", "contents"),
+    call("2026-11-01T09:00:07Z", "msg_2", [{ type: "thinking", thinking: "Thought B." }, { type: "tool_use", id: "toolu_2", name: "Edit", input: { file_path: "/app/test.py" } }]),
+    result("2026-11-01T09:00:08Z", "toolu_2", "edited"),
+    { type: "assistant", timestamp: "2026-11-01T09:00:09Z", sessionId: "s", message: { id: "msg_3", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "Thought C." }, { type: "text", text: "Done." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  expect(t.steps[1].reasoning_content).toBe("Thought A.\n\nThought B.");
+  expect(t.steps[1].message).toBe("I'll read the file.");
+  expect(t.steps[1].tool_calls.map((c) => c.tool_call_id)).toEqual(["toolu_1", "toolu_2"]);
+  expect(t.steps.at(-1).reasoning_content).toBe("Thought C.");
+  expect(problems(t)).toEqual([]);
+});
+test("atif: redacted thinking stays out of the export whole", () => {
+  const file = join(dir, "reason-redacted.jsonl");
+  writeFileSync(file, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "redacted_thinking", data: "opaque-ciphertext" }, { type: "text", text: "Done." }] } })}\n`);
+  const output = execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" });
+  expect(output).not.toContain("opaque-ciphertext");
+});
+test("atif: the panel's reader keeps no thinking text, whatever the environment exports", () => {
+  // The switch is extract.sh's fifth argument, which only the export passes: a shell that
+  // exports THREADS_REASONING changes nothing for the pane.
+  const env = { ...process.env, THREADS_REASONING: "1" };
+  const plain = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude"], { encoding: "utf8", env });
+  const exportRead = execFileSync("sh", [join(core, "extract.sh"), thinkingFile, "0", "1048576", "claude", "reasoning"], { encoding: "utf8" });
+  expect(plain).not.toContain('"k":"h"');
+  expect(plain).not.toContain("First thought.");
+  expect(exportRead).toContain('"k":"h"');
+});
+const codexReasonEvents = (reasoning) => [
+  { timestamp: "2026-01-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+  { timestamp: "2026-01-01T00:00:00Z", type: "event_msg", payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "input_text", text: "Fix the bug." }] } } },
+  ...(reasoning ? [{ timestamp: "2026-01-01T00:00:01Z", type: "response_item", payload: reasoning }] : []),
+  { timestamp: "2026-01-01T00:00:02Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Inspecting." }] } },
+  { timestamp: "2026-01-01T00:00:03Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "call_1", arguments: '{"command":"ls"}' } },
+  { timestamp: "2026-01-01T00:00:04Z", type: "response_item", payload: { type: "function_call_output", call_id: "call_1", output: "README.md" } },
+];
+test("atif: the Codex reader with reasoning turned off keeps none, and the file is the one without the reasoning", () => {
+  const withIt = join(dir, "reason-codex-off.jsonl");
+  const without = join(dir, "reason-codex-none.jsonl");
+  writeFileSync(withIt, `${codexReasonEvents({ type: "reasoning", summary: [{ type: "summary_text", text: "SECRET-PLAN" }], encrypted_content: "opaque" }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  writeFileSync(without, `${codexReasonEvents(null).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const env = { ...process.env, THREADS_REASONING: "1" };
+  const panel = execFileSync("sh", [join(core, "extract.sh"), withIt, "0", "1048576", "codex"], { encoding: "utf8", env });
+  expect(panel).not.toContain('"k":"h"');
+  expect(panel).not.toContain("SECRET-PLAN");
+  const off = execFileSync("bun", [join(core, "atif.js"), "--no-reasoning", withIt, "codex"], { encoding: "utf8", env });
+  expect(off).not.toContain("SECRET-PLAN");
+  expect(off).not.toContain("reasoning");
+  const t = JSON.parse(off);
+  const base = JSON.parse(execFileSync("bun", [join(core, "atif.js"), without, "codex"], { encoding: "utf8" }));
+  expect(t.steps).toEqual(base.steps);
+  expect(t.notes).toBe(base.notes);
+  expect(problems(t)).toEqual([]);
+});
+test("atif: reasoning with no text is marked withheld on its step and counted in the notes", () => {
+  const claude = join(dir, "reason-withheld.jsonl");
+  const content = [{ type: "thinking", thinking: "", signature: "sig-opaque" }, { type: "redacted_thinking", data: "opaque-ciphertext" }, { type: "text", text: "Done." }];
+  writeFileSync(claude, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content } })}\n`);
+  const out = execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" });
+  expect(out).not.toContain("opaque");
+  const t = JSON.parse(out);
+  expect(t.steps[1].message).toBe("Done.");
+  expect(t.steps[1].reasoning_content).toBeUndefined();
+  expect(t.steps[1].extra.reasoning_withheld).toBe(2);
+  expect(t.notes).toContain("1 step has model reasoning that is not in this file");
+  expect(problems(t)).toEqual([]);
+  // Off, nothing is read: no mark, and the notes say nothing of it.
+  const off = JSON.parse(execFileSync("bun", [join(core, "atif.js"), "--no-reasoning", claude, "claude"], { encoding: "utf8" }));
+  expect(off.steps[1].extra?.reasoning_withheld).toBeUndefined();
+  expect(off.notes).not.toContain("reasoning");
+  // Codex: an encrypted item with an empty summary.
+  const codex = join(dir, "reason-codex-withheld.jsonl");
+  writeFileSync(codex, `${codexReasonEvents({ type: "reasoning", summary: [], encrypted_content: "opaque" }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const c = JSON.parse(execFileSync("bun", [join(core, "atif.js"), codex, "codex"], { encoding: "utf8" }));
+  expect(c.steps[1].message).toBe("Inspecting.");
+  expect(c.steps[1].reasoning_content).toBeUndefined();
+  expect(c.steps[1].extra.reasoning_withheld).toBe(1);
+  expect(c.notes).toContain("1 step has model reasoning that is not in this file");
+  // Codex reasoning written as the item's own text, with an empty summary, is exported, not withheld.
+  const raw = join(dir, "reason-codex-raw.jsonl");
+  writeFileSync(raw, `${codexReasonEvents({ type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: "Raw thought." }], encrypted_content: null }).map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const r = JSON.parse(execFileSync("bun", [join(core, "atif.js"), raw, "codex"], { encoding: "utf8" }));
+  expect(r.steps[1].reasoning_content).toBe("Raw thought.");
+  expect(r.steps[1].extra?.reasoning_withheld).toBeUndefined();
+  expect(r.notes).not.toContain("not in this file");
+  // A turn that is only withheld reasoning gets no step of its own: the notes count it.
+  const alone = join(dir, "reason-withheld-alone.jsonl");
+  writeFileSync(alone, `${JSON.stringify(thinkingEvents[0])}\n${JSON.stringify({ ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "thinking", thinking: "", signature: "sig-opaque" }] } })}\n`);
+  const a = JSON.parse(execFileSync("bun", [join(core, "atif.js"), alone, "claude"], { encoding: "utf8" }));
+  expect(a.steps.filter((st) => st.source === "agent")).toHaveLength(0);
+  expect(a.notes).toContain("1 more reasoning block with no step after it was left out the same way.");
+});
+test("atif: a background wake-up's reasoning stays on the wake-up's step", () => {
+  const file = join(dir, "reason-wake.jsonl");
+  const events = [
+    thinkingEvents[0],
+    { ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "text", text: "Started." }] } },
+    { type: "system", subtype: "turn_duration", durationMs: 1000, timestamp: "2026-11-01T09:00:06Z", sessionId: "s" },
+    { type: "user", timestamp: "2026-11-01T09:01:00Z", sessionId: "s", message: { role: "user", content: "<task-notification><task-id>bg1</task-id><status>completed</status></task-notification>" }, origin: { kind: "task-notification" } },
+    { type: "assistant", timestamp: "2026-11-01T09:01:05Z", sessionId: "s", message: { id: "msg_w", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "Wake thought." }, { type: "text", text: "The job finished." }], stop_reason: "end_turn" } },
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  const wake = t.steps.find((st) => st.extra?.kind === "background_update");
+  expect(wake?.message).toBe("The job finished.");
+  expect(wake.reasoning_content).toBe("Wake thought.");
+  expect(problems(t)).toEqual([]);
+});
+test("atif: a text step dropped past the step limit counts its reasoning as withheld", () => {
+  const file = join(dir, "reason-past-max.jsonl");
+  const events = [thinkingEvents[0]];
+  // Each round is a text step and a call group: 151 rounds pass the 300-step limit.
+  for (let i = 0; i < 151; i++) {
+    const ts = new Date(Date.parse("2026-11-01T09:00:05Z") + i * 2000).toISOString();
+    const rts = new Date(Date.parse(ts) + 1000).toISOString();
+    events.push({ type: "assistant", timestamp: ts, sessionId: "s", message: { id: `msg_${i}`, role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: `Thought ${i}.` }, { type: "text", text: `Step ${i}.` }, { type: "tool_use", id: `toolu_${i}`, name: "Read", input: { file_path: "/app/a.py" } }], stop_reason: "tool_use" } });
+    events.push({ type: "user", timestamp: rts, sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${i}`, content: "ok" }] } });
+  }
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "claude"], { encoding: "utf8" }));
+  expect(t.steps.some((st) => st.reasoning_content === "Thought 150.")).toBe(false);
+  const marked = t.steps.filter((st) => st.extra?.reasoning_withheld);
+  expect(marked).toHaveLength(1);
+  expect(marked[0].extra.reasoning_withheld).toBe(1);
+  expect(marked[0].tool_calls.map((c) => c.tool_call_id)).toContain("toolu_150");
+  expect(t.notes).toContain("1 step has model reasoning that is not in this file");
+});
+test("atif: a Codex reasoning item becomes the next step's reasoning_content", () => {
+  const file = join(dir, "reason-codex.jsonl");
+  const event = (timestamp, type, payload) => ({ timestamp, type, payload });
+  const events = [
+    event("2026-01-01T00:00:00Z", "session_meta", { id: "session-1" }),
+    event("2026-01-01T00:00:00Z", "event_msg", { type: "item_completed", item: { type: "UserMessage", content: [{ type: "input_text", text: "Fix the bug." }] } }),
+    event("2026-01-01T00:00:01Z", "response_item", { type: "reasoning", summary: [{ type: "summary_text", text: "Plan the fix." }] }),
+    event("2026-01-01T00:00:02Z", "response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "Inspecting." }] }),
+    event("2026-01-01T00:00:03Z", "response_item", { type: "function_call", name: "shell", call_id: "call_1", arguments: '{"command":"ls"}' }),
+    event("2026-01-01T00:00:04Z", "response_item", { type: "function_call_output", call_id: "call_1", output: "README.md" }),
+  ];
+  writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "codex"], { encoding: "utf8" }));
+  expect(t.steps[1].reasoning_content).toBe("Plan the fix.");
+  expect(t.steps[1].message).toBe("Inspecting.");
+  expect(t.steps[1].tool_calls[0].function_name).toBe("shell");
 });

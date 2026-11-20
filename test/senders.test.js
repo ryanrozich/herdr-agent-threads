@@ -4,7 +4,7 @@
 import { test, expect, mock } from "bun:test";
 
 mock.module("herdr", () => ({ writeTextFile: async () => null }));
-const { parseSenders, parseExtras, senderCost, SENDER_OPEN, SENDER_STEPS, SENDER_TOTAL } = await import("../mods/agent-threads/settings.js");
+const { parseSenders, parseExtras, senderCost, checkSender, SENDER_OPEN, SENDER_STEPS, SENDER_TOTAL } = await import("../mods/agent-threads/settings.js");
 const { newSession, apply, ruleSender, remarkSenders, RULE_TEXT } = await import("../mods/agent-threads/core/turns.js");
 
 const HOURLY = "build-bot hourly 2026-11-18T01:47:20Z: 3 merged, open 32; nothing needs you.";
@@ -364,4 +364,56 @@ test("new rules mark a session already read again, and each changed turn takes a
   expect(i2).toBe(2);
   expect(remarkSenders(big, rules, i2)).toBe(150);
   expect(big.turns.filter((t) => t.agent).length).toBe(75);
+});
+
+// The Sender rules page (settings card): one list entry a rule in the file, with why one is
+// refused; on and example are the page's own keys.
+test("the list has one entry a rule in the file, with its name, match, example, on and why", () => {
+  expect(parseSenders(undefined)).toEqual({ rules: [], notes: [], list: [] });
+  expect(parseSenders({ prefix: "From {name}:" }).list).toEqual([]);
+  const { rules, notes, list } = parseSenders([
+    { name: "Checker", prefix: "From {name}:", example: FROM },
+    { name: "Nightly", pattern: "^\\[(?<sender>[a-z-]+)\\] ", on: false, example: "[nightly-bot] all green" },
+    { prefix: "From:" },
+    "nope",
+  ]);
+  expect(list.map((r) => [r.n, r.name, r.label, r.on, r.prefix, r.pattern, r.example, r.why])).toEqual([
+    [1, "Checker", "Checker", true, "From {name}:", "", FROM, null],
+    [2, "Nightly", "Nightly", false, "", "^\\[(?<sender>[a-z-]+)\\] ", "[nightly-bot] all green", null],
+    [3, "From:", "From:", true, "From:", "", "", "prefix has no {name}; it would mark every prompt that starts with it"],
+    [4, "Rule 4", "Rule 4", true, "", "", "", "not an object"],
+  ]);
+  expect(notes).toEqual(["Sender rule 3: prefix has no {name}; it would mark every prompt that starts with it", "Sender rule 4: not an object"]);
+  // An off rule is checked and compiled for the page, but marks nothing.
+  expect(rules.map((r) => r.n)).toEqual([1]);
+  expect(list[1].rule.n).toBe(2);
+  expect(list[0].rule).toBe(rules[0]);
+  expect(ruleSender(rules, "[nightly-bot] all green")).toBe(null);
+  // The example is never used to mark: a prompt that is not the example still marks.
+  expect(ruleSender(rules, "From helper-a: done")?.name).toBe("helper-a");
+  // The settings file gives the page its list, and the count of every rule.
+  const x = parseExtras(JSON.stringify({ senders: [{ prefix: "From {name}:", on: false }, { pattern: "nope" }] }));
+  expect(x.senderList.map((r) => [r.on, r.why])).toEqual([[false, null], [true, "pattern has no (?<sender>...) group"]]);
+  expect(x.senders).toEqual([]);
+  expect(x.senderCount).toBe(2);
+});
+
+test("an off rule takes no part of the step budget; a refused one past it says why on its entry", () => {
+  const near = `^(?<sender>\\s)${"\\s?".repeat(18)}Z`;
+  const fit = Math.floor(SENDER_TOTAL / senderCost(near).steps);
+  const raw = Array.from({ length: fit + 1 }, () => ({ pattern: near }));
+  expect(parseSenders(raw).list.at(-1).why).toBe("the rules before it and this one could take over 2 million steps between them on a prompt; ignored");
+  raw[0] = { ...raw[0], on: false };
+  const p = parseSenders(raw);
+  expect(p.notes).toEqual([]);
+  expect(p.rules.length).toBe(fit);
+});
+
+test("checkSender: a draft rule alone, compiled, or why it would not run", () => {
+  expect(checkSender({ prefix: "From {name}:" }).why).toBe(null);
+  expect(ruleSender([checkSender({ prefix: "From {name}:" }).rule], FROM)?.name).toBe("release-checker");
+  // Off in the draft does not matter: the editor shows what it would do.
+  expect(checkSender({ prefix: "From {name}:", on: false }).rule).not.toBe(null);
+  expect(checkSender({ pattern: "^From (\\w+):" })).toEqual({ rule: null, why: "pattern has no (?<sender>...) group" });
+  expect(checkSender({ prefix: "{name}" }).why).toBe("prefix needs 2 characters or more besides {name}");
 });

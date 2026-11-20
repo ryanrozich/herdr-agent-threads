@@ -2,6 +2,15 @@
 
 Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../CHANGELOG.md).
 
+## Unreleased
+
+### Save a session as ATIF
+
+- The exported file now holds the model's reasoning, for Claude Code and Codex sessions, as `reasoning_content` on the step it came before. This is the default. To leave it out, put `--no-reasoning` before the path: `bun mods/agent-threads/core/atif.js --no-reasoning <transcript> > session.json`. The file then holds no reasoning, as one from 1.1.0 did.
+- Reasoning a transcript keeps only as a signature, redacted or encrypted is never written. The step it came before says some was left out (`extra.reasoning_withheld`), and the file's notes count those steps.
+- Results now say whether a call failed in `extra.tool_result_is_error`, the name Harbor's tools read, in place of `extra.failed`, which is no longer written. It is `true` when the reader found the call failed, `false` when it found no failure, and left out when it cannot tell, such as for a call still running.
+- Claude Code helper steps carry `extra.agent_id` (the helper's id) and `extra.is_sidechain` (`true`), and the main session's steps carry `extra.is_sidechain` as `false`. Each Claude Code call that has an input repeats it, as the agent sent it, in `extra.raw_arguments`.
+
 ## 1.1.0
 
 A status line at the foot of the pane, prompts that keep their line breaks, and a way to save a session in a standard format. It also fixes highlighting, long transcripts and short panes. It needs the same Herdr and tools as 1.0.0.

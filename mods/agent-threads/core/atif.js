@@ -16,9 +16,11 @@
 //   (metrics.extra.scope "turn").
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
-//   (result_ts) and whether it failed. The panel's reader keeps no arguments, so arguments
-//   is {} unless the caller read them (the command line does, from calls.sh); a call whose
-//   input was not JSON, or was not read, keeps {} and says so (extra.arguments_unread).
+//   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
+//   false when the reader knows, left out when it does not). The panel's reader keeps no
+//   arguments, so arguments is {} unless the caller read them (the command line does, from
+//   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
+//   (extra.arguments_unread).
 // - A call with no result yet keeps its observation result, with no content and
 //   extra.no_result. A call the transcript gives no id has none made up for the join: its
 //   tool_call_id is "<turn id>#<step>.<call>" and tool_call.extra.id_from_reader is true.
@@ -76,9 +78,11 @@ function turnMetrics(turn) {
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
 // that its input is not JSON (unread); and for a subagent call its trajectory (sub) or that
 // its transcript was not found (subMissing).
-function turnSteps(turn, tr, next, results) {
+function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
   const steps = [];
-  const base = clean({ turn: turn.n, turn_id: tr.id });
+  // Harbor marks every Claude step (claudeSteps): is_sidechain true, with agent_id, on a
+  // helper's (helperId), false on the main session's.
+  const base = clean({ turn: turn.n, turn_id: tr.id, agent_id: helperId, is_sidechain: helperId ? true : claudeSteps ? false : undefined });
   const agentStep = (fields, extra) => {
     const st = clean({
       step_id: next + steps.length,
@@ -87,6 +91,7 @@ function turnSteps(turn, tr, next, results) {
       model_name: turn.model ?? undefined,
       reasoning_effort: turn.effort ?? undefined,
       message: fields.message ?? "",
+      reasoning_content: fields.reasoning_content || undefined,
       tool_calls: fields.tool_calls?.length ? fields.tool_calls : undefined,
       observation: fields.results?.length ? { results: fields.results } : undefined,
       extra: clean({ ...base, ...extra }),
@@ -124,7 +129,7 @@ function turnSteps(turn, tr, next, results) {
       const args = got?.args && typeof got.args === "object" && !Array.isArray(got.args) ? got.args : null;
       const unread = results && !args ? (got?.unread ? "not JSON" : "not read") : undefined;
       toolCalls.push(clean({ tool_call_id: id, function_name: c.tool, arguments: args ?? {},
-        extra: clean({ input: c.input ?? undefined, arguments_unread: unread, id_from_reader: c.call ? undefined : true, started: iso(c.start) }) }));
+        extra: clean({ input: c.input ?? undefined, arguments_unread: unread, id_from_reader: c.call ? undefined : true, started: iso(c.start), raw_arguments: got?.raw }) }));
       if (!c.call) return;
       res.push(clean({
         source_call_id: c.call,
@@ -135,7 +140,7 @@ function turnSteps(turn, tr, next, results) {
           subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end),
-          failed: c.result?.failed ?? undefined,
+          tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : undefined,
           no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
@@ -149,11 +154,13 @@ function turnSteps(turn, tr, next, results) {
       st.observation = res.length ? { results: res } : undefined;
       if (!st.observation) delete st.observation;
       if (more?.count) st.extra = { ...st.extra, calls_not_listed: (st.extra?.calls_not_listed ?? 0) + more.count };
+      if (g.held) st.extra = { ...st.extra, reasoning_withheld: (st.extra?.reasoning_withheld ?? 0) + g.held };
       continue;
     }
     const start = msg?.start ?? tools.find((c) => c.start != null)?.start;
-    const st = agentStep({ timestamp: iso(start), message: msg?.text, tool_calls: toolCalls, results: res }, {
+    const st = agentStep({ timestamp: iso(start), message: msg?.text, reasoning_content: msg?.reason, tool_calls: toolCalls, results: res }, {
       kind: g.title === "Update" ? "background_update" : undefined,
+      reasoning_withheld: g.held || undefined,
       end_ts: iso(msg?.end),
       cut: msg?.cut ? STEP_TEXT : undefined,
       calls_not_listed: more?.count,
@@ -183,11 +190,14 @@ function turnSteps(turn, tr, next, results) {
 
 // The whole session as one trajectory. agent: the harness name (claude, codex, ...). Returns
 // null when the session has no turn (ATIF needs a step).
-export function atif(s, { agent = "claude", version = "unknown", results = null, id = undefined, trajectoryId = undefined, children = [] } = {}) {
+export function atif(s, { agent = "claude", version = "unknown", results = null, id = undefined, trajectoryId = undefined, children = [], helperId = undefined } = {}) {
   const trs = trajectories(s);
   const steps = [];
-  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results)); });
+  s.turns.forEach((turn, i) => { steps.push(...turnSteps(turn, trs[i], steps.length + 1, results, helperId, agent === "claude")); });
   if (!steps.length) return null;
+  const held = steps.filter((st) => st.extra?.reasoning_withheld).length;
+  // Withheld reasoning with no step after it to carry the mark (a turn that is only that).
+  const heldOut = trs.reduce((n, tr) => n + (tr.heldOut ?? 0), 0);
   let prompt = 0, completion = 0, cached = 0, any = false;
   for (const st of steps) {
     if (!st.metrics) continue;
@@ -210,9 +220,9 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
     trajectory_id: trajectoryId ?? (subs.length ? (id === undefined ? s.id ?? undefined : id ?? undefined) : undefined),
     agent: clean({ name: AGENT_NAMES[agent] ?? agent, version, model_name: model ?? undefined, extra: { reader: "agent-threads" } }),
     steps,
-    notes: results
+    notes: (steps.some((step) => step.reasoning_content) ? "Model thinking is kept as reasoning_content. " : "") + (held ? `${held} step${held === 1 ? " has" : "s have"} model reasoning that is not in this file (only a signature, redacted or encrypted, or cut with a step past the step limit), counted in extra.reasoning_withheld. ` : "") + (heldOut ? `${heldOut} more reasoning block${heldOut === 1 ? "" : "s"} with no step after ${heldOut === 1 ? "it" : "them"} ${heldOut === 1 ? "was" : "were"} left out the same way. ` : "") + (results
       ? "Written by agent-threads from the transcript. Tool arguments and each result's whole text (cut only past 4,194,304 characters, with a marker) are read from the transcript; a call's input summary is in tool_call.extra.input. Token counts are per turn, on its last agent step. Results are whole, so this file is as sensitive as the transcript: whatever a tool printed, a secret included, is in it."
-      : "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step.",
+      : "Written by agent-threads from the transcript. Tool arguments are not kept: a call's input is a summary of up to 120 characters in tool_call.extra.input. Token counts are per turn, on its last agent step."),
     final_metrics: clean({
       total_prompt_tokens: total(any ? prompt : undefined, "total_prompt_tokens"),
       total_completion_tokens: total(any ? completion : undefined, "total_completion_tokens"),
@@ -224,7 +234,7 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
   });
 }
 
-// ---- the command line: bun core/atif.js <transcript> [agent] ----
+// ---- the command line: bun core/atif.js [--no-reasoning] <transcript> [agent] ----
 // Reads the transcript the way the panel does (extract.sh, or opencode.sh), takes each call's
 // whole result text (up to 4,194,304 characters, then a marker with its whole length) and
 // whole input from calls.sh (THREADS_WHOLE=1, THREADS_ARGS=1), keeps
@@ -237,9 +247,12 @@ const SUB_DEPTH = 4;
 const CODEX_DAYS = 60;
 
 async function main(argv) {
-  const [file, agent = "claude"] = argv;
+  // The model's reasoning is exported by default (Claude Code and Codex); --no-reasoning leaves
+  // it out, and the file is then what it was before reasoning was read.
+  const reasoning = !argv.includes("--no-reasoning");
+  const [file, agent = "claude"] = argv.filter((a) => a !== "--no-reasoning");
   if (!file || !AGENT_NAMES[agent]) {
-    console.error("usage: bun core/atif.js <transcript> [claude|codex|opencode|pi|cursor|antigravity]");
+    console.error("usage: bun core/atif.js [--no-reasoning] <transcript> [claude|codex|opencode|pi|cursor|antigravity]");
     return 2;
   }
   const cp = await import("node:child_process");
@@ -295,7 +308,7 @@ async function main(argv) {
     const base = 1 << 20;
     let chunk = base;
     for (let guard = 0; guard < 100000 && chunk; guard++) {
-      const r = parseChunk(sh("extract.sh", [path, String(s.offset), String(chunk), agent], env));
+      const r = parseChunk(sh("extract.sh", [path, String(s.offset), String(chunk), agent, ...(reasoning ? ["reasoning"] : [])], env));
       if (r.missing) return null;
       s.size = r.size;
       for (const e of r.events) apply(s, e);
@@ -327,7 +340,7 @@ async function main(argv) {
         if (typeof x?.id !== "string") continue;
         const r = results.get(x.id) ?? {};
         if (x.k === "out") r.out = x.out;
-        else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; }
+        else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; if (Object.hasOwn(x, "raw")) r.raw = x.raw; }
         results.set(x.id, r);
       }
     }
@@ -568,7 +581,7 @@ const LINE_MAX = Number(process.env.THREADS_LINE_MAX) > 0 ? Number(process.env.T
       if (t) r.sub = t; else r.subMissing = true;
       results.set(c.call, r);
     }
-    return atif(s, { agent, results, id: opts.id ?? root, trajectoryId: opts.trajectoryId, version: typeof version === "string" && version ? version.slice(0, 40) : "unknown" });
+    return atif(s, { agent, results, id: opts.id ?? root, trajectoryId: opts.trajectoryId, helperId: agent === "claude" ? opts.trajectoryId : undefined, version: typeof version === "string" && version ? version.slice(0, 40) : "unknown" });
   };
 
   if (agent !== "opencode" && !fs.existsSync(file)) { console.error("no transcript"); return 3; }
