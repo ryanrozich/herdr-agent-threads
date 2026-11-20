@@ -1,6 +1,7 @@
-# Merge queue for main. Nothing is queued on its own: a pull request enters
-# only after someone adds the `queue` label or comments `@mergifyio queue`, and never
-# while it carries a `hold` or `hold:preview` label.
+# Merge queue for main. A pull request enters
+# only after someone adds the `queue` label or comments `@mergifyio queue` (or, for a
+# pull request Catalyst opens for a ticket, Catalyst adds `queue:ready`: the last rule),
+# and never while it carries a `hold` or `hold:preview` label.
 #
 # Every condition is written with no space around the operator (base=main). Mergify reads
 # both spellings the same, but Catalyst's reader of this file takes only the compact one
@@ -52,5 +53,30 @@ pull_request_rules:
   - name: queue a pull request labeled queue
     conditions:
       - label=queue
+    actions:
+      queue:
+
+  # A pull request Catalyst opens for a ticket queues on Catalyst's own queue:ready label,
+  # with no person adding `queue`. Catalyst writes that label only after it has checked for
+  # a hold, and every queue condition above still applies (check, title, resolved threads,
+  # not a draft, no hold or hold:preview label). It never queues a change to the files that
+  # define this gate: the Mergify configuration, the workflows, Catalyst's settings and the
+  # files agents follow (AGENTS.md or CLAUDE.md anywhere, the skills folder). A files
+  # condition is true when any changed file matches, and the minus negates it; a renamed
+  # file counts at both its paths. #files is GitHub's own count, so a change too big for the
+  # file list cannot slip a denied file past it. Such pull requests need a person's `queue`.
+  - name: queue a Catalyst pull request labeled queue:ready
+    conditions:
+      - author=catalyst-cloud-connector[bot]
+      - label=queue:ready
+      - head-repo-full-name=ryanrozich/herdr-agent-threads
+      - head~=^TRD-[0-9]+$
+      - base=main
+      - "#files<=100"
+      - -files~=^\.mergify
+      - -files~=^\.github/
+      - -files~=^\.catalyst/
+      - -files~=^\.(claude|agents)/
+      - -files~=(^|/)(AGENTS|CLAUDE)\.md$
     actions:
       queue:
