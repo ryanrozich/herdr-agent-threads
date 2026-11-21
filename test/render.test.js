@@ -14509,6 +14509,64 @@ test("the Trajectory closed while its room is measured: the Chat is neither narr
   expect(v.splitAsk).toBeNull();
 });
 
+test("no width the split passes through is kept as the owner's Trajectory width, however slow the split; the owner's own width after it is", async () => {
+  const real = Date.now;
+  const t0 = real();
+  const at = (ms, fn) => { Date.now = () => t0 + ms; try { fn(); } finally { Date.now = real; } };
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.prefs = { ...v.prefs, width: "wide" };
+  v.width = 702;
+  v.paneW = 702;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: 600 };
+  log = [];
+  at(0, () => v.key(keyEv("y"), cx));
+  // The new pane, drawing on its own before the Chat sees it.
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  w.myPane = "p3";
+  w.firstSizeAt = undefined;
+  const measure = (ms, px) => at(ms, () => { w.paneW = px; w.shareWidth(); });
+  const kept = () => state.shared["threads.trajWidth"].px;
+  measure(1000, 216);
+  // Past its own first 1.5 s, the 5 s from y still holds.
+  measure(3000, 230);
+  expect(kept()).toBe(600);
+  // The Chat sees it late, and the probe starts: its room is measured past the 5 s.
+  at(3900, () => v.settleSplit(cx));
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  measure(5100, 433);
+  expect(kept()).toBe(600);
+  // The Chat's next look comes late too; the fitted width is measured after it.
+  at(6800, () => v.settleSplit(cx));
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  measure(7000, 462);
+  expect(kept()).toBe(600);
+  // The owner's drag, once the split is done, is kept.
+  measure(9000, 520);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 522 });
+  // A quick split: its later holds never cut the 5 s from y short.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  v.poll(cx);
+  at(10000, () => v.key(keyEv("y"), cx));
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  w.firstSizeAt = undefined;
+  measure(10100, 216);
+  at(10100, () => v.settleSplit(cx));
+  measure(10700, 433);
+  at(10800, () => v.settleSplit(cx));
+  at(11000, () => v.settleSplit(cx));
+  expect(v.splitAsk).toBeNull();
+  measure(13000, 462);
+  expect(kept()).toBe(522);
+});
+
 test("the Trajectory split reads the room only once the new pane's width holds still", async () => {
   const { v, cx } = await trajSplit();
   const real = Date.now;

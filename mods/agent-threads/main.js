@@ -208,6 +208,9 @@ const ROOM_WEIGHT = 1000;
 const ROOM_FIRST = 400;
 const ROOM_STILL = 200;
 const ROOM_WAIT = 1500;
+// How long the Trajectory pane's width stays held (threads.trajWidth) after the probe ends: the
+// fitted width's resize, and the pane measuring it.
+const TRAJ_W_HOLD = 1500;
 // syncSel: how long a loaded pane waits for a turn the other pane selected and it has not read
 // yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
@@ -3453,6 +3456,9 @@ export default class Threads extends View {
     if (made && a.map === TRAJ_MAP_KEY) {
       remember(this.terminal, made.pane, a.map);
       this.splitAsk = { ...a, made: made.pane, probeAt: Date.now(), seen: null };
+      // The width it takes to measure the room is not the owner's: held from the probe's start
+      // to past its longest wait, however late the pane came.
+      this.holdTrajWidth(ROOM_WAIT + TRAJ_W_HOLD);
       run("layout.resize", { id: made.pane, weight: ROOM_WEIGHT });
       this.settleTraj(this.splitAsk, cx);
     } else if (made) {
@@ -3485,6 +3491,8 @@ export default class Threads extends View {
       return;
     }
     this.splitAsk = null;
+    // The probe's width may be measured after this: held until the fitted width is in.
+    this.holdTrajWidth(TRAJ_W_HOLD);
     // Not measured in time: the width asked for, as before.
     if (!a.seen) { run("layout.resize", { id: a.made, px: a.px }); return; }
     const me = this.me();
@@ -3496,6 +3504,13 @@ export default class Threads extends View {
       run("layout.resize", { id: me.pane, px: fit.chat });
       this.trajChatBack = { px: a.chat, pane: a.made };
     }
+  }
+  // The Trajectory pane's widths for the next ms, at least, are the split's own, not the
+  // owner's (shareWidth). A hold already longer stands.
+  holdTrajWidth(ms) {
+    const kept = shared(TRAJ_W_KEY) ?? {};
+    const hold = Math.max(kept.hold ?? 0, Date.now() + ms);
+    if (hold !== kept.hold) setShared(TRAJ_W_KEY, { ...kept, hold });
   }
   // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
   // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading).
@@ -9907,7 +9922,7 @@ export default class Threads extends View {
     const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     // The widths the new pane passes through on its way (settleTraj) are not the owner's.
-    setShared(TRAJ_W_KEY, { ...(shared(TRAJ_W_KEY) ?? {}), hold: Date.now() + 5000 });
+    this.holdTrajWidth(5000);
     this.trajOpen = true;
     // The selected turn goes with it (syncSel), so the new pane opens on it.
     this.selSent = null;
