@@ -9379,7 +9379,8 @@ export default class Threads extends View {
     const me = this.me();
     if (!me || this.pw() < TRAJ_SPLIT_MIN) { this.enterTraj(); return true; }
     if (this.splitAsk) return true;
-    const px = trajColumn(this.pw() + PANE_FRAME, this.keptTrajWidth()) ?? TRAJ_COL;
+    // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor).
+    const px = trajColumn(this.pw() + PANE_FRAME, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     this.trajOpen = true;
     // The selected turn goes with it (syncSel), so the new pane opens on it.
