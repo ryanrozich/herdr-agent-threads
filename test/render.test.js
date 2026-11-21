@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -14282,4 +14282,42 @@ test("until the first build is done: no counts in the heading or the bottom line
   expect(v.tsel).not.toBe(sel);
   expect(v.ledgerAction("lfail", cx)).toBe(true);
   expect(v.tsel).toMatch(/^tr:/);
+});
+
+// A Codex session killed during its very first call: Codex writes a call's output when it
+// comes, so nothing in the session has a result time, and whether the call ever finished is
+// not known. Its row is an ordinary call row: no duration, and no "no result" either way.
+test("a Codex session killed during its very first call: the call is an ordinary row with a blank duration and no claim", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
+  const file = join(dir, "rollout-2026-11-01T09-00-00-00000000-0000-4000-8000-0000000000ca.jsonl");
+  let ct = Date.parse("2026-11-01T09:00:00.000Z");
+  let ord = 0;
+  const line = (type, payload) => `${JSON.stringify({ timestamp: new Date((ct += 1000)).toISOString(), ordinal: ord++, type, payload })}\n`;
+  writeFileSync(file, [
+    line("session_meta", { id: "00000000-0000-4000-8000-0000000000ca", cwd: "/tmp/threads-demo" }),
+    line("turn_context", { model: "gpt-5.5-codex", effort: "medium" }),
+    line("event_msg", { type: "item_completed", turn_id: "t0", item: { type: "UserMessage", content: [{ type: "text", text: "Run the e2e suite" }] } }),
+    line("response_item", { type: "function_call", name: "exec_command", arguments: "{\"cmd\":\"bun run e2e\"}", call_id: "c0" }),
+  ].join(""));
+  const { v } = await pane(file);
+  state.panes[0].program = { key: "codex", name: "Codex" };
+  // Killed: the agent's process is gone.
+  v.res = { ...v.res, ended: "exited" };
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  const L = v.ledger();
+  expect(v.agent().key).toBe("codex");
+  expect(L.going).toBe(false);
+  expect(v.sessions.some((x) => sessionHasEnds(x))).toBe(false);
+  const call = L.rows.find((r) => r.kind === "tr" && laneOf(r.lk) === "tools");
+  expect(call).toMatchObject({ lk: "tool", status: null, failed: false });
+  expect(call.open).toBeFalsy();
+  expect(call.noResult).toBeFalsy();
+  expect(rowTimes(call)).toMatchObject({ dur: "", bar: false });
+  const f = detailOf(call).fields;
+  expect(f).toContainEqual(["Took", "not recorded"]);
+  expect(f).toContainEqual(["Result", "not recorded"]);
+  expect(JSON.stringify(f)).not.toMatch(/No result|"ok"|running/);
 });
