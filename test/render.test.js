@@ -12086,6 +12086,20 @@ test("a pasted block keeps its long hyphenated tokens as typed, while the messag
 // The words a frame drew, and whether it drew an element of an id.
 const wordsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
 const hasId = (calls, id) => calls.some((e) => e[0] === "id" && e[1] === id);
+// The new Trajectory pane, taking the row's room by weight (settleTraj), reports w px; the
+// Chat reads it once it has held still.
+function roomIs(v, cx, pane, w) {
+  state.shared["threads.width"] = { ...(state.shared["threads.width"] ?? {}), [pane]: w };
+  const real = Date.now;
+  const t0 = real();
+  try {
+    Date.now = () => t0;
+    v.settleSplit(cx);
+    Date.now = () => t0 + 1000;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+}
+const resizes = () => log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
 
 test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map; y moves between them, and the pane closes with the Chat", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
@@ -12100,12 +12114,15 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   const split = log.find(([, n]) => n === "pane.split");
   expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
-  v.settleSplit();
+  v.settleSplit(cx);
   expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
   expect(state.shared["threads.pinnedByTerminal"]).toBeUndefined();
+  // First it takes the row's room, to measure it; the terminal has plenty to give.
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  roomIs(v, cx, "p3", 900);
   // 560 px, held to what a 700 px Chat can give: it keeps 240 px.
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 700 + 2 - 240 }]);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 700 + 2 - 240 }]);
   expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
   log = [];
   v.key(keyEv("y"), cx);
@@ -12858,6 +12875,112 @@ test("with no width kept, the split's 560 px is held to what a 600 px Chat can g
   v.paneW = 1400;
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(560);
+});
+
+// The Trajectory split takes its room from the terminal first, then the Chat, then itself
+// (settleTraj, ui.js trajFit). A 704 px Chat (the Wide reading width) with 600 px kept asks
+// for 464.
+async function trajSplit(chatW = 702, kept = 600) {
+  const r = await pane(fixture("--extra", "3"));
+  // The Wide reading width, 704 px, so the Chat is at it and keepWidth leaves it there.
+  r.v.prefs = { ...r.v.prefs, width: "wide" };
+  r.v.width = chatW;
+  r.v.paneW = chatW;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: kept };
+  log = [];
+  r.v.key(keyEv("y"), r.cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  r.v.settleSplit(r.cx);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  return r;
+}
+const closeTraj = (v, cx) => { state.panes = state.panes.filter((p) => p.pane !== "p3"); log = []; v.poll(cx); };
+
+test("the Trajectory split where the terminal has the room: the Chat keeps its width, the Trajectory gets what it asked for, and closing it changes nothing", async () => {
+  const { v, cx } = await trajSplit();
+  // The row has 902 px past the Chat: 464 for the Trajectory leaves the terminal 438.
+  roomIs(v, cx, "p3", 900);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  expect(v.splitAsk).toBeNull();
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+});
+
+test("the Trajectory split where the terminal is short: the Chat gives the rest, and gets its width back when the Trajectory closes", async () => {
+  const { v, cx } = await trajSplit();
+  // 435 px past the Chat (a 1440 px window): 464 for the Trajectory and 200 kept for the
+  // terminal is 229 more, from the Chat (704 to 475). Nothing runs past the window's edge.
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // Open, nothing is given back.
+  log = [];
+  v.poll(cx);
+  expect(resizes()).toEqual([]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }]);
+  // Once.
+  log = [];
+  v.poll(cx);
+  expect(resizes()).toEqual([]);
+});
+
+test("the Trajectory split with no terminal in the tab keeps nothing for one: the Chat gives only what the Trajectory needs", async () => {
+  const { v, cx } = await trajSplit();
+  state.panes = state.panes.filter((p) => p.pane !== "p1");
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 704 - 29 }]);
+});
+
+test("the Trajectory split where the Chat at its 240 px is still short: the Trajectory narrows toward 200 px", async () => {
+  // A 500 px Chat asks for 260. With 100 px past it, the Chat gives 260 (to 240) and the
+  // Trajectory 60 more (to 200); the terminal keeps 160.
+  const { v, cx } = await trajSplit(498, 600);
+  roomIs(v, cx, "p3", 98);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: 240 }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 500 }]);
+});
+
+test("the Trajectory split whose pane never reports its width goes ahead at the width asked for", async () => {
+  const { v, cx } = await trajSplit();
+  const real = Date.now;
+  const t0 = real();
+  try {
+    Date.now = () => t0 + 1000;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    Date.now = () => t0 + 2000;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  expect(v.splitAsk).toBeNull();
+});
+
+test("the Trajectory split reads the room only once the new pane's width holds still", async () => {
+  const { v, cx } = await trajSplit();
+  const real = Date.now;
+  const t0 = real();
+  v.splitAsk.probeAt = t0;
+  try {
+    // The width it was split at comes first and holds still a while: too soon to be the room.
+    state.shared["threads.width"] = { ...state.shared["threads.width"], p3: 216 };
+    Date.now = () => t0;
+    v.settleSplit(cx);
+    Date.now = () => t0 + 250;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    // Then the room, read once it has held still.
+    state.shared["threads.width"].p3 = 433;
+    Date.now = () => t0 + 450;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    Date.now = () => t0 + 700;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // While it waited, the Chat looked again on a timer.
+  expect(cx.timers.some((x) => x.ms === 50)).toBe(true);
 });
 
 test("until the first build is done, m and Shift m do nothing, as f does; after it they move", async () => {
