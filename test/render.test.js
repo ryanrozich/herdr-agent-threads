@@ -2157,6 +2157,36 @@ test("the repo comes from git remote get-url origin in the terminal's folder", a
 // ---- round 3: S1, the read never stalls ---------------------------------------------------
 
 let busyFile = null;
+test("debug on: a long session's rows settle with their text, and then no next draw is asked for", async () => {
+  const { v, cx } = await pane(fixture("--extra", "300"));
+  expect(v.debug).toBe(true);
+  draw(v, cx);
+  // As on a long session in a slow draw: the rows are built over several draws, and the
+  // reshaping time runs out after a turn or two. A new width builds and shapes every row again.
+  v.buildMax = () => 0;
+  v.shapeBudget = 0;
+  v.width = 380;
+  v.render(cx);
+  let draws = 0;
+  while (cx.timers.length && draws < 1500) {
+    cx.timers.splice(0).forEach((x) => x.fn(cx));
+    v.render(cx);
+    draws++;
+  }
+  expect(cx.timers).toEqual([]);
+  expect(v.rowJob).toBeNull();
+  expect(v.staleRows ?? []).toEqual([]);
+  const turns = v.rows().filter((r) => r.kind === "turn");
+  expect(turns.length).toBeGreaterThan(300);
+  expect(turns.filter((r) => r.shape?.blank).length).toBe(0);
+  // Drawn again with nothing changed: still nothing more to do. The report's build time is
+  // the last real build's, over all its slices.
+  v.render(cx);
+  expect(cx.timers).toEqual([]);
+  expect(v.buildMs).toBeGreaterThan(0);
+  expect(v.timing).toStartWith(`rows ${v.buildMs.toFixed(1)} ms`);
+}, 30000);
+
 const busy = () => (busyFile ??= fixture("--busy", "130"));
 
 // A pane on file whose cx is set up by prep before init (hooks must be in place for the read).
@@ -8911,6 +8941,8 @@ test("a rebuild keeps a closed turn's rows until the turn, its measures or the l
   const tb = v.findTurn(b);
   tb.after = [`${tb.after?.[0] ?? ""}\n\nOne more line from the agent.`];
   tb.v += 1;
+  // The reader moves the session version with the turn.
+  v.current().version++;
   v.open.delete(keys.at(-8));
   draw(v, cx);
   expect(rowOf(a)).toBe(before.a);
@@ -8922,6 +8954,8 @@ test("a rebuild keeps a closed turn's rows until the turn, its measures or the l
   const part = v.cmdFor(rc);
   v.probed(part.key, v.partSig(part), { height: 400 * v.zoom() }, cx);
   v.open.add(keys.at(-8));
+  // The next build of every row.
+  v.rowsKey = null;
   draw(v, cx);
   expect(rowOf(c)).not.toBe(rc);
   expect(sizeOf(c)).toBe(rc.shape.mdBase + 400);

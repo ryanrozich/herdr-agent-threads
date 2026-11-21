@@ -2452,6 +2452,7 @@ export default class Threads extends View {
     const s0 = this.shapeSpent ?? 0;
     const out = this.buildRows(status, job.from, b0 + this.buildMax());
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
+    job.ms = (job.ms ?? 0) + (now() - b0);
     if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
     for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.cachedH.get(i) ?? this.height(out[i])); job.index.set(out[i].key, i); }
     for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
@@ -2465,6 +2466,7 @@ export default class Threads extends View {
       return;
     }
     this.rowJob = null;
+    this.buildMs = job.ms;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -5715,12 +5717,12 @@ export default class Threads extends View {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
-  // props().debug: how long building the rows takes, fresh and memoised, and whether
-  // alpha() reads every colour of every theme.
+  // props().debug: how long the last build of the rows took (buildMs, over all its slices),
+  // a memoised ask, and whether alpha() reads every colour of every theme. It builds nothing
+  // itself: a build forced on every draw left a long session's rows mid-build at the start of
+  // each draw, so the reshaping time never came back (render), and the rows stayed blank while
+  // the pane drew about 40 times a second.
   measure() {
-    const a = now();
-    this.rowsKey = null;
-    this.rows();
     const b = now();
     this.rows();
     const c = now();
@@ -5735,7 +5737,7 @@ export default class Threads extends View {
       const all = themes().flatMap((x) => Object.values(x.colors ?? {})).filter((v) => typeof v === "string");
       this.alphaOk = `${all.filter((v) => /^#[0-9a-f]{8}$/.test(alpha(v, 0.5))).length}/${all.length}`;
     }
-    this.timing = `rows ${(b - a).toFixed(1)} ms · memo ${(c - b).toFixed(2)} ms · move ${((d - c) / 2).toFixed(2)} ms · ${this.rowsMemo.length} items · alpha ${this.alphaOk}`;
+    this.timing = `rows ${(this.buildMs ?? 0).toFixed(1)} ms · memo ${(c - b).toFixed(2)} ms · move ${((d - c) / 2).toFixed(2)} ms · ${this.rowsMemo.length} items · alpha ${this.alphaOk}`;
   }
 
   narrow() { return this.width < 300; }
