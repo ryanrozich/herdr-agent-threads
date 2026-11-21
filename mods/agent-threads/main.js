@@ -79,7 +79,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP,
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -200,6 +200,14 @@ const SEL_KEY = "threads.turnSel";
 // the Chat's own pane), and given this px width.
 const TRAJ_SPLIT_MIN = 480;
 const TRAJ_COL = 560;
+// The Trajectory split's room probe (settleTraj): the new pane's weight while it takes the
+// row's room; the earliest its width is read (the width it was split at may come first, and
+// Herdr had applied the weight by 300 ms on the rig); how long that width must hold still;
+// and how long to wait before the split goes ahead unmeasured.
+const ROOM_WEIGHT = 1000;
+const ROOM_FIRST = 400;
+const ROOM_STILL = 200;
+const ROOM_WAIT = 1500;
 // syncSel: how long a loaded pane waits for a turn the other pane selected and it has not read
 // yet, and how old an entry of a terminal may get before a write drops it.
 const SEL_WAIT = 5000;
@@ -2529,7 +2537,8 @@ export default class Threads extends View {
     this.findSelf(cx);
     this.fitOnOpen();
     this.keepWidth();
-    this.settleSplit();
+    this.settleSplit(cx);
+    this.trajGiveBack();
     this.autoPinned(cx);
     if (this.syncSel()) this.selMoved = true;
     this.lookRepo(cx);
@@ -3434,17 +3443,64 @@ export default class Threads extends View {
   }
 
   // Once the split has applied: the new pane goes in the Pinned map and gets the column's
-  // width. Opened by a pin or by Threads opening, the keyboard goes back to Threads.
-  settleSplit() {
+  // width. Opened by a pin or by Threads opening, the keyboard goes back to Threads. The
+  // Trajectory's pane first takes the row's room, to see how much there is (settleTraj).
+  settleSplit(cx) {
     const a = this.splitAsk;
     if (!a) return;
+    if (a.made) { this.settleTraj(a, cx); return; }
     const made = panes().find((p) => p.mod === MOD && !a.before.includes(p.pane));
-    if (made) {
+    if (made && a.map === TRAJ_MAP_KEY) {
+      remember(this.terminal, made.pane, a.map);
+      this.splitAsk = { ...a, made: made.pane, probeAt: Date.now(), seen: null };
+      run("layout.resize", { id: made.pane, weight: ROOM_WEIGHT });
+      this.settleTraj(this.splitAsk, cx);
+    } else if (made) {
       this.splitAsk = null;
       remember(this.terminal, made.pane, a.map ?? PIN_MAP_KEY);
       run("layout.resize", { id: made.pane, px: a.px });
       if (a.back) run("pane.focus", { pane: a.back });
     } else if (Date.now() > a.until) this.splitAsk = null;
+  }
+
+  // The Trajectory split's width. Herdr gives no window size, and a pane the Chat holds at a
+  // px width keeps it when a split beside it asks for more than the terminal has: the row
+  // then runs past the window's edge, and each pane still measures its full width. So the
+  // new pane first takes the row's room by weight (ROOM_WEIGHT against the terminal's 1 or
+  // so), and the width it reports once it holds still is that room: the row less the Chat and
+  // any pane of a fixed width. trajFit then says what the Trajectory and the Chat get: the
+  // terminal gives first, down to TERM_KEEP, then the Chat, then the Trajectory. A Chat
+  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack).
+  settleTraj(a, cx) {
+    const at = Date.now();
+    const w = shared(WIDTH_KEY)?.[a.made];
+    const late = at - a.probeAt > ROOM_WAIT;
+    if (Number.isFinite(w) && a.seen?.w !== w) a.seen = { w, at };
+    const still = a.seen && at - a.seen.at >= ROOM_STILL && at - a.probeAt >= ROOM_FIRST;
+    if (!still && !late) {
+      if (cx?.timer && !this.roomTimer) { this.roomTimer = true; cx.timer.after(50, (cx) => { this.roomTimer = false; this.settleSplit(cx); }); }
+      return;
+    }
+    this.splitAsk = null;
+    // Not measured in time: the width asked for, as before.
+    if (!a.seen) { run("layout.resize", { id: a.made, px: a.px }); return; }
+    const me = this.me();
+    const term = this.pane();
+    const keep = term && me && term.tab === me.tab ? TERM_KEEP : 0;
+    const fit = trajFit(a.chat, a.px, a.seen.w + PANE_FRAME, keep);
+    run("layout.resize", { id: a.made, px: fit.traj });
+    if (fit.chat < a.chat && me) {
+      run("layout.resize", { id: me.pane, px: fit.chat });
+      this.trajChatBack = { px: a.chat, pane: a.made };
+    }
+  }
+  // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back.
+  trajGiveBack() {
+    const back = this.trajChatBack;
+    if (!back || panes().some((p) => p.pane === back.pane)) return;
+    this.trajChatBack = null;
+    const me = this.me();
+    if (me) run("layout.resize", { id: me.pane, px: back.px });
   }
 
   // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that
@@ -9842,8 +9898,11 @@ export default class Threads extends View {
     if (!me || this.pw() < TRAJ_SPLIT_MIN) { this.enterTraj(); return true; }
     if (this.splitAsk) return true;
     // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor).
-    const px = trajColumn(this.pw() + PANE_FRAME, this.keptTrajWidth() ?? TRAJ_COL);
-    this.splitAsk = { before: panes().map((p) => p.pane), px, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
+    const chat = Math.round(this.pw()) + PANE_FRAME;
+    const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
+    this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
+    // The widths the new pane passes through on its way (settleTraj) are not the owner's.
+    setShared(TRAJ_W_KEY, { ...(shared(TRAJ_W_KEY) ?? {}), hold: Date.now() + 5000 });
     this.trajOpen = true;
     // The selected turn goes with it (syncSel), so the new pane opens on it.
     this.selSent = null;

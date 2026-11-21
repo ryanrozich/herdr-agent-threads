@@ -2669,6 +2669,23 @@ export function trajColumn(width, kept) {
   if (!(Number.isFinite(kept) && kept > 0)) return null;
   return Math.max(200, Math.min(Math.round(kept), Math.round(width) - PIN_MAIN_MIN));
 }
+// The Trajectory split's widths once the row's room is known, in Herdr px (frames included).
+// chat: the Chat's px; want: what the split asks for (trajColumn); room: what the row has for
+// the Trajectory and the panes that flex beside it (the terminal), measured with the new pane
+// taking nearly all of it; keep: what the terminal keeps (TERM_KEEP, or 0 with no terminal in
+// the tab). The room comes first from the terminal, down to keep; then from the Chat, down to
+// PIN_MAIN_MIN; then from the Trajectory, down to TRAJ_MIN. Past that the terminal gives the
+// rest of keep. A Chat of TRAJ_SPLIT_MIN (480) px or more always fits 240 + 200, so the row is
+// never short of those two. chat is the Chat's new px, the same when it gives nothing.
+export const TERM_KEEP = 200;
+export const TRAJ_MIN = 200;
+export function trajFit(chat, want, room, keep = TERM_KEEP) {
+  let need = want + keep - room;
+  if (need <= 0) return { chat, traj: want };
+  const give = Math.max(0, Math.min(need, chat - PIN_MAIN_MIN));
+  need -= give;
+  return { chat: chat - give, traj: Math.max(Math.min(want, TRAJ_MIN), want - need) };
+}
 export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
   const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4) + PIN_STEP));

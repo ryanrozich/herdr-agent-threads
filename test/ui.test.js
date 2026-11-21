@@ -9,7 +9,7 @@ import {
   rowLines, flattenMd, middle, rowShape, rowHeight, rowTextWidth, bubbleMax, commandLayout, ROW, senderLabel, senderParts, senderIcon, kindWords,
   isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
-  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, trajColumn, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
+  pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, trajColumn, trajFit, TERM_KEEP, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
   mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
@@ -815,6 +815,23 @@ test("codeRows: a code line wrapped word by word, a long word split across rows"
   expect(codeRows("aaaa bbbb cccc", 9)).toBe(2);
   expect(codeRows("x".repeat(25), 10)).toBe(3);
   expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
+});
+
+test("trajFit: the room comes from the terminal down to 200, then the Chat down to 240, then the Trajectory down to 200", () => {
+  expect(TERM_KEEP).toBe(200);
+  // The terminal has it.
+  expect(trajFit(704, 464, 902)).toEqual({ chat: 704, traj: 464 });
+  expect(trajFit(704, 464, 664)).toEqual({ chat: 704, traj: 464 });
+  // More room than it asks for: it still gets what it asked for.
+  expect(trajFit(704, 464, 700)).toEqual({ chat: 704, traj: 464 });
+  // The Chat gives the rest.
+  expect(trajFit(704, 464, 435)).toEqual({ chat: 475, traj: 464 });
+  expect(trajFit(704, 464, 435, 0)).toEqual({ chat: 675, traj: 464 });
+  // The Chat at 240, then the Trajectory toward 200.
+  expect(trajFit(500, 260, 100)).toEqual({ chat: 240, traj: 200 });
+  expect(trajFit(500, 260, 150)).toEqual({ chat: 240, traj: 210 });
+  // Past that the terminal gives the rest: the two floors always fit a 480 px Chat.
+  expect(trajFit(482, 242, 0)).toEqual({ chat: 240, traj: 200 });
 });
 
 test("trajColumn: a kept Trajectory width is held to 200 px and to the Chat's width less 240 px", () => {
