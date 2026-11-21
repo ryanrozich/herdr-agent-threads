@@ -10004,6 +10004,12 @@ export default class Threads extends View {
     this.endsSeen.add(x);
     return true;
   }
+  // Whether the counts and the keys that go by them (f, m, Home, End) wait: while a session is
+  // still being found or read, or the first build is not done. A split opened while its
+  // session is read builds over the turns read so far, and that build is whole, but its
+  // counts are of part of the session.
+  ledgerHeld(L) { return L.partial === true || this.unread(); }
+  unread() { return this.res.kind === "resolving" || this.sessions.some((x) => !x.loaded); }
   // The rows the filter buttons leave, kept until the rows or the filter change.
   ledgerRows() {
     const L = this.ledger();
@@ -10031,9 +10037,10 @@ export default class Threads extends View {
   ledgerAction(name, cx) {
     const shown = this.ledgerRows();
     const i = this.ledgerSel(shown);
-    // Until the first build is done the rows are the newest turns only: the first and last
-    // rows, the failed calls and the user's messages are not known yet.
-    const held = this.ledgerShown?.partial === true;
+    // Until the session is read and the first build is done (ledgerHeld), the rows are part
+    // of it only: the first and last rows, the failed calls and the user's messages are not
+    // known yet.
+    const held = this.ledgerShown?.partial === true || this.unread();
     const pick = (j) => {
       const r = shown[j];
       if (!r || r.kind === "sess") return;
@@ -10094,8 +10101,8 @@ export default class Threads extends View {
   // some calls' results were not kept).
   failCount(L, shown, i) {
     const n = L.totals.failed;
-    // Until the first build is done, the count would be of the newest turns only.
-    if (!n || L.partial) return null;
+    // Until the session is read and built, the count would be of part of it.
+    if (!n || this.ledgerHeld(L)) return null;
     const fails = L.totals.fails;
     const at = shown[i]?.failed ? fails.indexOf(shown[i].key) : -1;
     const more = L.totals.partial.length ? "+" : "";
@@ -10138,7 +10145,7 @@ export default class Threads extends View {
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
       .child(this.trajHeading(t, L, shown, i))
-      .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks, L.partial)))
+      .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks, this.ledgerHeld(L))))
       .child(right
         ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().items_start().child(list).when(Boolean(panel), (el) => el.child(panel))
         : v_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel)))
@@ -10367,7 +10374,8 @@ export default class Threads extends View {
   // The foot: the Chat's status line, with the Trajectory's numbers (ledger.js ledgerStatus).
   ledgerFoot(t, L, w) {
     // Until the first build is done, the line is left empty: its counts would be of the
-    // newest turns only. It keeps its height.
+    // newest turns only. It keeps its height. Until the session is read, it is not drawn
+    // (statusShown).
     const groups = L.partial ? [] : ledgerStatus(L.totals, w, L.going);
     return h_flex().id("th-status").flex_none().h(STATUS_H).px(12).gap(18).items_center().justify_center().overflow_hidden()
       .children(groups.map((g) => h_flex().id(`th-status-${g.key}`).gap(5).items_center().min_w(0).when(groups.length > 1, (el) => el.flex_none())

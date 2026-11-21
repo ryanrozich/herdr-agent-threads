@@ -14390,3 +14390,78 @@ test("until the first build is done, m and Shift m do nothing, as f does; after 
   expect(v.ledgerAction("luserBack", cx)).toBe(true);
   expect(v.tsel).not.toBe(sel);
 });
+
+// A split opened while its session is still read: the first build runs over the turns read so
+// far and is whole, but its counts are of part of the session. They wait for the read too.
+test("a Trajectory split on a session that arrives in chunks: no counts and no f, m, Home or End until the read and the build are both done", async () => {
+  // After the first chunk is in, the read waits (gate) until the test lets it go on.
+  let gate = null;
+  let open;
+  // 8 MB over 16 turns: the read takes it in several 2 MB chunks.
+  const { v, cx } = await paneWith(fixture("--extra", "8", "--pad-mb", "8"), (cx) => {
+    state.props = { ...state.props, view: "trajectory" };
+    cx.sleepHook = () => {
+      const s = v.current();
+      if (s && !s.loaded && s.turns.length && !open) gate ??= new Promise((r) => { open = r; });
+      return gate ?? new Promise((r) => setTimeout(r, 0));
+    };
+  }, 0);
+  await until(() => gate && v.current()?.turns.length > 0, "the first chunk");
+  expect(v.trajPane).toBe(true);
+  expect(v.current().loaded).toBeFalsy();
+  const part = v.current().turns.length;
+  v.width = 960;
+  v.paneW = 960;
+  const ids = (c) => c.filter((e) => e[0] === "id").map((e) => e[1]);
+  const filterTexts = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-filters");
+    const end = c.findIndex((e, j) => j > at && e[0] === "id" && !String(e[1]).startsWith("th-filter"));
+    return c.slice(at, end).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  };
+  const build = () => { for (let n = 0; v.ledgerJob && n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); } };
+  // A failed call among the turns read so far, so the heading has one to count.
+  const tr = v.current().turns.find((t) => t.steps.some((st) => st.k === "group"));
+  tr.steps.find((st) => st.k === "group").info[0].f = true;
+  tr.v = (tr.v ?? 0) + 1;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  build();
+  // The build over what is read is done, and it is whole: only the read holds the counts.
+  let L = v.ledger();
+  expect(L.partial).toBe(false);
+  expect(L.totals.failed).toBeGreaterThan(0);
+  expect(L.totals.tools).toBeGreaterThan(0);
+  let c = frame(v, cx);
+  expect(ids(c)).not.toContain("th-traj-fails");
+  expect(filterTexts(c)).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+  // The bottom line is not drawn until the session is read (statusShown).
+  expect(ids(c).filter((x) => String(x).startsWith("th-status"))).toEqual([]);
+  const sel = v.tsel;
+  for (const name of ["lfail", "lfailBack", "luser", "luserBack", "lfirst", "llast"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    expect(v.tsel).toBe(sel);
+  }
+  // The rest of the session comes; then the build over all of it; then the counts.
+  open();
+  await until(() => v.current().loaded && !v.reading, "the whole session", 2000);
+  const read = v.current().turns.length;
+  expect(read).toBeGreaterThan(part);
+  build();
+  L = v.ledger();
+  expect(L.partial).toBe(false);
+  expect(L.totals.heads.length).toBe(read);
+  c = frame(v, cx);
+  expect(ids(c)).toContain("th-traj-fails");
+  expect(filterTexts(c)).toEqual(["Input", String(L.totals.input), "Model", String(L.totals.model), "Tools", String(L.totals.tools), "Failed only", String(L.totals.failed), "User only", String(L.totals.user)]);
+  expect(ids(c)).toContain("th-status-turns");
+  expect(v.ledgerAction("lfirst", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+  expect(v.ledgerAction("lfail", cx)).toBe(true);
+  // Another session picked: while it is found, the build over no sessions is whole too, and
+  // its zeros are not shown either.
+  v.sessions = [];
+  v.res = { kind: "resolving" };
+  build();
+  expect(v.ledger().partial).toBe(false);
+  expect(filterTexts(frame(v, cx))).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+}, 30000);
