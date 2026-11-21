@@ -12957,6 +12957,28 @@ test("the Trajectory split whose pane never reports its width goes ahead at the 
   expect(v.splitAsk).toBeNull();
 });
 
+test("the Trajectory closed while its room is measured: the Chat is neither narrowed nor given back, and the gone pane is not resized", async () => {
+  // Measured: a width seen that would narrow the Chat (as above, 433 px past it).
+  let { v, cx } = await trajSplit();
+  state.shared["threads.width"] = { ...state.shared["threads.width"], p3: 433 };
+  closeTraj(v, cx);
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([]);
+  expect(v.splitAsk).toBeNull();
+  expect(v.trajChatBack ?? null).toBeNull();
+  // Not measured: the fallback would ask for the width it wanted.
+  ({ v, cx } = await trajSplit());
+  closeTraj(v, cx);
+  const real = Date.now;
+  try {
+    Date.now = () => real() + 2000;
+    v.settleSplit(cx);
+    v.poll(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([]);
+  expect(v.splitAsk).toBeNull();
+});
+
 test("the Trajectory split reads the room only once the new pane's width holds still", async () => {
   const { v, cx } = await trajSplit();
   const real = Date.now;

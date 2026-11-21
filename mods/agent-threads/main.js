@@ -3299,6 +3299,8 @@ export default class Threads extends View {
   // terminal gives first, down to TERM_KEEP, then the Chat, then the Trajectory. A Chat
   // narrowed for it gets its width back when the Trajectory closes (trajGiveBack).
   settleTraj(a, cx) {
+    // Closed while it was measured: nothing to fit, and the Chat stays as it is.
+    if (!panes().some((p) => p.pane === a.made)) { this.splitAsk = null; return; }
     const at = Date.now();
     const w = shared(WIDTH_KEY)?.[a.made];
     const late = at - a.probeAt > ROOM_WAIT;
