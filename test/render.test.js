@@ -13610,7 +13610,8 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
   expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
   expect(state.shared["threads.pinnedByTerminal"]).toBeUndefined();
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 560 }]);
+  // 560 px, held to what a 700 px Chat can give: it keeps 240 px.
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 700 + 2 - 240 }]);
   expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
   log = [];
   v.key(keyEv("y"), cx);
@@ -14347,4 +14348,20 @@ test("until the first build is done, the filter buttons from 900 px show their l
   c = frame(v, cx);
   const T = v.ledger().totals;
   expect(filterTexts(c)).toEqual(["Input", String(T.input), "Model", String(T.model), "Tools", String(T.tools), "Failed only", String(T.failed), "User only", String(T.user)]);
+});
+
+test("with no width kept, the split's 560 px is held to what a 600 px Chat can give, so the Chat keeps its 240 px", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  delete state.shared["threads.trajWidth"];
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(600 + 2 - 240);
+  // Wide enough, the default stands.
+  v.splitAsk = null;
+  v.width = 1400;
+  v.paneW = 1400;
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(560);
 });
