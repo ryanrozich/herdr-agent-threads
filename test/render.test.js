@@ -5514,6 +5514,65 @@ test("no weight with the Pinned column open, a split pending, zoomed or in the P
   }
 });
 
+// The Trajectory beside the Chat: both at px while it is open, as with the Pinned column.
+const trajBeside = () => {
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p3" } };
+};
+
+test("y puts the Chat at its px before the Trajectory's split: a px of its own still applying is the one kept, and a probe under way stops", async () => {
+  const { v, cx } = await weightPane({ width: "full" }, 700);
+  v.width = 700;
+  v.weighing = { pane: "p2", n0: 702, tried: [], w: 1, at: 700, asked: Date.now() };
+  v.key(keyEv("y"), cx);
+  const i = log.findIndex(([, n]) => n === "layout.resize");
+  const j = log.findIndex(([, n]) => n === "pane.split");
+  expect(log[i][2]).toEqual({ id: "p2", px: 702 });
+  expect(j).toBeGreaterThan(i);
+  expect(v.weighing).toBe(null);
+  expect(v.splitAsk.chat).toBe(702);
+  // A px of its own on its way (sizeTo): that width, not the one it is leaving.
+  const { v: w, cx: wx } = await weightPane({ width: "full" }, 700);
+  w.width = 700;
+  w.weighAfter = { px: 573, until: Date.now() + 1500 };
+  w.weightNow = 1.2;
+  w.key(keyEv("y"), wx);
+  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
+  expect([w.weighAfter, w.weightNow, w.splitAsk.chat]).toEqual([null, null, 573]);
+  // Too narrow to split: the Trajectory shows in the Chat's pane, and nothing is resized.
+  const { v: n, cx: nx } = await weightPane({ width: "full" }, 400);
+  n.width = 400;
+  n.key(keyEv("y"), nx);
+  expect(n.traj).toBe(true);
+  expect(resized()).toEqual([]);
+});
+
+test("no weight with the Trajectory open beside the Chat or in the Trajectory pane, and a probe under way stops when it opens", async () => {
+  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  trajBeside();
+  v.poll(cx);
+  v.action("width:full", cx);
+  v.poll(cx);
+  v.toWeight(true);
+  expect(resized()).toEqual([]);
+  // The Trajectory pane itself, with nothing else open.
+  const { v: t } = await weightPane({ width: "full" }, 560);
+  t.myPane = "p2";
+  t.trajPane = true;
+  t.toWeight(true);
+  expect(resized()).toEqual([]);
+  // A probe asked its first weight, then the Trajectory opened: no second ask.
+  const { v: g, cx: gx } = await weightPane({ width: "full" }, 700);
+  g.toWeight();
+  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+  trajBeside();
+  g.paneW = 650;
+  g.weighing.asked -= 500;
+  g.poll(gx);
+  expect(g.weighing).toBe(null);
+  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+});
+
 test("a size change alone (a drag) never converts, and the pane's own px mid-probe ends the probe", async () => {
   for (const readingWidth of [true, false]) {
     const { v, cx } = await weightPane({ width: readingWidth ? "full" : "comfortable", readingWidth });
@@ -12449,6 +12508,9 @@ test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map
   log = [];
   v.key(keyEv("y"), cx);
   expect(v.traj).toBe(false);
+  // The Chat at its px first, so the Trajectory's room comes from the terminal (pinPx).
+  expect(resizes()).toEqual([{ id: "p2", px: 702 }]);
+  log = log.filter(([, n]) => n !== "layout.resize");
   const split = log.find(([, n]) => n === "pane.split");
   expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
@@ -13228,6 +13290,9 @@ async function trajSplit(chatW = 702, kept = 600) {
   state.shared["threads.trajWidth"] = { px: kept };
   log = [];
   r.v.key(keyEv("y"), r.cx);
+  // The Chat at its px first, so the split's room comes from the terminal (pinPx).
+  expect(resizes()).toEqual([{ id: "p2", px: chatW + 2 }]);
+  log = [];
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   r.v.settleSplit(r.cx);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
@@ -13411,12 +13476,13 @@ test("no width the split passes through is kept as the owner's Trajectory width,
   expect(kept()).toBe(600);
   // The Chat sees it late, and the probe starts: its room is measured past the 5 s.
   at(3900, () => v.settleSplit(cx));
-  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  // The Chat's own px before the split (pinPx), then the probe.
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p3", weight: 1000 }]);
   measure(5100, 433);
   expect(kept()).toBe(600);
   // The Chat's next look comes late too; the fitted width is measured after it.
   at(6800, () => v.settleSplit(cx));
-  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
   measure(7000, 462);
   expect(kept()).toBe(600);
   // The owner's drag, once the split is done, is kept.

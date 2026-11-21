@@ -3269,17 +3269,24 @@ export default class Threads extends View {
       return true;
     }
     if (this.splitAsk) return true;
-    // The column's room comes from the terminal, not Threads: Threads at a px width first. A
-    // split takes half its target's weight, so at a weight Threads would lose half its room.
-    // A px of its own still applying (sizeTo), or the width a probe under way keeps, is the
-    // width it keeps, not a weight's trial width.
-    run("layout.resize", { id: me.pane, px: this.weighAfter?.px ?? this.weighing?.n0 ?? Math.round(this.pw()) + PANE_FRAME });
-    this.weighing = null;
-    this.weighAfter = null;
-    this.weightNow = null;
+    this.pinPx(me);
     this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
     run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
+  }
+
+  // Before a split off this pane (the Pinned column, the Trajectory): this pane at a px width,
+  // so the new pane's room comes from the terminal. A split takes half its target's weight,
+  // so at a weight this pane would lose half its room. A px of its own still applying
+  // (sizeTo), or the width a probe under way keeps, is the width it keeps, not a weight's
+  // trial width. Returns that px.
+  pinPx(me) {
+    const px = this.weighAfter?.px ?? this.weighing?.n0 ?? Math.round(this.pw()) + PANE_FRAME;
+    run("layout.resize", { id: me.pane, px });
+    this.weighing = null;
+    this.weighAfter = null;
+    this.weightNow = null;
+    return px;
   }
 
   // Once the split has applied: the new pane goes in the Pinned map and gets the column's
@@ -5977,8 +5984,9 @@ export default class Threads extends View {
   // pane goes to a weight that keeps its width (toWeight). Never on a size change alone,
   // which may be a drag still going on, but for keepWidth's cap: a drag past the reading
   // width snaps back to it (sizeTo), and the weight follows once the pane has been still for
-  // 300 ms. Not in the Pinned pane, not with the column open (- and = keep both at px; it
-  // converts when the column closes), and not zoomed (it converts once unzoomed).
+  // 300 ms. Not in the Pinned or the Trajectory pane, not with either open beside it (- and =
+  // keep both at px; it converts when that pane closes), and not zoomed (it converts once
+  // unzoomed).
   sizeTo(px) {
     const me = this.me();
     if (!me) return;
@@ -6007,7 +6015,7 @@ export default class Threads extends View {
   // a weight, so there is nothing to do; force: the column was open, and its pane may have
   // set this one's px (- and =, w).
   toWeight(force = false) {
-    if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.pinnedPane || this.paneW == null || this.splitAsk || this.pinnedPaneOpen()) return;
+    if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.sideKey() || this.paneW == null || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen()) return;
     const me = this.me();
     if (!me) return;
     if (me.zoomed) { this.weighZoomed = true; return; }
@@ -6033,8 +6041,8 @@ export default class Threads extends View {
     const g = this.weighing;
     if (!g) return;
     const me = this.me();
-    // Gone, zoomed, a column opening, or no answer from Herdr: stop there.
-    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || Date.now() - g.asked > 3000) {
+    // Gone, zoomed, a column or the Trajectory opening, or no answer from Herdr: stop there.
+    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen() || Date.now() - g.asked > 3000) {
       this.weighing = null;
       if (me?.zoomed) this.weighZoomed = true;
       return;
@@ -9572,8 +9580,9 @@ export default class Threads extends View {
     const me = this.me();
     if (!me || this.pw() < TRAJ_SPLIT_MIN) { this.enterTraj(); return true; }
     if (this.splitAsk) return true;
-    // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor).
-    const chat = Math.round(this.pw()) + PANE_FRAME;
+    // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor). The
+    // Chat at that px first, and both stay at px while the Trajectory is open (pinPx).
+    const chat = this.pinPx(me);
     const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     // The widths the new pane passes through on its way (settleTraj) are not the owner's.
