@@ -13444,9 +13444,14 @@ test("a row with no room for the Trajectory at 200 px beside a 240 px Chat: the 
     expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: chatW + 2 }]);
     expect(log.filter(([, k]) => k === "pane.close" || k === "pane.focus").map((x) => [x[1], x[2].pane])).toEqual([["pane.close", "p3"], ["pane.focus", "p2"]]);
     expect([v.traj, v.trajOpen, v.splitAsk, v.trajChatBack ?? null]).toEqual([true, false, null, null]);
-    // Gone: nothing to give back.
-    closeTraj(v, cx);
-    expect(resizes()).toEqual([]);
+    // That px is the Chat's own (sizeTo): once it applies and holds still, a weight that keeps it.
+    expect(v.weighAfter?.px).toBe(chatW + 2);
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    v.paneW = chatW;
+    v.sizeAt = Date.now() - 1000;
+    log = [];
+    v.poll(cx);
+    expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
   }
 });
 
