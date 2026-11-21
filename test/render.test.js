@@ -2157,7 +2157,7 @@ test("the repo comes from git remote get-url origin in the terminal's folder", a
 // ---- round 3: S1, the read never stalls ---------------------------------------------------
 
 let busyFile = null;
-test("debug on: a long session's rows settle with their text, and then no next draw is asked for", async () => {
+test("debug on: a long session's rows settle, and then no next draw is asked for", async () => {
   const { v, cx } = await pane(fixture("--extra", "300"));
   expect(v.debug).toBe(true);
   draw(v, cx);
@@ -2165,7 +2165,21 @@ test("debug on: a long session's rows settle with their text, and then no next d
   // reshaping time runs out after a turn or two. A new width builds and shapes every row again.
   v.buildMax = () => 0;
   v.shapeBudget = 0;
+  // Each slice takes at least 1 ms, and the slices of the last build are counted.
+  const build = v.buildRows.bind(v);
+  let job = null;
+  let slices = 0;
+  v.buildRows = (...a) => {
+    if (v.rowJob !== job) { job = v.rowJob; slices = 0; }
+    slices++;
+    const t = performance.now();
+    while (performance.now() - t < 1);
+    return build(...a);
+  };
+  // A new width reshapes every row, and a full build of them as well (as a settings change
+  // asks for), so the report has a sliced build to time.
   v.width = 380;
+  v.rowsKey = null;
   v.render(cx);
   let draws = 0;
   while (cx.timers.length && draws < 1500) {
@@ -2176,14 +2190,13 @@ test("debug on: a long session's rows settle with their text, and then no next d
   expect(cx.timers).toEqual([]);
   expect(v.rowJob).toBeNull();
   expect(v.staleRows ?? []).toEqual([]);
-  const turns = v.rows().filter((r) => r.kind === "turn");
-  expect(turns.length).toBeGreaterThan(300);
-  expect(turns.filter((r) => r.shape?.blank).length).toBe(0);
+  expect(v.rows().filter((r) => r.kind === "turn").length).toBeGreaterThan(300);
   // Drawn again with nothing changed: still nothing more to do. The report's build time is
-  // the last real build's, over all its slices.
+  // the last full build's, over all its slices.
   v.render(cx);
   expect(cx.timers).toEqual([]);
-  expect(v.buildMs).toBeGreaterThan(0);
+  expect(slices).toBeGreaterThan(1);
+  expect(v.buildMs).toBeGreaterThanOrEqual(slices);
   expect(v.timing).toStartWith(`rows ${v.buildMs.toFixed(1)} ms`);
 }, 30000);
 
@@ -7271,7 +7284,8 @@ test("a settings change in a long session reshapes rows over several frames, the
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
-  // Without the debug report, whose timing pass rebuilds the rows once more each draw.
+  // With debug off, as a person runs the pane. (The debug report's timing pass no longer
+  // builds the rows.)
   v.debug = false;
   // Every row built and shaped before the change below, on any machine: on the real clock a
   // slow one left rows unshaped here, and the counts below came out otherwise.

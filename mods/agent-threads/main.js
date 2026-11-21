@@ -5717,8 +5717,10 @@ export default class Threads extends View {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
-  // props().debug: how long the last build of the rows took (buildMs, over all its slices),
-  // a memoised ask, and whether alpha() reads every colour of every theme. It builds nothing
+  // props().debug: how long the last full build of the rows took (buildMs, its slices added
+  // up; a splice of opened or closed turns is not counted, and it reads 0.0 before the first
+  // build), a memoised ask, and whether alpha() reads every colour of every theme. Asked before
+  // the first draw (report), the memo figure can include that first build. It builds nothing
   // itself: a build forced on every draw left a long session's rows mid-build at the start of
   // each draw, so the reshaping time never came back (render), and the rows stayed blank while
   // the pane drew about 40 times a second.
