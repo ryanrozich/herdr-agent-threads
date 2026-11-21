@@ -12815,3 +12815,30 @@ test("a Codex session killed during its very first call: the call is an ordinary
   expect(f).toContainEqual(["Result", "not recorded"]);
   expect(JSON.stringify(f)).not.toMatch(/No result|"ok"|running/);
 });
+
+test("until the first build is done, the filter buttons from 900 px show their labels and no counts", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  // The strings drawn inside the filter row, up to the list.
+  const filterTexts = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-filters");
+    const end = c.findIndex((e, j) => j > at && e[0] === "id" && !String(e[1]).startsWith("th-filter"));
+    return c.slice(at, end).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  };
+  let c = frame(v, cx);
+  expect(v.ledger().partial).toBe(true);
+  expect(v.ledger().totals.tools).toBeGreaterThan(0);
+  const held = filterTexts(c);
+  expect(held).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  c = frame(v, cx);
+  const T = v.ledger().totals;
+  expect(filterTexts(c)).toEqual(["Input", String(T.input), "Model", String(T.model), "Tools", String(T.tools), "Failed only", String(T.failed), "User only", String(T.user)]);
+});
