@@ -5527,6 +5527,113 @@ test("a size change alone (a drag) never converts, and the pane's own px mid-pro
   expect(resized()).toEqual([{ id: "p2", weight: 1 }, { id: "p2", px: 573 }]);
 });
 
+test("the 300 ms stillness is timed from the pane's own size changes: a width still moving is not weighed", async () => {
+  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 571);
+  v.forcedWidth = null;
+  v.action("width:wide", cx);
+  expect(resized()).toEqual([{ id: "p2", px: 704 }]);
+  const real = Date.now;
+  const t0 = real();
+  const at = (ms, fn) => { Date.now = () => t0 + ms; try { fn(); } finally { Date.now = real; } };
+  const size = (w) => handlerAfterId(frame(v, cx), "threads-root", "on_size_change")({ width: w * v.zoom(), height: 800 }, cx);
+  // The px applying over two frames, the last 250 ms before the look: not still yet.
+  at(100, () => size(690));
+  at(250, () => size(702));
+  at(500, () => v.poll(cx));
+  expect(resized()).toEqual([{ id: "p2", px: 704 }]);
+  at(560, () => v.poll(cx));
+  expect(resized()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+});
+
+test("a probe stops when the pane goes, changes or zooms, a split or the Pinned column opens, or Herdr has not answered in 3 s; else it asks again", async () => {
+  const start = async () => {
+    const r = await weightPane({ width: "full" }, 700);
+    r.v.toWeight();
+    expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+    r.v.paneW = 650;
+    r.v.weighing.asked -= 500;
+    return r;
+  };
+  // Nothing in the way: the second ask.
+  const { v: go } = await start();
+  go.weighStep();
+  expect(resized().length).toBe(2);
+  const stops = [
+    () => { state.panes = state.panes.filter((p) => p.pane !== "p2"); },
+    (v) => { v.weighing.pane = "p9"; },
+    () => { state.panes.find((p) => p.pane === "p2").zoomed = true; },
+    (v) => { v.splitAsk = { before: [], until: Date.now() + 4000 }; },
+    () => {
+      state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+      state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
+    },
+    (v) => { v.weighing.asked -= 3000; },
+  ];
+  for (const [i, stop] of stops.entries()) {
+    const { v } = await start();
+    stop(v);
+    v.weighStep();
+    expect(v.weighing).toBe(null);
+    expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+    // Stopped by a zoom: it converts once unzoomed.
+    expect(Boolean(v.weighZoomed)).toBe(i === 2);
+  }
+});
+
+test("a probe asks at most three weights, and keeps the third", async () => {
+  // The row moving under it (a window being resized): no width within 2 px of 702.
+  const { v } = await weightPane({ width: "full" }, 700);
+  v.toWeight();
+  for (const w of [650, 680, 690]) {
+    v.paneW = w;
+    v.weighing.asked -= 500;
+    v.weighStep();
+  }
+  expect(resized().length).toBe(3);
+  expect(v.weighing).toBe(null);
+  expect(v.weightNow).toBe(resized()[2].weight);
+});
+
+test("w in the Pinned column sizes the main pane by px, not the column, and starts no weight there", async () => {
+  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 400);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
+  v.myPane = "p3";
+  v.pinnedPane = true;
+  v.fitToReading(cx);
+  // The main pane at the reading width, then the column at its own width beside it.
+  expect(resized().map((r) => r.id)).toEqual(["p2", "p3"]);
+  expect(resized()[0]).toEqual({ id: "p2", px: v.readingPx() });
+  expect(resized()[1].px).not.toBe(v.readingPx());
+  expect([v.weighAfter ?? null, v.weighing ?? null]).toEqual([null, null]);
+});
+
+test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane zoomed when it would convert converts once unzoomed", async () => {
+  const { v, cx } = await weightPane({ width: "full" }, 700);
+  v.toWeight();
+  // The trial weight laid it out 650 wide; 702 is the width being kept.
+  v.paneW = 650;
+  log = [];
+  v.openPinned(cx);
+  expect(resized()).toEqual([{ id: "p2", px: 702 }]);
+  expect(v.weighing).toBe(null);
+  const { v: z, cx: zx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  const p2 = state.panes.find((p) => p.pane === "p2");
+  p2.zoomed = true;
+  z.action("width:full", zx);
+  z.poll(zx);
+  expect(resized()).toEqual([]);
+  // Unzoomed: 500 ms for the row to settle, then the weight.
+  p2.zoomed = false;
+  z.poll(zx);
+  expect(resized()).toEqual([]);
+  expect(z.weighAt).toBeGreaterThan(Date.now());
+  z.weighAt = Date.now() - 1;
+  z.poll(zx);
+  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+  expect(z.weighZoomed).toBe(false);
+});
+
 test("a collapsed reply draws as Markdown: its block is measured, and the row is the rest plus that measure, image tiles included", async () => {
   const { v, cx } = await pane(fixture("--extra", "3", "--images"));
   v.width = 545;
