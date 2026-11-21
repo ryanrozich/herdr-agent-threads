@@ -9987,7 +9987,7 @@ export default class Threads extends View {
       followed: this.res.kind === "found" && !this.res.guess, alive: this.res.ended == null, open: Boolean(newest && !newest.done),
       reports: this.agent().key === "claude", status,
     });
-    const key = `${this.sessions.map((x) => `${x.version}.${x.turns.length}.${x.agentVer ?? 0}`).join(",")}|${going ? 1 : 0}`;
+    const key = `${this.sessions.map((x) => `${x.version}.${x.turns.length}.${x.agentVer ?? 0}.${x.loaded ? 1 : 0}`).join(",")}|${going ? 1 : 0}`;
     const m = this.ledgerMemo;
     if (m?.key === key && m.sessions === this.sessions && !m.partial) return m;
     this.turnLedger ??= new WeakMap();
@@ -10018,11 +10018,14 @@ export default class Threads extends View {
       // A done turn's rows are kept until the turn changes (turn.v), or, for a turn with a
       // subagent, until a launch or notice comes (s.agentVer): a background subagent often
       // finishes after its turn did.
+      // The last turn read so far of a session still being read, with no end read yet
+      // (ledgerTurn's reading): its rows claim nothing. Only done turns are kept.
+      const reading = !x.loaded && !turn.done && turn === x.turns[x.turns.length - 1];
       const kept = turn.done ? this.turnLedger.get(turn) : null;
       const fresh = kept?.si === si && kept.v === turn.v && kept.ends === ends && (!kept.sub || kept.agentVer === x.agentVer);
       let out = fresh ? kept.out : null;
       if (!out) {
-        out = ledgerTurn(x, turn, si, going && job.next === last, { ends });
+        out = ledgerTurn(x, turn, si, going && job.next === last, { ends, reading });
         if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
       }
       job.outs[job.next--] = out;
