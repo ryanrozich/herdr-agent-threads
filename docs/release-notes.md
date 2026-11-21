@@ -12,8 +12,8 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 - Press `y`, or the list button at the top of the chat, to see the session as a Trajectory: each turn is a heading, then one row per step (your message, the agent's texts, each tool call, the reply and any background update), with when it started, how long it took and a small bar for that.
 - In a pane at least 480 px wide, the Trajectory opens as a pane of its own to the right of the chat. Narrower, it shows in the chat's own pane until you press `y` or `Esc` or its Chat button.
-- A call shows as running only while the agent is still at it. A call the transcript has no result for says "no result", and its detail says when the transcript last recorded anything.
-- Keys: `↑` `↓` move, `Home` and `End` go to the first or last row, `Enter` or `Space` shows the detail, `f` and `Shift f` go to failed calls, `m` and `Shift m` to your messages, `-` and `=` make the Trajectory pane narrower or wider, `y` switches between it and the chat, and `Esc` closes the detail or goes back.
+- A call shows as running only while the agent is still at it. A call left with no result says "no result", and its detail says when the transcript last recorded anything. One case cannot be told: a session of an agent other than Claude Code (Codex, say) stopped during its very first call shows that call as a plain row with no duration.
+- Keys: `↑` `↓` or `j` `k` move, `Home` and `End` go to the first or last row, `Enter` or `Space` shows the detail, `f` and `Shift f` go to failed calls, `m` and `Shift m` to your messages, `-` and `=` make the Trajectory pane narrower or wider, `y` switches between it and the chat, and `Esc` closes the detail or goes back.
 
 ### Save a session as ATIF
 
