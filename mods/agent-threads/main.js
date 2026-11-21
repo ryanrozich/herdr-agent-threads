@@ -5,7 +5,7 @@
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
 // layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
-// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, and the Pinned column once its Threads pane is gone). The only programs
+// between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, the Pinned column once its Threads pane is gone, and a Trajectory split the row has no room for). The only programs
 // it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
 // Amp page's button; the scripts run jq, lsof, ps
 // and sqlite3 -readonly). The only file it writes
@@ -60,7 +60,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, trajColumn, trajFit, TERM_KEEP, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -3302,7 +3302,9 @@ export default class Threads extends View {
   // new pane first takes the row's room by weight (ROOM_WEIGHT against the terminal's 1 or
   // so), and the width it reports once it holds still is that room: the row less the Chat and
   // any pane of a fixed width. trajFit then says what the Trajectory and the Chat get: the
-  // terminal gives first, down to TERM_KEEP, then the Chat, then the Trajectory. A Chat
+  // other panes give first, down to TERM_KEEP each (trajKeep), then the Chat, then the
+  // Trajectory. With too little room even then, the new pane closes and the Trajectory shows
+  // in the Chat's pane, as under TRAJ_SPLIT_MIN, so no pane is squeezed for it. A Chat
   // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless a
   // reading width was chosen in the Chat while it was open.
   settleTraj(a, cx) {
@@ -3323,14 +3325,32 @@ export default class Threads extends View {
     // Not measured in time: the width asked for, as before.
     if (!a.seen) { run("layout.resize", { id: a.made, px: a.px }); return; }
     const me = this.me();
-    const term = this.pane();
-    const keep = term && me && term.tab === me.tab ? TERM_KEEP : 0;
-    const fit = trajFit(a.chat, a.px, a.seen.w + PANE_FRAME, keep);
+    const fit = trajFit(a.chat, a.px, a.seen.w + PANE_FRAME, this.trajKeep(me, a.made));
+    if (!fit) {
+      // At a px it gives no weight to its neighbour as it closes (Herdr gives a closed pane's
+      // weight to the pane before it, the Chat).
+      run("layout.resize", { id: a.made, px: TRAJ_MIN });
+      run("pane.close", { pane: a.made });
+      this.trajOpen = false;
+      // The Chat at the width it had before the split, which may have taken some of it.
+      if (me) { run("layout.resize", { id: me.pane, px: a.chat }); run("pane.focus", { pane: me.pane }); }
+      this.enterTraj();
+      return;
+    }
     run("layout.resize", { id: a.made, px: fit.traj });
     if (fit.chat < a.chat && me) {
       run("layout.resize", { id: me.pane, px: fit.chat });
       this.trajChatBack = { px: a.chat, pane: a.made };
     }
+  }
+  // What the row's other panes keep beside the Trajectory: TERM_KEEP each. Herdr does not say
+  // where a pane sits, so every other pane in the Chat's tab counts (a pane above or below
+  // the row too, which only makes the Trajectory narrower), less the Chat, the new pane and
+  // the Chat's Pinned column, which is at a px of its own.
+  trajKeep(me, made) {
+    if (!me) return 0;
+    const pin = this.pinnedPaneOpen()?.pane;
+    return TERM_KEEP * panes().filter((p) => p.tab === me.tab && p.pane !== me.pane && p.pane !== made && p.pane !== pin).length;
   }
   // The Trajectory pane's widths for the next ms, at least, are the split's own, not the
   // owner's (shareWidth). A hold already longer stands.

@@ -12102,6 +12102,7 @@ function roomIs(v, cx, pane, w) {
 const resizes = () => log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
 
 test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map; y moves between them, and the pane closes with the Chat", async () => {
+  delete recordFiles[PINS]; // pins an earlier test left would open the Pinned column first
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.width = 700;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -12957,13 +12958,52 @@ test("the Trajectory split with no terminal in the tab keeps nothing for one: th
 });
 
 test("the Trajectory split where the Chat at its 240 px is still short: the Trajectory narrows toward 200 px", async () => {
-  // A 500 px Chat asks for 260. With 100 px past it, the Chat gives 260 (to 240) and the
-  // Trajectory 60 more (to 200); the terminal keeps 160.
+  // A 500 px Chat asks for 260. With 140 px past it, the Chat gives 260 (to 240) and the
+  // Trajectory 60 more (to 200); the terminal keeps its 200.
   const { v, cx } = await trajSplit(498, 600);
-  roomIs(v, cx, "p3", 98);
+  roomIs(v, cx, "p3", 138);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: 240 }]);
   closeTraj(v, cx);
   expect(resizes()).toEqual([{ id: "p2", px: 500 }]);
+});
+
+test("the Trajectory split keeps 200 px for each other pane in the Chat's tab: one, two and three, with room and short of it", async () => {
+  // A 704 px Chat asking for 464. [other panes, room the probe saw, the resizes after it]
+  const cases = [
+    [1, 900, [{ id: "p3", px: 464 }]],
+    [1, 433, [{ id: "p3", px: 464 }, { id: "p2", px: 475 }]],
+    [2, 900, [{ id: "p3", px: 464 }]],
+    [2, 433, [{ id: "p3", px: 464 }, { id: "p2", px: 275 }]],
+    [3, 1100, [{ id: "p3", px: 464 }]],
+    [3, 900, [{ id: "p3", px: 464 }, { id: "p2", px: 542 }]],
+    // 600 kept: the Chat to its 240, then the Trajectory gives 165.
+    [3, 433, [{ id: "p3", px: 299 }, { id: "p2", px: 240 }]],
+  ];
+  for (const [n, seen, after] of cases) {
+    const { v, cx } = await trajSplit();
+    for (let i = 2; i <= n; i++) state.panes.push({ pane: `p${i + 7}`, tab: "A", terminal: `t${i + 7}` });
+    // A pane in another tab, and the Chat's own Pinned column (at a px of its own), keep nothing.
+    state.panes.push({ pane: "p20", tab: "B", terminal: "t20" }, { pane: "p21", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p21" } };
+    roomIs(v, cx, "p3", seen);
+    expect([n, seen, resizes().slice(1)]).toEqual([n, seen, after]);
+    expect(v.traj).toBe(false);
+  }
+});
+
+test("a row with no room for the Trajectory at 200 px beside a 240 px Chat: the new pane closes, the Chat keeps its width, and the Trajectory shows in the Chat's pane", async () => {
+  for (const [chatW, n, seen] of [[702, 3, 98], [498, 1, 98]]) {
+    const { v, cx } = await trajSplit(chatW, 600);
+    for (let i = 2; i <= n; i++) state.panes.push({ pane: `p${i + 7}`, tab: "A", terminal: `t${i + 7}` });
+    roomIs(v, cx, "p3", seen);
+    // At a px before it closes, so Herdr gives the Chat none of its weight.
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: chatW + 2 }]);
+    expect(log.filter(([, k]) => k === "pane.close" || k === "pane.focus").map((x) => [x[1], x[2].pane])).toEqual([["pane.close", "p3"], ["pane.focus", "p2"]]);
+    expect([v.traj, v.trajOpen, v.splitAsk, v.trajChatBack ?? null]).toEqual([true, false, null, null]);
+    // Gone: nothing to give back.
+    closeTraj(v, cx);
+    expect(resizes()).toEqual([]);
+  }
 });
 
 test("the Trajectory split whose pane never reports its width goes ahead at the width asked for", async () => {
