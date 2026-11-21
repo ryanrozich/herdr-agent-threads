@@ -3473,8 +3473,9 @@ export default class Threads extends View {
     if (this.splitAsk) return true;
     // The column's room comes from the terminal, not Threads: Threads at a px width first. A
     // split takes half its target's weight, so at a weight Threads would lose half its room.
-    // A px of its own still applying (sizeTo) is the width it keeps.
-    run("layout.resize", { id: me.pane, px: this.weighAfter?.px ?? Math.round(this.pw()) + PANE_FRAME });
+    // A px of its own still applying (sizeTo), or the width a probe under way keeps, is the
+    // width it keeps, not a weight's trial width.
+    run("layout.resize", { id: me.pane, px: this.weighAfter?.px ?? this.weighing?.n0 ?? Math.round(this.pw()) + PANE_FRAME });
     this.weighing = null;
     this.weighAfter = null;
     this.weightNow = null;
@@ -6253,8 +6254,10 @@ export default class Threads extends View {
   // window. So after each px resize this pane asks for (sizeTo), and when a width is chosen,
   // the switch is turned, Threads opens, a split fails or the Pinned column closes, the main
   // pane goes to a weight that keeps its width (toWeight). Never on a size change alone,
-  // which may be a drag still going on. Not in the Pinned pane, not with the column open
-  // (- and = keep both at px; it converts when the column closes), and not zoomed.
+  // which may be a drag still going on, but for keepWidth's cap: a drag past the reading
+  // width snaps back to it (sizeTo), and the weight follows once the pane has been still for
+  // 300 ms. Not in the Pinned pane, not with the column open (- and = keep both at px; it
+  // converts when the column closes), and not zoomed (it converts once unzoomed).
   sizeTo(px) {
     const me = this.me();
     if (!me) return;
@@ -6272,6 +6275,11 @@ export default class Threads extends View {
     const a = this.weighAfter;
     const still = Date.now() - (this.sizeAt ?? 0) >= 300;
     if (a && this.paneW != null && still && (Math.abs(this.paneW + PANE_FRAME - a.px) <= 2 || Date.now() > a.until)) { this.weighAfter = null; this.toWeight(); }
+    // Unzoomed: 500 ms for the row to settle, as after the column closes.
+    if (this.weighZoomed) {
+      const me = this.me();
+      if (me && !me.zoomed) { this.weighZoomed = false; this.weighAt = Date.now() + 500; }
+    }
     if (this.weighAt != null && Date.now() >= this.weighAt) { this.weighAt = null; this.toWeight(true); }
   }
   // weightNow: the weight this pane last set and has kept since. A drag changes it but leaves
@@ -6280,7 +6288,8 @@ export default class Threads extends View {
   toWeight(force = false) {
     if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.pinnedPane || this.paneW == null || this.splitAsk || this.pinnedPaneOpen()) return;
     const me = this.me();
-    if (!me || me.zoomed) return;
+    if (!me) return;
+    if (me.zoomed) { this.weighZoomed = true; return; }
     // Herdr's px size for a pane is its measured width and its frame.
     const n0 = this.paneW + PANE_FRAME;
     const p = this.lastPoint;
@@ -6304,7 +6313,11 @@ export default class Threads extends View {
     if (!g) return;
     const me = this.me();
     // Gone, zoomed, a column opening, or no answer from Herdr: stop there.
-    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || Date.now() - g.asked > 3000) { this.weighing = null; return; }
+    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || Date.now() - g.asked > 3000) {
+      this.weighing = null;
+      if (me?.zoomed) this.weighZoomed = true;
+      return;
+    }
     if (Math.abs(this.paneW - g.at) <= 1 && Date.now() - g.asked < 400) return;
     const n = this.paneW + PANE_FRAME;
     g.tried.push([g.w, n]);
