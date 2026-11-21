@@ -3579,13 +3579,19 @@ export default class Threads extends View {
     if (hold !== kept.hold) setShared(TRAJ_W_KEY, { ...kept, hold });
   }
   // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
-  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading).
+  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading). Either
+  // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
+  // settles): it is at a px only while the Trajectory is open.
   trajGiveBack() {
+    const open = Boolean(this.trajPaneOpen());
+    const closed = this.trajWasOpen && !open;
+    this.trajWasOpen = open;
     const back = this.trajChatBack;
-    if (!back || panes().some((p) => p.pane === back.pane)) return;
-    this.trajChatBack = null;
-    const me = this.me();
-    if (me) run("layout.resize", { id: me.pane, px: back.px });
+    if (back && !panes().some((p) => p.pane === back.pane)) {
+      this.trajChatBack = null;
+      if (this.me()) { this.sizeTo(back.px); return; }
+    }
+    if (closed) this.weighAt = Date.now() + 500;
   }
 
   // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that

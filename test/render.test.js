@@ -15227,14 +15227,26 @@ async function trajSplit(chatW = 702, kept = 600) {
 }
 const closeTraj = (v, cx) => { state.panes = state.panes.filter((p) => p.pane !== "p3"); log = []; v.poll(cx); };
 
-test("the Trajectory split where the terminal has the room: the Chat keeps its width, the Trajectory gets what it asked for, and closing it changes nothing", async () => {
+test("the Trajectory split where the terminal has the room: the Chat keeps its width, the Trajectory gets what it asked for, and closing it gives no width back but puts the Chat on a weight", async () => {
   const { v, cx } = await trajSplit();
   // The row has 902 px past the Chat: 464 for the Trajectory leaves the terminal 438.
   roomIs(v, cx, "p3", 900);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
   expect(v.splitAsk).toBeNull();
+  // Open: the Chat stays at its px.
+  log = [];
+  v.poll(cx);
+  expect([resizes(), v.weighAt ?? null]).toEqual([[], null]);
   closeTraj(v, cx);
   expect(resizes()).toEqual([]);
+  // Once the row settles (500 ms), a weight that keeps the Chat's width; then no more.
+  expect(v.weighAt).toBeGreaterThan(Date.now());
+  v.weighAt = Date.now() - 1;
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
+  v.poll(cx);
+  expect(v.weighAt).toBe(null);
+  expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
 });
 
 test("the Trajectory split where the terminal is short: the Chat gives the rest, and gets its width back when the Trajectory closes", async () => {
@@ -15244,11 +15256,18 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   roomIs(v, cx, "p3", 433);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
   // Open, nothing is given back.
+  v.paneW = 473;
   log = [];
   v.poll(cx);
   expect(resizes()).toEqual([]);
   closeTraj(v, cx);
   expect(resizes()).toEqual([{ id: "p2", px: 704 }]);
+  // Given back through sizeTo: once the width applies, a weight that keeps it.
+  expect(v.weighAfter.px).toBe(704);
+  v.paneW = 702;
+  v.sizeAt = Date.now() - 1000;
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
   // Once.
   log = [];
   v.poll(cx);
@@ -15314,6 +15333,7 @@ test("the Trajectory split where the Chat at its 240 px is still short: the Traj
   const { v, cx } = await trajSplit(498, 600);
   roomIs(v, cx, "p3", 138);
   expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: 240 }]);
+  v.paneW = 238;
   closeTraj(v, cx);
   expect(resizes()).toEqual([{ id: "p2", px: 500 }]);
 });
