@@ -3551,8 +3551,9 @@ export default class Threads extends View {
       run("layout.resize", { id: a.made, px: TRAJ_MIN });
       run("pane.close", { pane: a.made });
       this.trajOpen = false;
-      // The Chat at the width it had before the split, which may have taken some of it.
-      if (me) { run("layout.resize", { id: me.pane, px: a.chat }); run("pane.focus", { pane: me.pane }); }
+      // The Chat at the width it had before the split, which may have taken some of it, and
+      // then a weight that keeps it (sizeTo), as after any px of its own.
+      if (me) { this.sizeTo(a.chat); run("pane.focus", { pane: me.pane }); }
       this.enterTraj();
       return;
     }
