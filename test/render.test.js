@@ -12859,3 +12859,28 @@ test("with no width kept, the split's 560 px is held to what a 600 px Chat can g
   v.key(keyEv("y"), cx);
   expect(v.splitAsk.px).toBe(560);
 });
+
+test("until the first build is done, m and Shift m do nothing, as f does; after it they move", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  v.render(cx);
+  expect(v.ledger().partial).toBe(true);
+  // The newest turn's own message is a row of the first slice, so m could find one.
+  expect(v.ledgerRows().some((r) => r.lk === "you")).toBe(true);
+  const sel = v.tsel;
+  expect(v.ledgerAction("luser", cx)).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(false);
+  v.key(keyEv("m"), cx);
+  v.key(keyEv("m", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(sel);
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+});

@@ -9570,7 +9570,7 @@ export default class Threads extends View {
     const shown = this.ledgerRows();
     const i = this.ledgerSel(shown);
     // Until the first build is done the rows are the newest turns only: the first and last
-    // rows and the failed calls are not known yet.
+    // rows, the failed calls and the user's messages are not known yet.
     const held = this.ledgerShown?.partial === true;
     const pick = (j) => {
       const r = shown[j];
@@ -9594,8 +9594,8 @@ export default class Threads extends View {
       case "llast": if (held) return false; pick(step(shown.length, -1)); return true;
       case "lfail": if (held) return false; seek((r) => r.failed === true, 1); return true;
       case "lfailBack": if (held) return false; seek((r) => r.failed === true, -1); return true;
-      case "luser": seek((r) => r.lk === "you", 1); return true;
-      case "luserBack": seek((r) => r.lk === "you", -1); return true;
+      case "luser": if (held) return false; seek((r) => r.lk === "you", 1); return true;
+      case "luserBack": if (held) return false; seek((r) => r.lk === "you", -1); return true;
       case "ldetail": this.toggleDetail(shown[i]?.key ?? null); return true;
       case "trajectory": return this.openTraj();
       case "escape":
