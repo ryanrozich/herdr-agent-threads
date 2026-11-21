@@ -460,8 +460,10 @@ export function ledgerStatus(t, width, going = false) {
 
 // A row's start and duration columns as text, and whether it draws a bar of its duration. A
 // row with no time recorded leaves the column blank (the detail says "not recorded"). A row
-// that says "no result" shows no duration and no bar: what time it has is the launch call's,
-// which the detail keeps.
+// that says "no result" leaves its duration blank and draws no duration bar. A direct call with
+// no result is open, and main.js ledgerBar draws the grey unfinished bar for it before it asks
+// this; a subagent whose launch returned but whose run was never seen to finish is not open, so
+// it shows no bar, and the launch call's time stays in the detail.
 export function rowTimes(r) {
   const none = r.status === "no result";
   return {
