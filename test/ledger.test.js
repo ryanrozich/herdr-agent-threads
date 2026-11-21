@@ -318,6 +318,8 @@ test("ledger filters: the buttons say Failed and User, and from 900 px 'Failed o
   const t = { input: 6, model: 7, tools: 16, failed: 2, user: 3 };
   expect(filterButtons(t, 600).map((b) => [b.label, b.count])).toEqual([["Input", null], ["Model", null], ["Tools", null], ["Failed", null], ["User", null]]);
   expect(filterButtons(t, 960).map((b) => [b.label, b.count])).toEqual([["Input", 6], ["Model", 7], ["Tools", 16], ["Failed only", 2], ["User only", 3]]);
+  // Until the first build is done: the wide labels, no counts.
+  expect(filterButtons(t, 960, true).map((b) => [b.label, b.count])).toEqual([["Input", null], ["Model", null], ["Tools", null], ["Failed only", null], ["User only", null]]);
   let f = toggleFilter(ALL_ROWS, "tools");
   expect(f).toEqual({ ...ALL_ROWS, tools: false });
   f = toggleFilter(f, "failed");

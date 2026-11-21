@@ -417,12 +417,14 @@ export function filterRows(rows, f) {
 }
 // The filter buttons, as data: [key, label, count]. From WIDE_MIN px Failed and User say
 // "Failed only" and "User only", and each button carries its count.
-export function filterButtons(totals, width) {
+// held: the first build of the rows is not done, so the counts would be of the newest turns
+// only; the buttons show their labels alone.
+export function filterButtons(totals, width, held = false) {
   const wide = width >= WIDE_MIN;
   return [
     ["input", "Input", totals.input], ["model", "Model", totals.model], ["tools", "Tools", totals.tools],
     ["failed", wide ? "Failed only" : "Failed", totals.failed], ["user", wide ? "User only" : "User", totals.user],
-  ].map(([key, label, n]) => ({ key, label, count: wide ? n : null }));
+  ].map(([key, label, n]) => ({ key, label, count: wide && !held ? n : null }));
 }
 // A press on a filter button: a lane turns on or off; Failed only and User only are one at a
 // time, and a second press turns it off.

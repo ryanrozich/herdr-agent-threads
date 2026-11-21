@@ -10137,7 +10137,7 @@ export default class Threads extends View {
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
       .child(this.trajHeading(t, L, shown, i))
-      .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks)))
+      .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks, L.partial)))
       .child(right
         ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().items_start().child(list).when(Boolean(panel), (el) => el.child(panel))
         : v_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel)))
@@ -10170,7 +10170,7 @@ export default class Threads extends View {
 
   // The filter buttons: Input, Model and Tools each with their swatch, Failed with a red dot,
   // User with the user mark. From 900 px they say "Failed only" and "User only", with counts.
-  filterBar(t, totals, w, inks) {
+  filterBar(t, totals, w, inks, held = false) {
     const sq = (c) => div().flex_none().size(8).rounded(2).bg(c);
     const swatch = {
       input: h_flex().flex_none().gap(1).child(sq(inks.user)).child(sq(inks.agent)).child(sq(inks.context)),
@@ -10180,7 +10180,7 @@ export default class Threads extends View {
     };
     const f = this.tfilter;
     return h_flex().id("th-traj-filters").flex_none().h(LEDGER_FILTERS).px(10).gap(6).items_center().border_b(1).border_color(t.border)
-      .children(filterButtons(totals, w).map((b) => {
+      .children(filterButtons(totals, w, held).map((b) => {
         const on = Boolean(f[b.key]);
         return h_flex().id(`th-filter-${b.key}`).flex_none().h(24).px(8).gap(6).items_center().rounded(5).cursor_pointer()
           .text_size(12).text_color(on ? t.foreground : t.dim).when(on, (el) => el.bg(t.raised))
