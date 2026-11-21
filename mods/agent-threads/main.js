@@ -10066,12 +10066,17 @@ export default class Threads extends View {
     this.endsSeen.add(x);
     return true;
   }
-  // Whether the counts and the keys that go by them (f, m, Home, End) wait: while a session is
-  // still being found or read, or the first build is not done. A split opened while its
+  // Whether the counts and the keys that go by them (f, m, Home, End) wait: while the session
+  // is still being found or read, or the first build is not done. A split opened while its
   // session is read builds over the turns read so far, and that build is whole, but its
-  // counts are of part of the session.
+  // counts are of part of the session. Only the current session is read (read()): an earlier
+  // one left mid-read by a clear, a restart or a resume is never read further, so it does not
+  // hold them (statusShown looks at the current one too).
   ledgerHeld(L) { return L.partial === true || this.unread(); }
-  unread() { return this.res.kind === "resolving" || this.sessions.some((x) => !x.loaded); }
+  unread() {
+    const s = this.current();
+    return this.res.kind === "resolving" || (s != null && !s.loaded);
+  }
   // The rows the filter buttons leave, kept until the rows or the filter change.
   ledgerRows() {
     const L = this.ledger();

@@ -14589,6 +14589,42 @@ test("a Trajectory split on a session that arrives in chunks: no counts and no f
   expect(filterTexts(frame(v, cx))).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
 }, 30000);
 
+// A clear, a restart or a resume during the first read of a long session: the new session is
+// found and read, and the earlier one is never read to its end.
+test("an earlier session left unread holds nothing: once the current one is read and built, f, m, Home and End work and the counts show", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  const cur = v.current();
+  expect(cur.loaded).toBe(true);
+  // A failed call, so f has one to go to and the heading one to count.
+  const tr = cur.turns.find((t) => t.steps.some((st) => st.k === "group"));
+  tr.steps.find((st) => st.k === "group").info[0].f = true;
+  tr.v = (tr.v ?? 0) + 1;
+  // The earlier session: its first three turns read, the third with no end read yet.
+  const turns = cur.turns.slice(0, 3).map((t) => ({ ...t }));
+  turns[2].done = false;
+  v.sessions = [{ ...cur, turns, loaded: false }, cur];
+  v.res = { ...v.res, kind: "found" };
+  const build = () => { for (let n = 0; n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); if (!v.ledgerJob) return; } };
+  build();
+  const L = v.ledger();
+  expect(L.partial).toBe(false);
+  const c = frame(v, cx);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids).toContain("th-traj-fails");
+  expect(ids).toContain("th-status-turns");
+  expect(L.totals.failed).toBeGreaterThan(0);
+  for (const name of ["lfirst", "llast", "lfail", "lfailBack", "luser", "luserBack"]) {
+    v.tsel = L.rows.find((r) => r.kind === "trh" && r.key.startsWith("1:")).key;
+    expect(v.ledgerAction(name, cx)).toBe(true);
+  }
+  // The earlier session's last turn read stays as it was read: it claims no result.
+  expect(L.rows.find((r) => r.key === `0:${turns[2].n}`)).toMatchObject({ kind: "trh", reading: true, stale: false });
+  expect(L.rows.some((r) => String(r.key).startsWith(`tr:0:${turns[2].n}:`) && r.lk === "noresult")).toBe(false);
+});
+
 test("a Trajectory split while the session is still read: the last turn read so far claims no 'no result' and no last activity", async () => {
   let gate = null;
   let open;
