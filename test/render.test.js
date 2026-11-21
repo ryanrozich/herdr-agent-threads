@@ -15279,6 +15279,28 @@ test("a reading width chosen while the Trajectory is open stands: closing it doe
   expect(resizes()).toEqual([]);
 });
 
+test("a reading width chosen beside the Trajectory is the Chat's own px (sizeTo), and stays a px while the Trajectory is open", async () => {
+  const ways = [(v, cx) => v.chooseWidth("comfortable", cx), (v, cx) => v.fitToReading(cx)];
+  for (const choose of ways) {
+    const { v, cx } = await trajSplit();
+    roomIs(v, cx, "p3", 433);
+    expect(v.trajChatBack).toEqual({ px: 704, pane: "p3" });
+    v.paneW = 473;
+    v.sizeAt = Date.now() - 1000;
+    log = [];
+    choose(v, cx);
+    const px = v.readingPx();
+    expect(v.trajChatBack).toBe(null);
+    expect(v.weighAfter.px).toBe(px);
+    // Applied and still, with the Trajectory open: no weight.
+    v.paneW = px - 2;
+    v.sizeAt = Date.now() - 1000;
+    v.poll(cx);
+    expect(v.weighAfter).toBe(null);
+    expect(resizes()).toEqual([{ id: "p2", px }]);
+  }
+});
+
 test("the Trajectory split with no terminal in the tab keeps nothing for one: the Chat gives only what the Trajectory needs", async () => {
   const { v, cx } = await trajSplit();
   state.panes = state.panes.filter((p) => p.pane !== "p1");
