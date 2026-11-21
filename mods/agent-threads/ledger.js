@@ -176,8 +176,12 @@ export function sessionHasEnds(s) {
 // stretch of the heading's line ends at the turn's last recorded event, not at now.
 // opts.ends: whether the agent writes result times (see sessionHasEnds); left out, this turn
 // or its session decides.
+// opts.reading: the last turn read so far of a session still being read. With no end read yet,
+// its end may be in the part not read, so it claims nothing: no "no result" and no last
+// activity, and a call with no end yet has blank fields (r.reading).
 export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   const tr = trajectory(s, turn);
+  const reading = !live && opts.reading === true && !turn.done && !turn.interrupted;
   const key = `${si}:${turn.n}`;
   const t0 = tr.start;
   const hasReply = Boolean(reply(turn));
@@ -238,12 +242,12 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       // launch itself succeeds). A run stopped or killed is not a failure.
       const failed = c.result?.failed === true || c.subagent?.state === "failed";
       const ended = c.end != null;
-      const open = Boolean(c.result) && !ended && (ends || (live && i === lastTool));
+      const open = Boolean(c.result) && !ended && !reading && (ends || (live && i === lastTool));
       r.lk = failed ? "failed" : c.subagent ? "subagent" : open ? (live ? "running" : "noresult") : "tool";
       // A subagent whose run has no end and no final state yet: unfinished too, drawn at the
       // subagent's SUB_ALPHA. Its row keeps the run's state as its words.
       const subOpen = Boolean(c.subagent) && !failed && !ended && !Number.isFinite(c.subagent.ms) && c.start != null
-        && (c.subagent.state == null || c.subagent.state === "async_launched" || c.subagent.state === "running") && (ends || live);
+        && (c.subagent.state == null || c.subagent.state === "async_launched" || c.subagent.state === "running") && (ends || live) && !reading;
       if ((open && !c.subagent && !failed) || subOpen) r.open = true;
       if (c.subagent) {
         r.tool = "Agent";
@@ -253,18 +257,19 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       if (failed && r.sub?.tokens) r.status = `failed · ${fmtTokens(r.sub.tokens)} tok`;
       // A subagent the transcript last saw launched or running: only a running turn may say so
       // (the running rule). Otherwise its outcome is unknown, so it has no result.
-      if (r.sub && !failed && !live && (r.sub.state === "running" || r.sub.state === "async_launched")) {
+      if (r.sub && !failed && !live && !reading && (r.sub.state === "running" || r.sub.state === "async_launched")) {
         r.sub = { ...r.sub, state: null };
         r.status = "no result";
         r.noResult = true;
       }
       r.failed = failed;
       if (failed) fails++;
+      if (reading && !ended && !failed) r.reading = true;
       if (c.start != null && t0 != null) r.start = c.start - t0;
       else r.startQ = true;
       const ms = c.subagent?.ms ?? (c.start != null && c.end != null ? c.end - c.start : null);
       if (Number.isFinite(ms)) r.dur = ms;
-      else if (!r.open && (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed")) r.durQ = true;
+      else if (!r.open && !r.reading && (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed")) r.durQ = true;
       if (c.start != null && c.end != null) (failed ? red : c.subagent ? sub : tools).push([c.start, c.end]);
       else if (c.start != null && r.open) (subOpen ? openSub : openAt).push(c.start);
     } else if (c.kind === "more") {
@@ -289,7 +294,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   // A turn with no end record that is not running: unknown. Its calls with no result stop at
   // the last recorded event, and the rows say when that was. (An unfinished turn's end time is
   // only its latest model message, so it is activity, not an end.)
-  const stale = !live && !tr.done && !tr.interrupted;
+  const stale = !live && !reading && !tr.done && !tr.interrupted;
   // The turn's last recorded activity. The heading shows it for a stale turn; a call with no
   // result shows it in any turn that is not running, and says "interrupted" only when the
   // turn is marked so.
@@ -321,7 +326,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
     tokens: stats(turn).tokens, total: tr.end != null && t0 != null && (tr.done || tr.interrupted) ? tr.end - t0 : null,
-    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt,
+    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
     t0, span, cnt,
@@ -334,12 +339,13 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
 // The heading's numbers at the right: "10 calls · 1 failed · 48.2k tok · 9m 44s". When
 // narrow, tokens go first, then the call count; failures and the total stay. The failed
 // count is its own part so the drawing can put the red dot before it. A turn that is neither
-// running nor ended says "no result", never "running".
+// running nor ended says "no result", never "running"; the last turn read so far of a session
+// still being read (reading) says nothing.
 export function headParts(h, width = 600) {
   const calls = h.calls ? `${h.calls} call${h.calls === 1 ? "" : "s"}` : null;
   const failed = h.fails ? `${h.fails}${h.partial ? "+" : ""} failed` : null;
   const tok = h.tokens ? `${fmtTokens(h.tokens)} tok` : null;
-  const total = h.going ? "running" : h.interrupted ? "interrupted" : h.stale ? "no result" : !h.timed ? "no times" : durText(h.total) || null;
+  const total = h.going ? "running" : h.interrupted ? "interrupted" : h.stale ? "no result" : h.reading ? null : !h.timed ? "no times" : durText(h.total) || null;
   return {
     calls: width >= 340 ? calls : null,
     failed,
@@ -479,7 +485,7 @@ export function detailOf(r) {
     if (p.tokens) F.push(["Tokens", p.tokens]);
     // A turn cut off mid-call has no time it took: it says so once, as its calls' detail does.
     if (r.stale) F.push(["Result", "No result"]);
-    else F.push(["Took", p.total ?? "not recorded"]);
+    else F.push(["Took", p.total ?? (r.reading ? "" : "not recorded")]);
     if (r.lastAt != null) F.push(["Last activity", fmtTime(r.lastAt)]);
     return { kind: null, tag: "Turn", title: `Turn ${r.n}`, fields: F, text: null, code: false };
   }
@@ -495,12 +501,12 @@ export function detailOf(r) {
   // "No result" once.
   const cut = r.lk === "noresult" || r.noResult || (r.open && r.lastAt != null) || r.interrupted;
   if ((call || r.lk === "reply") && !(cut && r.dur == null)) {
-    const took = r.dur != null ? durText(r.dur) : r.lk === "running" || r.open ? "still running" : "not recorded";
+    const took = r.dur != null ? durText(r.dur) : r.reading ? "" : r.lk === "running" || r.open ? "still running" : "not recorded";
     F.push(["Took", took]);
   }
   if (call) {
     const none = r.interrupted ? "No result: the turn was interrupted" : "No result";
-    F.push(["Result", r.failed ? "failed" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" || r.noResult ? none : r.durQ ? "not recorded" : "ok"]);
+    F.push(["Result", r.failed ? "failed" : r.reading ? "" : r.lk === "running" ? "Running, no result yet" : r.lk === "noresult" || r.noResult ? none : r.durQ ? "not recorded" : "ok"]);
     if (r.lastAt != null) F.push(["Last activity", fmtTime(r.lastAt)]);
     if (r.sub) F.push(["Subagent", [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null].filter(Boolean).join(" · ") || "no state recorded"]);
   }

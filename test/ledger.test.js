@@ -341,6 +341,40 @@ test("ledger status line: turns and steps, failed, tokens, time worked; time giv
   expect(ledgerStatus({ ...t, failed: 0 }, 400).map((g) => g.key)).toEqual(["turns"]);
 });
 
+test("ledger: the last turn read so far of a session still being read claims no 'no result' and no last activity", () => {
+  const t = turn(11, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null });
+  const { rows } = ledgerTurn(S, t, 0, false, { reading: true });
+  expect(rows.slice(1).map((r) => r.lk)).toEqual(["you", "tool", "tool"]);
+  expect(rows[0]).toMatchObject({ stale: false, lastAt: null, reading: true });
+  expect(rows.some((r) => r.lastAt != null || r.noResult || r.open)).toBe(false);
+  expect(headParts(rows[0]).total).toBe(null);
+  // Blank fields: the heading's Took, and the open call's Took and Result. The ended call keeps its own.
+  expect(detailOf(rows[0]).fields).toContainEqual(["Took", ""]);
+  expect(rows[3]).toMatchObject({ reading: true, status: null, dur: null, durQ: false });
+  const f = Object.fromEntries(detailOf(rows[3]).fields);
+  expect([f.Took, f.Result]).toEqual(["", ""]);
+  expect(rows[2].reading).toBeUndefined();
+  expect(Object.fromEntries(detailOf(rows[2]).fields).Result).toBe("ok");
+  for (const r of rows) expect(detailOf(r).fields.some(([k, v]) => k === "Last activity" || /no result|not recorded/i.test(v))).toBe(false);
+  // A subagent last seen running: no "no result" either.
+  const a = turn(14, [[["Agent", "Audit the tests", 1000, 2000]], [["Agent", "Audit the docs", 3000, null]]], { done: false, end: null, reply: null, agent: true });
+  const s = { agents: new Map([[a.steps[0].ids[0], { st: "running", tok: null, ms: null }], [a.steps[1].ids[0], { st: "running", tok: null, ms: null }]]), agentIds: new Map() };
+  const subs = (o) => ledgerTurn(s, a, 0, false, o).rows.filter((r) => r.tool === "Agent");
+  for (const sub of subs({ reading: true })) {
+    expect(sub.noResult).toBeUndefined();
+    expect(sub.lastAt).toBeUndefined();
+    expect(sub.open).toBeUndefined();
+  }
+  // Not read in full is what holds them: read, the unfinished run is drawn open, with its last activity.
+  expect(subs({})[1]).toMatchObject({ open: true, lastAt: T0 + 3000 });
+  // Running wins: reading changes nothing for a live turn.
+  expect(ledgerTurn(S, t, 0, true, { reading: true }).rows[3]).toMatchObject({ lk: "running", status: "running" });
+  // Nor for a turn whose end is read: its call with no result has none.
+  const ended = turn(12, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]]);
+  expect(ledgerTurn(S, ended, 0, false, { reading: true }).rows[3]).toMatchObject({ lk: "noresult", status: "no result" });
+  expect(ledgerTurn(S, ended, 0, false, { reading: true }).rows[0].reading).toBe(false);
+});
+
 test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant, the heading line's in 4 px", () => {
   expect([BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, LEDGER_HEAD]).toEqual([64, 4, 5, 4, 40]);
   expect(slantPoints(0, 64, 4, 5)).toEqual([[0, 0], [64, 0], [59, 4], [0, 4]]);

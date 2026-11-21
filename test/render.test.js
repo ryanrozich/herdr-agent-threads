@@ -13082,3 +13082,88 @@ test("a Trajectory split on a session that arrives in chunks: no counts and no f
   expect(v.ledger().partial).toBe(false);
   expect(filterTexts(frame(v, cx))).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
 }, 30000);
+
+test("a Trajectory split while the session is still read: the last turn read so far claims no 'no result' and no last activity", async () => {
+  let gate = null;
+  let open;
+  // About 2.4 MB of bookkeeping lines right after the first call of the second turn, before
+  // its result: the first 2 MB chunk ends inside that turn.
+  const file = fixture("--extra", "8");
+  const lines = readFileSync(file, "utf8").split("\n");
+  const second = lines.findIndex((l, i) => l.includes('"promptSource":"typed"') && lines.slice(0, i).some((x) => x.includes('"promptSource":"typed"')));
+  const at = lines.findIndex((l, i) => i > second && l.includes('"tool_use"'));
+  const blob = (i) => JSON.stringify({ type: "api-request-blob", sessionId: "00000000-0000-4000-8000-000000000009", blob: { messages: [{ role: "assistant", content: [{ type: "text", text: `${i}`.padEnd(400000, "x") }] }] } });
+  lines.splice(at + 1, 0, ...Array.from({ length: 6 }, (_, i) => blob(i)));
+  writeFileSync(file, lines.join("\n"));
+  const { v, cx } = await paneWith(file, (cx) => {
+    state.props = { ...state.props, view: "trajectory" };
+    cx.sleepHook = () => {
+      const s = v.current();
+      if (s && !s.loaded && s.turns.length && !open) gate ??= new Promise((r) => { open = r; });
+      return gate ?? new Promise((r) => setTimeout(r, 0));
+    };
+  }, 0);
+  await until(() => gate && v.current()?.turns.length > 0, "the first chunk");
+  expect(v.trajPane).toBe(true);
+  expect(v.current().loaded).toBeFalsy();
+  v.width = 960;
+  v.paneW = 960;
+  const build = () => { for (let n = 0; v.ledgerJob && n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); } };
+  build();
+  const s = v.current();
+  const last = s.turns[s.turns.length - 1];
+  // The turn the read stopped in: its end is in the part not read yet.
+  expect(last.done).toBeFalsy();
+  const key = `0:${last.n}`;
+  const rowsOf = () => v.ledger().rows.filter((r) => r.key === key || String(r.key).startsWith(`tr:${key}:`));
+  let rows = rowsOf();
+  const head = rows[0];
+  expect(head.kind).toBe("trh");
+  expect(head.stale).toBe(false);
+  expect(head.lastAt).toBe(null);
+  expect(rows.some((r) => r.lk === "noresult" || r.noResult || r.lastAt != null)).toBe(false);
+  // The heading: no time it took, and no result claimed.
+  expect(head.reading).toBe(true);
+  const hf = Object.fromEntries(detailOf(head).fields);
+  expect(hf.Took).toBe("");
+  expect(hf.Result).toBeUndefined();
+  // Its calls with no result yet: blank fields, not "not recorded".
+  // Selected, with its detail open: the drawn pane says none of it.
+  v.tsel = key;
+  v.tdetail = true;
+  const texts = (c) => c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  let words = texts(frame(v, cx));
+  expect(words).toContain(`Turn ${last.n}`);
+  expect(words.some((x) => /no result/i.test(x))).toBe(false);
+  expect(words).not.toContain("Last activity");
+  expect(words).not.toContain("not recorded");
+  // Only the last turn read so far is held: an earlier one with no end still says so.
+  const first = s.turns[0];
+  first.done = false;
+  first.v = (first.v ?? 0) + 1;
+  s.version++;
+  const full = () => { for (let n = 0; n < 400; n++) { const L = v.ledger(); if (!v.ledgerJob) return L; } return null; };
+  expect(full().rows.find((r) => r.key === `0:${first.n}`)).toMatchObject({ stale: true, reading: false });
+  first.done = true;
+  first.v++;
+  s.version++;
+  // Once the session is read, the same turn has its outcome.
+  open();
+  await until(() => v.current().loaded && !v.reading, "the whole session", 2000);
+  build();
+  rows = rowsOf();
+  expect(rows[0].reading).toBe(false);
+  words = texts(frame(v, cx));
+  expect(words).toContain("Took");
+  // A read whose last turn has no end when the read finishes: once the session is read (with
+  // nothing else changed), that turn is no longer held blank, and says it has no result.
+  const tail = s.turns[s.turns.length - 1];
+  const tailHead = () => full().rows.find((r) => r.key === `0:${tail.n}`);
+  s.loaded = false;
+  tail.done = false;
+  tail.v = (tail.v ?? 0) + 1;
+  s.version++;
+  expect(tailHead()).toMatchObject({ reading: true, stale: false });
+  s.loaded = true;
+  expect(tailHead()).toMatchObject({ reading: false, stale: true });
+}, 30000);
