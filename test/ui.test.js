@@ -817,7 +817,7 @@ test("codeRows: a code line wrapped word by word, a long word split across rows"
   expect(codeRows("cd ~/acme-web-try && git fetch && git checkout coupon-checks && git pull", 40)).toBe(2);
 });
 
-test("trajFit: the room comes from the terminal down to 200, then the Chat down to 240, then the Trajectory down to 200", () => {
+test("trajFit: the room comes from the other panes down to their keep, then the Chat down to 240, then the Trajectory down to 200; short of that, none", () => {
   expect(TERM_KEEP).toBe(200);
   // The terminal has it.
   expect(trajFit(704, 464, 902)).toEqual({ chat: 704, traj: 464 });
@@ -827,11 +827,14 @@ test("trajFit: the room comes from the terminal down to 200, then the Chat down 
   // The Chat gives the rest.
   expect(trajFit(704, 464, 435)).toEqual({ chat: 475, traj: 464 });
   expect(trajFit(704, 464, 435, 0)).toEqual({ chat: 675, traj: 464 });
-  // The Chat at 240, then the Trajectory toward 200.
-  expect(trajFit(500, 260, 100)).toEqual({ chat: 240, traj: 200 });
+  // Three panes keep 600: the Chat to 240, then the Trajectory gives 165.
+  expect(trajFit(704, 464, 435, 600)).toEqual({ chat: 240, traj: 299 });
+  // The Chat at 240, then the Trajectory toward 200, and no further.
   expect(trajFit(500, 260, 150)).toEqual({ chat: 240, traj: 210 });
-  // Past that the terminal gives the rest: the two floors always fit a 480 px Chat.
-  expect(trajFit(482, 242, 0)).toEqual({ chat: 240, traj: 200 });
+  expect(trajFit(500, 260, 140)).toEqual({ chat: 240, traj: 200 });
+  expect(trajFit(500, 260, 139)).toBe(null);
+  expect(trajFit(482, 242, 0)).toBe(null);
+  expect(trajFit(704, 464, 100, 600)).toBe(null);
 });
 
 test("trajColumn: a kept Trajectory width is held to 200 px and to the Chat's width less 240 px", () => {
