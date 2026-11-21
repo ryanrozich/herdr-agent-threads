@@ -12925,6 +12925,30 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   expect(resizes()).toEqual([]);
 });
 
+test("a reading width chosen while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
+  // Shift w or the settings card: Comfortable, wider than the 475 px the Chat was narrowed to.
+  let { v, cx } = await trajSplit();
+  roomIs(v, cx, "p3", 433);
+  expect(resizes().at(-1)).toEqual({ id: "p2", px: 475 });
+  v.paneW = 473;
+  log = [];
+  v.chooseWidth("comfortable", cx);
+  const px = v.readingPx();
+  expect(px).toBeGreaterThan(475);
+  expect(resizes()).toEqual([{ id: "p2", px }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+  // w, the reading width at once.
+  ({ v, cx } = await trajSplit());
+  roomIs(v, cx, "p3", 433);
+  v.paneW = 473;
+  log = [];
+  v.fitToReading(cx);
+  expect(resizes()).toEqual([{ id: "p2", px: v.readingPx() }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+});
+
 test("the Trajectory split with no terminal in the tab keeps nothing for one: the Chat gives only what the Trajectory needs", async () => {
   const { v, cx } = await trajSplit();
   state.panes = state.panes.filter((p) => p.pane !== "p1");

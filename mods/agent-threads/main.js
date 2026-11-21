@@ -3297,7 +3297,8 @@ export default class Threads extends View {
   // so), and the width it reports once it holds still is that room: the row less the Chat and
   // any pane of a fixed width. trajFit then says what the Trajectory and the Chat get: the
   // terminal gives first, down to TERM_KEEP, then the Chat, then the Trajectory. A Chat
-  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack).
+  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless a
+  // reading width was chosen in the Chat while it was open.
   settleTraj(a, cx) {
     // Closed while it was measured: nothing to fit, and the Chat stays as it is.
     if (!panes().some((p) => p.pane === a.made)) { this.splitAsk = null; return; }
@@ -3323,7 +3324,8 @@ export default class Threads extends View {
       this.trajChatBack = { px: a.chat, pane: a.made };
     }
   }
-  // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back.
+  // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
+  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading).
   trajGiveBack() {
     const back = this.trajChatBack;
     if (!back || panes().some((p) => p.pane === back.pane)) return;
@@ -5933,7 +5935,7 @@ export default class Threads extends View {
     const me = this.me();
     if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.sideKey() && me && !me.zoomed && this.paneW != null) {
       const px = this.readingPx();
-      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
+      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); this.trajChatBack = null; run("layout.resize", { id: me.pane, px }); }
     }
   }
   // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
@@ -5958,6 +5960,7 @@ export default class Threads extends View {
     const px = this.readingPx();
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     run("layout.resize", { id: main.pane, px });
+    if (!this.pinnedPane) this.trajChatBack = null;
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
     if (col) {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
