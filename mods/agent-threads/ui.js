@@ -2644,6 +2644,36 @@ export function columnResize(c, m, d, max = 640) {
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
 
+// A pane's weight from its widths. In a row, Herdr lays a pane of weight w out w R / (w + S)
+// px wide (R the room the panes sized by weight share, S the others' weights), so 1/px is a
+// straight line in 1/w: 1/px = a + b/w, a = 1/R and b = S/R. A mod can read neither R nor S,
+// so the line comes from two weights tried ([weight, px] each), or null when they do not
+// make one (the same weight or the same width twice).
+export function weightLine([w1, n1], [w2, n2]) {
+  const [x1, x2, y1, y2] = [1 / w1, 1 / w2, 1 / n1, 1 / n2];
+  if (!(Math.abs(x1 - x2) > 1e-9)) return null;
+  const b = (y1 - y2) / (x1 - x2);
+  const a = y1 - b * x1;
+  return b > 0 && a > 0 ? { a, b } : null;
+}
+const w5 = (w) => Number(w.toPrecision(5));
+// The weight that lays the pane out n0 px wide on that line; null past the room.
+export function weightFor(line, n0) {
+  if (!line) return null;
+  const x0 = (1 / n0 - line.a) / line.b;
+  return x0 > 0 ? w5(1 / x0) : null;
+}
+// From one measure: the weight for n0 with the others' weights as on line and the room as
+// the measure says (the window may have changed size since). With no line, as if the
+// pane's own share were all that changed.
+export function weightNear(line, [w1, n1], n0) {
+  if (!line) return w5((w1 * n0) / n1);
+  const S = line.b / line.a;
+  const k = (n1 * (1 + S / w1)) / n0 - 1;
+  return k > 0 ? w5(S / k) : null;
+}
+export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
+
 // The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane
 // and a step (PIN_STEP) more, 380 to 440 px (PIN_COL_WANT), so a compact row shows about 48
 // characters of its prompt a line (the row's text is the column less PIN_ROW's 54 px of
