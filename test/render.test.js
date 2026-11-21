@@ -14727,6 +14727,12 @@ test("an earlier session left unread holds nothing: once the current one is read
   // The earlier session's last turn read stays as it was read: it claims no result.
   expect(L.rows.find((r) => r.key === `0:${turns[2].n}`)).toMatchObject({ kind: "trh", reading: true, stale: false });
   expect(L.rows.some((r) => String(r.key).startsWith(`tr:0:${turns[2].n}:`) && r.lk === "noresult")).toBe(false);
+  // No session found at all: nothing is being read, so nothing holds the keys either.
+  v.sessions = [];
+  v.res = { kind: "none" };
+  build();
+  expect(v.ledger().partial).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(true);
 });
 
 test("a Trajectory split while the session is still read: the last turn read so far claims no 'no result' and no last activity", async () => {
