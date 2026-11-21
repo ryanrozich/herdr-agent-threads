@@ -39,6 +39,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null
@@ -158,6 +159,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "The background build finished cleanly.",
+  "latestAt": 1793524436000,
   "latestParts": [
    "The background build finished cleanly."
   ],
@@ -223,6 +225,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null
@@ -309,6 +312,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null
@@ -382,6 +386,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null
@@ -531,6 +536,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null

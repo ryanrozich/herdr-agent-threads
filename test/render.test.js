@@ -10,6 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -95,8 +96,10 @@ mock.module("gpui-base", () => ({
   VirtualListScrollHandle: { new: () => ({ scroll_to_bottom() {}, scroll_to_item() {} }) },
   ScrollHandle: { new: () => { const h = { asked: [], scroll_to_item(i) { h.asked.push(i); }, release() { return true; } }; scrollHandles.push(h); return h; } },
   v_virtual_list: (_id, n, sizes, keyOf, draw) => {
-    lastList = { sizes: [...sizes], keys: [], draw };
-    for (let i = 0; i < n; i++) { if (!(sizes[i] > 0)) throw new Error(`item ${keyOf(i)} has height ${sizes[i]}`); lastList.keys.push(keyOf(i)); }
+    // One number is one height for every item (the Trajectory's list); an array is one each.
+    const size = (i) => (typeof sizes === "number" ? sizes : sizes[i]);
+    lastList = { sizes: typeof sizes === "number" ? Array.from({ length: n }, () => sizes) : [...sizes], keys: [], draw };
+    for (let i = 0; i < n; i++) { if (!(size(i) > 0)) throw new Error(`item ${keyOf(i)} has height ${size(i)}`); lastList.keys.push(keyOf(i)); }
     draw(listWindow ? listWindow(n) : { start: 0, end: n });
     return el;
   },
@@ -6766,9 +6769,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 36 rows.
+  // Six groups (the settings card's keys among them), 37 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -8132,11 +8135,11 @@ test("the floating top: no header row, the state top left at every width, icons 
   const at = calls.findIndex((e) => e[0] === "id" && e[1] === "th-state");
   const tip = calls.slice(at, at + 14).find((e) => e[0] === "tooltip")?.[1];
   expect(tip).toMatch(/^Claude finished its newest turn · click to go to the terminal \(t\) · .*Reading t4 · session /);
-  // The pointer in the pane, or the keyboard in the panel: search, pinned and settings, in that order.
+  // The pointer in the pane, or the keyboard in the panel: search, the Trajectory, pinned and settings, in that order.
   v.paneHover = true;
   ids = idsOf(drawn());
-  expect(["th-search", "th-pinned", "th-settings"].map((id) => ids.indexOf(id)).every((x, i, a) => x > 0 && (i === 0 || x > a[i - 1]))).toBe(true);
-  expect(v.floatButtons().map((b) => [b[0], b[1], b[2].split(" (")[0]])).toEqual([["th-search", "search", "Search"], ["th-pinned", "pin", "Open the Pinned column beside Threads"], ["th-settings", "sliders-horizontal", "Settings"]]);
+  expect(["th-search", "th-traj", "th-pinned", "th-settings"].map((id) => ids.indexOf(id)).every((x, i, a) => x > 0 && (i === 0 || x > a[i - 1]))).toBe(true);
+  expect(v.floatButtons().map((b) => [b[0], b[1], b[2].split(" (")[0]])).toEqual([["th-search", "search", "Search"], ["th-traj", "list", "Open the Trajectory beside the Chat"], ["th-pinned", "pin", "Open the Pinned column beside Threads"], ["th-settings", "sliders-horizontal", "Settings"]]);
   v.paneHover = false;
   v.h.is_focused = () => true;
   expect(idsOf(drawn())).toContain("th-settings");
@@ -12078,3 +12081,1235 @@ test("a pasted block keeps its long hyphenated tokens as typed, while the messag
   expect(paste.rows).toBeNull();
   expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
 });
+
+// ---- the Trajectory pane (TRD-22) ----
+// The words a frame drew, and whether it drew an element of an id.
+const wordsOf = (calls) => calls.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+const hasId = (calls, id) => calls.some((e) => e[0] === "id" && e[1] === id);
+// The new Trajectory pane, taking the row's room by weight (settleTraj), reports w px; the
+// Chat reads it once it has held still.
+function roomIs(v, cx, pane, w) {
+  state.shared["threads.width"] = { ...(state.shared["threads.width"] ?? {}), [pane]: w };
+  const real = Date.now;
+  const t0 = real();
+  try {
+    Date.now = () => t0;
+    v.settleSplit(cx);
+    Date.now = () => t0 + 1000;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+}
+const resizes = () => log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+
+test("y from 480 px splits the Trajectory pane off the Chat, kept in its own map; y moves between them, and the pane closes with the Chat", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  expect(v.floatButtons().map((b) => b[0])).toEqual(["th-search", "th-traj", "th-pinned", "th-settings"]);
+  expect(v.floatButtons()[1].slice(1, 5)).toEqual(["list", "Open the Trajectory beside the Chat (y)", "trajectory", false]);
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(false);
+  const split = log.find(([, n]) => n === "pane.split");
+  expect(split[2]).toMatchObject({ pane: "p2", direction: "right", mod: "agent-threads", props: { terminal: "t4", view: "trajectory" } });
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit(cx);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p3" } });
+  expect(state.shared["threads.byTerminal"].t4).toEqual({ pane: "p2" });
+  expect(state.shared["threads.pinnedByTerminal"]).toBeUndefined();
+  // First it takes the row's room, to measure it; the terminal has plenty to give.
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  roomIs(v, cx, "p3", 900);
+  // 560 px, held to what a 700 px Chat can give: it keeps 240 px.
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 700 + 2 - 240 }]);
+  expect(v.floatButtons()[1].slice(2, 5)).toEqual(["Go to the Trajectory (y)", "trajectory", true]);
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p3" }]]);
+  // No notice for any of it.
+  expect(v.toast).toBeNull();
+
+  // The Trajectory pane: the ledger only, with its heading, and the Chat's selected turn.
+  const turnKey = v.turnKeys(v.rows())[1];
+  v.sel = turnKey;
+  v.poll(cx);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: turnKey });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  expect([w.trajPane, w.traj, w.pinnedPane]).toEqual([true, true, false]);
+  expect(w.me().pane).toBe("p3");
+  w.width = 560;
+  w.paneW = 560;
+  const c = frame(w, cx2);
+  expect(wordsOf(c)).toContain("Trajectory");
+  expect(hasId(c, "th-traj-heading")).toBe(true);
+  expect(hasId(c, "th-traj-chat")).toBe(false); // its own pane has no Chat button
+  expect(hasId(c, "threads-list")).toBe(false); // no Chat rows drawn
+  expect(w.tsel).toBe(turnKey);
+  // Its debug entry is its own: the Chat's, with whatever it carries, stays as it was.
+  v.report();
+  state.shared["threads.debug"].t4.command = "next";
+  const chatEntry = JSON.stringify(state.shared["threads.debug"].t4);
+  w.report();
+  expect(JSON.stringify(state.shared["threads.debug"].t4)).toBe(chatEntry);
+  expect(state.shared["threads.debug"].t4.command).toBe("next");
+  expect(state.shared["threads.debug"].t4.traj.pane).toBe(false);
+  // It builds no Chat rows for its report: it draws none.
+  expect(state.shared["threads.debug"]["t4:trajectory"].rows).toEqual([]);
+  expect(state.shared["threads.debug"].t4.rows.length).toBeGreaterThan(0);
+  const rep = state.shared["threads.debug"]["t4:trajectory"].traj;
+  expect(rep).toMatchObject({ pane: true, inPane: false, sel: turnKey, cols: { start: true, bar: true, filters: true, detailRight: false } });
+  // The keys move through the ledger, and the Chat follows the turn.
+  w.key(keyEv("j"), cx2);
+  expect(w.tsel.startsWith(`tr:${turnKey}:`)).toBe(true);
+  const other = w.ledger().rows.filter((r) => r.kind === "trh").at(-1).key;
+  w.key(keyEv("End"), cx2);
+  w.key(keyEv("end"), cx2);
+  expect(w.turnOfRow(w.tsel)).toBe(other);
+  w.poll(cx2);
+  v.poll(cx);
+  expect(v.sel).toBe(other);
+  // y in the Trajectory pane goes to the Chat.
+  log = [];
+  w.key(keyEv("y"), cx2);
+  expect(log).toEqual([["run", "pane.focus", { pane: "p2" }]]);
+  // The Chat closes: the Trajectory pane closes with it.
+  log = [];
+  state.panes = state.panes.filter((p) => p.pane !== "p2");
+  w.poll(cx2);
+  expect(log.filter(([, n]) => n === "pane.close")).toEqual([["run", "pane.close", { pane: "p3" }]]);
+});
+
+test("under 480 px y shows the Trajectory in the Chat's own pane, with no notice; its Chat button, y or Esc goes back on the turn it selected", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 460;
+  v.paneW = 460;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  draw(v, cx);
+  expect(v.floatButtons()[1][2]).toBe("Show the Trajectory in this pane (y)");
+  const k = v.turnKeys(v.rows());
+  v.sel = k[0];
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  expect([v.traj, v.trajPane, v.toast]).toEqual([true, false, null]);
+  let c = frame(v, cx);
+  expect(hasId(c, "th-traj-chat")).toBe(true);
+  expect(wordsOf(c)).toContain("Chat");
+  // At 460 px: the start column, no bar, no filter bar, and the detail closed.
+  expect(hasId(c, "th-traj-filters")).toBe(false);
+  expect(hasId(c, "th-traj-detail")).toBe(false);
+  // Enter shows the detail under the ledger; Esc closes it, then goes back to the Chat.
+  v.key(keyEv("enter"), cx);
+  c = frame(v, cx);
+  expect(hasId(c, "th-traj-detail")).toBe(true);
+  v.key(keyEv("escape"), cx);
+  expect([v.traj, v.detailOpen()]).toEqual([true, false]);
+  v.key(keyEv("End"), cx);
+  v.key(keyEv("end"), cx);
+  const last = v.turnOfRow(v.tsel);
+  v.key(keyEv("escape"), cx);
+  expect(v.traj).toBe(false);
+  expect(v.sel).toBe(last);
+  // y in and y out.
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(true);
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(false);
+  // The Chat button.
+  v.key(keyEv("y"), cx);
+  c = frame(v, cx);
+  onOf(c, "th-traj-chat", "on_click")({}, cx);
+  expect(v.traj).toBe(false);
+  expect(v.toast).toBeNull();
+  draw(v, cx);
+});
+
+test("the Trajectory at 960 px: the filter bar with counts, the detail open at the right; f steps through failed calls and the heading counts them", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  let c = frame(v, cx);
+  expect(hasId(c, "th-traj-filters")).toBe(true);
+  expect(wordsOf(c)).toContain("Failed only");
+  expect(hasId(c, "th-traj-detail")).toBe(true);
+  const L = v.ledger();
+  expect(L.totals.failed).toBeGreaterThan(0);
+  // f: to the first failed call after the selected row; the heading says which of them.
+  v.tsel = L.rows.find((r) => r.kind === "trh").key;
+  v.key(keyEv("f"), cx);
+  const sel = L.rows.find((r) => r.key === v.tsel);
+  expect(sel.failed).toBe(true);
+  c = frame(v, cx);
+  expect(wordsOf(c)).toContain(`1 of ${L.totals.failed}`);
+  expect(v.trajReport().detail.fields).toContainEqual(["Result", "failed"]);
+  // Failed only lists only failed calls (and their headings).
+  onOf(c, "th-filter-failed", "on_click")({}, cx);
+  expect(v.ledgerRows().filter((r) => r.kind === "tr").every((r) => r.failed)).toBe(true);
+  // The status line: turns and steps, failed, tokens, time worked.
+  expect(v.trajReport().status[0]).toMatch(/^\d+ turns · \d+ steps$/);
+  // The list's commands (keys.json) move through the ledger here; trajectory goes back.
+  onOf(frame(v, cx), "th-filter-failed", "on_click")({}, cx);
+  v.command("first", cx);
+  const top = v.tsel;
+  v.command("next", cx);
+  expect(v.tsel).not.toBe(top);
+  expect(v.turnOfRow(v.tsel)).toBe(v.turnOfRow(top));
+  v.command("trajectory", cx);
+  expect(v.traj).toBe(false);
+  draw(v, cx);
+});
+
+test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
+  const { file } = runningFixture();
+  const { v, cx } = await pane(file);
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  state.terminals[0].status = "working";
+  v.ledgerMemo = null;
+  expect(v.ledger().going).toBe(true);
+  expect(v.trajReport().heads.at(-1).total).toBe("running");
+  // The same transcript with Herdr's status idle (the agent was killed mid-turn): unknown.
+  state.terminals[0].status = "idle";
+  expect(v.ledger().going).toBe(false);
+  const h = v.trajReport().heads.at(-1);
+  expect(h.total).not.toBe("running");
+  expect(h.stale).toBe(true);
+  expect(Number.isFinite(h.lastAt)).toBe(true);
+  // The process gone: never running, whatever the status says.
+  state.terminals[0].status = "working";
+  const res = v.res;
+  v.res = { ...res, ended: "exited" };
+  expect(v.ledger().going).toBe(false);
+  // Followed means a real match: a session guessed from the folder, or none, is not.
+  v.res = { ...res, guess: true };
+  expect(v.ledger().going).toBe(false);
+  v.res = { kind: "none" };
+  expect(v.ledger().going).toBe(false);
+  v.res = res;
+  expect(v.ledger().going).toBe(true);
+  // Open means the newest turn is not done: a done turn with Claude still working is not running.
+  const newest = v.current().turns.at(-1);
+  newest.done = true;
+  expect(v.ledger().going).toBe(false);
+  newest.done = false;
+  draw(v, cx);
+});
+
+test("- and = step the Trajectory pane 40 px and the Chat the other way, keep its width for the next split, and say nothing at the limit", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  state.shared["threads.width"] = { p2: 600, p3: 918 };
+  // In the Chat, with no Pinned column: the Trajectory pane.
+  log = [];
+  v.key(keyEv("="), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 960 }, { id: "p2", px: 562 }]);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 960 });
+  expect(state.shared["threads.pinWidth"]).toBeUndefined();
+  // In the Trajectory pane.
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  log = [];
+  w.key(keyEv("-"), cx2);
+  // The Chat gives way up to its reading width (readingWidth on), as beside the Pinned column.
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: Math.min(602, w.readingPx()) }]);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 920 });
+  // The Chat at its 240 px: = does nothing, with no notice.
+  state.shared["threads.width"] = { p2: 238, p3: 918 };
+  log = [];
+  w.key(keyEv("="), cx2);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect([w.toast, v.toast]).toEqual([null, null]);
+  // The next split, from a Chat with room for it, opens at the kept width.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  delete state.shared["threads.trajByTerminal"];
+  v.splitAsk = null;
+  v.width = 1400;
+  v.paneW = 1400;
+  log = [];
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(920);
+});
+
+test("a subagent that finishes after its turn ended changes its row: kept rows follow the turn's and the agents' versions", async () => {
+  const { v, cx } = await pane(fixture("--subagents"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const row = () => v.ledger().rows.find((r) => r.sub && r.turn.done);
+  const first = row();
+  const s = v.sessions[first.si];
+  const a = s.agents.get(first.call);
+  expect(a).toBeTruthy();
+  // The notification has not come yet: the run was last seen launched.
+  Object.assign(a, { st: "async_launched", ms: null, tok: null });
+  s.agentVer = (s.agentVer ?? 0) + 1;
+  expect(row()).toMatchObject({ key: first.key, status: "no result", noResult: true });
+  // It comes after the turn ended: the row says how the run went.
+  Object.assign(a, { st: "completed", ms: 90000, tok: 21000 });
+  s.agentVer += 1;
+  const done = row();
+  expect(done.key).toBe(first.key);
+  expect(done.noResult).toBeUndefined();
+  expect(done.sub.state).toBe("completed");
+  expect(done.dur).toBe(90000);
+  draw(v, cx);
+});
+
+test("the ledger is built newest turn first, one slice a draw: the newest turns show first, then every row", async () => {
+  const { v } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const whole = v.ledger().rows.map((r) => r.key);
+  const heads = whole.filter((k) => !k.startsWith("tr:"));
+  expect(heads.length).toBeGreaterThan(4);
+  // A fresh build with no time to spare: one turn a slice.
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  const first = v.ledger();
+  expect(first.partial).toBe(true);
+  expect(first.rows[0].key).toBe(heads.at(-1));
+  expect(first.rows.filter((r) => r.kind === "trh").length).toBe(1);
+  expect(v.ledgerJob).toBeTruthy();
+  // Inside a draw, a second ask in the same draw builds nothing more.
+  v.renderOpen = true;
+  v.renders = 1;
+  v.ledger();
+  const at = v.ledgerJob.next;
+  v.ledger();
+  expect(v.ledgerJob.next).toBe(at);
+  v.renderOpen = false;
+  let n = 0;
+  while (v.ledgerJob && n++ < 100) v.ledger();
+  const done = v.ledger();
+  expect(done.partial).toBe(false);
+  expect(done.rows.map((r) => r.key)).toEqual(whole);
+});
+
+test("the bars: an unfinished call's row bar is grey with a 5 px slant; the heading line's unfinished end is teal with a 4 px slant", async () => {
+  const { v } = await pane(fixture("--only", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const L = v.ledger();
+  const inks = trajInks(theme, true);
+  const grey = TRAJ_INKS.open.dark;
+  const teal = TRAJ_INKS.tools.dark;
+  const slants = [];
+  const bar = v.slantBar.bind(v);
+  v.slantBar = (c, w, h, d) => { slants.push(["bar", c, w, h, d]); return bar(c, w, h, d); };
+  const end = v.slantEnd.bind(v);
+  v.slantEnd = (c, d, h) => { slants.push(["end", c, d, h]); return end(c, d, h); };
+  // A running call and one with no result: the same grey bar.
+  const call = L.rows.find((r) => r.lk === "tool");
+  for (const lk of ["running", "noresult"]) v.ledgerBar({ ...call, lk, open: true, dur: null }, inks.tools, inks);
+  expect(slants).toEqual([["bar", grey, 64, 4, 5], ["bar", grey, 64, 4, 5]]);
+  // The heading's line: the unfinished stretch teal, ending in one 4 px slant; nothing grey.
+  const head = { ...L.rows.find((r) => r.kind === "trh"), line: { tools: [[0, 0.3]], sub: [], model: [], red: [], open: [[0.5, 1]], openSub: [] } };
+  slants.length = 0;
+  rec = [];
+  v.ledgerHead(theme, head, false, inks);
+  const bgs = rec.filter((e) => e[0] === "bg").map((e) => e[1]);
+  rec = null;
+  expect(slants).toEqual([["end", teal, 4, 3]]);
+  expect(bgs).toContain(teal);
+  expect(bgs).not.toContain(grey);
+});
+
+test("y does nothing in the Chat's Pinned view or in the Pinned column: no Trajectory opens there, and the key passes on", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  let stops = 0;
+  cx.stop_propagation = () => { stops++; };
+  const tryY = () => {
+    log = [];
+    stops = 0;
+    v.key(keyEv("y"), cx);
+    expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+    expect([v.traj, Boolean(v.splitAsk), stops]).toEqual([false, false, 0]);
+  };
+  v.setView("pinned");
+  expect(v.view).toBe("pinned");
+  tryY();
+  v.setView("all");
+  v.pinnedPane = true;
+  tryY();
+  v.width = 420;
+  v.paneW = 420;
+  tryY();
+  // In the Chat's list, y still opens it.
+  v.pinnedPane = false;
+  v.key(keyEv("y"), cx);
+  expect(v.traj).toBe(true);
+});
+
+test("in the Trajectory, a bound command the ledger does not mean does nothing: a bound pin pins no hidden turn", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.sel = v.turnKeys(v.rows()).at(-1);
+  v.enterTraj();
+  const pins = v.pinnedList().length;
+  log = [];
+  for (const name of ["pin", "copy", "outline", "agents", "jump", "pinned"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    v.command(name, cx);
+  }
+  expect(v.pinnedList().length).toBe(pins);
+  expect(cx.clip).toBe(null);
+  expect(v.traj).toBe(true);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  // The ones it means still work: its moves, the detail, the key sheet.
+  expect(v.ledgerAction("keys", cx)).toBe(true);
+  expect(v.keysOpen).toBe(true);
+  v.command("open", cx);
+});
+
+test("entering the Trajectory in the Chat's own pane with the search open closes the search", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 420;
+  v.paneW = 420;
+  v.filtering = true;
+  v.input.set_value("needle");
+  v.query = "needle";
+  v.action("trajectory", cx);
+  expect(v.traj).toBe(true);
+  expect([v.filtering, v.query]).toEqual([false, ""]);
+  draw(v, cx);
+  // Back in the Chat, no search is left open or filtering the list.
+  v.key(keyEv("escape"), cx);
+  expect(v.traj).toBe(false);
+  expect([v.filtering, v.query]).toEqual([false, ""]);
+});
+
+test("Trajectory keys: Space shows and hides the detail; Esc with nothing left to close and an unbound key pass to Herdr", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  w.width = 560;
+  w.paneW = 560;
+  expect(w.trajPane).toBeTruthy();
+  let stops = 0;
+  cx2.stop_propagation = () => { stops++; };
+  const was = w.detailOpen();
+  w.key(keyEv("space"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([!was, 1]);
+  w.key(keyEv("space"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([was, 2]);
+  // Keys the Trajectory has no use for pass on.
+  stops = 0;
+  for (const k of ["x", "q", "1", "backspace"]) w.key(keyEv(k), cx2);
+  expect(stops).toBe(0);
+  // Esc closes the detail first; with nothing left to close it passes on.
+  if (!w.detailOpen()) w.key(keyEv("space"), cx2);
+  stops = 0;
+  w.key(keyEv("escape"), cx2);
+  expect([w.detailOpen(), stops]).toEqual([false, 1]);
+  w.key(keyEv("escape"), cx2);
+  expect(stops).toBe(1);
+  expect(w.trajPane).toBeTruthy();
+});
+
+test("the shared selection never selects a turn the Chat hides; a turn it shows is selected", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3", "--agents"));
+  v.width = 700;
+  v.paneW = 700;
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // Agent turns with no reply of their own: hidden while agent turns are.
+  for (const turn of v.current().turns) if (turn.agent) turn.after = [];
+  v.current().version++;
+  draw(v, cx);
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const shown = v.turnKeys(v.rows());
+  const hidden = v.ledger().rows.filter((r) => r.kind === "trh" && !shown.includes(r.key)).map((r) => r.key);
+  expect(hidden.length).toBeGreaterThan(0);
+  expect(v.findTurn(hidden[0])).toBeTruthy();
+  const before = v.sel;
+  state.shared["threads.turnSel"] = { t4: { key: hidden[0], by: "other", at: Date.now() + 1000 } };
+  expect(v.syncSel()).toBe(false);
+  expect(v.sel).toBe(before);
+  const pick = shown.find((k) => k !== before);
+  state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000 } };
+  expect(v.syncSel()).toBe(true);
+  expect(v.sel).toBe(pick);
+});
+
+// test/herdr-still.sh reads the command record of the pane it drives: a Trajectory pane's
+// commands go through the ledger and are recorded under its own key.
+test("a command sent to a Trajectory pane is recorded under the terminal plus :trajectory, with whether the ledger acted", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.command("latest", cx);
+  v.report();
+  const chat = JSON.stringify(state.shared["threads.debug"].t4);
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  const last = () => { w.report(); return state.shared["threads.debug"]["t4:trajectory"].command; };
+  w.command("prev", cx2);
+  expect(last()).toEqual({ n: 1, name: "prev", acted: true });
+  // A command the ledger does not mean: recorded, not acted on.
+  w.command("pin", cx2);
+  expect(last()).toEqual({ n: 2, name: "pin", acted: false });
+  w.command("open", cx2);
+  expect(last()).toEqual({ n: 3, name: "open", acted: true });
+  expect(JSON.stringify(state.shared["threads.debug"].t4)).toBe(chat);
+});
+
+test("a Trajectory width kept in a wider window is held to what the Chat can give when the next split asks for it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: 2400 };
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(700 + 2 - 240);
+  v.splitAsk = null;
+  state.shared["threads.trajWidth"] = { px: 12 };
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(200);
+});
+
+// Claude Code's first turn killed during its first call: nothing in the session has a result
+// time yet, and Claude Code always writes them, so the call has no result.
+function killedFirstCall() {
+  const file = fixture("--only", "3");
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  const at = lines.findIndex((l) => { const j = JSON.parse(l); return j.type === "assistant" && j.message?.content?.some?.((c) => c.type === "tool_use"); });
+  writeFileSync(file, `${lines.slice(0, at + 1).join("\n")}\n`);
+  return file;
+}
+
+test("Claude Code's first turn killed during its first call: the call says no result in the pane", async () => {
+  const { v } = await pane(killedFirstCall());
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  state.terminals[0].status = "idle";
+  v.ledgerMemo = null;
+  const L = v.ledger();
+  expect(L.going).toBe(false);
+  expect(v.sessions.some((x) => sessionHasEnds(x))).toBe(false);
+  const call = L.rows.find((r) => r.kind === "tr" && laneOf(r.lk) === "tools");
+  expect(call).toMatchObject({ lk: "noresult", status: "no result" });
+});
+
+test("a done turn whose version moves is built again; one that does not keeps its rows", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  const s = v.current();
+  const turn = s.turns.find((t) => t.done && !t.interrupted);
+  const key = `0:${turn.n}`;
+  const head = () => v.ledger().rows.find((r) => r.kind === "trh" && r.key === key);
+  const before = head();
+  expect(before.interrupted).toBe(false);
+  // The reader changes the turn and gives it the session's next version.
+  turn.interrupted = true;
+  s.version++;
+  turn.v = s.version;
+  expect(head().interrupted).toBe(true);
+  // A session change that leaves this turn's version alone keeps its rows as they were.
+  turn.interrupted = false;
+  s.version++;
+  expect(head().interrupted).toBe(true);
+});
+
+test("while the ledger's build is unfinished, each draw asks for the next; once done, none", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  cx.timers = [];
+  v.render(cx);
+  expect(v.ledgerJob).toBeTruthy();
+  // The next draw is asked for (a 0 ms timer that notifies).
+  expect(v.buildNext).toBe(true);
+  let draws = 1;
+  while (cx.timers.length && draws < 100) {
+    const due = cx.timers.splice(0);
+    for (const x of due) x.fn(cx);
+    v.render(cx);
+    draws++;
+  }
+  expect(v.ledgerJob).toBeNull();
+  expect(v.ledger().partial).toBe(false);
+  expect(draws).toBeGreaterThan(2);
+  expect(v.buildNext).toBe(false);
+});
+
+test("in the Trajectory shown in the Chat's own pane, - and = do nothing and pass on, even with a Pinned column open", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 440;
+  v.paneW = 440;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p5" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.width"] = { p2: 438, p5: 300 };
+  expect(Boolean(v.pinnedPaneOpen())).toBe(true);
+  v.key(keyEv("y"), cx);
+  expect([v.traj, v.trajPane]).toEqual([true, false]);
+  let stops = 0;
+  cx.stop_propagation = () => { stops++; };
+  log = [];
+  v.key(keyEv("-"), cx);
+  v.key(keyEv("="), cx);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  expect(stops).toBe(0);
+  expect(v.toast).toBe(null);
+});
+
+test("narrow, opening the detail under the list scrolls the selected row into view; wide, the list stays put", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 460;
+  v.paneW = 460;
+  v.enterTraj();
+  v.render(cx);
+  const scrolled = [];
+  v.tscroll = { scroll_to_item: (i, how) => scrolled.push([i, how]), scroll_to_bottom() {} };
+  v.ledgerAction("llast", cx);
+  v.render(cx);
+  scrolled.length = 0;
+  cx.timers = [];
+  // Enter opens it: the selected row is centred in the shorter list, now and after layout.
+  v.key(keyEv("enter"), cx);
+  expect(v.detailOpen()).toBe(true);
+  v.render(cx);
+  const shown = v.ledgerRows();
+  const at = v.ledgerSel(shown);
+  expect(scrolled).toEqual([[at, "center"]]);
+  cx.flush(16);
+  expect(scrolled).toEqual([[at, "center"], [at, "center"]]);
+  // A click on the selected row opens it the same way.
+  v.ledgerAction("ldetail", cx);
+  v.render(cx);
+  scrolled.length = 0;
+  v.ledgerClick(shown[at].key);
+  expect(v.detailOpen()).toBe(true);
+  v.render(cx);
+  expect(scrolled[0]).toEqual([at, "center"]);
+  // From 900 px the detail sits at the right: opening it moves nothing.
+  v.ledgerAction("ldetail", cx);
+  v.width = 960;
+  v.paneW = 960;
+  v.render(cx);
+  scrolled.length = 0;
+  v.tdetail = false;
+  v.ledgerAction("ldetail", cx);
+  v.render(cx);
+  expect(scrolled).toEqual([]);
+});
+
+test("until the first build is done: no counts in the heading or the bottom line, and f, Shift f, Home and End do nothing", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  // A failed call in the newest turn, so the first slice has one to count.
+  const s = v.current();
+  const last = s.turns[s.turns.length - 1];
+  last.steps.find((st) => st.k === "group").info[0].f = true;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  const ids = (c) => c.filter((e) => e[0] === "id").map((e) => e[1]);
+  const statusTexts = (c) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-status"); return c.slice(at).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
+  let c = frame(v, cx);
+  const L = v.ledger();
+  expect(L.partial).toBe(true);
+  expect(L.totals.failed).toBe(1);
+  expect(ids(c)).toContain("th-traj-heading");
+  expect(ids(c)).not.toContain("th-traj-fails");
+  expect(ids(c)).toContain("th-status");
+  expect(ids(c).filter((x) => String(x).startsWith("th-status-"))).toEqual([]);
+  expect(statusTexts(c).join(" ")).not.toMatch(/turn|step|failed|token|\?/);
+  const sel = v.tsel;
+  for (const name of ["lfail", "lfailBack", "lfirst", "llast"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    expect(v.tsel).toBe(sel);
+  }
+  for (const k of ["home", "end", "f"]) v.key(keyEv(k), cx);
+  v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(sel);
+  expect(v.toast).toBe(null);
+  // Once the build is done, all of them are back.
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  c = frame(v, cx);
+  expect(ids(c)).toContain("th-traj-fails");
+  expect(ids(c)).toContain("th-status-turns");
+  expect(v.ledgerAction("lfirst", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+  expect(v.ledgerAction("lfail", cx)).toBe(true);
+  expect(v.tsel).toMatch(/^tr:/);
+});
+
+// A Codex session killed during its very first call: Codex writes a call's output when it
+// comes, so nothing in the session has a result time, and whether the call ever finished is
+// not known. Its row is an ordinary call row: no duration, and no "no result" either way.
+test("a Codex session killed during its very first call: the call is an ordinary row with a blank duration and no claim", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-fx-"));
+  const file = join(dir, "rollout-2026-11-01T09-00-00-00000000-0000-4000-8000-0000000000ca.jsonl");
+  let ct = Date.parse("2026-11-01T09:00:00.000Z");
+  let ord = 0;
+  const line = (type, payload) => `${JSON.stringify({ timestamp: new Date((ct += 1000)).toISOString(), ordinal: ord++, type, payload })}\n`;
+  writeFileSync(file, [
+    line("session_meta", { id: "00000000-0000-4000-8000-0000000000ca", cwd: "/tmp/threads-demo" }),
+    line("turn_context", { model: "gpt-5.5-codex", effort: "medium" }),
+    line("event_msg", { type: "item_completed", turn_id: "t0", item: { type: "UserMessage", content: [{ type: "text", text: "Run the e2e suite" }] } }),
+    line("response_item", { type: "function_call", name: "exec_command", arguments: "{\"cmd\":\"bun run e2e\"}", call_id: "c0" }),
+  ].join(""));
+  const { v } = await pane(file);
+  state.panes[0].program = { key: "codex", name: "Codex" };
+  // Killed: the agent's process is gone.
+  v.res = { ...v.res, ended: "exited" };
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  const L = v.ledger();
+  expect(v.agent().key).toBe("codex");
+  expect(L.going).toBe(false);
+  expect(v.sessions.some((x) => sessionHasEnds(x))).toBe(false);
+  const call = L.rows.find((r) => r.kind === "tr" && laneOf(r.lk) === "tools");
+  expect(call).toMatchObject({ lk: "tool", status: null, failed: false });
+  expect(call.open).toBeFalsy();
+  expect(call.noResult).toBeFalsy();
+  expect(rowTimes(call)).toMatchObject({ dur: "", bar: false });
+  const f = detailOf(call).fields;
+  expect(f).toContainEqual(["Took", "not recorded"]);
+  expect(f).toContainEqual(["Result", "not recorded"]);
+  expect(JSON.stringify(f)).not.toMatch(/No result|"ok"|running/);
+});
+
+test("until the first build is done, the filter buttons from 900 px show their labels and no counts", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  // The strings drawn inside the filter row, up to the list.
+  const filterTexts = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-filters");
+    const end = c.findIndex((e, j) => j > at && e[0] === "id" && !String(e[1]).startsWith("th-filter"));
+    return c.slice(at, end).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  };
+  let c = frame(v, cx);
+  expect(v.ledger().partial).toBe(true);
+  expect(v.ledger().totals.tools).toBeGreaterThan(0);
+  const held = filterTexts(c);
+  expect(held).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  c = frame(v, cx);
+  const T = v.ledger().totals;
+  expect(filterTexts(c)).toEqual(["Input", String(T.input), "Model", String(T.model), "Tools", String(T.tools), "Failed only", String(T.failed), "User only", String(T.user)]);
+});
+
+test("with no width kept, the split's 560 px is held to what a 600 px Chat can give, so the Chat keeps its 240 px", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 600;
+  v.paneW = 600;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  delete state.shared["threads.trajWidth"];
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(600 + 2 - 240);
+  // Wide enough, the default stands.
+  v.splitAsk = null;
+  v.width = 1400;
+  v.paneW = 1400;
+  v.key(keyEv("y"), cx);
+  expect(v.splitAsk.px).toBe(560);
+});
+
+// The Trajectory split takes its room from the terminal first, then the Chat, then itself
+// (settleTraj, ui.js trajFit). A 704 px Chat (the Wide reading width) with 600 px kept asks
+// for 464.
+async function trajSplit(chatW = 702, kept = 600) {
+  const r = await pane(fixture("--extra", "3"));
+  // The Wide reading width, 704 px, so the Chat is at it and keepWidth leaves it there.
+  r.v.prefs = { ...r.v.prefs, width: "wide" };
+  r.v.width = chatW;
+  r.v.paneW = chatW;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: kept };
+  log = [];
+  r.v.key(keyEv("y"), r.cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  r.v.settleSplit(r.cx);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  return r;
+}
+const closeTraj = (v, cx) => { state.panes = state.panes.filter((p) => p.pane !== "p3"); log = []; v.poll(cx); };
+
+test("the Trajectory split where the terminal has the room: the Chat keeps its width, the Trajectory gets what it asked for, and closing it changes nothing", async () => {
+  const { v, cx } = await trajSplit();
+  // The row has 902 px past the Chat: 464 for the Trajectory leaves the terminal 438.
+  roomIs(v, cx, "p3", 900);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  expect(v.splitAsk).toBeNull();
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+});
+
+test("the Trajectory split where the terminal is short: the Chat gives the rest, and gets its width back when the Trajectory closes", async () => {
+  const { v, cx } = await trajSplit();
+  // 435 px past the Chat (a 1440 px window): 464 for the Trajectory and 200 kept for the
+  // terminal is 229 more, from the Chat (704 to 475). Nothing runs past the window's edge.
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // Open, nothing is given back.
+  log = [];
+  v.poll(cx);
+  expect(resizes()).toEqual([]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }]);
+  // Once.
+  log = [];
+  v.poll(cx);
+  expect(resizes()).toEqual([]);
+});
+
+test("a reading width chosen while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
+  // Shift w or the settings card: Comfortable, wider than the 475 px the Chat was narrowed to.
+  let { v, cx } = await trajSplit();
+  roomIs(v, cx, "p3", 433);
+  expect(resizes().at(-1)).toEqual({ id: "p2", px: 475 });
+  v.paneW = 473;
+  log = [];
+  v.chooseWidth("comfortable", cx);
+  const px = v.readingPx();
+  expect(px).toBeGreaterThan(475);
+  expect(resizes()).toEqual([{ id: "p2", px }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+  // w, the reading width at once.
+  ({ v, cx } = await trajSplit());
+  roomIs(v, cx, "p3", 433);
+  v.paneW = 473;
+  log = [];
+  v.fitToReading(cx);
+  expect(resizes()).toEqual([{ id: "p2", px: v.readingPx() }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+});
+
+test("the Trajectory split with no terminal in the tab keeps nothing for one: the Chat gives only what the Trajectory needs", async () => {
+  const { v, cx } = await trajSplit();
+  state.panes = state.panes.filter((p) => p.pane !== "p1");
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 704 - 29 }]);
+});
+
+test("the Trajectory split where the Chat at its 240 px is still short: the Trajectory narrows toward 200 px", async () => {
+  // A 500 px Chat asks for 260. With 100 px past it, the Chat gives 260 (to 240) and the
+  // Trajectory 60 more (to 200); the terminal keeps 160.
+  const { v, cx } = await trajSplit(498, 600);
+  roomIs(v, cx, "p3", 98);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 200 }, { id: "p2", px: 240 }]);
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 500 }]);
+});
+
+test("the Trajectory split whose pane never reports its width goes ahead at the width asked for", async () => {
+  const { v, cx } = await trajSplit();
+  const real = Date.now;
+  const t0 = real();
+  try {
+    Date.now = () => t0 + 1000;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    Date.now = () => t0 + 2000;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  expect(v.splitAsk).toBeNull();
+});
+
+test("the Trajectory closed while its room is measured: the Chat is neither narrowed nor given back, and the gone pane is not resized", async () => {
+  // Measured: a width seen that would narrow the Chat (as above, 433 px past it).
+  let { v, cx } = await trajSplit();
+  state.shared["threads.width"] = { ...state.shared["threads.width"], p3: 433 };
+  closeTraj(v, cx);
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([]);
+  expect(v.splitAsk).toBeNull();
+  expect(v.trajChatBack ?? null).toBeNull();
+  // Not measured: the fallback would ask for the width it wanted.
+  ({ v, cx } = await trajSplit());
+  closeTraj(v, cx);
+  const real = Date.now;
+  try {
+    Date.now = () => real() + 2000;
+    v.settleSplit(cx);
+    v.poll(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([]);
+  expect(v.splitAsk).toBeNull();
+});
+
+test("no width the split passes through is kept as the owner's Trajectory width, however slow the split; the owner's own width after it is", async () => {
+  const real = Date.now;
+  const t0 = real();
+  const at = (ms, fn) => { Date.now = () => t0 + ms; try { fn(); } finally { Date.now = real; } };
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.prefs = { ...v.prefs, width: "wide" };
+  v.width = 702;
+  v.paneW = 702;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.trajWidth"] = { px: 600 };
+  log = [];
+  at(0, () => v.key(keyEv("y"), cx));
+  // The new pane, drawing on its own before the Chat sees it.
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const cx2 = makeCx();
+  w.init(state.props, cx2);
+  await settle(w);
+  state.props = props;
+  w.myPane = "p3";
+  w.firstSizeAt = undefined;
+  const measure = (ms, px) => at(ms, () => { w.paneW = px; w.shareWidth(); });
+  const kept = () => state.shared["threads.trajWidth"].px;
+  measure(1000, 216);
+  // Past its own first 1.5 s, the 5 s from y still holds.
+  measure(3000, 230);
+  expect(kept()).toBe(600);
+  // The Chat sees it late, and the probe starts: its room is measured past the 5 s.
+  at(3900, () => v.settleSplit(cx));
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+  measure(5100, 433);
+  expect(kept()).toBe(600);
+  // The Chat's next look comes late too; the fitted width is measured after it.
+  at(6800, () => v.settleSplit(cx));
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  measure(7000, 462);
+  expect(kept()).toBe(600);
+  // The owner's drag, once the split is done, is kept.
+  measure(9000, 520);
+  expect(state.shared["threads.trajWidth"]).toEqual({ px: 522 });
+  // A quick split: its later holds never cut the 5 s from y short.
+  state.panes = state.panes.filter((p) => p.pane !== "p3");
+  v.poll(cx);
+  at(10000, () => v.key(keyEv("y"), cx));
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  w.firstSizeAt = undefined;
+  measure(10100, 216);
+  at(10100, () => v.settleSplit(cx));
+  measure(10700, 433);
+  at(10800, () => v.settleSplit(cx));
+  at(11000, () => v.settleSplit(cx));
+  expect(v.splitAsk).toBeNull();
+  measure(13000, 462);
+  expect(kept()).toBe(522);
+});
+
+test("the Trajectory split reads the room only once the new pane's width holds still", async () => {
+  const { v, cx } = await trajSplit();
+  const real = Date.now;
+  const t0 = real();
+  v.splitAsk.probeAt = t0;
+  try {
+    // The width it was split at comes first and holds still a while: too soon to be the room.
+    state.shared["threads.width"] = { ...state.shared["threads.width"], p3: 216 };
+    Date.now = () => t0;
+    v.settleSplit(cx);
+    Date.now = () => t0 + 250;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    // Then the room, read once it has held still.
+    state.shared["threads.width"].p3 = 433;
+    Date.now = () => t0 + 450;
+    v.settleSplit(cx);
+    expect(resizes()).toEqual([{ id: "p3", weight: 1000 }]);
+    Date.now = () => t0 + 700;
+    v.settleSplit(cx);
+  } finally { Date.now = real; }
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // While it waited, the Chat looked again on a timer.
+  expect(cx.timers.some((x) => x.ms === 50)).toBe(true);
+});
+
+test("until the first build is done, m and Shift m do nothing, as f does; after it they move", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 600;
+  v.paneW = 600;
+  v.enterTraj();
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  v.buildMax = () => -1;
+  v.render(cx);
+  expect(v.ledger().partial).toBe(true);
+  // The newest turn's own message is a row of the first slice, so m could find one.
+  expect(v.ledgerRows().some((r) => r.lk === "you")).toBe(true);
+  const sel = v.tsel;
+  expect(v.ledgerAction("luser", cx)).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(false);
+  v.key(keyEv("m"), cx);
+  v.key(keyEv("m", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(sel);
+  for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); }
+  expect(v.ledger().partial).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+});
+
+// A split opened while its session is still read: the first build runs over the turns read so
+// far and is whole, but its counts are of part of the session. They wait for the read too.
+test("a Trajectory split on a session that arrives in chunks: no counts and no f, m, Home or End until the read and the build are both done", async () => {
+  // After the first chunk is in, the read waits (gate) until the test lets it go on.
+  let gate = null;
+  let open;
+  // 8 MB over 16 turns: the read takes it in several 2 MB chunks.
+  const { v, cx } = await paneWith(fixture("--extra", "8", "--pad-mb", "8"), (cx) => {
+    state.props = { ...state.props, view: "trajectory" };
+    cx.sleepHook = () => {
+      const s = v.current();
+      if (s && !s.loaded && s.turns.length && !open) gate ??= new Promise((r) => { open = r; });
+      return gate ?? new Promise((r) => setTimeout(r, 0));
+    };
+  }, 0);
+  await until(() => gate && v.current()?.turns.length > 0, "the first chunk");
+  expect(v.trajPane).toBe(true);
+  expect(v.current().loaded).toBeFalsy();
+  const part = v.current().turns.length;
+  v.width = 960;
+  v.paneW = 960;
+  const ids = (c) => c.filter((e) => e[0] === "id").map((e) => e[1]);
+  const filterTexts = (c) => {
+    const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-filters");
+    const end = c.findIndex((e, j) => j > at && e[0] === "id" && !String(e[1]).startsWith("th-filter"));
+    return c.slice(at, end).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  };
+  const build = () => { for (let n = 0; v.ledgerJob && n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); } };
+  // A failed call among the turns read so far, so the heading has one to count.
+  const tr = v.current().turns.find((t) => t.steps.some((st) => st.k === "group"));
+  tr.steps.find((st) => st.k === "group").info[0].f = true;
+  tr.v = (tr.v ?? 0) + 1;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  build();
+  // The build over what is read is done, and it is whole: only the read holds the counts.
+  let L = v.ledger();
+  expect(L.partial).toBe(false);
+  expect(L.totals.failed).toBeGreaterThan(0);
+  expect(L.totals.tools).toBeGreaterThan(0);
+  let c = frame(v, cx);
+  expect(ids(c)).not.toContain("th-traj-fails");
+  expect(filterTexts(c)).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+  // The bottom line is not drawn until the session is read (statusShown).
+  expect(ids(c).filter((x) => String(x).startsWith("th-status"))).toEqual([]);
+  const sel = v.tsel;
+  for (const name of ["lfail", "lfailBack", "luser", "luserBack", "lfirst", "llast"]) {
+    expect(v.ledgerAction(name, cx)).toBe(false);
+    expect(v.tsel).toBe(sel);
+  }
+  // The rest of the session comes; then the build over all of it; then the counts.
+  open();
+  await until(() => v.current().loaded && !v.reading, "the whole session", 2000);
+  const read = v.current().turns.length;
+  expect(read).toBeGreaterThan(part);
+  build();
+  L = v.ledger();
+  expect(L.partial).toBe(false);
+  expect(L.totals.heads.length).toBe(read);
+  c = frame(v, cx);
+  expect(ids(c)).toContain("th-traj-fails");
+  expect(filterTexts(c)).toEqual(["Input", String(L.totals.input), "Model", String(L.totals.model), "Tools", String(L.totals.tools), "Failed only", String(L.totals.failed), "User only", String(L.totals.user)]);
+  expect(ids(c)).toContain("th-status-turns");
+  expect(v.ledgerAction("lfirst", cx)).toBe(true);
+  expect(v.tsel).not.toBe(sel);
+  expect(v.ledgerAction("lfail", cx)).toBe(true);
+  // Another session picked: while it is found, the build over no sessions is whole too, and
+  // its zeros are not shown either.
+  v.sessions = [];
+  v.res = { kind: "resolving" };
+  build();
+  expect(v.ledger().partial).toBe(false);
+  expect(filterTexts(frame(v, cx))).toEqual(["Input", "Model", "Tools", "Failed only", "User only"]);
+}, 30000);
+
+// A clear, a restart or a resume during the first read of a long session: the new session is
+// found and read, and the earlier one is never read to its end.
+test("an earlier session left unread holds nothing: once the current one is read and built, f, m, Home and End work and the counts show", async () => {
+  const { v, cx } = await pane(fixture("--extra", "6"));
+  v.width = 960;
+  v.paneW = 960;
+  v.enterTraj();
+  const cur = v.current();
+  expect(cur.loaded).toBe(true);
+  // A failed call, so f has one to go to and the heading one to count.
+  const tr = cur.turns.find((t) => t.steps.some((st) => st.k === "group"));
+  tr.steps.find((st) => st.k === "group").info[0].f = true;
+  tr.v = (tr.v ?? 0) + 1;
+  // The earlier session: its first three turns read, the third with no end read yet.
+  const turns = cur.turns.slice(0, 3).map((t) => ({ ...t }));
+  turns[2].done = false;
+  v.sessions = [{ ...cur, turns, loaded: false }, cur];
+  v.res = { ...v.res, kind: "found" };
+  const build = () => { for (let n = 0; n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); if (!v.ledgerJob) return; } };
+  build();
+  const L = v.ledger();
+  expect(L.partial).toBe(false);
+  const c = frame(v, cx);
+  const ids = c.filter((e) => e[0] === "id").map((e) => e[1]);
+  expect(ids).toContain("th-traj-fails");
+  expect(ids).toContain("th-status-turns");
+  expect(L.totals.failed).toBeGreaterThan(0);
+  for (const name of ["lfirst", "llast", "lfail", "lfailBack", "luser", "luserBack"]) {
+    v.tsel = L.rows.find((r) => r.kind === "trh" && r.key.startsWith("1:")).key;
+    expect(v.ledgerAction(name, cx)).toBe(true);
+  }
+  // The earlier session's last turn read stays as it was read: it claims no result.
+  expect(L.rows.find((r) => r.key === `0:${turns[2].n}`)).toMatchObject({ kind: "trh", reading: true, stale: false });
+  expect(L.rows.some((r) => String(r.key).startsWith(`tr:0:${turns[2].n}:`) && r.lk === "noresult")).toBe(false);
+  // No session found at all: nothing is being read, so nothing holds the keys either.
+  v.sessions = [];
+  v.res = { kind: "none" };
+  build();
+  expect(v.ledger().partial).toBe(false);
+  expect(v.ledgerAction("luserBack", cx)).toBe(true);
+});
+
+test("a Trajectory split while the session is still read: the last turn read so far claims no 'no result' and no last activity", async () => {
+  let gate = null;
+  let open;
+  // About 2.4 MB of bookkeeping lines right after the first call of the second turn, before
+  // its result: the first 2 MB chunk ends inside that turn.
+  const file = fixture("--extra", "8");
+  const lines = readFileSync(file, "utf8").split("\n");
+  const second = lines.findIndex((l, i) => l.includes('"promptSource":"typed"') && lines.slice(0, i).some((x) => x.includes('"promptSource":"typed"')));
+  const at = lines.findIndex((l, i) => i > second && l.includes('"tool_use"'));
+  const blob = (i) => JSON.stringify({ type: "api-request-blob", sessionId: "00000000-0000-4000-8000-000000000009", blob: { messages: [{ role: "assistant", content: [{ type: "text", text: `${i}`.padEnd(400000, "x") }] }] } });
+  lines.splice(at + 1, 0, ...Array.from({ length: 6 }, (_, i) => blob(i)));
+  writeFileSync(file, lines.join("\n"));
+  const { v, cx } = await paneWith(file, (cx) => {
+    state.props = { ...state.props, view: "trajectory" };
+    cx.sleepHook = () => {
+      const s = v.current();
+      if (s && !s.loaded && s.turns.length && !open) gate ??= new Promise((r) => { open = r; });
+      return gate ?? new Promise((r) => setTimeout(r, 0));
+    };
+  }, 0);
+  await until(() => gate && v.current()?.turns.length > 0, "the first chunk");
+  expect(v.trajPane).toBe(true);
+  expect(v.current().loaded).toBeFalsy();
+  v.width = 960;
+  v.paneW = 960;
+  const build = () => { for (let n = 0; v.ledgerJob && n < 400; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); v.render(cx); } };
+  build();
+  const s = v.current();
+  const last = s.turns[s.turns.length - 1];
+  // The turn the read stopped in: its end is in the part not read yet.
+  expect(last.done).toBeFalsy();
+  const key = `0:${last.n}`;
+  const rowsOf = () => v.ledger().rows.filter((r) => r.key === key || String(r.key).startsWith(`tr:${key}:`));
+  let rows = rowsOf();
+  const head = rows[0];
+  expect(head.kind).toBe("trh");
+  expect(head.stale).toBe(false);
+  expect(head.lastAt).toBe(null);
+  expect(rows.some((r) => r.lk === "noresult" || r.noResult || r.lastAt != null)).toBe(false);
+  // The heading: no time it took, and no result claimed.
+  expect(head.reading).toBe(true);
+  const hf = Object.fromEntries(detailOf(head).fields);
+  expect(hf.Took).toBe("");
+  expect(hf.Result).toBeUndefined();
+  // Its calls with no result yet: blank fields, not "not recorded".
+  // Selected, with its detail open: the drawn pane says none of it.
+  v.tsel = key;
+  v.tdetail = true;
+  const texts = (c) => c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  let words = texts(frame(v, cx));
+  expect(words).toContain(`Turn ${last.n}`);
+  expect(words.some((x) => /no result/i.test(x))).toBe(false);
+  expect(words).not.toContain("Last activity");
+  expect(words).not.toContain("not recorded");
+  // Only the last turn read so far is held: an earlier one with no end still says so.
+  const first = s.turns[0];
+  first.done = false;
+  first.v = (first.v ?? 0) + 1;
+  s.version++;
+  const full = () => { for (let n = 0; n < 400; n++) { const L = v.ledger(); if (!v.ledgerJob) return L; } return null; };
+  expect(full().rows.find((r) => r.key === `0:${first.n}`)).toMatchObject({ stale: true, reading: false });
+  first.done = true;
+  first.v++;
+  s.version++;
+  // Once the session is read, the same turn has its outcome.
+  open();
+  await until(() => v.current().loaded && !v.reading, "the whole session", 2000);
+  build();
+  rows = rowsOf();
+  expect(rows[0].reading).toBe(false);
+  words = texts(frame(v, cx));
+  expect(words).toContain("Took");
+  // A read whose last turn has no end when the read finishes: once the session is read (with
+  // nothing else changed), that turn is no longer held blank, and says it has no result.
+  const tail = s.turns[s.turns.length - 1];
+  const tailHead = () => full().rows.find((r) => r.key === `0:${tail.n}`);
+  s.loaded = false;
+  tail.done = false;
+  tail.v = (tail.v ?? 0) + 1;
+  s.version++;
+  expect(tailHead()).toMatchObject({ reading: true, stale: false });
+  s.loaded = true;
+  expect(tailHead()).toMatchObject({ reading: false, stale: true });
+}, 30000);

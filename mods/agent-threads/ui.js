@@ -19,6 +19,8 @@ const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4:
 // one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
 // so a quote key someone chose keeps working.
 const SEARCH_KEYS = { n: "olderMatch" };
+// y opens the Trajectory, or goes to it, and gives way to a quote key of y as the pin keys do.
+const TRAJ_KEYS = { y: "trajectory" };
 // quoteKey (settings.json, default q) returns "quote": the panel handles it itself, and no
 // mod command fires it.
 export function keyAction(e, filtering = false, quoteKey = "q") {
@@ -32,18 +34,47 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (k === "W") return filtering ? null : "widthStep";
   if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
-  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
+  return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? TRAJ_KEYS[k] ?? null);
+}
+// The Trajectory's own keys (the ledger): moving through its rows, the detail, the next or
+// previous failure and user message. The Chat's other keys do nothing there, but for y (back
+// to the Chat), t, the settings and the key sheet. No quote: the Trajectory quotes nothing.
+const LEDGER_KEYS = {
+  up: "lprev", k: "lprev", down: "lnext", j: "lnext", home: "lfirst", end: "llast", enter: "ldetail", space: "ldetail",
+  f: "lfail", m: "luser", y: "trajectory", escape: "escape", t: "focus", ",": "settings", "?": "keys",
+  "-": "narrower", "=": "wider",
+};
+export function ledgerKey(e) {
+  const m = e?.modifiers ?? {};
+  if (m.platform || m.control || m.alt || m.function) return null;
+  const k = e?.key ?? "";
+  if (m.shift) return k === "f" || k === "F" ? "lfailBack" : k === "m" || k === "M" ? "luserBack" : k === "g" || k === "G" ? "llast" : k === "?" || k === "/" ? "keys" : null;
+  if (k === "F") return "lfailBack";
+  if (k === "M") return "luserBack";
+  if (k === "G") return "llast";
+  return LEDGER_KEYS[k] ?? null;
 }
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
-export function keySheet(quoteKey = "q", { outline = true } = {}) {
+export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPane = false } = {}) {
   const pin = (k) => quoteKey !== k;
+  if (ledger) return [
+    ["Trajectory", [
+      [["↑", "↓", "j", "k"], "Move between steps"], [["Home", "End"], "First or last step"], [["↵", "Space"], "Show or hide the detail"],
+      [["f", "Shift f"], "Next or previous failed call"], [["m", "Shift m"], "Next or previous user message"],
+      [["y"], inPane ? "Back to the Chat" : "Go to the Chat"], [["Esc"], inPane ? "Close the detail, then back to the Chat" : "Close the detail"],
+    ]],
+    ["Pane", [
+      ...(inPane ? [] : [[["-", "="], "Make the Trajectory pane narrower or wider"]]),
+      [["t"], "Focus the terminal"], [[","], "Settings"], [["?"], "Show or hide this sheet"],
+    ]],
+  ];
   return [
     ["List", [
       [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
       ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
-      [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
+      [["a"], "Show or hide agent messages"], ...(pin("y") && outline ? [[["y"], "Open or go to the Trajectory"]] : []), [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
     ["Open turn", [
       [["c"], "Copy the reply"], [[quoteKey], "Quote the reply into the terminal"], [["s"], "Select view, to highlight and copy"],
@@ -62,7 +93,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
       [["Esc", ","], "Close it"],
     ]],
     ["View", [
-      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column or Trajectory pane narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }
@@ -2526,11 +2557,14 @@ export function pinRowShape({ prompt, reply, width }) {
 // divider between those two resizes Threads alone (the terminal takes up the rest). So the
 // keys resize both, the column by d and Threads by -d, and the terminal keeps its width.
 // From the column's width c and Threads' m: the two new widths, or null when there is no
-// room (the column 200 to 640 px, Threads at least PIN_MAIN_MIN).
+// room (the column 200 to max px, 640 for the Pinned column, Threads at least PIN_MAIN_MIN).
+// The Trajectory pane steps the same way with no upper limit of its own (TRAJ_MAX): it has a
+// layout from 900 px, past the Pinned column's 640.
 export const PIN_STEP = 40;
-export function columnResize(c, m, d) {
+export const TRAJ_MAX = Infinity;
+export function columnResize(c, m, d, max = 640) {
   if (!(c > 0) || !(m > 0)) return null;
-  let dd = Math.max(200, Math.min(640, Math.round(c + d))) - Math.round(c);
+  let dd = Math.max(200, Math.min(max, Math.round(c + d))) - Math.round(c);
   if (Math.round(m) - dd < PIN_MAIN_MIN) dd = Math.round(m) - PIN_MAIN_MIN;
   if (d > 0 ? dd <= 0 : dd >= 0) return null;
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
@@ -2553,6 +2587,31 @@ export const PIN_COL = Object.freeze([240, 440]);
 export const PIN_COL_WANT = 380;
 export const PIN_MAIN_MIN = 240;
 export const PIN_SPLIT_MIN = PIN_COL[0] + PIN_MAIN_MIN;
+// The Trajectory pane's kept width (threads.trajWidth), as the next split asks for it from a
+// Chat width wide: at least 200 px (columnResize's floor) and at most what leaves the Chat its
+// PIN_MAIN_MIN. A width kept in a wide window is more than a narrow one has. Null when none
+// is kept.
+export function trajColumn(width, kept) {
+  if (!(Number.isFinite(kept) && kept > 0)) return null;
+  return Math.max(200, Math.min(Math.round(kept), Math.round(width) - PIN_MAIN_MIN));
+}
+// The Trajectory split's widths once the row's room is known, in Herdr px (frames included).
+// chat: the Chat's px; want: what the split asks for (trajColumn); room: what the row has for
+// the Trajectory and the panes that flex beside it (the terminal), measured with the new pane
+// taking nearly all of it; keep: what the terminal keeps (TERM_KEEP, or 0 with no terminal in
+// the tab). The room comes first from the terminal, down to keep; then from the Chat, down to
+// PIN_MAIN_MIN; then from the Trajectory, down to TRAJ_MIN. Past that the terminal gives the
+// rest of keep. A Chat of TRAJ_SPLIT_MIN (480) px or more always fits 240 + 200, so the row is
+// never short of those two. chat is the Chat's new px, the same when it gives nothing.
+export const TERM_KEEP = 200;
+export const TRAJ_MIN = 200;
+export function trajFit(chat, want, room, keep = TERM_KEEP) {
+  let need = want + keep - room;
+  if (need <= 0) return { chat, traj: want };
+  const give = Math.max(0, Math.min(need, chat - PIN_MAIN_MIN));
+  need -= give;
+  return { chat: chat - give, traj: Math.max(Math.min(want, TRAJ_MIN), want - need) };
+}
 export function pinColumn(width, kept = null) {
   if (!(width >= PIN_SPLIT_MIN)) return null;
   const want = kept > 0 ? Math.round(kept) : Math.max(PIN_COL_WANT, Math.min(PIN_COL[1], Math.round(width * 0.4) + PIN_STEP));
