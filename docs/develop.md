@@ -109,7 +109,7 @@ herdr-app do space.new --name acme-web --folder ~/code/acme-web --tab acme-web \
   --argv '["/abs/stage-claude","/abs/screen.txt","/abs/input.txt"]'
 herdr-app do pane.split --pane <pane> --direction right --mod agent-threads \
   --props '{"terminal":"<t>","transcript":"/abs/hero.jsonl","debug":false}'
-herdr-app do layout.resize --id <new pane> --px 545   # with Keep to reading width on, a wider pane also comes back to 545 by itself
+herdr-app do layout.resize --id <new pane> --px 545
 python3 test/hero/render.py <cols> <rows> /abs/screen.txt /abs/input.txt &    # size from: hc get <t> --json
 ```
 
@@ -132,7 +132,7 @@ Start each shot from a fresh launch with the window size set in `window.json`, w
 | `keys.png` | 1460x1150 | `keys` | `1808 96 2912 2232` |
 | `work.png` | 1460x1150, `"debug": true`, a transcript made with the cwd `/home/dev/acme-web` (`make-hero.js herodev.jsonl /home/dev/acme-web …`), because level 3 shows each call's whole file path | `search:#7`, `escape`, `deeper`, `deeper`, `debugClick:100:cl:0:7:0:4`, so turn 7's line and its run open and the test command's output shows | `1808 242 2912 2232`, below the header, which shows timings in debug |
 | `outline.png` | 1460x1150, a `many` transcript started three days before the shot (`make-hero.js outline.jsonl … <three days ago>T15:05:00Z days many`), 21 turns over four days | `outline`, `search:#12`, `open` (in a `#N` search `open` leaves the field and keeps the turn selected) | `1808 96 2912 2232` |
-| `width.png` | 1760x1150, `"readingWidth": false` in `settings.json`, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
+| `width.png` | 1760x1150, Threads resized to 960 px | `open` | `1578 96 3512 2232` |
 | `agents.png` | 1460x720, the pane's `transcript` set to each file `make-agents.js` printed; for Amp, a terminal running a program named `amp` (a copy of `sleep` will do) and a Threads pane with no `transcript` | `first`, `open` | `1808 96 2912 1372` each, in a 3 by 2 grid (Codex, OpenCode, Pi, then Cursor, Antigravity, Amp) 20 px apart on `#0f1012` |
 
 The stand-in has to run as a program named `claude` (copy the build to `bin/claude`), or Threads does not treat the terminal as Claude Code and a quote does not paste. Use the 1.0 defaults for every shot (the settings file holds only the two link rules): blue user bubbles, amber agent bubbles, and no key-hints row, so `keys.png` is reached with the `keys` command (the `?` key).
