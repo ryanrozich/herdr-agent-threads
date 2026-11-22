@@ -15360,6 +15360,41 @@ test("the Trajectory below 200 px: one line a row (a step's mark, its turn's num
   expect(v.tsel).not.toBe(from);
 });
 
+test("the compact switch goes through the size handler by the rounded Herdr px: 199 to 200 and back by 1 px, 64 to 63, and a 200 px pane at zoom 1.25 that reads 199.99", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  try {
+    for (const z of [1, 1.25]) {
+      herdrSettings = { font_family: "Mono", zoom: z };
+      v.paneW = null;
+      v.width = 400;
+      let c = frame(v, cx);
+      // Herdr hands the handler the inner width in zoomed px (the pane's px less its 2 px frame).
+      const size = (inner) => { handlerAfterId(c, "threads-root", "on_size_change")({ width: inner * z, height: 800 * z }, cx); c = frame(v, cx); return c; };
+      const compact = () => hasId(c, "th-traj-icon");
+      size(198);
+      expect([z, 198, compact()]).toEqual([z, 198, false]);
+      size(197);
+      expect([z, 197, compact()]).toEqual([z, 197, true]);
+      size(198);
+      expect([z, "198 again", compact()]).toEqual([z, "198 again", false]);
+      // A 200 px pane whose width comes back a hair under: 199.99, from 150 px.
+      size(148);
+      size(197.99);
+      expect([z, 197.99, compact()]).toEqual([z, 197.99, false]);
+      // 64 to 63: the marks alone.
+      size(80);
+      const nums = () => wordsOf(c).some((x) => /^#\d+$/.test(x));
+      size(62);
+      expect([z, 62, nums()]).toEqual([z, 62, true]);
+      size(61);
+      expect([z, 61, nums()]).toEqual([z, 61, false]);
+      size(62);
+      expect([z, "62 again", nums()]).toEqual([z, "62 again", true]);
+    }
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
 test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
   const { file } = runningFixture();
   const { v, cx } = await pane(file);

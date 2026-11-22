@@ -7284,8 +7284,9 @@ export default class Threads extends View {
   // text, at most a reading line, with the side gutters left and right of it, centred. Before
   // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
-  // The pane's px as Herdr's layout gives it (the frame in), which the compact Trajectory goes by.
-  trajPx() { return this.pw() + PANE_FRAME; }
+  // The pane's px as Herdr's layout gives it (the frame in), which the compact Trajectory goes
+  // by: rounded as everywhere else, so a 200 px pane at zoom 1.25 (199.99) is 200.
+  trajPx() { return Math.round(this.pw()) + PANE_FRAME; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
     const step = this.paneStep();
@@ -11538,7 +11539,10 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const pw = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(pw - (this.paneW ?? -9)) > 1) { this.paneW = pw; this.shareWidth(); cx.notify(); }
+        // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact).
+        const form = (x) => trajCompact(Math.round(x) + PANE_FRAME);
+        const cross = this.paneW != null && form(pw) !== form(this.paneW);
+        if (!this.forcedWidth && (cross || Math.abs(pw - (this.paneW ?? -9)) > 1)) { this.paneW = pw; this.shareWidth(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
