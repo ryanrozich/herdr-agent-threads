@@ -3756,6 +3756,13 @@ export default class Threads extends View {
     // Closed during a landing: the landing given up first (rowQuit), so the Chat's width back
     // below is the last px it is sent.
     if (closed && side && this.rowLand) this.rowQuit(cx);
+    // The column's close still under way: both side panes closed together (rowCloseBoth).
+    const closing = closed && side ? this.rowClosing() : null;
+    if (closing && this.me()) {
+      const px = back && !panes().some((p) => p.pane === back.pane) ? back.px : closing.targets[this.me().pane];
+      this.rowCloseBoth(px, cx);
+      return;
+    }
     // The row on weights: the Chat gets the Trajectory's weight (Herdr gives a closed pane's to
     // the pane before it), and rowClose asks the weights that keep each pane left, the Chat at
     // the width it had before the split narrowed it.
@@ -4275,6 +4282,27 @@ export default class Threads extends View {
     this.rowTick(cx);
     return true;
   }
+  // A close's weights still under way. Its targets (the panes it left, the Chat at its width
+  // from before the Trajectory when that was the pane closed), or null.
+  rowClosing() {
+    const c = this.rowCloseDue ?? this.rowCloseFix;
+    return c ? { targets: c.targets, S: c.ent?.S ?? c.S ?? null } : null;
+  }
+  // A second side pane closed before the first close's weights are done (two presses of
+  // Herdr's close key do this): those weights are for a pane that is gone. The Chat, alone now,
+  // goes to px (px: its width from before the side panes) and onto a weight from there
+  // (sizeTo), as before the row was on weights.
+  rowCloseBoth(px, cx) {
+    const c = this.rowClosing();
+    this.rowCloseDue = null;
+    this.rowCloseFix = null;
+    this.rowLand = null;
+    this.rowPlan = null;
+    this.trajChatBack = null;
+    this.weighAt = null;
+    this.rowSave({ S: c?.S ?? null }, cx);
+    if (px > 0 && this.me()) this.sizeTo(px);
+  }
   rowCloseStep(cx) {
     const c = this.rowCloseDue;
     if (!c) return;
@@ -4430,7 +4458,9 @@ export default class Threads extends View {
       // the Trajectory open, to the Trajectory before it (rowClose).
       const pair = shared(PAIR_KEY)?.[this.terminal];
       const ent = this.rowNow();
-      if (ent?.k > 0 && ent.ids?.pin) {
+      const closing = this.rowClosing();
+      if (closing) this.rowCloseBoth(closing.targets[this.me()?.pane], cx);
+      else if (ent?.k > 0 && ent.ids?.pin) {
         const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.pin).map((id) => [id, ent.n[id]]));
         if (this.rowClose(ent.ids.pin, targets, cx)) this.weighAt = null;
       } else if (pair?.k > 0 && pair.m > 0) { this.weighAt = null; this.pairClose(pair); }

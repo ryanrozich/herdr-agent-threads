@@ -18041,6 +18041,30 @@ test("the Trajectory closed during its own landing after the held panes' weights
   }
 });
 
+test("both side panes closed within 400 ms, in either order (a double press of Herdr's close key): the Chat ends at its width from before the side panes, on a weight, as when they close a second apart", async () => {
+  for (const order of [["p3", "p4"], ["p4", "p3"]]) {
+    for (const gap of [0, 100, 250, 400, 1000]) {
+      const t = await threeOpen("traj");
+      try {
+        // The Chat as the side panes left it: 722 before them, 719 beside them (their dividers
+        // took 3 px), with no narrowing of its own to give back.
+        const was = t.row.widths();
+        expect(t.v.trajChatBack ?? null).toBe(null);
+        const closeOne = (id) => { t.close(id); if (id === "p3") t.inst.p2.x.autoPinned?.(t.cx); };
+        closeOne(order[0]);
+        if (gap) t.run(gap, 50);
+        closeOne(order[1]);
+        t.run(4000);
+        const now = t.row.widths();
+        expect([order.join(","), gap, near(now.p2, was.p2, 1), near(now.p2, 722, 3)]).toEqual([order.join(","), gap, true, true]);
+        expect(t.row.size.p2.weight).toBeGreaterThan(0);
+        expect(t.v.rowCloseDue ?? t.v.rowCloseFix ?? null).toBe(null);
+        expect(rowRec()?.k).toBeUndefined();
+      } finally { t.restore(); }
+    }
+  }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });
