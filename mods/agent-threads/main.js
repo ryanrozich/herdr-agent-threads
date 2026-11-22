@@ -10242,6 +10242,8 @@ export default class Threads extends View {
       .id("threads-root")
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
+      // Its settings card takes Tab and Shift-Tab as the Chat's does (cardKeyContext).
+      .when(this.settingsOpen, (el) => this.cardKeyContext(el))
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }

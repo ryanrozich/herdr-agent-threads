@@ -7133,9 +7133,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 37 rows.
-  v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
+  // Six groups (the settings card's keys among them), 38 rows.
+  v.rootH = 1400;
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 38 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -14076,6 +14076,34 @@ test("the shared selection never selects a turn the Chat hides; a turn it shows 
   state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000 } };
   expect(v.syncSel()).toBe(true);
   expect(v.sel).toBe(pick);
+});
+
+test("the Trajectory pane's root is the card's key context while its settings card is open", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  v.paneW = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.key(keyEv("y"), cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit();
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const w = new Threads();
+  const wcx = makeCx();
+  w.init(state.props, wcx);
+  await settle(w);
+  state.props = props;
+  w.width = 560;
+  w.paneW = 560;
+  expect(w.trajPane).toBeTruthy();
+  const shut = rootOf(w, wcx);
+  expect(shut.filter((e) => e[0] === "key_context")).toEqual([]);
+  w.ledgerAction("settings", wcx);
+  expect(w.settingsOpen).toBe(true);
+  const open = rootOf(w, wcx);
+  expect(open.filter((e) => e[0] === "key_context")).toEqual([["key_context", "ThreadsCard"]]);
+  expect(Object.keys(actionsOf(open)).sort()).toEqual(["agent-threads.ringBack", "agent-threads.ringNext"]);
+  done(w);
 });
 
 // test/herdr-still.sh reads the command record of the pane it drives: a Trajectory pane's
