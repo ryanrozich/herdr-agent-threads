@@ -6,7 +6,7 @@ import { test, expect, mock, setSystemTime } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest } from "../mods/agent-threads/core/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
@@ -10764,13 +10764,13 @@ test("no rules: the two types that fill a rule in dashed boxes, and Use opens on
   const { v, cx } = await rulesPane([]);
   try {
     let c = cardOf(v);
-    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Ticket key", "Pull request", "Links a number such as #58 to that pull request in this repository.", "Add rule"]));
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Templates, not rules until you keep one", "Ticket key", "Pull request", "Links a number such as #58 to that pull request in this repository.", "Add rule"]));
     expect(c).toContainEqual(["border_dashed"]);
     onOf(c, "th-rule-use-pull-request", "on_click")({}, cx);
     expect(v.ruleEdit.draft.type).toBe("pull-request");
     expect(v.ruleInputs.url.value()).toBe("https://github.com/{repo}/pull/$1");
     expect(strsOf(cardOf(v))).toContain("This session has no repository, so this rule links nothing here.");
-    expect(strsOf(cardOf(v))).not.toContain("Examples, not rules until you keep one");
+    expect(strsOf(cardOf(v))).not.toContain("Templates, not rules until you keep one");
     v.closeRule();
     // A hand edit that does not parse: the rules show, with no switch, no Add rule and no editor.
     v.applyPrefs(JSON.stringify({ links: RULES }));
@@ -11631,6 +11631,53 @@ test("the Pattern and Finds hints wrap inside the card: the hint's text may shri
   } finally { done(r.v); }
 });
 
+test("the count's progress holds nothing of a session the pane no longer follows, and nothing once the editor is closed", async () => {
+  const { v, cx } = await sendersPane([{ name: "Bump", prefix: "Bump {name} " }]);
+  const heldOf = (old) => (v.senderHits?.per ?? []).filter((p) => p.s === old || old.turns.includes(p.last)).length;
+  try {
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.render(cx);
+    const old = v.current();
+    expect(heldOf(old)).toBe(1);
+    // The pane follows another transcript, with the rule still open.
+    v.pick({ path: fixture("--only", "3") }, cx);
+    expect(heldOf(old)).toBe(0);
+    await settle(v);
+    expect(v.current()).not.toBe(old);
+    expect(v.ruleEdit?.at).toBe(0);
+    v.render(cx);
+    expect(heldOf(old)).toBe(0);
+    expect(v.senderHits.per.map((p) => p.s)).toEqual(v.sessions);
+    // Discard: nothing kept.
+    onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+    expect(v.senderHits).toBe(null);
+    // The card closed with the rule open: the next draw drops it.
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.render(cx);
+    expect(v.senderHits).not.toBe(null);
+    v.action("settings", cx);
+    expect(v.settingsOpen).toBe(false);
+    v.render(cx);
+    expect(v.senderHits).toBe(null);
+    // The page left with the rule open.
+    v.action("settings", cx);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.render(cx);
+    expect(v.senderHits).not.toBe(null);
+    v.action("settingsPage:main", cx);
+    expect(v.senderHits).toBe(null);
+    // A draft that stops running: the draw after it, which counts nothing, drops it.
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    v.render(cx);
+    expect(v.senderHits).not.toBe(null);
+    typeSender(v, "prefix", "", cx);
+    v.render(cx);
+    expect(v.senderHits).toBe(null);
+  } finally { done(v); }
+});
+
 test("a press on a sender rule opens it in place: Name, Matches by, the prefix, Example and what it does to the example; Keep rule writes it, keeping keys this version does not know", async () => {
   const { v, cx } = await sendersPane();
   try {
@@ -11906,11 +11953,11 @@ test("Reset leaves sender rules alone, and its note names them", async () => {
   } finally { done(v); }
 });
 
-test("no sender rules: the two examples in dashed boxes, and Use opens a new rule filled from one", async () => {
+test("no sender rules: the templates in dashed boxes, and Use opens a new rule filled from one", async () => {
   const { v, cx } = await sendersPane([]);
   try {
     let c = cardOf(v);
-    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Examples, not rules until you keep one", "Name in brackets", "[build-bot] at the start of a prompt",
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["No rules yet.", "Templates, not rules until you keep one", "Name in brackets", "[build-bot] at the start of a prompt",
       "From line", "From build-bot: at the start of a prompt", "Add rule"]));
     expect(strsOf(c)).not.toContain("When two rules match the same prompt, the higher one wins.");
     expect(c).toContainEqual(["border_dashed"]);
@@ -11918,7 +11965,7 @@ test("no sender rules: the two examples in dashed boxes, and Use opens a new rul
     expect([v.ruleEdit.kind, v.ruleEdit.at, v.senderInputs.name.value(), v.senderInputs.prefix.value()]).toEqual(["senders", null, "Name in brackets", "[{name}] "]);
     c = cardOf(v);
     expect(strsOf(c)).toContain("build-bot · matched by rule");
-    expect(strsOf(c)).not.toContain("Examples, not rules until you keep one");
+    expect(strsOf(c)).not.toContain("Templates, not rules until you keep one");
     onOf(c, "th-rule-keep", "on_click")({}, cx);
     await settleAll(cx);
     expect(lastSenders()).toEqual([{ name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" }]);
@@ -11928,6 +11975,140 @@ test("no sender rules: the two examples in dashed boxes, and Use opens a new rul
     v.applyPrefs(bare);
     expect(strsOf(cardOf(v)).filter((x) => x === "From {name}: ").length).toBe(2);
   } finally { done(v); }
+});
+
+
+// The sender rule templates the Sender rules page shows, by key, in order.
+const TEMPLATES = ["brackets", "from", "colon"];
+const templatesOn = (c) => TEMPLATES.filter((k) => idsIn(c).includes(`th-sender-example-${k}`));
+const TEMPLATE_RULES = {
+  brackets: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" },
+  from: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" },
+  colon: { name: "Name and a colon", pattern: "^(?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]): ", example: "seat-one: 3 changes open, 1 waiting on review" },
+};
+
+test("templates: the ones not in use stay on the page under the rules after a rule is kept", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    expect(templatesOn(cardOf(v))).toEqual(TEMPLATES);
+    onOf(cardOf(v), "th-sender-use-brackets", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([TEMPLATE_RULES.brackets]);
+    const c = cardOf(v);
+    expect(strsOf(c)).toEqual(expect.arrayContaining(["Rules · 1", "Templates, not rules until you keep one", "From line", "Name and a colon", "Add rule"]));
+    expect(templatesOn(c)).toEqual(["from", "colon"]);
+    // Under the rules, before Add rule.
+    expect(idsAt(c, "th-sender-example-from")).toBeGreaterThan(idsAt(c, "th-sender-1"));
+    expect(idsAt(c, "th-sender-example-colon")).toBeLessThan(idsAt(c, "th-rule-add"));
+    expect(strsOf(c).indexOf("Templates, not rules until you keep one")).toBeLessThan(strsOf(c).indexOf("Add rule"));
+    // Hidden while a rule is open, as Add rule is.
+    onOf(c, "th-rule-add", "on_click")({}, cx);
+    expect(templatesOn(cardOf(v))).toEqual([]);
+  } finally { done(v); }
+});
+
+test("templates: one comes back when no rule has its text, and Undo takes it away again", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    onOf(cardOf(v), "th-sender-use-from", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([TEMPLATE_RULES.from]);
+    expect(templatesOn(cardOf(v))).toEqual(["brackets", "colon"]);
+    onOf(cardOf(v), "th-sender-delete-btn-1", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([]);
+    expect(templatesOn(cardOf(v))).toEqual(TEMPLATES);
+    onOf(cardOf(v), "th-rule-undo", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(templatesOn(cardOf(v))).toEqual(["brackets", "colon"]);
+  } finally { done(v); }
+});
+
+test("templates: a rule kept with its text changed leaves its template in place; the open rule names the template until it is kept", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    onOf(cardOf(v), "th-sender-use-from", "on_click")({}, cx);
+    typeSender(v, "name", "Relay notes", cx);
+    typeSender(v, "prefix", "From {name} via relay: ", cx);
+    expect(strsOf(cardOf(v))).toContain("New rule from From line, not kept yet");
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([{ name: "Relay notes", prefix: "From {name} via relay: ", example: TEMPLATE_RULES.from.example }]);
+    expect(templatesOn(cardOf(v))).toEqual(TEMPLATES);
+  } finally { done(v); }
+});
+
+test("templates: with every one in use, one line says so and Add rule opens a blank rule", async () => {
+  const { v, cx } = await sendersPane(TEMPLATES.map((k) => TEMPLATE_RULES[k]));
+  try {
+    const c = cardOf(v);
+    expect(templatesOn(c)).toEqual([]);
+    expect(strsOf(c)).toContain("Every template is in use.");
+    expect(strsOf(c)).not.toContain("Templates, not rules until you keep one");
+    expect(idsAt(c, "th-sender-templates-used")).toBeLessThan(idsAt(c, "th-rule-add"));
+    onOf(c, "th-rule-add", "on_click")({}, cx);
+    expect(v.ruleEdit.draft).toEqual({ name: "", by: "prefix", prefix: "", pattern: "", example: "", on: true });
+    expect(strsOf(cardOf(v))).toContain("New rule, not kept yet");
+    expect(strsOf(cardOf(v))).not.toContain("Every template is in use.");
+  } finally { done(v); }
+});
+
+test("templates: Use fills a new rule with the template's type, name, text and example, names it on its first line, and writes nothing", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    for (const [k, by] of [["from", "prefix"], ["colon", "pattern"]]) {
+      onOf(cardOf(v), `th-sender-use-${k}`, "on_click")({}, cx);
+      const x = TEMPLATE_RULES[k];
+      expect([v.ruleEdit.at, v.ruleEdit.draft.by]).toEqual([null, by]);
+      expect(Object.fromEntries(["name", by, "example"].map((f) => [f, v.senderInputs[f].value()]))).toEqual(x);
+      const c = cardOf(v);
+      expect(strsOf(c)).toContain(`New rule from ${x.name}, not kept yet`);
+      expect(strsOf(c)).not.toContain("New rule, not kept yet");
+      expect(idsIn(c)).toContain(`th-sender-type-${by}`);
+      expect(strsOf(c)).toContain("Matches. It shows as");
+      expect(settingsWrites).toEqual([]);
+      // Discard: the page as it was, the template still there.
+      onOf(c, "th-rule-discard", "on_click")({}, cx);
+      expect(templatesOn(cardOf(v))).toEqual(TEMPLATES);
+      expect(settingsWrites).toEqual([]);
+    }
+  } finally { done(v); }
+});
+
+test("templates: Name and a colon reads a name with a hyphen and a colon, and leaves the person's own notes theirs", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    onOf(cardOf(v), "th-sender-use-colon", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()).toEqual([TEMPLATE_RULES.colon]);
+    // As the reader marks a typed prompt with the kept rules.
+    expect(ruleSender(v.senders, "seat-one: 3 changes open")).toMatchObject({ kind: "peer", name: "seat-one", rule: 1, ruleLabel: "Name and a colon" });
+    for (const own of ["Note: check the flaky test", "note: check the flaky test", "fix: the build on main", "TODO: rename the flag", "https://example.com/build: look", "seat-one 3 changes open"]) expect([own, ruleSender(v.senders, own)]).toEqual([own, null]);
+  } finally { done(v); }
+});
+
+test("templates: a template is in use when a rule has its type and its text, on or off, working or not; spaces at the end and the name are not compared", async () => {
+  const cases = [
+    [[{ name: "Mine", prefix: "[{name}] " }], ["from", "colon"]],
+    [[{ prefix: "[{name}] ", on: false }], ["from", "colon"]],
+    [[{ prefix: "From {name}:" }], ["brackets", "colon"]],
+    [[{ prefix: "From {name}:   " }], ["brackets", "colon"]],
+    [[{ pattern: `${TEMPLATE_RULES.colon.pattern.trimEnd()}` }], ["brackets", "from"]],
+    // Not working (both texts): its type is the one the editor opens it with.
+    [[{ prefix: "[{name}] ", pattern: "x" }], ["from", "colon"]],
+    // Another type with the same text, or another text.
+    [[{ pattern: "[{name}] " }], TEMPLATES],
+    [[{ prefix: TEMPLATE_RULES.colon.pattern }], TEMPLATES],
+    [[{ prefix: "[{name}]: " }], TEMPLATES],
+    [[{ prefix: " [{name}] " }], TEMPLATES],
+  ];
+  for (const [senders, left] of cases) {
+    const { v } = await sendersPane(senders);
+    try { expect([senders, templatesOn(cardOf(v))]).toEqual([senders, left]); } finally { done(v); }
+  }
 });
 
 
@@ -13376,11 +13557,12 @@ test("card keys: Change, a type, Move up and Duplicate keep the ring on the open
 
 // The Sender rules page (and its row on the card) take the ring as the Link rules page does.
 
-test("card keys: the Sender rules page goes Back, Close, each rule's Edit, Delete and switch (none on a rule that is not working), Add rule, Copy path; an open rule's controls sit in its place", async () => {
+test("card keys: the Sender rules page goes Back, Close, each rule's Edit, Delete and switch (none on a rule that is not working), each template's Use, Add rule, Copy path; an open rule's controls sit in its place", async () => {
   const { v } = await sendersPane();
   try {
     const rows = (ns) => ns.flatMap((n) => [`th-sender-edit-btn-${n}`, `th-sender-delete-btn-${n}`, ...(n === 3 ? [] : [`th-sender-on-${n}`])]);
-    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1, 2, 3, 4, 5]), "th-rule-add", "th-set-copy", "th-set-keys"]);
+    // From line is in use (rule 1 has its text), so two templates are left.
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1, 2, 3, 4, 5]), "th-sender-use-brackets", "th-sender-use-colon", "th-rule-add", "th-set-copy", "th-set-keys"]);
     // A kept rule found by its pattern: Change, Name, Pattern and its Reference, Example, the buttons.
     v.openRule(1, null, null, "senders");
     expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1]),
@@ -13396,7 +13578,7 @@ test("card keys: the Sender rules page goes Back, Close, each rule's Edit, Delet
     v.closeRule();
     // No rules: the examples' Use buttons, then Add rule.
     v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
-    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-sender-use-brackets", "th-sender-use-from", "th-rule-add", "th-set-copy", "th-set-keys"]);
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-sender-use-brackets", "th-sender-use-from", "th-sender-use-colon", "th-rule-add", "th-set-copy", "th-set-keys"]);
   } finally { done(v); }
 });
 
