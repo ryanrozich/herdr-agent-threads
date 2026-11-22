@@ -968,9 +968,9 @@ test("? opens the key sheet, as ? or Shift-/, but not while the search field typ
 
 test("the key sheet lists every key the panel takes, and a pin key gives way to a quote key of the same letter", () => {
   const shown = (q) => new Set(keySheet(q).flatMap(([, items]) => items.flatMap(([keys]) => keys)));
-  const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End" };
+  const names = { up: "↑", down: "↓", enter: "↵", space: "Space", escape: "Esc", home: "Home", end: "End", tab: "Tab" };
   const all = shown("q");
-  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G"]) {
+  for (const k of ["up", "k", "down", "j", "home", "g", "end", "enter", "space", "o", "c", "/", "escape", "[", "]", "a", "t", ",", "s", "i", "v", "-", "=", "w", "?", "p", "u", "q", "G", "tab"]) {
     expect(all.has(names[k] ?? k)).toBe(true);
   }
   expect(all.has("1-5")).toBe(true);
@@ -1491,4 +1491,110 @@ test("ringStep: the ring's eighths, empty only at 0% and full only at 100%", () 
   expect([null, undefined, -5, Number.NaN].map(ringStep)).toEqual([0, 0, 0, 0]);
   // Each step has its icon.
   for (let k = 0; k <= 8; k++) expect(existsSync(join(import.meta.dir, `../mods/agent-threads/ring-${k}.svg`))).toBe(true);
+});
+
+test("ringKey: Tab and Shift-Tab move the card's ring, Enter and Space press while a control has it; chords are Herdr's. nextStop goes round the ends", async () => {
+  const { ringKey, nextStop, cardKey } = await import("../mods/agent-threads/ui.js");
+  const k = (key, m = {}) => ({ key, modifiers: { shift: false, control: false, alt: false, platform: false, function: false, ...m } });
+  expect(ringKey(k("tab"), false)).toBe("next");
+  expect(ringKey(k("tab", { shift: true }), false)).toBe("back");
+  for (const m of ["control", "alt", "platform", "function"]) expect(ringKey(k("tab", { [m]: true }), true)).toBe(null);
+  expect(ringKey(k("enter"), true)).toBe("press");
+  expect(ringKey(k("space"), true)).toBe("press");
+  expect(ringKey(k("enter"), false)).toBe(null);
+  expect(ringKey(k("space"), false)).toBe(null);
+  expect(ringKey(k("enter", { shift: true }), true)).toBe(null);
+  expect(ringKey(k("j"), true)).toBe(null);
+  expect(ringKey(null, true)).toBe(null);
+  // Without the ring, Space is still the card's page down.
+  expect(cardKey(k("space"))).toBe("pagedown");
+  const ids = ["a", "b", "c"];
+  expect(nextStop(ids, null, 1)).toBe("a");
+  expect(nextStop(ids, null, -1)).toBe("c");
+  expect(nextStop(ids, "a", 1)).toBe("b");
+  expect(nextStop(ids, "c", 1)).toBe("a");
+  expect(nextStop(ids, "a", -1)).toBe("c");
+  expect(nextStop(ids, "gone", 1)).toBe("a");
+  expect(nextStop([], "a", 1)).toBe(null);
+});
+
+test("keyInstaller: the first init installs the card's keys whatever Herdr answers; only the card's first opening may try again, and only after a throw", async () => {
+  const { keyInstaller } = await import("../mods/agent-threads/ui.js");
+  const B = [{ keystroke: "tab", action: "a.next", context: "C" }];
+  const cxOf = (answers) => {
+    const calls = [];
+    return { calls, bind_keys(list) { calls.push(list); const a = answers[calls.length - 1]; if (a instanceof Error) throw a; return a; } };
+  };
+  // A count, nothing, or an object: installed by the first init, and never asked again.
+  for (const [answer, kept] of [[2, 2], [undefined, "answered undefined"], [{ ok: true }, "answered [object Object]"], ["2", "answered 2"]]) {
+    const k = keyInstaller(B);
+    const cx = cxOf([answer, answer, answer]);
+    expect(k.ask(cx, "init")).toBe(kept);
+    k.ask(cx, "init"); k.ask(cx, "open"); k.ask(cx, "open");
+    expect([answer, cx.calls]).toEqual([answer, [B]]);
+    expect(k.answer).toBe(kept);
+  }
+  // No bind_keys: missing, and not asked again.
+  const none = keyInstaller(B);
+  expect(none.ask({}, "init")).toBe("missing");
+  const later = cxOf([2]);
+  expect(none.ask(later, "init")).toBe("missing");
+  expect(none.ask(later, "open")).toBe("missing");
+  expect(later.calls).toEqual([]);
+  // The init call threw: other panes' inits ask nothing, the card's first opening tries once
+  // more, and later openings and inits ask nothing.
+  const k = keyInstaller(B);
+  const cx = cxOf([new Error("not from here"), 2, 2]);
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(k.ask(cx, "init")).toBe("failed: not from here");
+  expect(cx.calls).toEqual([B]);
+  expect(k.ask(cx, "open")).toBe(2);
+  k.ask(cx, "open"); k.ask(cx, "init");
+  expect(cx.calls).toEqual([B, B]);
+  // Threw at init and at the first opening: two calls in all, and the second answer kept.
+  const k2 = keyInstaller(B);
+  const cx2 = cxOf([new Error("one"), new Error("two"), 2]);
+  k2.ask(cx2, "init"); k2.ask(cx2, "open"); k2.ask(cx2, "open"); k2.ask(cx2, "init");
+  expect(cx2.calls).toEqual([B, B]);
+  expect(k2.answer).toBe("failed: two");
+  // No init yet: the first opening installs, once.
+  const k3 = keyInstaller(B);
+  const cx3 = cxOf([3, 3]);
+  expect(k3.ask(cx3, "open")).toBe(3);
+  k3.ask(cx3, "open"); k3.ask(cx3, "init");
+  expect(cx3.calls).toEqual([B]);
+});
+
+test("cardReveal: the card's view moves only as far as shows the control with the ring in full, by a mark 8 px apart", async () => {
+  const { cardReveal, cardMarks } = await import("../mods/agent-threads/ui.js");
+  const h = 1000, viewH = 300;
+  const marks = cardMarks(h);
+  // Shown already, or nowhere to move: null.
+  expect(cardReveal(100, 128, 0, h, viewH)).toBeNull();
+  expect(cardReveal(0, 28, 0, h, viewH)).toBeNull();
+  expect(cardReveal(100, 128, 0, 0, viewH)).toBeNull();
+  expect(cardReveal(100, 128, 0, h, 0)).toBeNull();
+  expect(cardReveal(100, 128, 0, 200, viewH)).toBeNull();
+  // Below the view: its bottom edge comes just past the control, a mark brought up to it.
+  const shows = (r, y0, y1) => r.y <= y0 && y1 <= r.y + viewH;
+  const down = cardReveal(500, 528, 0, h, viewH);
+  expect(shows(down, 500, 528)).toBe(true);
+  expect(down.y + viewH).toBe(marks[down.mark] + 1);
+  expect(down.y + viewH - 528).toBeLessThan(8);
+  // Above it: its top edge comes to the mark at or above the control's top.
+  const up = cardReveal(203, 231, 600, h, viewH);
+  expect(shows(up, 203, 231)).toBe(true);
+  expect(up.y).toBe(marks[up.mark]);
+  expect(203 - up.y).toBeLessThan(8);
+  // Taller than the view, below it: its top comes to the top edge.
+  const tall = cardReveal(400, 900, 0, h, viewH);
+  expect(tall.y).toBeGreaterThanOrEqual(400);
+  expect(tall.y - 400).toBeLessThan(8);
+  // At the end: the view stops at the rows' end, on the last mark.
+  const end = cardReveal(980, 1000, 0, h, viewH);
+  expect(end).toEqual({ y: h - viewH, mark: marks.length - 1 });
+  // Partly shown counts as not shown.
+  expect(cardReveal(290, 318, 0, h, viewH)).not.toBeNull();
+  expect(cardReveal(-4, 24, 10, h, viewH)).toEqual({ y: 0, mark: 0 });
 });

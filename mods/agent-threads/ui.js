@@ -34,6 +34,56 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? null);
 }
+// The settings card's ring keys (issue 104): Tab and Shift-Tab move the card's ring ("next",
+// "back"), and Enter and Space press the control it is on ("press") while it is on one that is
+// not a text field (ringOn). Chords with cmd, ctrl, alt or fn are Herdr's (ctrl-tab). Without
+// the ring, Space scrolls the card (cardKey).
+export function ringKey(e, ringOn) {
+  const m = e?.modifiers ?? {};
+  if (!e || m.platform || m.control || m.alt || m.function) return null;
+  if (e.key === "tab") return m.shift ? "back" : "next";
+  if (m.shift || !ringOn) return null;
+  return e.key === "enter" || e.key === "space" ? "press" : null;
+}
+// The stop after `cur` in `ids` (step 1) or before it (step -1), round the ends; from none (or
+// one no longer drawn), the first or the last.
+export function nextStop(ids, cur, step) {
+  if (!ids.length) return null;
+  const i = ids.indexOf(cur);
+  if (i < 0) return step > 0 ? ids[0] : ids[ids.length - 1];
+  return ids[(i + step + ids.length) % ids.length];
+}
+// Installs a mod's key bindings once for all its panes (cx.bind_keys works on the app's
+// keymap). ask(cx, "init") runs from each pane's init, and only the first one calls: it
+// installs, whatever Herdr answers. ask(cx, "open") runs when the settings card opens, and
+// only the first opening may call: it tries once more if the init call threw (init may be a
+// place Herdr refuses it), or installs if no init has called. Another pane's init never
+// spends that try, and after it nothing is asked again. answer is what Herdr said: the
+// count, "missing" (no cx.bind_keys), "failed: <message>", or any other answer as text.
+export function keyInstaller(bindings) {
+  const s = { answer: null, tries: 0, opened: false };
+  const call = (cx) => {
+    s.tries++;
+    if (!cx || !("bind_keys" in cx)) s.answer = "missing";
+    else {
+      try {
+        const n = cx.bind_keys(bindings);
+        s.answer = typeof n === "number" ? n : `answered ${String(n)}`;
+      } catch (err) { s.answer = `failed: ${err?.message ?? err}`; }
+    }
+    return s.answer;
+  };
+  s.ask = (cx, from) => {
+    if (from === "open") {
+      if (s.opened) return s.answer;
+      s.opened = true;
+      if (s.tries === 0 || String(s.answer).startsWith("failed: ")) return call(cx);
+      return s.answer;
+    }
+    return s.tries === 0 ? call(cx) : s.answer;
+  };
+  return s;
+}
 // Every key, grouped, for the ? sheet: [group, [[keys, what it does]]]. A pin key gives way
 // to a quote key of the same letter (PIN_KEYS), so the sheet leaves it out then. The Pinned
 // column has no outline (outline false), so its sheet leaves o out.
@@ -59,7 +109,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
     ]],
     ["Settings card", [
       [["↑", "↓", "j", "k"], "Scroll the card"], [["PgUp", "PgDn", "Space"], "Scroll it a page"], [["Home", "End"], "Its top or its end"],
-      [["Esc", ","], "Close it"],
+      [["Tab", "Shift Tab"], "Next or previous control, then ↵ or Space to press it"], [["Esc", ","], "Close it"],
     ]],
     ["View", [
       [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
@@ -553,6 +603,30 @@ export function cardScroll(kind, y, h, viewH) {
   }
   const i = near(to);
   return { y: marks[i], mark: i };
+}
+// The settings card's ring (issue 104) on a control the view does not show in full: the
+// view's new place, so [y0, y1] of the rows (the control) shows, from y, with h the rows'
+// height and viewH the view's. { y, mark } as cardScroll gives, or null when the control shows
+// already or the view cannot move. A control above the view comes to its top edge; one below
+// comes to its bottom edge, or to the top edge when it is taller than the view. The marks are
+// 8 px apart, so the edge lands up to 7 px further on, never short of the control.
+export function cardReveal(y0, y1, y, h, viewH) {
+  if (!(h > 0) || !(viewH > 0)) return null;
+  const maxY = Math.max(0, h - viewH);
+  let to = y;
+  if (y0 < y) to = y0;
+  else if (y1 > y + viewH) to = y1 - y0 > viewH ? y0 : y1 - viewH;
+  to = Math.max(0, Math.min(maxY, to));
+  if (Math.abs(to - y) < 1) return null;
+  const marks = cardMarks(h);
+  if (to < y) {
+    let i = 0;
+    while (i + 1 < marks.length && marks[i + 1] <= to) i++;
+    return { y: marks[i], mark: i };
+  }
+  let i = marks.findIndex((m) => m >= to + viewH - 1);
+  if (i < 0) i = marks.length - 1;
+  return { y: Math.max(0, Math.min(maxY, marks[i] + 1 - viewH)), mark: i };
 }
 // One line of a prompt as pieces: plain text, and each pasted-image label ([Image #3]) with
 // its number. A label inside an inline code span stays text.
