@@ -12088,9 +12088,9 @@ test("templates: Name and a colon reads a name with a hyphen and a colon, and le
     expect(lastSenders()).toEqual([TEMPLATE_RULES.colon]);
     // As the reader marks a typed prompt with the kept rules.
     expect(ruleSender(v.senders, "seat-one: 3 changes open")).toMatchObject({ kind: "peer", name: "seat-one", rule: 1, ruleLabel: "Name and a colon" });
-    // Any hyphenated word before a colon counts, as the template's line says.
+    // Any lowercase hyphenated word before a colon counts, as the template's line says.
     for (const word of ["follow-up", "re-run", "pre-commit"]) expect(ruleSender(v.senders, `${word}: the tests please`)).toMatchObject({ kind: "peer", name: word });
-    for (const own of ["Note: check the flaky test", "note: check the flaky test", "fix: the build on main", "TODO: rename the flag", "https://example.com/build: look", "seat-one 3 changes open"]) expect([own, ruleSender(v.senders, own)]).toEqual([own, null]);
+    for (const own of ["Follow-up: the tests please", "Note: check the flaky test", "note: check the flaky test", "fix: the build on main", "TODO: rename the flag", "https://example.com/build: look", "seat-one 3 changes open"]) expect([own, ruleSender(v.senders, own)]).toEqual([own, null]);
   } finally { done(v); }
 });
 

@@ -280,8 +280,9 @@ const SENDER_TYPES = [
 // Sender rule templates: each fills a new rule, with Use, under the rules while no rule has
 // its type and text (senderTemplatesLeft). by is the rule's type, the key its text is under.
 // Name and a colon asks for a hyphen in the name, so "Note:", "TODO:" and a web address
-// stay the person's own; any hyphenated word before a colon counts, so "follow-up:" or
-// "re-run:" at the start shows as from that word, as its line in the box says.
+// stay the person's own; any lowercase hyphenated word before a colon counts, so "follow-up:"
+// or "re-run:" at the start shows as from that word, as its line in the box says, while
+// "Follow-up:" with a capital stays the person's own.
 const SENDER_EXAMPLES = {
   brackets: { by: "prefix", line: "[build-bot] at the start of a prompt", rule: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" } },
   from: { by: "prefix", line: "From build-bot: at the start of a prompt", rule: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" } },
