@@ -3988,9 +3988,15 @@ export default class Threads extends View {
     this.weighing = { pane: me.pane, n0: Math.round(pair.m), tried: [], w: wc };
     this.askWeight();
   }
-  // This terminal's record changed by fn, after the drawing pass (poll runs in render).
+  // This terminal's record changed by fn, after the drawing pass (poll runs in render). Not
+  // once this column's pane is gone: its close may have deleted the record in the same tick,
+  // and a kept px left behind would be the next column's.
   pairPatch(fn, cx) {
-    const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: fn(shared(PAIR_KEY)?.[this.terminal] ?? {}) });
+    const mine = this.me()?.pane;
+    const put = () => {
+      if (!mine || !panes().some((p) => p.pane === mine)) return;
+      setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: fn(shared(PAIR_KEY)?.[this.terminal] ?? {}) });
+    };
     if (cx?.timer) cx.timer.after(0, put);
     else put();
   }

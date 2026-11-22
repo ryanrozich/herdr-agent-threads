@@ -17782,6 +17782,25 @@ test("three weights Herdr does not answer after a dropped probe put the column b
   } finally { t.restore(); }
 });
 
+test("a probe's record write from a column pane that closes in the same tick is dropped, so no kept px is left for the next column", async () => {
+  const t = await pairPanes();
+  try {
+    untilProbe(t);
+    // The column's write pending after the drawing pass; in the same tick the column closes
+    // and the Chat's close deletes the record.
+    const due = [];
+    t.w.pairPatch((r) => ({ ...r, probe: 999 }), { timer: { after: (_ms, fn) => due.push(fn) } });
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    delete state.shared["threads.pinPair"].t4;
+    for (const fn of due) fn(t.cxw);
+    expect(state.shared["threads.pinPair"].t4 ?? null).toBe(null);
+    // With the pane there, the same write lands.
+    state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+    t.w.pairPatch((r) => ({ ...r, probe: 999 }), { timer: { after: (_ms, fn) => fn() } });
+    expect(state.shared["threads.pinPair"].t4.probe).toBe(999);
+  } finally { t.restore(); }
+});
+
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
