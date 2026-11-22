@@ -265,6 +265,9 @@ const ROW_KEY = "threads.row";
 const SPLIT_GAP = 8;
 // Both widths still this long before the pair is made or its weights brought up to date.
 const PAIR_STILL_MS = 500;
+// Weights a key sent are checked once the row is still, or this long after they went if it is
+// never still (rowCheck).
+const ROW_WANT_MS = 1500;
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -3821,12 +3824,16 @@ export default class Threads extends View {
     // The pair, or the row with the Trajectory open, on weights: weight moves from one to the
     // other with their sum held, so the terminals keep theirs (k, the px a unit of weight
     // gets, is the same for all). The Chat's pane follows it as a divider (rowTrack).
-    const row = trajOpen ? shared(ROW_KEY)?.[this.terminal] : null;
+    const row = trajOpen ? this.rowNow() : null;
     const onRow = row?.k > 0 && Object.values(row.ids ?? {}).includes(col.pane) && Object.values(row.ids ?? {}).includes(main.pane);
     const pair = trajOpen ? null : shared(PAIR_KEY)?.[this.terminal];
     if (onRow) {
       run("layout.resize", { id: col.pane, weight: Number((next.column / row.k).toPrecision(5)) });
       run("layout.resize", { id: main.pane, weight: Number((next.main / row.k).toPrecision(5)) });
+      // Where every pane of the row should land, from the last key's still to come if there is
+      // one: the Chat checks it (rowCheck).
+      const base = row.want?.n ?? row.n;
+      this.rowSave({ ...row, want: { n: { ...base, [col.pane]: next.column, [main.pane]: next.main }, at: Date.now() } }, cx);
     } else if (pair?.k > 0) {
       run("layout.resize", { id: col.pane, weight: Number((next.column / pair.k).toPrecision(5)) });
       run("layout.resize", { id: main.pane, weight: Number((next.main / pair.k).toPrecision(5)) });
@@ -4102,7 +4109,13 @@ export default class Threads extends View {
     if (this.rowSeen?.sig !== sig) this.rowSeen = { sig, at: now };
     const still = now - this.rowSeen.at >= PAIR_STILL_MS;
     if (this.rowLand) { this.rowLandStep(n, rp, cx); return; }
-    if (ent?.k > 0) { if (still) this.rowTrack(ent, n, rp, cx); else this.rowWake(PAIR_STILL_MS - (now - this.rowSeen.at), cx); return; }
+    if (ent?.k > 0) {
+      const late = ent.want && now - ent.want.at >= ROW_WANT_MS;
+      if (!still && !late) { this.rowWake(PAIR_STILL_MS - (now - this.rowSeen.at), cx); return; }
+      if (ent.want && !this.rowCheck(ent, n, cx)) return;
+      this.rowTrack(ent, n, rp, cx);
+      return;
+    }
     const plan = this.rowPlan;
     if (!plan) return;
     if (now - plan.at > 10000 || !n[plan.probe]) { this.rowPlan = null; return; }
@@ -4118,7 +4131,7 @@ export default class Threads extends View {
   }
   // Measures 50 ms apart while a landing, a plan or a close is under way.
   rowTick(cx) {
-    if (this.rowTimer || !cx?.timer || !(this.rowLand || this.rowPlan || this.rowCloseDue || this.rowCloseFix)) return;
+    if (this.rowTimer || !cx?.timer || !(this.rowLand || this.rowPlan || this.rowCloseDue || this.rowCloseFix || this.rowNow()?.want)) return;
     this.rowTimer = true;
     cx.timer.after(50, (cx) => { this.rowTimer = false; this.rowPoll(cx); });
   }
@@ -4188,22 +4201,41 @@ export default class Threads extends View {
     this.rowSave({ S: g.S }, cx);
   }
   // The row on weights and still: what moved since (ui.js rowEvent). Drags keep k, and the
-  // terminals' S gives up what the row's panes took; the window scales k. The panes changing,
-  // or the terminals left with nothing: back to px.
+  // terminals' S gives up what the row's panes took; the window scales k. What the measures
+  // cannot prove (mixed), the panes changing, or the terminals left with nothing: back to px
+  // where the panes are, which is exact, and no weight is worked out from this record again.
   rowTrack(ent, n, rp, cx) {
     const order = ["chat", "traj", "pin"].map((r) => rp.ids[r]).filter(Boolean);
     const same = order.length === Object.keys(ent.ids).length && order.every((id) => Object.values(ent.ids).includes(id));
     if (!same) { this.rowPx(cx); return; }
-    const was = order.map((id) => ent.n[id]);
+    const { want, ...rec } = ent;
+    const was = order.map((id) => rec.n[id]);
     const now = order.map((id) => n[id]);
     const ev = rowEvent(was, now);
-    if (ev.kind === "same") return;
-    if (ev.kind === "stale") { this.rowPx(cx); return; }
-    let { k, S } = ent;
+    if (ev.kind === "same") { if (want) this.rowSave(rec, cx); return; }
+    if (ev.kind === "stale" || ev.kind === "mixed") { this.rowPx(cx); return; }
+    let { k, S } = rec;
     if (ev.kind === "drag") S -= ev.d / k;
-    else k *= now[0] / was[0];
+    else k *= ev.f;
     if (!(S > 0)) { this.rowPx(cx); return; }
-    this.rowSave({ ...ent, k, S, n: Object.fromEntries(order.map((id, i) => [id, now[i]])) }, cx);
+    this.rowSave({ ...rec, k, S, n: Object.fromEntries(order.map((id, i) => [id, now[i]])) }, cx);
+  }
+  // Weights a key worked out from the record (want: where each pane of the row should land),
+  // checked once the row is still (or ROW_WANT_MS on): every pane within 2 px, or the record
+  // was wrong (a change under the rounding, ui.js rowEvent) and the row goes to px at those
+  // widths, which is exact. true when it held.
+  rowCheck(ent, n, cx) {
+    if (Object.entries(ent.want.n).every(([id, px]) => Math.abs((n[id] ?? -99) - px) <= 2)) return true;
+    this.rowPxAt(ent.want.n, ent.S, cx);
+    return false;
+  }
+  // The row's panes to px at the given widths (those still open), and no record but the
+  // terminals' S, which only seeds the next landing's first weight.
+  rowPxAt(targets, S, cx) {
+    this.rowLand = null;
+    this.rowPlan = null;
+    for (const [id, px] of Object.entries(targets)) if (px > 0 && panes().some((p) => p.pane === id)) run("layout.resize", { id, px });
+    this.rowSave({ S: S ?? null }, cx);
   }
   // Every pane of the row back to px where it is: for w, a second Threads pane, a change it
   // cannot follow, or the column's opening. The row's S is kept for the next landing.
@@ -4286,16 +4318,30 @@ export default class Threads extends View {
     if (f.seen?.sig !== sig) f.seen = { sig, at: now };
     if ((now - f.seen.at < 150 || now - f.asked < 150) && now - f.asked < 1500) { this.rowTick(cx); return; }
     this.rowCloseFix = null;
+    const off = ids.some((id) => Math.abs(n[id] - f.targets[id]) > 2);
+    // The fix's weights asked: where they landed is the check. Off by more than 2 px, the
+    // record they came from was wrong: px at the targets, which is exact, and no record.
+    if (f.check) {
+      if (off) { this.rowPxAt(f.targets, f.S, cx); return; }
+      this.rowFixSave(f, f.check.k, n, cx);
+      return;
+    }
     const sw = ids.reduce((s, id) => s + f.w[id], 0);
     const R = (ids.reduce((s, id) => s + n[id], 0) / sw) * (f.S + sw);
     const T = ids.reduce((s, id) => s + f.targets[id], 0);
-    let k = (R - T) / f.S;
-    let at = f.targets;
-    if (!(k > 0)) { k = R / (f.S + sw); at = n; }
-    else if (ids.some((id) => Math.abs(n[id] - f.targets[id]) > 2)) {
-      for (const id of ids) run("layout.resize", { id, weight: Number((f.targets[id] / k).toPrecision(5)) });
-    }
-    if (f.ids.traj) { this.rowSave({ k, S: f.S, ids: f.ids, n: { ...at } }, cx); return; }
+    const k = (R - T) / f.S;
+    // No room left for the terminals: the record cannot be right. px at the targets.
+    if (!(k > 0)) { this.rowPxAt(f.targets, f.S, cx); return; }
+    if (!off) { this.rowFixSave(f, k, n, cx); return; }
+    for (const id of ids) run("layout.resize", { id, weight: Number((f.targets[id] / k).toPrecision(5)) });
+    this.rowCloseFix = { ...f, check: { k }, asked: now, seen: null };
+    this.rowTick(cx);
+  }
+  // The record a close leaves once its panes hold their widths: the row's (the Chat and the
+  // Trajectory) or the pair's (the Chat and the column), the pair's after the drawing pass.
+  rowFixSave(f, k, n, cx) {
+    const at = Object.fromEntries(Object.values(f.ids).map((id) => [id, n[id]]));
+    if (f.ids.traj) { this.rowSave({ k, S: f.S, ids: f.ids, n: at }, cx); return; }
     const v = { k, m: at[f.ids.chat], p: at[f.ids.pin], S: f.S };
     cx?.timer?.after(0, () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v }));
   }

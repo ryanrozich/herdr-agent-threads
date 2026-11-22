@@ -2833,21 +2833,32 @@ export function pairEvent(was, now) {
 // With the Trajectory open, the row is the terminals, the Chat, the Trajectory and the Pinned
 // column, in that order (the column splits off the Trajectory when it is open). The Chat
 // drives it. All widths are Herdr px.
-// What moved between two measures of the row's panes, left to right (the Chat first):
-// "same"; "scale" (two or more panes by one factor: the window); otherwise "drag", any mix of
-// the outer edge and the dividers since the last measure. Herdr keeps the sum of two weights
-// on a drag, so k holds and the terminals change by what the row's panes changed in all: d.
-// "stale" when the lists differ. { kind, d }.
+// What moved between two measures of the row's panes, left to right (the Chat first), and
+// only what the measures prove (the mod cannot read a weight):
+// - "same": nothing past a px of rounding;
+// - "drag", d 0: the panes' widths add up as before, within 2 px: any mix of drags between the
+//   row's own panes, which Herdr makes with each pair's weights summed as before, so k and
+//   the terminals' weights hold;
+// - "scale", f: every pane by one factor, each within 1.5 px: the window (k by f);
+// - "drag", d: the Chat alone moved: the outer edge, the terminals taking what it gave;
+// - "mixed": anything else (the window and a drag together, the edge and a divider), which
+//   the record cannot follow: the row goes back to px where it is (main.js rowTrack);
+// - "stale" when the lists differ.
+// A change under the rounding can read as the wrong one of these (a 2 px window change as the
+// edge, three drags as the window); a key or close's weights are checked against where they
+// should land, and a miss puts the row at px there (main.js rowCheck).
 export function rowEvent(was, now) {
   if (was.length !== now.length) return { kind: "stale" };
   const d = now.map((x, i) => x - was[i]);
-  const moved = d.filter((x) => Math.abs(x) > 1).length;
-  if (!moved) return { kind: "same" };
-  const f = now[0] / was[0];
-  if (moved > 1 && now.every((x, i) => Math.abs(x / was[i] - f) <= 0.01)) return { kind: "scale" };
+  const moved = d.map((x) => Math.abs(x) > 1);
+  const count = moved.filter(Boolean).length;
+  if (!count) return { kind: "same" };
   const sum = d.reduce((x, y) => x + y, 0);
-  // Two panes trading width round apart by a px each.
-  return { kind: "drag", d: Math.abs(sum) <= 2 ? 0 : sum };
+  if (Math.abs(sum) <= 2) return { kind: "drag", d: 0 };
+  const f = now.reduce((x, y) => x + y, 0) / was.reduce((x, y) => x + y, 0);
+  if (now.every((x, i) => Math.abs(x - was[i] * f) <= 1.5)) return { kind: "scale", f };
+  if (count === 1 && moved[0]) return { kind: "drag", d: sum };
+  return { kind: "mixed" };
 }
 // A pane of the row closed, with the row on weights: Herdr gives its weight to the pane before
 // it, which grows by the closed pane's width while the rest stay. The weights that put each
