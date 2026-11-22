@@ -17621,7 +17621,11 @@ test("the Trajectory opened with the column open puts the pair back to px for it
     t.run(3600);
     expect(t.row.size.p2.weight).toBeGreaterThan(0);
     expect(t.row.size.p3.weight).toBeGreaterThan(0);
-    expect(t.frames.slice(n).every((f) => f.p2 === was.p2)).toBe(true);
+    // The Chat within 1 px (the Chat's weight comes from the column's width in whole px).
+    expect(t.frames.slice(n).every((f) => Math.abs(f.p2 - was.p2) <= 1)).toBe(true);
+    // The pair made again from the row as the last pair had it: the column's first weight
+    // lands it within 2 px, no jump.
+    expect(Math.max(...t.frames.slice(n).map((f) => Math.abs(f.p3 - was.p3)))).toBeLessThanOrEqual(2);
   } finally { t.restore(); }
 });
 

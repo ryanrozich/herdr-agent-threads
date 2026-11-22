@@ -3790,7 +3790,10 @@ export default class Threads extends View {
     const map = shared(PAIR_KEY) ?? {};
     const was = map[this.terminal];
     if (send && was?.k > 0 && Number.isFinite(w[col.pane])) run("layout.resize", { id: col.pane, px: Math.round(w[col.pane]) + PANE_FRAME });
-    setShared(PAIR_KEY, { ...map, [this.terminal]: { S: was?.S ?? null, hold: Date.now() + hold } });
+    // The row's weight room as the pair last had it (the terminals' kS and the two widths), so
+    // the pair made again after the hold starts from the terminals' width (pairBegin).
+    const R = was?.k > 0 ? Math.round(was.k * (was.S ?? 0) + was.m + was.p) : was?.R ?? null;
+    setShared(PAIR_KEY, { ...map, [this.terminal]: { S: was?.S ?? null, R, hold: Date.now() + hold } });
   }
   // In the column's pane: the pair onto weights once the split has settled and both widths
   // are still, and its weights kept up to date after that. Not while the Trajectory is open
