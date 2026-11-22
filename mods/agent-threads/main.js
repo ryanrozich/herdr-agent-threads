@@ -3593,6 +3593,8 @@ export default class Threads extends View {
       return true;
     }
     if (this.splitAsk) return true;
+    // A close's weights under way: the panes it left to px at their targets first.
+    this.rowCancelClose(cx);
     // The row on weights goes to px where it is (the split takes its room from the terminals).
     if (fit.T != null) this.rowPx(cx);
     this.pinPx(me, fit.chat);
@@ -4302,6 +4304,17 @@ export default class Threads extends View {
     this.weighAt = null;
     this.rowSave({ S: c?.S ?? null }, cx);
     if (px > 0 && this.me()) this.sizeTo(px);
+  }
+  // A side pane opening while a close's weights are under way: the panes left go to px at
+  // their targets, so the opening starts from px and ends all px or all on weights. The Chat's
+  // target, or null.
+  rowCancelClose(cx) {
+    const c = this.rowClosing();
+    if (!c) return null;
+    this.rowCloseDue = null;
+    this.rowCloseFix = null;
+    this.rowPxAt(c.targets, c.S, cx);
+    return c.targets[this.me()?.pane] ?? null;
   }
   rowCloseStep(cx) {
     const c = this.rowCloseDue;
@@ -11113,8 +11126,11 @@ export default class Threads extends View {
     // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor). The
     // Chat at that px first, and both stay at px while the Trajectory is open (pinPx). An open
     // Pinned column goes back to px too: the Trajectory's room probe needs both at px.
+    // A close's weights under way: the panes it left to px at their targets first, the Chat
+    // at its own.
+    const back = this.rowCancelClose(null);
     this.pairPx(5000);
-    const chat = this.pinPx(me);
+    const chat = this.pinPx(me, back);
     const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     // The widths the new pane passes through on its way (settleTraj) are not the owner's.

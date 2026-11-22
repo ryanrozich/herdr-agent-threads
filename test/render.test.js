@@ -18065,6 +18065,22 @@ test("both side panes closed within 400 ms, in either order (a double press of H
   }
 });
 
+test("the Trajectory closed and opened again within 350 ms ends all on weights or all at px, the column at its width", async () => {
+  for (const gap of [50, 100, 200, 350]) {
+    const t = await threeOpen("traj");
+    try {
+      const was = t.row.widths();
+      t.close("p4");
+      t.run(gap, 50);
+      await t.openTraj();
+      t.run(6000);
+      const ids = ["p2", "p4", "p3"];
+      expect([gap, allWeights(t, ["p1", ...ids]) || allPx(t, ids)]).toEqual([gap, true]);
+      expect(near(t.row.widths().p3, was.p3)).toBe(true);
+    } finally { t.restore(); }
+  }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });
