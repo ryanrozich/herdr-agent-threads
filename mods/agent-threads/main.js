@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel, weightLine, weightFor, weightNear,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -168,6 +168,13 @@ const FRAME_AIM_MS = 30;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
+// A place held across a re-wrap (holdPlace) is let go after this at the latest; a reader kept
+// at the end is held there for up to END_HOLD_MS while the probe measures the rows above.
+const ANCHOR_HOLD_MS = 2000;
+const END_HOLD_MS = 10000;
+// While a place is held, the probe measures this many rows below the top row with the rows
+// above it, and the rest of the rows below once it is let go.
+const PROBE_NEAR = 24;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
 // Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
@@ -2656,7 +2663,7 @@ export default class Threads extends View {
     const gap = this.floating() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -2680,6 +2687,10 @@ export default class Threads extends View {
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
+      if (this.anchor && !this.anchor.end) this.holdPlace(rows, this.slotsMemo);
+      // A held place put back (letGo): row 0 lift px taller (or shorter) for the layout that
+      // lands it.
+      if (this.anchorLift && this.slotsMemo.length) this.slotsMemo[0] = Math.max(1, this.slotsMemo[0] + this.anchorLift);
       // A rail click's landing (landExact): the first row is lift px taller for the frame of
       // the scroll, far above the view, then its own height again.
       if (this.landLift > 0 && this.slotsMemo.length) this.slotsMemo[0] += Math.ceil(this.landLift);
@@ -2773,6 +2784,8 @@ export default class Threads extends View {
     }
     this.rowJob = null;
     this.buildMs = job.ms;
+    // A new column width: the place on screen before these rows come in (holdPlace).
+    if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -4208,6 +4221,115 @@ export default class Threads extends View {
     if (this.view !== "pinned" && this.newestSig() !== before) this.unseen = "pending";
   }
 
+  // The list's scroll offset (listOff, in the list's px), which Herdr gives no read of: the
+  // pane's own scroll since the last layout, then the rows this layout draws (ui.js
+  // listOffset). A wheel moves it too (listWheel).
+  trackOff(slots, range) {
+    const ask = this.scrollAsk;
+    this.scrollAsk = null;
+    this.listOff = listOffset(this.slotPre(slots), this.listOff ?? 0, this.listH, ask, range.start, range.end);
+  }
+  // The rows' tops in a list's heights, and its end: made once for each set of heights.
+  slotPre(slots) {
+    if (this.preOf === slots) return this.preArr;
+    const pre = new Float64Array(slots.length + 1);
+    for (let i = 0; i < slots.length; i++) pre[i + 1] = pre[i] + slots[i];
+    this.preOf = slots;
+    this.preArr = pre;
+    return pre;
+  }
+  // Every scroll the pane asks of the list, so trackOff knows where it lands.
+  askScroll(i, how) { this.scrollAsk = { i, how }; this.scroll.scroll_to_item(i, how); }
+  askEnd() { this.scrollAsk = { end: true }; this.scroll.scroll_to_bottom(); }
+
+  // The place on screen just before a re-wrap's rows come in (buildStep): the row at the top
+  // edge, the share of its height above the edge, and the heights the list has for the rows
+  // above it. A reader at the end (following, the end on screen) is kept at the end instead.
+  // None while a landing's lift is on, or in a list that fits the pane.
+  takeAnchor() {
+    const rows = this.rowsMemo;
+    const slots = this.slotsMemo;
+    if (!rows?.length || !slots?.length || !(this.listH > 0) || rows[0].kind === "spacer") return null;
+    const at = Date.now();
+    if (this.follow && this.bottomShown && this.view !== "pinned" && !this.outlined()) return { end: true, at };
+    if (this.landLift > 0 || this.anchorLift) return null;
+    const off = this.listOff ?? 0;
+    const p = placeAt(this.slotPre(slots), off);
+    const held = new Map();
+    for (let i = 0; i < p.i; i++) held.set(rows[i].key, slots[i]);
+    return { key: rows[p.i].key, turn: rowTurnKey(rows[p.i]), share: p.share, off, held, at };
+  }
+  // While a place is held: the rows above the anchor keep the heights the list had for them,
+  // so the measures the probe brings in over the next frames move nothing on screen. The list
+  // keeps its offset in px, and the px those rows lack or have over (taken from or given to
+  // the nearest of them, all off screen) put the anchor's top where the same share of its new
+  // height is above the edge. That place is set once, from the first rows that have it.
+  holdPlace(rows, slots) {
+    const A = this.anchor;
+    let a = rows[A.a]?.key === A.key ? A.a : rows.findIndex((r) => r.key === A.key);
+    // The row is gone (its reply was parted anew): its turn's first row, from its top.
+    if (a < 0 && A.turn) {
+      a = rows.findIndex((r) => rowTurnKey(r) === A.turn);
+      if (a >= 0) { A.key = rows[a].key; A.share = 0; A.pre = null; }
+    }
+    if (a < 0) { this.anchor = null; return; }
+    A.a = a;
+    let sum = 0;
+    for (let i = 0; i < a; i++) {
+      const h = A.held.get(rows[i].key);
+      if (h != null) slots[i] = h;
+      sum += slots[i];
+    }
+    A.pre ??= Math.round(A.off - A.share * slots[a]);
+    let c = A.pre - sum;
+    for (let i = a - 1; i >= 0 && c !== 0; i--) {
+      const h = Math.max(1, slots[i] + c);
+      c -= h - slots[i];
+      slots[i] = h;
+    }
+  }
+  // Why a held place is let go now (letGo), or null:
+  // - a jump, which puts the view somewhere new;
+  // - the person's scroll;
+  // - ANCHOR_HOLD_MS (END_HOLD_MS at the end) since the rows came in;
+  // - the rows built and shaped, and the probe with nothing left above the anchor (the whole
+  //   list, at the end).
+  holdDone() {
+    const A = this.anchor;
+    if (!A) return null;
+    if (this.scrollTo || (this.toBottom && !A.end)) return "jump";
+    if ((this.wheelAt ?? 0) > A.at) return "scroll";
+    if (Date.now() - A.at >= (A.end ? END_HOLD_MS : ANCHOR_HOLD_MS)) return "time";
+    // The probe's word is for this place only from a walk made while it was held.
+    if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || this.probeFor !== A) return null;
+    return this.probeLeft === 0 || (!A.end && this.probeAbove) ? "settled" : null;
+  }
+  // A held place let go: the rows above the anchor take the heights they have now. In this
+  // frame the list goes back to the same place: the row at the top edge, at the same share of
+  // its height (ui.js anchorPlan; its lift is taken away in the next frame). A jump puts the
+  // view where it goes itself; a reader kept at the end is put at the end once more.
+  letGo(why, cx) {
+    const A = this.anchor;
+    this.anchor = null;
+    this.fitKey = null;
+    if (A.end) { if (why !== "scroll" && this.follow) this.askEnd(); return; }
+    if (why === "jump" || !this.rowsMemo?.length || !this.slotsMemo?.length) return;
+    const at = placeAt(this.slotPre(this.slotsMemo), this.listOff ?? 0);
+    const key = this.rowsMemo[at.i]?.key;
+    const rows = this.rows();
+    const slots = this.slotsMemo;
+    const i = rows[at.i]?.key === key ? at.i : rows.findIndex((r) => r.key === key);
+    if (i < 0) return;
+    const pre = this.slotPre(slots);
+    const room = Math.max(0, pre[slots.length] - this.listH);
+    const want = Math.max(0, Math.min(pre[i] + at.share * slots[i], room));
+    const p = anchorPlan(pre, want, Math.min(this.listOff ?? 0, room), this.listH);
+    if (!p) return;
+    if (p.end) { this.askEnd(); return; }
+    if (p.lift) { this.anchorLift = p.lift; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
+    this.askScroll(p.j, p.how);
+  }
+
   // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
   // so it leaves a step for render and asks the 120 ms timer for a frame). The list's end
   // (the tail row) on screen is the bottom. The person scrolled when the top row moved with
@@ -4245,9 +4367,14 @@ export default class Threads extends View {
   // list keeps the event to itself.
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
-    if (!dy || this.view === "pinned") return;
+    if (!dy) return;
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    // The list has moved by it (trackOff): delta is in the window's px, the offset in the
+    // list's, which Herdr scales by zoom.
+    this.listOff = (this.listOff ?? 0) - dy / this.zoom();
+    this.wheelAt = Date.now();
+    if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
@@ -6154,6 +6281,9 @@ export default class Threads extends View {
   // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
     if (this.drawingRow) this.rowCut(this.drawingRow);
+    // A placement's lift (letGo) is for the one layout that lands it, gone before anything in
+    // this frame builds the list's heights.
+    if (this.anchorLift) { this.anchorLift = 0; this.fitKey = null; }
     if (this.renderOpen) {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
@@ -6350,6 +6480,8 @@ export default class Threads extends View {
     // The re-wrap's draw time is counted (render) until nothing is left to build, shape or
     // measure. A full one: no layout kept for this width.
     if (!first) this.rewrap = { ms: 0, full: !this.keptBases?.has(this.sigBase()) };
+    // The place on screen is kept across the rows built for it (buildStep, takeAnchor).
+    if (!first) this.anchorDue = true;
   }
   rewrapCostly() {
     if (this.rewrap && this.rewrap.ms > HOLD_WORK_MS) return true;
@@ -8050,6 +8182,8 @@ export default class Threads extends View {
     if (s && !s.loaded && s.turns.length === 0)
       return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
+    const why = this.holdDone();
+    if (why) this.letGo(why, cx);
     const rows = this.rows();
     // The first rows of a session still being built, in slices over several frames (buildStep):
     // no row yet, and no empty state either, which would say there is nothing while the turns
@@ -8076,6 +8210,9 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
+    // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
+    // the place is let go (holdDone).
+    if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
@@ -8091,7 +8228,7 @@ export default class Threads extends View {
       // were stopped through a load and the rows never settled.
       if (bottomHeld && rows.length) {
         this.pinningUntil = Date.now() + 1000;
-        this.scroll.scroll_to_bottom();
+        this.askEnd();
       }
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
@@ -8102,7 +8239,7 @@ export default class Threads extends View {
       const holds = this.holds ?? 0;
       cx.timer.after(16, (cx) => {
         if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
-        this.scroll.scroll_to_bottom();
+        this.askEnd();
         cx.notify();
       });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
@@ -8153,8 +8290,8 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { this.askScroll(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
@@ -8172,17 +8309,17 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
           if (lift > 0) { this.landLift = lift; this.fitKey = null; }
-          this.scroll.scroll_to_item(p.j, p.how);
+          this.askScroll(p.j, p.how);
           cx.notify();
         });
         if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
-        if (top !== i) cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, how); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(i, how); cx.notify(); });
+        if (top !== i) cx.timer.after(48, (cx) => { this.askScroll(top, how); cx.notify(); });
       }
     }
     const dim = Boolean(this.res.ended);
@@ -8944,6 +9081,7 @@ export default class Threads extends View {
   // were measured). probeLeft is above 0 while parts may be left.
   probeDue() {
     const want = [];
+    this.probeFor = this.anchor ?? null;
     this.probeTries ??= new Map();
     const base = this.sigBase();
     // Nothing was due and nothing it depends on changed: every part was measured, or tried.
@@ -8963,7 +9101,10 @@ export default class Threads extends View {
     // layout and the top stay, a new measure only settles parts: the walk starts there.
     // Measures and tries cleared (probeEpoch) start it from the top again.
     // A measure dropped for this layout (stamp) starts it again too.
-    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}|${stamp}`;
+    // While a place is held (holdPlace), the rows above the top row, and only the few below it:
+    // the place is let go once the rows above are measured. The rest below come after.
+    const up = this.anchor && !this.anchor.end;
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}|${stamp}|${up ? 1 : 0}`;
     const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
     const visit = (r) => {
       if (r.probeOk === stamp && r.kind === "turn") return 0;
@@ -8981,7 +9122,8 @@ export default class Threads extends View {
     let clean = d0;
     let seen = 0;
     for (; d < n && seen < PROBE_WALK; d++) {
-      if (top + d < n) seen += visit(rows[top + d]);
+      if (up && d > PROBE_NEAR && top - d < 0) break;
+      if (top + d < n && !(up && d > PROBE_NEAR)) seen += visit(rows[top + d]);
       if (d > 0 && top - d >= 0) seen += visit(rows[top - d]);
       if (!want.length) clean = d + 1;
       if (want.length >= PROBE_MAX) break;
@@ -8990,7 +9132,9 @@ export default class Threads extends View {
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
     // Nothing due anywhere: quiet. Otherwise parts wait, or rows are not looked at yet.
-    const done = top + clean >= n && top - clean < 0;
+    // Rows below left out while a place is held are not done.
+    const done = !up && top + clean >= n && top - clean < 0;
+    this.probeAbove = top - clean < 0;
     this.probeLeft = done ? 0 : 1;
     this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
     if (this.probeTries.size > 4000) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
@@ -9050,6 +9194,7 @@ export default class Threads extends View {
     // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
+      this.trackOff(slots, range);
       this.topKey = rows[range.start]?.key ?? null;
       try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
       // The end of the list on screen clears the latest button's dot; a new turn or reply

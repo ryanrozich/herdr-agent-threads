@@ -10200,6 +10200,109 @@ test("a rail click lands a tall turn level with its tick when the turn above it 
   expect(top - offset).toBe(want);
 });
 
+test("listOffset: a scroll lands as Herdr lands it, the list's ends hold it, and the rows drawn put right a scroll the pane missed", async () => {
+  const { listOffset } = await import("../mods/agent-threads/ui.js");
+  // Five rows of 100 px in a list 250 px tall: tops 0 to 400, the end at 500.
+  const pre = [0, 100, 200, 300, 400, 500];
+  const H = 250;
+  expect(listOffset(pre, 150, H, null, -1, -1)).toBe(150);
+  // The end: its bottom at the bottom edge.
+  expect(listOffset(pre, 0, H, { end: true }, -1, -1)).toBe(250);
+  // To the near edge: row 3 below the view goes to the bottom edge, row 1 above it to the top
+  // edge, row 2 on screen stays where it is.
+  expect(listOffset(pre, 0, H, { i: 3, how: "top" }, -1, -1)).toBe(150);
+  expect(listOffset(pre, 180, H, { i: 1, how: "top" }, -1, -1)).toBe(100);
+  expect(listOffset(pre, 150, H, { i: 2, how: "top" }, -1, -1)).toBe(150);
+  // Row 2's middle at the list's middle.
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, -1, -1)).toBe(125);
+  // A row the list does not have asks nothing.
+  expect(listOffset(pre, 150, H, { i: 5, how: "top" }, -1, -1)).toBe(150);
+  expect(listOffset(pre, 150, H, { i: -1, how: "top" }, -1, -1)).toBe(150);
+  // Held to the list: not above its start, not past its end, 0 in a list the pane holds.
+  expect(listOffset(pre, -40, H, null, -1, -1)).toBe(0);
+  expect(listOffset(pre, 400, H, null, -1, -1)).toBe(250);
+  expect(listOffset([0, 100, 200], 50, H, null, -1, -1)).toBe(0);
+  // The pane thought 150, but rows 2 to 4 are drawn: the offset is between 200 and 250.
+  expect(listOffset(pre, 150, H, null, 2, 5)).toBe(200);
+  expect(listOffset(pre, 290, H, null, 2, 5)).toBe(250);
+  expect(listOffset(pre, 230, H, null, 2, 5)).toBe(230);
+  // Rows 1 and 2 drawn: the last one's top above the bottom edge, the next one's at or
+  // below it, so between 100 and 150.
+  expect(listOffset(pre, 20, H, null, 1, 4)).toBe(100);
+  expect(listOffset(pre, 199, H, null, 1, 4)).toBe(150);
+  // In a list 50 px tall, rows 1 and 2 drawn: row 2's top above the bottom edge puts the
+  // offset past 150.
+  expect(listOffset(pre, 120, 50, null, 1, 3)).toBe(150);
+  // Rows the list could not draw for any offset leave it as it was.
+  expect(listOffset(pre, 150, H, null, 1, 3)).toBe(150);
+  expect(listOffset(pre, 150, H, null, 3, 9)).toBe(150);
+});
+
+test("placeAt: the row at the top edge, the last whose top is at or above it, and the share of it above the edge", async () => {
+  const { placeAt } = await import("../mods/agent-threads/ui.js");
+  const pre = [0, 100, 200, 260, 400];
+  expect(placeAt(pre, 0)).toEqual({ i: 0, share: 0 });
+  expect(placeAt(pre, 50)).toEqual({ i: 0, share: 0.5 });
+  expect(placeAt(pre, 100)).toEqual({ i: 1, share: 0 });
+  expect(placeAt(pre, 230)).toEqual({ i: 2, share: 0.5 });
+  expect(placeAt(pre, 260)).toEqual({ i: 3, share: 0 });
+  expect(placeAt(pre, 330)).toEqual({ i: 3, share: 0.5 });
+  // Past the end: the last row, all of it above the edge. Above the start: the first.
+  expect(placeAt(pre, 900)).toEqual({ i: 3, share: 1 });
+  expect(placeAt(pre, -5)).toEqual({ i: 0, share: 0 });
+  // A row of no height has no share.
+  expect(placeAt([0, 0, 100], 0)).toEqual({ i: 1, share: 0 });
+});
+
+test("anchorPlan: one layout brings the offset to the place asked, with the least lift, as Herdr lands each kind of scroll", async () => {
+  const { anchorPlan, listOffset } = await import("../mods/agent-threads/ui.js");
+  // Rows 40, 100, 60, 220, 60, 120, 100, 300 px.
+  const pre = [0, 40, 140, 200, 420, 480, 600, 700, 1000];
+  // There already, and the end.
+  expect(anchorPlan(pre, 300, 300, 300)).toBe(null);
+  expect(anchorPlan(pre, 700, 100, 300)).toEqual({ end: true, lift: 0 });
+  // Up: the top row at the top edge, 10 px lower for a frame (the middle would take 130).
+  expect(anchorPlan(pre, 150, 400, 300)).toEqual({ j: 2, how: "top", lift: 10 });
+  // Down: the last row whose bottom is above the bottom edge at that edge (70; the middle
+  // would take 90). Not one that would sit above the top edge, which goes to the top.
+  expect(anchorPlan(pre, 250, 100, 300)).toEqual({ j: 4, how: "top", lift: 70 });
+  // A row taller than the list at the top edge: its middle at the middle.
+  expect(anchorPlan([0, 50, 100, 1100, 1150, 1200], 500, 200, 300)).toEqual({ j: 2, how: "center", lift: 50 });
+  // Up a short way inside a tall row, near the start: row 0 made shorter for the frame, kept
+  // above the view, puts row 1's top at the top edge.
+  expect(anchorPlan([0, 400, 800, 1200], 30, 90, 300)).toEqual({ j: 1, how: "top", lift: -370 });
+  // The start itself: nothing to put anywhere but the start at the top.
+  expect(anchorPlan([0, 400, 800, 1200], 0, 90, 300)).toEqual({ j: 0, how: "top", lift: 0 });
+  // Every plan lands where it was asked, as listOffset lands it: the lifted rows for the
+  // layout, then the lift taken away with the offset left in px.
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  let checked = 0;
+  for (let k = 0; k < 400; k++) {
+    const n = 4 + Math.floor(rnd() * 30);
+    const p = [0];
+    for (let i = 0; i < n; i++) p.push(p[i] + 20 + Math.round(rnd() * (rnd() < 0.1 ? 900 : 200)));
+    const H = 200 + Math.round(rnd() * 500);
+    const room = Math.max(0, p[n] - H);
+    if (!room) continue;
+    const want = Math.round(rnd() * room);
+    const off = Math.round(rnd() * room);
+    const plan = anchorPlan(p, want, off, H);
+    if (Math.abs(want - off) < 0.5) { expect(plan).toBe(null); continue; }
+    expect(plan).not.toBe(null);
+    if (plan.end) { expect(want).toBeGreaterThanOrEqual(room - 0.5); continue; }
+    if (plan.j === 0) continue;
+    // Row 0 keeps 1 px at least, and when made shorter it is above the view.
+    expect(p[1] + plan.lift).toBeGreaterThanOrEqual(1);
+    if (plan.lift < 0) expect(want).toBeGreaterThanOrEqual(p[1] + plan.lift);
+    const lifted = p.map((x, i) => (i >= 1 ? x + plan.lift : x));
+    const got = listOffset(lifted, off, H, { i: plan.j, how: plan.how }, -1, -1);
+    expect(Math.abs(got - want)).toBeLessThanOrEqual(0.5);
+    checked++;
+  }
+  expect(checked).toBeGreaterThan(300);
+});
+
 test("landExact: the nearest earlier item at least want above, lifted by the rest", async () => {
   const { landExact } = await import("../mods/agent-threads/ui.js");
   // Item 3 to 300 px down: item 2 (40) is short of it, item 1 (40 + 600) past it by 340.
@@ -16503,3 +16606,313 @@ test("a Trajectory split while the session is still read: the last turn read so 
   s.loaded = true;
   expect(tailHead()).toMatchObject({ reading: false, stale: true });
 }, 30000);
+
+// A long made-up session whose prompts and replies wrap to more lines at 70 characters than
+// at 90, so a column step changes every row's height.
+async function wrapSession(n) {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 18 + (i % 5) * 6)}.`, ts }, { k: "t", t: `Reply ${i}: ${say(i + 3, 30 + (i % 7) * 8)}.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+// Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
+// held to the list at each layout; scroll_to_item to the near edge or the middle, and
+// scroll_to_bottom, each taken at the next layout; the rows on screen drawn. A wheel moves the
+// list first, then the pane hears of it. Each layout is kept in frames.
+function simList(v) {
+  const sim = { off: 0, ask: null, frames: [], asks: 0 };
+  v.scroll = { scroll_to_item(i, how) { sim.ask = { i, how }; sim.asks++; }, scroll_to_bottom() { sim.ask = { end: true }; sim.asks++; } };
+  const room = (s) => Math.max(0, s.reduce((x, y) => x + y, 0) - v.listH);
+  listWindow = (n) => {
+    const s = lastList.sizes;
+    const pre = [0];
+    for (const x of s) pre.push(pre[pre.length - 1] + x);
+    let off = sim.off;
+    const a = sim.ask;
+    sim.ask = null;
+    if (a?.end) off = pre[n] - v.listH;
+    else if (a) {
+      const top = pre[a.i];
+      const bot = pre[a.i + 1];
+      if (a.how === "center") off = (top + bot - v.listH) / 2;
+      else if (top < off) off = top;
+      else if (bot > off + v.listH) off = bot - v.listH;
+    }
+    off = Math.max(0, Math.min(off, room(s)));
+    sim.off = off;
+    let start = 0;
+    while (start < n - 1 && pre[start + 1] <= off) start++;
+    let end = start + 1;
+    while (end < n && pre[end] < off + v.listH) end++;
+    sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
+    return { start, end };
+  };
+  sim.wheel = (dy) => {
+    sim.off = Math.max(0, Math.min(sim.off - dy, room(lastList.sizes)));
+    v.listWheel({ delta: { y: dy * v.zoom() } });
+  };
+  sim.last = () => sim.frames[sim.frames.length - 1];
+  return sim;
+}
+// A frame, then the probe's parts drawn in it answered with made-up heights, as the real probe
+// trickles measures in over the frames after a re-wrap.
+const fakeH = (p) => 30 + ((p.key.length * 37 + p.key.charCodeAt(p.key.length - 1) * 13) % 70);
+function probeFrame(v, cx) {
+  let due = [];
+  v.probeDue = function () { due = Threads.prototype.probeDue.call(this); return due; };
+  try { draw(v, cx); } finally { delete v.probeDue; }
+  // The timers due before the next frame run, as Herdr runs them between frames (a scroll
+  // asked 16 or 48 ms on); the frame marks they would clear are cleared.
+  cx.flush(120, 3);
+  dropTimers(v, cx);
+  for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
+  return due.length;
+}
+// Frames until the rows are built and shaped, the probe has measured everything, and no
+// place is held; the frames each drew.
+function settleList(v, cx, sim, max = 900) {
+  const from = sim.frames.length;
+  for (let k = 0; k < max; k++) {
+    probeFrame(v, cx);
+    if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0) && v.probeLeft === 0 && !v.anchor && !v.anchorLift) break;
+  }
+  probeFrame(v, cx);
+  return sim.frames.slice(from);
+}
+// A pane width through the column's steps, still for long enough that it re-wraps at once.
+const stillAt = (v, w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 2000; };
+// The pane at w px with the rows built, measured and at the end, as a session opens.
+function openAt(v, cx, sim, w) {
+  stillAt(v, w);
+  settleList(v, cx, sim);
+  v.jumpLatest();
+  settleList(v, cx, sim);
+  expect([v.follow, sim.last().end]).toEqual([true, true]);
+}
+// Crosses a column step mid-chat and back, and checks the place held through each:
+// - the row at the top edge is the same in every frame, but for the one frame that lands
+//   the place again (its lift), which shows it at most lift px off;
+// - while held, nothing above the anchor moves: the px into the row stay as they were;
+// - once let go, the rows above have their measured heights, and the anchor sits at the
+//   share it had.
+function crossStep(v, cx, sim, from, to) {
+  const whys = [];
+  const go = v.letGo;
+  v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+  try {
+    for (const w of [to, from]) {
+      const before = sim.last();
+      const was = new Map(before.keys.map((k, i) => [k, before.sizes[i]]));
+      const chars = v.chars();
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      expect(v.chars()).not.toBe(chars);
+      const odd = frames.filter((f) => f.key !== before.key);
+      expect(odd.length).toBeLessThanOrEqual(1);
+      for (const f of odd) expect(f.lift).not.toBe(0);
+      // Held: the same px into the row in every frame, the first taking the share of its new height.
+      const held = frames.filter((f) => f.held);
+      expect(held.length).toBeGreaterThan(0);
+      expect(new Set(held.map((f) => Math.round(f.into))).size).toBe(1);
+      expect(Math.abs(held[0].share - before.share)).toBeLessThan(0.02);
+      // The rows above keep the heights the list had for them, but for the few nearest the
+      // place that take the px it lacks or has over.
+      for (const f of held) {
+        const a = f.keys.indexOf(before.key);
+        const moved = f.keys.slice(0, a).filter((k, i) => was.has(k) && f.sizes[i] !== was.get(k));
+        expect(moved.length).toBeLessThan(Math.max(3, a / 10));
+      }
+      const after = sim.last();
+      expect(after.key).toBe(before.key);
+      expect(Math.abs(after.share - before.share)).toBeLessThan(0.15);
+      expect(after.sizes).toEqual(v.sizesMemo.map((h) => Math.ceil(h)));
+      // The pane's offset is the list's.
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+    }
+  } finally { v.letGo = go; }
+  return whys;
+}
+
+test("a column step crossed mid-chat keeps the row at the top edge at the same share of its height, both ways: still while the probe measures, put back in one frame once it is done", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    expect(v.chars()).toBe(70);
+    // Up to the middle by the wheel, to part way into a row.
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    expect(v.follow).toBe(false);
+    expect(sim.last().into).toBeGreaterThan(0);
+    // Each probe measure that comes in while the place is held moves nothing above it.
+    const hold = v.holdPlace;
+    const seen = [];
+    v.holdPlace = function (rows, slots) { hold.call(this, rows, slots); seen.push(slots.slice(0, this.anchor?.a ?? 0).reduce((x, y) => x + y, 0)); };
+    const whys = crossStep(v, cx, sim, 650, 750);
+    v.holdPlace = hold;
+    expect(new Set(seen).size).toBeLessThanOrEqual(2);
+    expect(seen.length).toBeGreaterThan(4);
+    // Let go once the probe had measured the rows above, before the 2 s.
+    expect(whys).toEqual(["settled", "settled"]);
+  } finally { listWindow = null; }
+});
+
+test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(1e9);
+    probeFrame(v, cx);
+    expect(sim.off).toBe(0);
+    const top = sim.last().key;
+    for (const w of [750, 650]) {
+      stillAt(v, w);
+      for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([top, 0]);
+    }
+  } finally { listWindow = null; }
+});
+
+test("a reader at the end stays at the end through a column step, both ways: the end on screen in every frame while the rows come in and the probe measures them", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    for (const w of [750, 650]) {
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      expect(frames.length).toBeGreaterThan(1);
+      expect(frames.filter((f) => !f.end)).toEqual([]);
+      expect(v.follow).toBe(true);
+      // The pane knows where the list is: at its end.
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+    }
+  } finally { listWindow = null; }
+});
+
+test("the place is kept across a column step with the Trajectory open beside the Chat, and with the Pinned column open", async () => {
+  for (const open of ["trajectory", "pinned"]) {
+    const { v, cx } = await wrapSession(300);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+      if (open === "trajectory") {
+        state.shared["threads.trajWidth"] = { px: 600 };
+        v.width = 702;
+        v.paneW = 702;
+        v.key(keyEv("y"), cx);
+        state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+        v.settleSplit(cx);
+        expect(Boolean(v.trajPaneOpen())).toBe(true);
+      } else {
+        v.openPinned(cx);
+        state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+        state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
+        expect(Boolean(v.pinnedPaneOpen())).toBe(true);
+      }
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      sim.wheel(23);
+      probeFrame(v, cx);
+      crossStep(v, cx, sim, 650, 750);
+    } finally { listWindow = null; }
+  }
+});
+
+test("while the probe still measures, the place holds: a scroll lets it go at once, and 2 s at most", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off / 2);
+    probeFrame(v, cx);
+    const whys = [];
+    const go = v.letGo;
+    v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+    // The probe still has rows above the place to measure in every frame.
+    v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+    // The place holds until a frame past 2 s lets it go.
+    stillAt(v, 750);
+    settleRows(v, cx);
+    expect(v.anchor?.key).toBe(sim.last().key);
+    const real = Date.now;
+    const t0 = real();
+    try {
+      Date.now = () => t0 + 1900;
+      draw(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      Date.now = () => t0 + 2100;
+      draw(v, cx);
+    } finally { Date.now = real; }
+    expect(whys).toEqual(["time"]);
+    expect(v.anchor).toBe(null);
+    // A wheel while held lets it go in the next frame, at the place the wheel took it to.
+    stillAt(v, 650);
+    settleRows(v, cx);
+    expect(Boolean(v.anchor)).toBe(true);
+    sim.wheel(40);
+    const key = sim.last().key;
+    draw(v, cx);
+    expect(whys).toEqual(["time", "scroll"]);
+    expect(v.anchor).toBe(null);
+    draw(v, cx);
+    expect(sim.last().key).toBe(key);
+    v.letGo = go;
+    delete v.probeDue;
+  } finally { listWindow = null; }
+});
+
+test("a scroll the pane did not see: the rows drawn bound the offset it works out, and the row at the top edge is kept across a step", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    // As a scrollbar drag: the list moves with no wheel event.
+    sim.off = Math.round(sim.off / 3) + 11;
+    probeFrame(v, cx);
+    const f = sim.last();
+    const i = f.keys.indexOf(f.key);
+    const top = f.sizes.slice(0, i).reduce((x, y) => x + y, 0);
+    expect(v.listOff).toBeGreaterThanOrEqual(top);
+    expect(v.listOff).toBeLessThan(top + f.sizes[i]);
+    stillAt(v, 750);
+    settleList(v, cx, sim);
+    expect(sim.last().key).toBe(f.key);
+  } finally { listWindow = null; }
+});
+
+test("inside a step nothing is held or moved: 720 to 800 px and back takes no place and asks no scroll", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 720);
+    sim.wheel(sim.off / 2);
+    probeFrame(v, cx);
+    const before = sim.last();
+    const asks = sim.asks;
+    for (const w of [800, 720]) {
+      stillAt(v, w);
+      for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([before.key, before.off]);
+      expect([v.anchor ?? null, v.anchorDue ?? false, sim.asks]).toEqual([null, false, asks]);
+    }
+  } finally { listWindow = null; }
+});

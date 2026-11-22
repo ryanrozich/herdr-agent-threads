@@ -2499,6 +2499,89 @@ export function landExact(slots, i, want) {
   }
   return { j: 0, how: "top", y, lift: 0 };
 }
+// The line on screen is kept across a re-wrap (main.js takeAnchor and holdPlace) from the
+// list's scroll offset, which Herdr's v_virtual_list keeps in px and gives no read of. pre
+// is the rows' tops (pre[i]) and the list's end (pre[n]), in the layout's heights.
+// listOffset: the offset after a layout, from the one before (off). ask is the pane's scroll
+// since the last layout, which Herdr applies at that layout: { end } is scroll_to_bottom,
+// { i, how: "center" } puts row i's middle at the list's middle, any other how brings row i
+// to the near edge (its top to the top edge when it is above, its bottom to the bottom edge
+// when it is below). Then the offset is held to the list, and to what the rows drawn,
+// [start, end), allow: the first one's top at or above the top edge and the next one's
+// below it, the last one's top above the bottom edge and the next one's at or below it.
+// That puts right a scroll the pane did not see.
+export function listOffset(pre, off, H, ask, start, end) {
+  const n = pre.length - 1;
+  let o = off;
+  if (ask?.end) o = pre[n] - H;
+  else if (ask && ask.i >= 0 && ask.i < n) {
+    const top = pre[ask.i];
+    const bot = pre[ask.i + 1];
+    if (ask.how === "center") o = (top + bot - H) / 2;
+    else if (top < o) o = top;
+    else if (bot > o + H) o = bot - H;
+  }
+  o = Math.max(0, Math.min(o, pre[n] - H));
+  if (end > start && start >= 0 && end <= n) {
+    const lo = Math.max(pre[start], pre[end - 1] - H);
+    const hi = Math.min(pre[start + 1], pre[end] - H);
+    if (lo <= hi) o = Math.max(lo, Math.min(o, hi));
+  }
+  return o;
+}
+// The row at the top edge for offset off, the last whose top is at or above it, and the share
+// of its height above the edge.
+export function placeAt(pre, off) {
+  let lo = 0;
+  let hi = pre.length - 2;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (pre[m] <= off) lo = m;
+    else hi = m - 1;
+  }
+  const h = pre[lo + 1] - pre[lo];
+  return { i: lo, share: h > 0 ? Math.max(0, Math.min(1, (off - pre[lo]) / h)) : 0 };
+}
+// How to bring the offset from off to want in one layout, when Herdr can only bring a row to
+// the near edge or put its middle at the middle. The pane can change row 0's height by lift
+// px for that layout and put it back at the next. The offset stays in px, so everything below
+// row 0 then moves by lift. Row 0 can be made taller, or shorter while it keeps 1 px and is
+// above the view. The options, each with the rows on both sides of the edge:
+// - a row's top at the top edge, when want is above off;
+// - a row's bottom at the bottom edge, when want is below off (its top must not be above
+//   the top edge, or it would go to the top);
+// - a row's middle at the middle.
+// The one with the smallest lift wins: the frame with it shows the place that many px off.
+// Returns { j, how, lift }, { end } for the end of the list, or null when the offset is at
+// want already.
+export function anchorPlan(pre, want, off, H) {
+  const n = pre.length - 1;
+  if (Math.abs(want - off) < 0.5) return null;
+  if (want >= pre[n] - H - 0.5) return { end: true, lift: 0 };
+  const short = 1 - pre[1];
+  let best = null;
+  const take = (j, how, lift) => {
+    // Row 0 kept at 1 px and above the view, and the lifted list still long enough for want.
+    if (j < 1 || j >= n || lift < short || (lift < 0 && want < pre[1] + lift) || want > pre[n] + lift - H) return;
+    if (!best || Math.abs(lift) < Math.abs(best.lift)) best = { j, how, lift: Math.round(lift) };
+  };
+  // Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
+  if (want < off) {
+    const t = placeAt(pre, want).i;
+    for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
+  }
+  if (want > off) {
+    const b = placeAt(pre, want + H).i;
+    for (const k of [b - 1, b]) {
+      const lift = want + H - pre[k + 1];
+      if (pre[k] + lift >= off) take(k, "top", lift);
+    }
+  }
+  const c = placeAt(pre, want + H / 2).i;
+  for (const j of [c - 1, c, c + 1]) if (j >= 0 && j < n) take(j, "center", want + H / 2 - (pre[j] + pre[j + 1]) / 2);
+  // Near the start with no option: the start at the top.
+  return best ?? (want < off ? { j: 0, how: "top", lift: 0 } : null);
+}
 // The rail shows only in a pane that holds a whole 70 character reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
 // line, and the rail gives it the room, as Codex hides its side rail. 549 px at 14 px.
