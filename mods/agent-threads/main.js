@@ -5019,12 +5019,14 @@ export default class Threads extends View {
       // Up and down (k and j) follow the rail: they stop only at turns with a tick
       // (railStop), so with Agent messages on the rail off they pass over agent messages.
       // From a turn with no tick (a click selected it) they go to the nearest tick that way;
-      // at either end the selection stays.
+      // at either end the selection stays. When no turn in the list has a tick (a finished
+      // session of agent messages only, with agentRail off), every turn is a stop, as before.
       case "prev": case "next": {
         const d = name === "next" ? 1 : -1;
+        const stop = keys.some((k) => this.railStop(k)) ? (k) => this.railStop(k) : () => true;
         let i = at < 0 ? keys.length : at + d;
-        if (at < 0) do i--; while (i > 0 && !this.railStop(keys[i]));
-        else while (i >= 0 && i < keys.length && !this.railStop(keys[i])) i += d;
+        if (at < 0) do i--; while (i > 0 && !stop(keys[i]));
+        else while (i >= 0 && i < keys.length && !stop(keys[i])) i += d;
         go(i >= 0 && i < keys.length ? i : at);
         return true;
       }

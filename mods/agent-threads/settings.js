@@ -68,7 +68,9 @@ export const FILE = "settings.json";
 // once: the first load writes the file again with the mark (behindLook, main.js readPrefs),
 // and from then on the file holds the person's own choice. A file with no mark keeps its
 // value: every build that knew agentRail wrote a mark, so that file was written by hand.
-// Builds before 4 read any mark of 3 or more as theirs, and their next save writes 3 again.
+// Builds before 4 read any mark of 3 or more as theirs, and their next save writes 3 again:
+// after a move back to one, or from a pane still running one, the newer build turns
+// agentRail off once more the next time it loads the file.
 export const LOOK = 4;
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }

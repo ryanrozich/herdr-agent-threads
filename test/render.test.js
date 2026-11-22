@@ -1300,6 +1300,78 @@ test("a settings file from a build before agentRail's new default: the first loa
   }
 });
 
+test("a list where no turn has a tick (a finished session of agent messages only, agentRail off): up and down step one turn at a time", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(0) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(1) },
+    { k: "p", o: "peer", t: peer("The docs build is green"), ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(4) }, { k: "t", t: "Noted." }, { k: "d", ms: 800, ts: at(5) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect((v.railTurns ?? []).length).toBe(0);
+  // Nothing selected: up goes to the newest turn, not the oldest.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:3");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:2");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  v.action("next", cx);
+  v.action("next", cx);
+  expect(v.sel).toBe("0:3");
+  // One of the person's turns after them: it has the only tick, so the keys go to it and stay.
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  for (const e of [{ k: "p", o: "human", t: "Thanks, all", ts: at(6) }, { k: "t", t: "Done." }, { k: "d", ms: 500, ts: at(7) }]) apply(v.current(), e);
+  v.rowsKey = null;
+  draw(v, cx);
+  v.sel = "0:2";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:4");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:4");
+});
+
+test("the Pinned view: every pin is a stop for up and down, a pinned agent message included, with agentRail off", async () => {
+  // No pins from an earlier test: the pane reads pins.json as it opens.
+  delete recordFiles[PINS];
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  try {
+    for (const k of ["0:1", "0:2", "0:3"]) { v.sel = k; v.action("pin", cx); }
+    expect(v.pinnedList().map((p) => p.key)).toEqual(["0:1", "0:2", "0:3"]);
+    // In the list the agent message is passed over.
+    v.sel = "0:1";
+    v.action("next", cx);
+    expect(v.sel).toBe("0:3");
+    // In the Pinned view it is a stop, both ways.
+    v.setView("pinned");
+    draw(v, cx);
+    expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+    v.sel = "0:1";
+    v.action("next", cx);
+    expect(v.sel).toBe("0:2");
+    v.action("next", cx);
+    expect(v.sel).toBe("0:3");
+    v.action("prev", cx);
+    expect(v.sel).toBe("0:2");
+  } finally {
+    v.setView("all");
+    delete recordFiles[PINS];
+  }
+});
+
 test("up and down follow the rail: with Agent messages on the rail off they pass over agent messages, on they stop at them; the running one is a stop", async () => {
   const { keyAction } = await import("../mods/agent-threads/ui.js");
   const { v, cx } = await scripted([
