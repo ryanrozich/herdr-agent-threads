@@ -1080,6 +1080,11 @@ export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(si
 // re-wrap every turn) on each move. cur: the step the pane shows now, or null for none yet.
 // The switch points and the 16 px scale with the text size.
 export const STEP_BACK = 16;
+// After a resize that changes the column (another step, or a pane narrower than the narrowest
+// step), the turns are laid out again once the pane has been still this long. A person who
+// stops moving with the button still down usually moves on within it (the owner's report on
+// 300 ms, 21 Nov 2026). A resize inside a step lays nothing out again, so nothing waits.
+export const REWRAP_PAUSE_MS = 1200;
 export function columnStep(paneW, size = TEXT_SIZE, cur = null) {
   if (!Number.isFinite(paneW)) return cur ?? STEPS[0];
   const back = Math.round((STEP_BACK * readType(size).size) / TEXT_SIZE);

@@ -61,7 +61,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, weightLine, weightFor, weightNear, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -156,16 +156,15 @@ const BAND_MARK = 100;
 // goes on (buildStep).
 const BUILD_MS = 10;
 // While the pane's width is changing (a drag), the column keeps the width it has and the
-// turns are laid out again once the pane has been still this long. A width change reshapes
-// every turn and measures every reply again: at 2,000 turns that is 3.5 to 13 s of redraws
-// on the rig, at every step of a drag.
-const WIDTH_HOLD_MS = 300;
+// turns are laid out again once the pane has been still for ui.js REWRAP_PAUSE_MS. A width
+// change reshapes every turn and measures every reply again: at 2,000 turns that is 3.5 to
+// 13 s of redraws on the rig, at every step of a drag.
 // Column widths whose shapes, measures and kept rows stay with each turn and part, the
 // last used first: a drag that ends at a width seen before lays out in a few frames.
 const WIDTHS_KEPT = 3;
 // Rows left unsized at the end of a build slice that are sized in it anyway (buildStep).
 const SIZE_REST = 64;
-// The hold (WIDTH_HOLD_MS) is for a conversation whose last full re-wrap, at a column width
+// The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
 // for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
 const HOLD_WORK_MS = 150;
@@ -5942,7 +5941,7 @@ export default class Threads extends View {
     // A column held through a drag (fitColumn): a draw once the pane has been still.
     if (this.widthHeld && !this.holdNext) {
       this.holdNext = true;
-      cx.timer.after(Math.max(0, WIDTH_HOLD_MS - (Date.now() - (this.sizeAt ?? 0))) + 5, (cx) => { this.holdNext = false; cx.notify(); });
+      cx.timer.after(Math.max(0, REWRAP_PAUSE_MS - (Date.now() - (this.sizeAt ?? 0))) + 5, (cx) => { this.holdNext = false; cx.notify(); });
     }
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
@@ -6042,10 +6041,10 @@ export default class Threads extends View {
     const step = this.paneStep();
     const w = columnWidth(this.paneW, this.prefs.textSize, step);
     if (Math.abs(w - this.width) <= 0.5 && step === this.colStep) { this.widthHeld = false; return; }
-    // The pane resized less than WIDTH_HOLD_MS ago: the column keeps its width, centred in a
+    // The pane resized less than REWRAP_PAUSE_MS ago: the column keeps its width, centred in a
     // wider pane and cut off on the right in a narrower one, until it is still (frame asks
     // for a draw then). The first width the pane measures is taken at once.
-    if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < WIDTH_HOLD_MS && this.rewrapCostly()) { this.widthHeld = true; return; }
+    if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < REWRAP_PAUSE_MS && this.rewrapCostly()) { this.widthHeld = true; return; }
     const first = !this.colFit;
     this.width = w;
     this.colStep = step;
