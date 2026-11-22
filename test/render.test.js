@@ -15983,6 +15983,85 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   expect(resizes()).toEqual([]);
 });
 
+// The column's steps through a Trajectory split (fitColumn): each one taken, as [the
+// characters it steps to, whether it is a full re-wrap or one from the kept layouts]. The
+// Chat drawn and settled first, at 704 px (90 characters, 624 px).
+function trajSteps(v, cx) {
+  const still = (w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 2000; };
+  const done = () => { settleRows(v, cx); for (let i = 0; i < 100 && v.rewrap; i++) draw(v, cx); };
+  still(704);
+  draw(v, cx);
+  done();
+  expect([v.chars(), v.width, v.rewrap ?? null]).toEqual([90, 624, null]);
+  const steps = [];
+  const fit = v.fitColumn.bind(v);
+  v.fitColumn = () => {
+    const was = [v.colStep, v.width];
+    fit();
+    if (v.colStep !== was[0] || v.width !== was[1]) steps.push([v.chars(), v.rewrap?.full ?? null]);
+  };
+  return { steps, still, done };
+}
+// While open, the mod moves the Chat's width by nothing of its own: no weight and no probe,
+// however long the width has been still and even when asked to (toWeight).
+function nothingWhileOpen(v, cx, still, w) {
+  log = [];
+  for (let i = 0; i < 3; i++) { still(w); v.toWeight(true); v.poll(cx); draw(v, cx); }
+  expect(Boolean(v.trajPaneOpen())).toBe(true);
+  expect([resizes(), v.weighing ?? null, v.weighAfter ?? null, v.weighAt ?? null]).toEqual([[], null, null, null]);
+}
+
+test("the Trajectory open beside the Chat where the terminal has the room: the column does not step on open or close, and closing it sends only a weight", async () => {
+  const { v, cx } = await trajSplit();
+  const { steps, still, done } = trajSteps(v, cx);
+  roomIs(v, cx, "p3", 900);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  nothingWhileOpen(v, cx, still, 704);
+  expect(steps).toEqual([]);
+  // Closed: nothing at once, then a weight once the row settles (500 ms), at the same width.
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([]);
+  expect(v.weighAt - Date.now()).toBeGreaterThan(400);
+  v.weighAt = Date.now() - 1;
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
+  draw(v, cx);
+  done();
+  expect(steps).toEqual([]);
+  expect([v.chars(), v.width]).toEqual([90, 624]);
+});
+
+test("the Trajectory open beside the Chat where the terminal is short: the split's narrowing steps the column once, and closing it hands the px back, then a weight, with one step back from the kept layouts", async () => {
+  const { v, cx } = await trajSplit();
+  const { steps, still, done } = trajSteps(v, cx);
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // The Chat at 475 px: 90 to 70 characters while the Trajectory is open, a full re-wrap
+  // (no layout kept for that width yet).
+  still(475);
+  draw(v, cx);
+  expect(steps).toEqual([[70, true]]);
+  done();
+  expect(v.chars()).toBe(70);
+  nothingWhileOpen(v, cx, still, 475);
+  expect(steps).toEqual([[70, true]]);
+  // Closed: the 704 px back at once, then a weight that keeps it once it applies.
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }]);
+  still(704);
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  // One step back to 90, from the layout kept for 704 px.
+  draw(v, cx);
+  expect(steps).toEqual([[70, true], [90, false]]);
+  done();
+  // And no more: no second px, weight or step.
+  for (let i = 0; i < 3; i++) { v.poll(cx); draw(v, cx); }
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  expect(steps).toEqual([[70, true], [90, false]]);
+  expect([v.chars(), v.width]).toEqual([90, 624]);
+});
+
 test("w while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
   const { v, cx } = await trajSplit();
   roomIs(v, cx, "p3", 433);
