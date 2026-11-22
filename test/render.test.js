@@ -17583,7 +17583,7 @@ test("the column opened with the row on weights keeps the terminal 200 px, count
   } finally { t.restore(); }
 });
 
-test("two dividers and the outer edge moved between still measures leave the row on weights: the record follows, k holds, and the terminals' S gives up only what the edge took", async () => {
+test("two dividers moved between still measures leave the row on weights: the record follows, k and the terminals' S hold; with the outer edge as well, which the widths cannot tell from the window, the row goes to px where it is", async () => {
   for (const edge of [0, -50]) {
     const t = await threeOpen("traj");
     try {
@@ -17592,16 +17592,32 @@ test("two dividers and the outer edge moved between still measures leave the row
       t.row.drag("p2", -30);
       t.row.drag("p4", 40);
       if (edge) t.row.drag("p1", edge);
+      const moved = t.row.widths();
       t.step(100);
       t.run(2000);
       const now = t.row.widths();
+      // No pane moves after the drags, whichever way the row goes.
+      expect(now).toEqual(moved);
+      expect(termAsked()).toBe(false);
+      if (edge) {
+        for (const id of ["p2", "p4", "p3"]) expect(t.row.size[id].px).toBe(now[id]);
+        expect(rowRec()?.k).toBeUndefined();
+        // Then a key steps the two panes in px, the others still.
+        t.inst.p4.x.resizeColumn(40, t.inst.p4.c);
+        t.run(1500);
+        const after = t.row.widths();
+        expect(after.p4 - now.p4).toBe(40);
+        expect(after.p2 - now.p2).toBe(-40);
+        for (const id of ["p1", "p3"]) expect(after[id]).toBe(now[id]);
+        continue;
+      }
       for (const id of ["p1", "p2", "p4", "p3"]) expect(t.row.size[id].weight).toBeGreaterThan(0);
       expect(log.slice(from).some(([k, n]) => k === "run" && n === "layout.resize")).toBe(false);
       const r = rowRec();
       expect(r.k).toBe(r0.k);
       expect(r.n).toEqual({ p2: now.p2, p4: now.p4, p3: now.p3 });
       expect(Math.abs(r.k * r.S - now.p1)).toBeLessThanOrEqual(2);
-      if (!edge) expect(r.S).toBe(r0.S);
+      expect(r.S).toBe(r0.S);
       // Then a drag on its own is followed as before.
       t.row.drag("p4", -20);
       t.run(1500);
@@ -17808,8 +17824,20 @@ test("rowEvent: two panes trading width a px apart in rounding are a drag the te
   expect(rowEvent([716, 240, 380], [716, 241, 380])).toEqual({ kind: "same" });
   expect(rowEvent([716, 240, 380], [685, 272, 380])).toEqual({ kind: "drag", d: 0 });
   expect(rowEvent([716, 240, 380], [721, 240, 380])).toEqual({ kind: "drag", d: 5 });
-  expect(rowEvent([716, 240, 380], [788, 264, 418])).toEqual({ kind: "scale" });
+  expect(rowEvent([716, 240, 380], [788, 264, 418])).toMatchObject({ kind: "scale" });
+  expect(rowEvent([716, 240, 380], [788, 264, 418]).f).toBeCloseTo(1470 / 1336, 9);
   expect(rowEvent([716, 240], [716, 240, 380])).toEqual({ kind: "stale" });
+  // Three drags among the row's panes (sum held): the terminals give nothing.
+  expect(rowEvent([716, 240, 380], [700, 290, 346])).toEqual({ kind: "drag", d: 0 });
+  // The window 10% wider and the Chat/Trajectory divider 30 px in one gap: the widths add up to
+  // more, and not by one factor. The record cannot follow it.
+  expect(rowEvent([716, 240, 380], [818, 234, 418])).toEqual({ kind: "mixed" });
+  // The edge and a divider in one gap.
+  expect(rowEvent([716, 240, 380], [736, 220, 400])).toEqual({ kind: "mixed" });
+  // A 3 px window change: the Chat moves 2 px, the others under their rounding. The window.
+  expect(rowEvent([716, 240, 380], [718, 240, 381])).toMatchObject({ kind: "scale" });
+  // Another pane alone moving, past rounding and not by the window's factor: mixed.
+  expect(rowEvent([716, 240, 380], [716, 240, 395])).toEqual({ kind: "mixed" });
 });
 
 // Helpers for the row's cases below.
@@ -17825,6 +17853,143 @@ function rowKey(t, where, k) {
 }
 const allWeights = (t, ids) => ids.every((id) => t.row.size[id].weight > 0);
 const allPx = (t, ids) => ids.every((id) => t.row.size[id].px > 0);
+
+// The record is never trusted past the measures.
+test("the window 10% wider and a divider dragged 30 px in one gap: the row goes to px where it is, then = and - step only their two panes and a close keeps the panes left", async () => {
+  const t = await threeOpen("traj");
+  try {
+    t.row.total = Math.round(1806 * 1.1);
+    t.row.drag("p2", 30);
+    const moved = t.row.widths();
+    t.step(100);
+    t.run(2000);
+    // Nothing moves, and no record is kept to work weights out from.
+    expect(t.row.widths()).toEqual(moved);
+    expect(rowRec()?.k).toBeUndefined();
+    expect(allPx(t, ["p2", "p4", "p3"])).toBe(true);
+    for (const k of ["=", "-"]) {
+      const { was, now } = rowKey(t, "p2", k);
+      const d = k === "=" ? 40 : -40;
+      expect(now.p4 - was.p4).toBe(d);
+      expect(now.p2 - was.p2).toBe(-d);
+      expect(now.p1).toBe(was.p1);
+      expect(now.p3).toBe(was.p3);
+    }
+    const was = t.row.widths();
+    t.close("p3");
+    t.inst.p2.x.autoPinned?.(t.cx);
+    t.run(4000);
+    const now = t.row.widths();
+    expect(now.p2).toBe(was.p2);
+    expect(now.p4).toBe(was.p4);
+    expect(termAsked()).toBe(false);
+  } finally { t.restore(); }
+});
+
+test("ten 5 px window resizes, then =: the two panes step 40 px and the other two stay, within 2 px", async () => {
+  const t = await threeOpen("traj");
+  try {
+    for (let i = 1; i <= 10; i++) { t.row.total = 1806 + 5 * i; t.run(1500); }
+    const { was, now } = rowKey(t, "p2", "=");
+    expect(near(now.p4 - was.p4, 40)).toBe(true);
+    expect(near(now.p2 - was.p2, -40)).toBe(true);
+    expect(near(now.p1, was.p1)).toBe(true);
+    expect(near(now.p3, was.p3)).toBe(true);
+    // On weights or at px, never both.
+    expect(allWeights(t, rowIds) || allPx(t, ["p2", "p4", "p3"])).toBe(true);
+    expect(termAsked()).toBe(false);
+  } finally { t.restore(); }
+});
+
+test("three drags in one gap that grow the three panes by one factor read as the window: = then lands where it should or goes to px there, and the Trajectory's close keeps the column and gives the Chat its width back", async () => {
+  const t = await threeOpen("traj");
+  try {
+    const w = t.row.widths();
+    const sum = w.p2 + w.p4 + w.p3;
+    const f = 1 + 64 / sum;
+    const dc = Math.round(w.p2 * (f - 1));
+    const dt = Math.round(w.p4 * (f - 1));
+    t.row.drag("p1", -64);
+    t.row.drag("p2", dc - 64);
+    t.row.drag("p4", 64 - dc - dt);
+    t.step(100);
+    t.run(2000);
+    const { was, now } = rowKey(t, "p2", "=");
+    expect(near(now.p4 - was.p4, 40)).toBe(true);
+    expect(near(now.p2 - was.p2, -40)).toBe(true);
+    expect(near(now.p1, was.p1)).toBe(true);
+    expect(near(now.p3, was.p3)).toBe(true);
+    expect(allWeights(t, rowIds) || allPx(t, ["p2", "p4", "p3"])).toBe(true);
+    const back = t.v.trajChatBack;
+    const before = t.row.widths();
+    t.close("p4");
+    t.run(4000);
+    const end = t.row.widths();
+    expect(near(end.p2, back?.pane === "p4" ? back.px : before.p2)).toBe(true);
+    expect(near(end.p3, before.p3)).toBe(true);
+    expect(termAsked()).toBe(false);
+  } finally { t.restore(); }
+});
+
+test("= whose weights land more than 2 px off (the record wrong): the row goes to px where each pane should be, and no weight is worked out from that record again", async () => {
+  const t = await threeOpen("traj");
+  try {
+    // A record off by 5%, as the window's change under the rounding leaves it.
+    const r = rowRec();
+    state.shared["threads.row"] = { t4: { ...r, k: r.k * 1.05 } };
+    t.v.rowPending = undefined;
+    const from = log.length;
+    const { was, now } = rowKey(t, "p2", "=");
+    expect(now.p4 - was.p4).toBe(40);
+    expect(now.p2 - was.p2).toBe(-40);
+    expect(now.p1).toBe(was.p1);
+    expect(now.p3).toBe(was.p3);
+    expect(allPx(t, ["p2", "p4", "p3"])).toBe(true);
+    expect(rowRec()?.k).toBeUndefined();
+    // One pair of weights from the key, then only px.
+    const asks = log.slice(from).filter(([k, n]) => k === "run" && n === "layout.resize");
+    expect(asks.filter(([, , a]) => a.weight != null).length).toBe(2);
+    const more = log.length;
+    rowKey(t, "p2", "-");
+    expect(log.slice(more).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.weight != null)).toBe(false);
+  } finally { t.restore(); }
+});
+
+test("two keys 100 ms apart in different panes of the row on weights: each lands where it should, checked together, and the row stays on weights", async () => {
+  const t = await threeOpen("traj");
+  try {
+    const was = t.row.widths();
+    t.inst.p2.x.key(keyEv("="), t.inst.p2.c);
+    t.step(100);
+    t.inst.p3.x.key(keyEv("="), t.inst.p3.c);
+    t.run(3000);
+    const now = t.row.widths();
+    expect(now.p2 - was.p2).toBe(-40);
+    expect(now.p4 - was.p4).toBe(0);
+    expect(now.p3 - was.p3).toBe(40);
+    expect(now.p1).toBe(was.p1);
+    expect(allWeights(t, rowIds)).toBe(true);
+    expect(rowRec().n).toEqual({ p2: now.p2, p4: now.p4, p3: now.p3 });
+  } finally { t.restore(); }
+});
+
+test("a close whose fix finds no room left for the terminals (k at most 0) puts the panes left at px at their targets, not where they measured", async () => {
+  const t = await threeOpen("traj");
+  try {
+    const was = t.row.widths();
+    // A record whose terminals hold almost nothing: the fix's k comes out at most 0.
+    const r = rowRec();
+    state.shared["threads.row"] = { t4: { ...r, S: 0.02 } };
+    t.v.rowPending = undefined;
+    t.close("p3");
+    t.inst.p2.x.autoPinned?.(t.cx);
+    t.run(4000);
+    const now = t.row.widths();
+    expect(near(now.p2, was.p2)).toBe(true);
+    expect(near(now.p4, was.p4)).toBe(true);
+    expect(termAsked()).toBe(false);
+  } finally { t.restore(); }
+});
 
 // A close during a landing, and both side panes closed together.
 test("the Trajectory closed during the column's landing gives the landing up: the column back at its px, the Chat at its width, in one state", async () => {
