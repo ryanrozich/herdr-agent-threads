@@ -6,6 +6,7 @@
 import { test, expect } from "bun:test";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
+  trajCompact, compactRow,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
   BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds, rowTimes,
 } from "../mods/agent-threads/ledger.js";
@@ -465,4 +466,22 @@ test("ledger: a task notification's turn starts with a Background task finished 
   // A teammate's message keeps its own words and name.
   const peer = ledgerTurn(S, turn(5, [], { prompt: "Review the diff", who: "helper-a" }), 0).rows[1];
   expect([peer.lk, peer.text, peer.sender]).toEqual(["agent", "Review the diff", "helper-a"]);
+});
+
+test("compact rows below 200 px: the turn's number and the duration where it fits; below 64 px the mark alone; the label and the time in the tooltip", () => {
+  expect([trajCompact(200), trajCompact(199), trajCompact(100), trajCompact(64), trajCompact(63), trajCompact(60)]).toEqual([null, "line", "line", "line", "icon", "icon"]);
+  const step = { kind: "tr", turn: { n: 291 }, lk: "tool", tool: "Bash", text: "ls -la", start: 12000, dur: 3400, status: null };
+  expect(compactRow(step, 240)).toBe(null);
+  const at100 = compactRow(step, 100);
+  expect([at100.mode, at100.num, at100.dur]).toEqual(["line", "#291", durText(3400)]);
+  expect(at100.tip).toBe(["#291", "Bash ls -la", startText(12000), durText(3400)].join(" · "));
+  // A 100 px pane, 98 inside: a three-figure number and a five-character duration fit.
+  expect(compactRow({ ...step, dur: 50 }, 100, 98).dur).toBe(durText(50));
+  // Too narrow for the duration: the number alone.
+  expect(compactRow(step, 72).dur).toBe(null);
+  expect(compactRow(step, 72).num).toBe("#291");
+  const at60 = compactRow(step, 60);
+  expect([at60.mode, at60.num, at60.dur, at60.tip]).toEqual(["icon", null, null, at100.tip]);
+  const head = { kind: "trh", n: 291, ts: null, total: 8000 };
+  expect([compactRow(head, 100).num, compactRow(head, 100).dur]).toEqual(["#291", durText(8000)]);
 });

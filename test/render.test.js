@@ -15310,6 +15310,56 @@ test("the Trajectory at 960 px: the filter bar with counts, the detail open at t
   draw(v, cx);
 });
 
+test("the Trajectory below 200 px: one line a row (a step's mark, its turn's number, its duration when it fits), the heading's icon alone, the label and time in the tooltip; below 64 px the mark alone; rows keep their height", async () => {
+  const { rowTimes: rowTimesOf } = await import("../mods/agent-threads/ledger.js");
+  // The list's row height: one number when every row has it.
+  const listSizes = () => { const u = [...new Set(lastList.sizes)]; return u.length === 1 ? u[0] : u; };
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  const L = v.ledger();
+  const steps = L.rows.filter((r) => r.kind === "tr");
+  const step = steps.find((r) => rowTimesOf(r).dur) ?? steps[0];
+  const head = L.rows.find((r) => r.kind === "trh");
+  const at = (w) => { v.width = w; v.paneW = w; return frame(v, cx); };
+  // A 200 px pane (198 inside its frame): as before.
+  let c = at(198);
+  expect(wordsOf(c)).toContain("Trajectory");
+  expect(hasId(c, "th-settings")).toBe(true);
+  expect(listSizes()).toBe(24);
+  const w200 = wordsOf(c);
+  // A 199 px pane: compact.
+  c = at(197);
+  expect(hasId(c, "th-traj-icon")).toBe(true);
+  // 100 px: the heading's icon only, each step its turn's number, no time of day.
+  c = at(98);
+  expect(wordsOf(c)).not.toContain("Trajectory");
+  expect(hasId(c, "th-traj-icon")).toBe(true);
+  expect(hasId(c, "th-settings")).toBe(false);
+  expect(listSizes()).toBe(24);
+  const words = wordsOf(c);
+  expect(words).toContain(`#${step.turn.n}`);
+  expect(words.some((x) => /\d:\d\d (AM|PM)/.test(x))).toBe(false);
+  expect(words).not.toContain(step.text);
+  // The tooltip has the label and the time; the duration is drawn where it fits.
+  const tips = c.filter((e) => e[0] === "tooltip").map((e) => e[1]);
+  const dur = rowTimesOf(step).dur;
+  expect(tips.some((x) => x.includes(`#${step.turn.n}`) && (!step.text || x.includes(step.text)))).toBe(true);
+  if (dur) expect(words).toContain(dur);
+  expect(tips.some((x) => x.startsWith(`#${head.n}`))).toBe(true);
+  expect(w200.length).toBeGreaterThan(0);
+  // 60 px: the marks alone, no numbers and no durations, the tooltips kept.
+  c = at(58);
+  const w60 = wordsOf(c);
+  expect(w60.some((x) => /^#\d+$/.test(x))).toBe(false);
+  if (dur) expect(w60).not.toContain(dur);
+  expect(c.filter((e) => e[0] === "tooltip").length).toBeGreaterThanOrEqual(L.rows.length - L.rows.filter((r) => r.kind === "sess").length);
+  expect(listSizes()).toBe(24);
+  // The selection and the keys work as before at 60 px.
+  const from = v.tsel;
+  v.key(keyEv("j"), cx);
+  expect(v.tsel).not.toBe(from);
+});
+
 test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
   const { file } = runningFixture();
   const { v, cx } = await pane(file);
