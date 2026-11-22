@@ -17252,7 +17252,11 @@ function pairRow(total, sizes) {
 // test moves. step(ms): Herdr applies the asks, lays the row out, each pane hears its width
 // (as on_size_change) and draws; deferred writes run.
 // opts.total: the row's width; opts.weighed: the Chat on a weight it set, with its row's line
-// known (as after the mod's own sizing), in place of px.
+// known (as after the mod's own sizing), in place of px. opts.zoom: Herdr's zoom, with each
+// pane hearing its width through its own on_size_change in zoomed px. The row itself is in
+// layout.resize px, the unit the mod sends: Herdr 0.1.16 keeps a px span unzoomed and draws
+// it at zoom times px (window.rs sized), and its drag works in the same unzoomed px, so these
+// are the design px the mod measures (size.width / zoom).
 async function pairPanes(chat = 722, opts = {}) {
   const { v, cx } = await pinPane("--extra", "6");
   v.debug = false;
@@ -17269,13 +17273,22 @@ async function pairPanes(chat = 722, opts = {}) {
     v.weighLine = { a: 1 / total, b: 0.5 / total };
   }
   const panesSeen = [];
+  const z = opts.zoom ?? 1;
+  if (z !== 1) herdrSettings = { font_family: "Mono", zoom: z };
+  let heard = 0;
+  const onSize = new Map();
   const hear = (x, c, id) => {
     const wd = row.widths()[id] - 2;
-    if (Math.abs(wd - (x.paneW ?? -9)) > 1) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
+    // Herdr calls the size handler of the last frame drawn, then draws the next.
+    const h = z !== 1 ? onSize.get(x) : null;
+    if (h) { heard++; h({ width: wd * z, height: 800 * z }, c); }
+    else if (Math.abs(wd - (x.paneW ?? -9)) > 1) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
+    if (z !== 1) rec = [];
     draw(x, c);
+    if (z !== 1) { onSize.set(x, handlerAfterId(rec, "threads-root", "on_size_change")); rec = null; }
     c.flush(0);
   };
-  const t = { v, cx, row, w: null, cxw: null, frames: panesSeen, now: () => now, restore: () => { Date.now = real; } };
+  const t = { v, cx, row, w: null, cxw: null, frames: panesSeen, now: () => now, heard: () => heard, restore: () => { Date.now = real; herdrSettings = { font_family: "Mono" }; } };
   t.step = (ms = 100) => {
     now += ms;
     row.apply();
@@ -17334,6 +17347,34 @@ test("the Pinned column opens at px and the pair then goes on weights that keep 
     expect(Math.abs(pair.k - 722 / t.row.size.p2.weight)).toBeLessThan(0.01);
     // The probe's widths were not taken as the owner's column width.
     expect(state.shared["threads.pinWidth"]?.px ?? 380).toBe(380);
+  } finally { t.restore(); }
+});
+
+test("at zoom 1.25, with each pane hearing its width in zoomed px, the pair goes on weights that keep both widths and a divider drag moves only its two panes", async () => {
+  const t = await pairPanes(722, { zoom: 1.25 });
+  try {
+    expect(t.v.zoom()).toBe(1.25);
+    t.run(4000);
+    // Each width came through the pane's own size handler, divided by the zoom.
+    expect(t.heard()).toBeGreaterThan(10);
+    expect(t.v.paneW).toBeCloseTo(720, 6);
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+    const end = t.row.widths();
+    expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(1);
+    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(2);
+    const was = t.row.widths();
+    t.row.drag("p2", -100);
+    t.run(1000);
+    const now = t.row.widths();
+    expect(now.p2).toBe(was.p2 - 100);
+    expect(Math.abs(now.p3 - (was.p3 + 100))).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p1 - was.p1)).toBeLessThanOrEqual(1);
+    const pair = state.shared["threads.pinPair"].t4;
+    expect(pair.m).toBe(now.p2);
+    expect(pair.p).toBe(now.p3);
   } finally { t.restore(); }
 });
 
