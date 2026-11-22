@@ -3875,8 +3875,12 @@ export default class Threads extends View {
       return;
     }
     run("layout.resize", { id: main.pane, px: m });
-    // The probe's widths are not the owner's (shareWidth).
-    setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
+    // The probe's widths are not the owner's (shareWidth). After the drawing pass, as the
+    // record's writes (poll runs in render).
+    const hold = Date.now() + 4000;
+    const put = () => setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold });
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
     const S = ent?.S > 0 ? ent.S : 0.5;
     const d = ent?.R > 0 ? ent.R - m - p : 0;
     this.pairing = { m, p, S: ent?.S > 0 ? ent.S : null, tried: [], w: Number(((S * p) / (d > 0 ? d : m)).toPrecision(5)), asked: Date.now(), at: this.paneW };
