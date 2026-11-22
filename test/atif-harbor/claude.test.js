@@ -7,8 +7,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_CASES, user, writeSession } from "./claude-cases.js";
-import { checkCase } from "./differences.js";
+import { CLAUDE_CASES, user, assistant, writeSession } from "./claude-cases.js";
+import { checkCase, OUR_DIFFERENCES } from "./differences.js";
+import { problems } from "../atif-schema.js";
 
 const cli = join(import.meta.dir, "../../mods/agent-threads/core/atif.js");
 // A case's export, or null when the export says exactly "no turns" (exit 1); anything else throws.
@@ -49,4 +50,28 @@ test("harbor claude: json.dumps facts pass on Harbor's five messages and fail on
   item.facts(exportOf(harbor));
   expect(() => item.facts(exportOf(harbor.with(2, '{"a":1,"b":"x"}')))).toThrow('json.dumps semantics expected for {"a":1,"b":"x"}');
   expect(() => item.facts(exportOf(harbor.slice(0, 4)))).toThrow("one user step per payload");
+});
+
+test("harbor ours: task_notification_after_a_finished_turn", () => {
+  const entry = OUR_DIFFERENCES.find((x) => x.id === "ours: task_notification_after_a_finished_turn");
+  expect(entry).toMatchObject({ reason: "R12", kind: "by design" });
+  const notice = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"bun run build\" completed (exit code 0)</summary>\n</task-notification>";
+  const main = writeSession(mkdtempSync(join(tmpdir(), "threads-harbor-")), "session.jsonl", [
+    user("Start the build in the background", "2026-01-01T00:00:00Z"),
+    assistant([{ type: "text", text: "Started." }], "2026-01-01T00:00:01Z", "msg_1"),
+    { type: "system", subtype: "turn_duration", durationMs: 1000, timestamp: "2026-01-01T00:00:01Z", sessionId: "test-session" },
+    { ...user(notice, "2026-01-01T00:01:00Z"), origin: { kind: "task-notification" } },
+    assistant([{ type: "text", text: "The build finished clean." }], "2026-01-01T00:01:02Z", "msg_2"),
+  ]);
+  const r = spawnSync("bun", [cli, main, "claude"], { encoding: "utf8" });
+  expect(r.status).toBe(0);
+  const t = JSON.parse(r.stdout);
+  expect(problems(t)).toEqual([]);
+  const users = t.steps.filter((x) => x.source === "user");
+  expect(users.map((x) => x.message)).toEqual(["Start the build in the background", ""]);
+  expect(users[1].extra.sender).toEqual({ kind: "task-notification" });
+  expect(users[1].extra.turn).toBe(2);
+  expect(t.steps.at(-1)).toMatchObject({ source: "agent", message: "The build finished clean.", extra: { turn: 2 } });
+  // Harbor's likely shape, the notice's text as the message, is not what the export writes.
+  expect(JSON.stringify(t)).not.toContain("bun run build");
 });

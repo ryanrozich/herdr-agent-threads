@@ -548,6 +548,23 @@ test("every background update keeps its own final text, in order; a silent one a
   expect(updatesText(t.turns[0])).toBe("");
 });
 
+// A task notification while an auto-continuation's wake-up is still going, after the row has
+// ended: the notice opens a row of its own, and what the agent says from then on is its reply.
+test("a task notification during a running auto-continuation opens its own row; the text after it is that row's", () => {
+  const s = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "go" }, { k: "t", t: "done" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "t", t: "checking" }, { k: "u", n: "Read" },
+  ]) apply(s, e);
+  expect(s.followActive).toBe(true);
+  for (const e of [{ k: "p", o: "task-notification", t: null }, { k: "t", t: "the build passed" }, { k: "d", ms: 1 }]) apply(s, e);
+  expect(s.turns).toHaveLength(2);
+  expect(s.turns[0]).toMatchObject({ followups: 1, latest: "checking", updates: ["checking"] });
+  expect(reply(s.turns[0])).toBe("done");
+  expect(s.turns[1]).toMatchObject({ prompt: "", sender: { kind: "task-notification" }, done: true });
+  expect(reply(s.turns[1])).toBe("the build passed");
+});
+
 test("a command line from another sender is that sender's turn, not the person's (F3)", () => {
   for (const o of ["peer", "scheduled", "sdk"]) {
     const s = newSession("x", "f");

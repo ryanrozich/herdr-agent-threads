@@ -974,6 +974,45 @@ test("replies after background-task notices show in the Chat, each its own row i
   v.outline = false;
 });
 
+// The quiet line is a line, not a fold: no chevron on a closed row or in an open turn, where
+// a teammate's folded message has one; and the Pinned view names it the same way.
+test("a task notification's quiet line has no chevron, closed or open, and its pin reads Background task finished", async () => {
+  const { v, cx } = await pane(noticeSession());
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  const row = v.rows().find((r) => r.kind === "turn" && r.turn.n === 6);
+  expect(row.fold).toBe("folded");
+  const icons = (r) => { rec = []; v.foldLine(theme, r); const c = rec; rec = null; return svgs(c); };
+  expect(icons(row)).toEqual(["bell.svg"]);
+  v.open.add(row.key);
+  draw(v, cx);
+  const af = v.rows().find((r) => r.kind === "afold" && r.turn.n === 6);
+  expect(icons(af)).toEqual(["bell.svg"]);
+  // A folded agent message from a teammate keeps its chevron, so the test above can fail.
+  expect(icons({ ...row, turn: { ...row.turn, sender: { kind: "peer", name: "helper-a" } } })).toContain("chevron-right.svg");
+  // Pinned: the line's words where the prompt would be, with the reply under them.
+  const sh = v.pinShape(row.turn);
+  expect(sh.prompt.join(" ")).toBe("Background task finished");
+  expect(sh.tone).toBe("reply");
+});
+
+// Text copied from any of the background updates under LATEST UPDATE is that turn's, so q
+// quotes it, not only text from the last one.
+test("q finds the turn for text copied from an earlier background update, not only the last", async () => {
+  const { v, cx } = await pane(noticeSession("auto-continuation"));
+  v.selectableMemo = true;
+  draw(v, cx);
+  const key = v.turnKeys(v.rows()).at(-1);
+  expect(v.findTurn(key).updates).toEqual(NOTICE_REPLIES);
+  v.sel = key;
+  for (const text of [NOTICE_REPLIES[0], "one failure, in the coupon step", NOTICE_REPLIES[2]]) {
+    cx.clip = "older text";
+    v.notePress(cx);
+    cx.clip = text;
+    expect(v.copiedPart(cx)).toEqual({ key, text });
+  }
+});
+
 // While its turn runs, a task notification's row has the same quiet line in place of the
 // bubble, closed and selected, and its height leaves the bubble and its strip out.
 test("a running task-notification turn draws its quiet line, not a bubble, and its height counts no bubble", async () => {
