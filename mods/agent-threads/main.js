@@ -3823,7 +3823,7 @@ export default class Threads extends View {
     if (blocked || !still) return;
     if (ent?.k > 0) { this.pairTrack(ent, m, p, cx); return; }
     if (now - (this.firstSizeAt ?? now) < 1500 || (this.pairTries ?? 0) >= 3) return;
-    this.pairBegin(me, main, m, p, ent);
+    this.pairBegin(me, main, m, p, ent, cx);
   }
   // The Chat at px m (where it is), and the column to a weight that lands it at its width p:
   // then the column and the other weight panes get the same px a unit of weight, p / w, and
@@ -3832,14 +3832,14 @@ export default class Threads extends View {
   // knew it when it opened the column (pinKeep: the weight room R and the others' weights S,
   // so the others have R - m - p), else from the last pair's S with the others about as wide
   // as the Chat; then toward p from the measures (ui.js weightLine). The Chat does not move.
-  pairBegin(me, main, m, p, ent) {
+  pairBegin(me, main, m, p, ent, cx) {
     const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane);
     this.pairTries = (this.pairTries ?? 0) + 1;
     // The column's px is kept in the record while it is on a trial weight, so the Trajectory
     // opening mid-probe puts it back at px from the Chat's pane (pairPx). After a dropped
     // probe the column's width follows its trial weight, so the px from before the first is
     // the one kept.
-    setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...(ent ?? {}), probe: ent?.probe > 0 ? ent.probe : p } });
+    this.pairPatch((rec) => ({ ...rec, probe: rec.probe > 0 ? rec.probe : p }), cx);
     // No terminal beside them: the two share the row in the ratio of their widths, one ask
     // each.
     if (!others.length) {
@@ -3866,7 +3866,7 @@ export default class Threads extends View {
     // measure after 400 ms, below, and the third ends the probe.)
     if (blocked || Math.abs(m - g.m) > 2) {
       this.pairing = null;
-      if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m);
+      if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m, cx);
       return;
     }
     if (g.final) {
@@ -3876,7 +3876,7 @@ export default class Threads extends View {
       if (Math.abs(p - g.p) <= 2) {
         this.pairTries = 0;
         this.pairSave({ k: g.m / g.final.wc, m, p, S: g.S }, cx);
-      } else if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m);
+      } else if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m, cx);
       return;
     }
     if (Math.abs(this.paneW - g.at) <= 1 && now - g.asked < 400) return;
@@ -3906,13 +3906,13 @@ export default class Threads extends View {
   // it is when it was given a weight, so no half-made pair is left on a trial weight. No more
   // tries until the column opens again (pairTries is this pane's): a row that keeps moving
   // under the probe is not probed every half second.
-  pairGiveUp(g, m) {
+  pairGiveUp(g, m, cx) {
     const me = this.me();
     const main = this.mainPane();
     const rec = shared(PAIR_KEY)?.[this.terminal];
     if (me) run("layout.resize", { id: me.pane, px: rec?.probe > 0 ? rec.probe : g.p });
     if (g.final && main) run("layout.resize", { id: main.pane, px: m });
-    if (rec?.probe) { const rest = { ...rec }; delete rest.probe; setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: rest }); }
+    this.pairPatch((r) => { const rest = { ...r }; delete rest.probe; return rest; }, cx);
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.
@@ -3957,6 +3957,12 @@ export default class Threads extends View {
     this.weighAfter = null;
     this.weighing = { pane: me.pane, n0: Math.round(pair.m), tried: [], w: wc };
     this.askWeight();
+  }
+  // This terminal's record changed by fn, after the drawing pass (poll runs in render).
+  pairPatch(fn, cx) {
+    const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: fn(shared(PAIR_KEY)?.[this.terminal] ?? {}) });
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
   }
   pairSave(v, cx) {
     const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v });
