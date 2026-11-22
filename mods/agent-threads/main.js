@@ -3850,11 +3850,11 @@ export default class Threads extends View {
     const me = this.me();
     const main = this.mainPane();
     const now = Date.now();
-    // The Chat moved or the Trajectory opened: the column back to its px. (No answer is a
+    // The Chat moved or the Trajectory opened: the probe ends, and the column stays on its
+    // trial weight; the next probe, once the row is still, starts from there. (No answer is a
     // measure after 400 ms, below, and the third ends the probe.)
     if (blocked || Math.abs(m - g.m) > 2) {
       this.pairing = null;
-      if (!blocked && Math.abs(m - g.m) <= 2) run("layout.resize", { id: me.pane, px: g.p });
       return;
     }
     if (g.final) {

@@ -17472,7 +17472,7 @@ test("a column that cannot land exactly at its width on a weight (2 px off at be
   } finally { t.restore(); }
 });
 
-test("the probe stops when the Chat moves under it, or after three weights Herdr does not answer: the column back at its px either way", async () => {
+test("the probe stops when the Chat moves under it (the column left on its trial weight for the next probe), or after three weights Herdr does not answer (the column back at its px)", async () => {
   const t = await pairPanes();
   try {
     untilProbe(t);
