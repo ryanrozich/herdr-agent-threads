@@ -17413,7 +17413,7 @@ test("the pair's weights follow a window resize (both scale), and two changes be
 });
 
 test("the column closing with the pair on weights: the Chat goes back to its width in one weight when the terminals' weights are known, within the probe's error and then exact when they were measured", async () => {
-  for (const exact of [true, false]) {
+  for (const [exact, early] of [[true, false], [false, false], [true, true]]) {
     const t = await pairPanes();
     try {
       t.run(4000);
@@ -17424,12 +17424,19 @@ test("the column closing with the pair on weights: the Chat goes back to its wid
       expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.05);
       if (exact) state.shared["threads.pinPair"] = { t4: { ...pair, S: t.row.size.p1.weight } };
       // Herdr closes the column: its room goes to the weights left, the Chat's among them.
+      // early: the pane list shows it gone a frame before the Chat hears its new width (as on
+      // the rig), so the Chat's first frame after it is at its old width.
       state.panes = state.panes.filter((p) => p.pane !== "p3");
+      log = [];
+      t.row.seen = 0;
+      if (early) {
+        t.w = null;
+        t.step(16);
+        expect(log.filter(([, n2]) => n2 === "layout.resize")).toEqual([]);
+      }
       t.row.close("p3");
       t.w = null;
       const n = t.frames.length;
-      log = [];
-      t.row.seen = 0;
       t.run(1500);
       const asks = log.filter(([, n2, a]) => n2 === "layout.resize" && a.id === "p2").map((x) => Object.keys(x[2]).sort().join());
       // Herdr draws the Chat wide until the ask lands, between these frames; each frame here
@@ -17450,6 +17457,25 @@ test("the column closing with the pair on weights: the Chat goes back to its wid
       expect(state.shared["threads.pinPair"]?.t4).toBeUndefined();
     } finally { t.restore(); }
   }
+  // The column's room to the terminal (a column moved left of the Chat): the Chat keeps its
+  // width on its weight, and nothing is asked.
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const m = t.row.widths().p2;
+    const wp = t.row.size.p3.weight;
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    t.row.order = t.row.order.filter((id) => id !== "p3");
+    delete t.row.size.p3;
+    t.row.size.p1 = { weight: t.row.size.p1.weight + wp };
+    t.w = null;
+    log = [];
+    t.row.seen = 0;
+    t.run(1500);
+    expect(log.filter(([, n2]) => n2 === "layout.resize")).toEqual([]);
+    expect(t.frames.slice(-15).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+    expect(t.v.pairCloseDue ?? null).toBe(null);
+  } finally { t.restore(); }
 });
 
 test("the Trajectory opened with the column open puts the pair back to px for its life; closed, the pair goes back on weights", async () => {

@@ -2597,6 +2597,7 @@ export default class Threads extends View {
     this.weighSoon();
     this.weighStep();
     this.autoPinned(cx);
+    this.pairCloseStep();
     this.pairPoll(cx);
     if (this.syncSel()) this.selMoved = true;
     this.lookRepo(cx);
@@ -3900,7 +3901,22 @@ export default class Threads extends View {
   // the column's room. The weight that keeps the Chat at its width (ui.js pairAlone) in one
   // ask, then measured as any weight is (weighStep), with the row's line from the pair for a
   // second ask if one is needed. No other weights known: the width at px, then a weight.
+  // Herdr can show the column gone a frame before this pane's new width. The ask waits for
+  // that width (the column's room given to this pane), so the wide width is not taken for the
+  // answer to it (seen on the rig: the Chat measured 1,170 px as the answer to the weight for
+  // 656, and went to 367). Not wider in 400 ms: the room went to another pane (the column was
+  // not right of this one), this pane is at its width on its weight, and nothing is asked.
   pairClose(pair) {
+    this.pairCloseDue = { pair, at: Date.now() };
+    this.pairCloseStep();
+  }
+  pairCloseStep() {
+    const c = this.pairCloseDue;
+    if (!c) return;
+    const grew = this.paneW != null && Math.round(this.paneW) + PANE_FRAME > c.pair.m + 2;
+    if (!grew) { if (Date.now() - c.at >= 400) this.pairCloseDue = null; return; }
+    this.pairCloseDue = null;
+    const pair = c.pair;
     const me = this.me();
     const wc = me ? pairAlone(pair) : null;
     if (!wc) { if (me) this.sizeTo(Math.round(pair.m)); return; }
