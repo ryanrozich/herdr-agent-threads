@@ -18140,6 +18140,69 @@ test("columnResize keeps the stepped pane's own 200 px floor when the other pane
   expect(columnResize(380, 60, -40, Infinity, 200)).toEqual({ column: 240, main: 200 });
 });
 
+test("closeWeights counts what each pane left gives up or takes against its target", async () => {
+  const { closeWeights } = await import("../mods/agent-threads/ui.js");
+  // The Trajectory (482) closed, the Chat going from 702 back to 722 and the column staying:
+  // the terminals hold k S + 482 - 20.
+  const r = closeWeights({ k: 400, S: 0.5, n: { a: 702, b: 482, c: 380 }, closed: "b", targets: { a: 722, c: 380 } });
+  expect(r.k).toBeCloseTo((200 + 482 - 20) / 0.5, 9);
+  expect(r.w.a).toBeCloseTo(722 / r.k, 4);
+  expect(r.w.c).toBeCloseTo(380 / r.k, 4);
+});
+
+test("the Trajectory closed in a row where the Chat gave it room: the Chat goes back to its width from before the Trajectory, not the one it had beside it", async () => {
+  const t = await threeRow(900, { total: 1400 });
+  try {
+    t.run(1000);
+    await t.openTraj();
+    t.run(4000);
+    expect(t.row.widths().p2).toBeLessThan(900 - 200);
+    expect(rowRec().k).toBeGreaterThan(0);
+    t.close("p4");
+    t.run(4000);
+    expect(near(t.row.widths().p2, 900)).toBe(true);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("a close whose Herdr update comes after the mod sees the pane gone waits for the pane that takes its weight to measure wider: one weight for each pane left, then the divider's fix", async () => {
+  const t = await threeOpen("traj");
+  try {
+    const was = t.row.widths();
+    const from = log.length;
+    // The column gone from the pane list a step before Herdr lays the row out without it.
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    delete t.inst.p3;
+    t.inst.p2.x.autoPinned?.(t.cx);
+    t.step(100);
+    t.step(100);
+    t.row.close("p3");
+    t.run(4000);
+    const now = t.row.widths();
+    expect(near(now.p2, was.p2)).toBe(true);
+    expect(near(now.p4, was.p4)).toBe(true);
+    const asks = log.slice(from).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p4" && a.weight != null);
+    expect(asks.length).toBe(2);
+  } finally { t.restore(); }
+});
+
+test("the landing's record is kept only once the row has been still after the held panes' weights went", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openCol();
+    t.run(5000);
+    await t.openTraj();
+    for (let s = 0; s < 6000 && !t.v.rowLand?.final; s += 50) t.step(50);
+    expect(Boolean(t.v.rowLand?.final)).toBe(true);
+    t.run(400, 50);
+    expect(rowRec()?.k).toBeUndefined();
+    expect(Boolean(t.v.rowLand)).toBe(true);
+    t.run(1200, 50);
+    expect(rowRec().k).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });

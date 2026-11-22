@@ -265,6 +265,9 @@ const ROW_KEY = "threads.row";
 const SPLIT_GAP = 8;
 // Both widths still this long before the pair is made or its weights brought up to date.
 const PAIR_STILL_MS = 500;
+// How long a close waits for the pane that takes the closed one's weight to measure wider
+// before it asks its weights anyway (rowCloseStep).
+const ROW_CLOSE_WAIT_MS = 400;
 // Weights a key sent are checked once the row is still, or this long after they went if it is
 // never still (rowCheck).
 const ROW_WANT_MS = 1500;
@@ -4285,7 +4288,7 @@ export default class Threads extends View {
     const receiver = closed === ent.ids.pin ? ent.ids.traj : ent.ids.chat;
     this.rowLand = null;
     this.rowPlan = null;
-    this.rowCloseDue = { r, ent, closed, targets, receiver, n0: ent.n[receiver], until: Date.now() + 400 };
+    this.rowCloseDue = { r, ent, closed, targets, receiver, n0: ent.n[receiver], until: Date.now() + ROW_CLOSE_WAIT_MS };
     this.weighAt = null;
     this.rowTick(cx);
     return true;
