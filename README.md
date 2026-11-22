@@ -112,7 +112,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 
 | Key | What it does |
 |---|---|
-| `↑` `↓` or `j` `k` | Move between turns |
+| `↑` `↓` or `j` `k` | Move between the turns on the rail |
 | `Enter` or `Space` | Open or close a turn |
 | `o` | Outline |
 | `/` | Search |

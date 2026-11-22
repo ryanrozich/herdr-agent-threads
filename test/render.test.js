@@ -1135,6 +1135,19 @@ test("agentRail: off by default, only the person's turns and the running one hav
   expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
   expect(kids).toContain("Agent messages on the rail");
   v.settingsOpen = false;
+  // The switch's knob sits at the end only while it is on.
+  const switchOn = () => {
+    v.settingsOpen = true;
+    rec = [];
+    v.render(cx);
+    const r = rec;
+    rec = null;
+    v.settingsOpen = false;
+    const i = r.findIndex((e) => e[0] === "id" && e[1] === "th-set-agent-rail");
+    const j = r.findIndex((e, k) => k > i && e[0] === "id");
+    return r.slice(i, j < 0 ? undefined : j).some((e) => e[0] === "justify_end");
+  };
+  expect(switchOn()).toBe(false);
   // On: the switch writes true, and the folded agent message gets its tick. The writes are
   // what the next read finds, as on disk.
   keepSettings = true;
@@ -1143,6 +1156,7 @@ test("agentRail: off by default, only the person's turns and the running one hav
   expect(v.prefs.agentRail).toBe(true);
   await new Promise((r) => setTimeout(r, 20));
   expect(JSON.parse(settingsWrites.at(-1)).agentRail).toBe(true);
+  expect(switchOn()).toBe(true);
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
   // Off again: the switch writes false, not a missing key.
@@ -1156,11 +1170,108 @@ test("agentRail: off by default, only the person's turns and the running one hav
   v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: true }));
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // The setting alone changing rebuilds the rail (it is in the rows' key).
+  v.prefs = { ...v.prefs, agentRail: false };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  v.prefs = { ...v.prefs, agentRail: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
   v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: false }));
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
   keepSettings = false;
   delete recordFiles[v.prefsPath()];
+});
+
+test("up and down follow the rail: with Agent messages on the rail off they pass over agent messages, on they stop at them; the running one is a stop", async () => {
+  const { keyAction } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "peer", t: peer("The docs build is green"), ts: at(4) }, { k: "t", t: "Thanks." }, { k: "d", ms: 800, ts: at(5) },
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(6) }, { k: "t", t: "Noted." }, { k: "d", ms: 800, ts: at(7) },
+    { k: "p", o: "human", t: "Add the line", ts: at(8) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(9) },
+    // An agent message still running: the running turn.
+    { k: "p", o: "peer", t: peer("Checking the release build"), ts: at(10) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3", "0:4", "0:5", "0:6"]);
+  expect(v.railTurns.map((x) => x.key)).toEqual(["0:1", "0:5", "0:6"]);
+  // j and k are the same actions as down and up.
+  expect(["j", "down", "k", "up"].map((k) => keyAction(keyEv(k), false, "q"))).toEqual(["next", "next", "prev", "prev"]);
+  // Down from turn 1 passes over the three agent messages and brings turn 5 into view.
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.scrollTo).toEqual({ key: "0:5", how: "center" });
+  // Up from turn 5 passes over them back to turn 1.
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  expect(v.scrollTo).toEqual({ key: "0:1", how: "center" });
+  // An agent message selected by a click: down goes to the next tick, up to the one before.
+  v.sel = "0:3";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:5");
+  v.sel = "0:3";
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  // The running agent message keeps its tick, so it is a stop; past it, nothing more.
+  v.sel = "0:5";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:6");
+  v.action("next", cx);
+  expect(v.sel).toBe("0:6");
+  v.sel = "0:1";
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  // Nothing selected: up goes to the newest stop.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:6");
+  // With Agent messages on the rail on, down stops at the first agent message.
+  v.prefs = { ...v.prefs, agentRail: true };
+  draw(v, cx);
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  // In the outline every row stays a stop.
+  v.prefs = { ...v.prefs, agentRail: false };
+  v.setOutline(true);
+  draw(v, cx);
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  v.setOutline(false);
+});
+
+test("an agent message with no tick, selected by a click, still takes the keys that act on the selected turn", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good. The release note needs one more line." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+    // A finished agent message last: no tick, so the last stop is turn 3.
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(6) }, { k: "t", t: "Noted." }, { k: "d", ms: 500, ts: at(7) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.railTurns.map((x) => x.key)).toEqual(["0:1", "0:3"]);
+  // Down from the last stop goes nowhere: the agent message after it has no tick.
+  v.sel = "0:3";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:3");
+  // With nothing selected, up goes to the newest stop, not the newest row.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:3");
+  v.sel = "0:2";
+  // Enter opens it.
+  expect(v.action("open", cx)).toBe(true);
+  expect(v.open.has("0:2")).toBe(true);
+  // c copies its reply, and the selection stays on it.
+  expect(v.action("copy", cx)).toBe(true);
+  expect(v.sel).toBe("0:2");
 });
 
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {

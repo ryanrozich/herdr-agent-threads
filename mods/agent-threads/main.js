@@ -3802,6 +3802,18 @@ export default class Threads extends View {
     return this.sessions[si]?.turns[n - 1] ?? null;
   }
 
+  // Whether up and down stop at this turn: whether it has a tick on the rail (the rows'
+  // rule). An agent message has one only with agentRail on; the running turn always does.
+  // In the outline and the Pinned view every row is a stop, as before.
+  railStop(key) {
+    if (this.prefs.agentRail === true || this.view === "pinned" || this.outlined()) return true;
+    const turn = this.findTurn(key);
+    if (!turn?.agent) return true;
+    const si = Number(key.split(":")[0]);
+    const s = this.sessions[si];
+    return si === this.sessions.length - 1 && turn === s.turns[s.turns.length - 1] && !turn.done;
+  }
+
   // ---- actions ----
 
   // Selects the newest turn (when asked, or when nothing is selected) and scrolls to it on
@@ -5000,8 +5012,18 @@ export default class Threads extends View {
       this.scrollTo = { key: this.sel, how: "center" };
     };
     switch (name) {
-      case "prev": go(at < 0 ? keys.length - 1 : at - 1); return true;
-      case "next": go(at < 0 ? keys.length - 1 : at + 1); return true;
+      // Up and down (k and j) follow the rail: they stop only at turns with a tick
+      // (railStop), so with Agent messages on the rail off they pass over agent messages.
+      // From a turn with no tick (a click selected it) they go to the nearest tick that way;
+      // at either end the selection stays.
+      case "prev": case "next": {
+        const d = name === "next" ? 1 : -1;
+        let i = at < 0 ? keys.length : at + d;
+        if (at < 0) do i--; while (i > 0 && !this.railStop(keys[i]));
+        else while (i >= 0 && i < keys.length && !this.railStop(keys[i])) i += d;
+        go(i >= 0 && i < keys.length ? i : at);
+        return true;
+      }
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
