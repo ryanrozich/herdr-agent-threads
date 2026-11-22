@@ -1184,6 +1184,36 @@ test("agentRail: off by default, only the person's turns and the running one hav
   delete recordFiles[v.prefsPath()];
 });
 
+test("agentRail alone changing builds the rows again: it is in the rows' key, so the rail follows with nothing else changed", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  for (const debug of [false, true]) {
+    v.debug = debug;
+    v.prefs = { ...v.prefs, agentTurns: false, agentRail: false };
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+    // Built and kept: a draw with nothing changed keeps the same key and the same rows.
+    const key = v.rowsKey;
+    const rows = v.baseRows;
+    draw(v, cx);
+    expect(v.rowsKey).toBe(key);
+    expect(v.baseRows).toBe(rows);
+    // Only agentRail changes: a new key, and the rail has the agent message's tick.
+    v.prefs = { ...v.prefs, agentRail: true };
+    draw(v, cx);
+    expect(v.rowsKey).not.toBe(key);
+    expect(railKeys()).toEqual(["0:1", "0:2", "0:3"]);
+    v.prefs = { ...v.prefs, agentRail: false };
+    draw(v, cx);
+    expect(v.rowsKey).toBe(key);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+  }
+});
+
 test("a settings file from a build before agentRail's new default: the first load turns it off and marks the file (look 4), once; the switch's choice after that is kept", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
