@@ -98,6 +98,10 @@ export function trajectory(s, turn, id = null) {
       if (last || reason) groups.push({ title, cells: [{ kind: "context", text: last, ...(reason ? { reason } : {}), start: at(w.afterAt), end: null }], ...(w.held ? { held: w.held } : {}) });
       else holdOn(w.held);
     }
+  } else if (turn.updates?.length) {
+    // The panel's reader: each background update's final text (turn.updates), in order, from
+    // the time it began (turn.updatesAt).
+    turn.updates.forEach((text, i) => groups.push({ title: "Update", cells: [{ kind: "context", text, start: at(turn.updatesAt?.[i]), end: null }] }));
   } else if (turn.latest) groups.push({ title: "Update", cells: [{ kind: "context", text: turn.latest, start: at(turn.latestAt), end: null }] });
   return {
     id,

@@ -277,7 +277,8 @@ function newTurn(s, e) {
     latestAt: null, // when that text began: the time of its first part
     latestParts: [],
     // Each background update that said something keeps its final text here, in order
-    // (turn.updates, made with the first one), so a later update never drops an earlier one.
+    // (turn.updates, made with the first one), so a later update never drops an earlier one,
+    // and when that text began beside it (turn.updatesAt, as latestAt).
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
     // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
     // message id (OpenCode) or entry id (Pi). src is the temp file a Pi paste names.
@@ -508,6 +509,7 @@ function applyOne(s, e) {
         // last call replaces what it said before, as latest does.
         if (s.updateAt?.turn !== cur) s.updateAt = { turn: cur, i: (cur.updates ??= []).push("") - 1 };
         cur.updates[s.updateAt.i] = cur.latest;
+        (cur.updatesAt ??= [])[s.updateAt.i] = cur.latestAt;
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
         if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
       }

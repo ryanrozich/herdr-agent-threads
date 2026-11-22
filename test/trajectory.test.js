@@ -177,3 +177,24 @@ test("contextPct: Codex's context as a share of its stated window, and none for 
   expect(pct(readFile(cursor, "cursor"))).toBe(null);
   expect(pct(readFile(agy, "antigravity"))).toBe(null);
 });
+
+// The panel's reader (no keepWakes) keeps every background update's text (turn.updates), so
+// the Trajectory has an Update group for each one that said something, in order, each from
+// the time its text began; a silent one has none.
+test("trajectory: from the panel's reader, every background update that said something is an Update group, in order, with its start", () => {
+  const s = newSession("s", "f");
+  const at = (m) => `2026-11-01T09:${String(m).padStart(2, "0")}:00.000Z`;
+  for (const e of [
+    { k: "p", o: "human", t: "go", ts: at(0) }, { k: "t", t: "done", ts: at(1) }, { k: "d", ms: 1, ts: at(1) },
+    { k: "p", o: "auto-continuation", ts: at(5) }, { k: "t", t: "checking", ts: at(6) }, { k: "u", n: "Read", id: "toolu_1", ts: at(7) },
+    { k: "t", t: "the build passed", ts: at(8) }, { k: "d", ms: 1, ts: at(9) },
+    { k: "p", o: "auto-continuation", ts: at(20) }, { k: "u", n: "Read", id: "toolu_2", ts: at(21) }, { k: "d", ms: 1, ts: at(22) },
+    { k: "p", o: "auto-continuation", ts: at(30) }, { k: "t", t: "the deploy is out", ts: at(31) }, { k: "d", ms: 1, ts: at(32) },
+  ]) apply(s, e);
+  expect(s.turns).toHaveLength(1);
+  const g = trajectory(s, s.turns[0]).groups.filter((x) => x.title === "Update");
+  expect(g.map((x) => x.cells.map((c) => [c.kind, c.text, c.start]))).toEqual([
+    [["context", "the build passed", Date.parse(at(8))]],
+    [["context", "the deploy is out", Date.parse(at(31))]],
+  ]);
+});

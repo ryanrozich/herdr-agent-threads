@@ -12,7 +12,7 @@
 
 import { trajectory } from "./core/trajectory.js";
 import { reply, stats, fmtClock, fmtTokens, fmtDuration, fmtTime } from "./core/turns.js";
-import { outlineText, flattenMd, callTime } from "./ui.js";
+import { outlineText, flattenMd, callTime, noticeTurn, kindWords } from "./ui.js";
 
 export const LEDGER_ROW = 24;
 // The pane's heading, as tall as the Pinned pane's.
@@ -219,9 +219,13 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
     if (c.end != null) lastEnd = Math.max(lastEnd ?? c.end, c.end);
     if (c.kind === "user") {
+      // A task notification's turn has no message: its row says what the Chat's quiet line
+      // says ("Background task finished"), never the notice's text.
+      const notice = noticeTurn(turn);
       r.lk = turn.agent ? "agent" : "you";
-      r.text = outlineText(c.text) || " ";
-      r.sender = turn.agent ? turn.sender?.name ?? null : null;
+      r.text = notice ? kindWords(turn.sender) : outlineText(c.text) || " ";
+      r.sender = turn.agent && !notice ? turn.sender?.name ?? null : null;
+      if (notice) r.notice = true;
       r.start = t0 != null ? 0 : null;
     } else if (c.kind === "message") {
       const isReply = i === replyAt;
@@ -494,7 +498,7 @@ export function detailOf(r) {
   const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
   const F = [];
   if (r.lk === "you") F.push(["From", "the user"]);
-  else if (r.lk === "agent") F.push(["From", `${r.sender ?? "an agent"} · another agent, not the user`]);
+  else if (r.lk === "agent") F.push(["From", r.notice ? "the harness · a background task finished, nobody typed this" : `${r.sender ?? "an agent"} · another agent, not the user`]);
   else if (r.lk === "context") F.push(["From", "the harness · nobody typed this"]);
   if (r.turn?.n != null) F.push(["Turn", `${r.turn.n}`]);
   F.push(["Started", r.start != null ? `${startText(r.start)} into the turn` : r.startQ ? "not recorded" : "no times in this turn"]);
