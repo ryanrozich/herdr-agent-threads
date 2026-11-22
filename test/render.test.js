@@ -17753,6 +17753,35 @@ test("the column's probe writes the owner's width hold and the pair's record aft
   } finally { t.restore(); }
 });
 
+test("three weights Herdr does not answer after a dropped probe put the column back at the px it had before the first and clear the kept px, so y moves it nowhere", async () => {
+  const t = await pairPanes();
+  try {
+    // A probe dropped by the Chat moving: the column left on its trial weight, its width
+    // following it.
+    untilProbe(t);
+    t.row.size.p2 = { px: 680 };
+    t.step(100);
+    expect(t.w.pairing).toBe(null);
+    t.run(200);
+    const drifted = t.row.widths().p3;
+    expect(drifted).not.toBe(380);
+    // The next probe: Herdr drops the column's weights from here on.
+    untilProbe(t);
+    const apply = t.row.apply;
+    t.row.apply = () => { for (; t.row.seen < log.length; t.row.seen++) { const [k, n, a] = log[t.row.seen]; if (k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null) continue; if (k === "run" && n === "layout.resize" && t.row.size[a.id]) t.row.size[a.id] = a.px != null ? { px: a.px } : { weight: a.weight }; } };
+    for (let s = 0; s < 4000 && t.w.pairing; s += 100) t.step(100);
+    t.row.apply = apply;
+    t.row.apply();
+    expect(t.w.pairing).toBe(null);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    log = [];
+    t.row.seen = 0;
+    t.v.openTraj();
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p3")).toBe(false);
+  } finally { t.restore(); }
+});
+
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
