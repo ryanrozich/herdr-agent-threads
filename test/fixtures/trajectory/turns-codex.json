@@ -75,6 +75,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null
@@ -150,6 +151,7 @@
   "answeredBy": null,
   "answeredIn": null,
   "latest": "",
+  "latestAt": null,
   "latestParts": [],
   "images": [],
   "imgLine": null

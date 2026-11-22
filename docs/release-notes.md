@@ -8,12 +8,20 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 - `↑` and `↓` (and `k` and `j`) follow the rail: they move between the turns that have a tick. With "Agent messages on the rail" off they pass over agent messages; with it on they stop at them, as before. A click still selects an agent message.
 - A Codex subagent rollout exported by itself now starts at its own history boundary.
 
+### The Trajectory
+
+- Press `y`, or the list button at the top of the chat, to see the session as a Trajectory: each turn is a heading, then one row per step (your message, the agent's texts, each tool call, the reply and any background update), with when it started, how long it took and a small bar for that.
+- In a pane at least 480 px wide, the Trajectory opens as a pane of its own to the right of the chat, leaving the other panes in the tab 200 px for each of them. Narrower, or with no room for that, it shows in the chat's own pane until you press `y` or `Esc` or its Chat button.
+- A call shows as running only while the agent is still at it. A call left with no result says "no result", and its detail says when the transcript last recorded anything. One case cannot be told: a session of an agent other than Claude Code (Codex, say) stopped during its very first call shows that call as a plain row with no duration.
+- Keys: `↑` `↓` or `j` `k` move, `Home` and `End` go to the first or last row, `Enter` or `Space` shows the detail, `f` and `Shift f` go to failed calls, `m` and `Shift m` to your messages, `-` and `=` make the Trajectory pane narrower or wider, `y` switches between it and the chat, and `Esc` closes the detail or goes back.
+
 ### Save a session as ATIF
 
 - The exported file now holds the model's reasoning, for Claude Code and Codex sessions, as `reasoning_content` on the step it came before. This is the default. To leave it out, put `--no-reasoning` before the path: `bun mods/agent-threads/core/atif.js --no-reasoning <transcript> > session.json`. The file then holds no reasoning, as one from 1.1.0 did.
 - Reasoning a transcript keeps only as a signature, redacted or encrypted is never written. The step it came before says some was left out (`extra.reasoning_withheld`), and the file's notes count those steps.
 - Results now say whether a call failed in `extra.tool_result_is_error`, the name Harbor's tools read, in place of `extra.failed`, which is no longer written. It is `true` when the reader found the call failed, `false` when it found no failure, and left out when it cannot tell, such as for a call still running.
 - Claude Code helper steps carry `extra.agent_id` (the helper's id) and `extra.is_sidechain` (`true`), and the main session's steps carry `extra.is_sidechain` as `false`. Each Claude Code call that has an input repeats it, as the agent sent it, in `extra.raw_arguments`.
+- A background update's step now carries its start time (`timestamp`), where it had none.
 
 ## 1.1.0
 
