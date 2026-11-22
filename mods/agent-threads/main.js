@@ -3797,6 +3797,14 @@ export default class Threads extends View {
     if (!wKey) return;
     const now = Date.now();
     this.firstSizeAt ??= now;
+    // The column closed beside the Trajectory: with the row on weights the Trajectory takes its
+    // weight for a moment, then the close's weights and the divider's room move it again. Those
+    // widths are the close's, not the owner's. colId: the column last seen beside it (trajFrame).
+    if (this.trajPane) {
+      const col = this.pinnedPaneOpen();
+      if (col) this.colId = col.pane;
+      else if (this.colId && !panes().some((p) => p.pane === this.colId)) { this.colId = null; this.holdTrajWidth(3000); }
+    }
     const kept = shared(wKey) ?? {};
     if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
     const px = Math.round(this.paneW) + PANE_FRAME;
@@ -11433,6 +11441,8 @@ export default class Threads extends View {
   // detail (under the ledger, or at its right from 900 px), the key hints and the status line.
   trajFrame(cx) {
     const t = theme();
+    // The column beside the Trajectory's pane, kept for its close (shareWidth).
+    if (this.trajPane) { const col = this.pinnedPaneOpen(); if (col) this.colId = col.pane; }
     const w = this.pw();
     const cols = ledgerCols(w);
     const L = this.ledger();
