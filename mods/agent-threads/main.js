@@ -4,7 +4,7 @@
 // bound terminal's input as a bracketed paste (Herdr's terminal.paste, the ⌘V command),
 // never followed by Enter or any other submit. Nothing else types into a terminal. The
 // other commands it runs are pane.split (to open itself, and the Pinned column beside it),
-// layout.resize (to give that column its width, and a pane Cmd-Shift-T opened the reading width), pane.focus (the Terminal button, v
+// layout.resize (to give that column its width, a pane Cmd-Shift-T opened the reading width, then a weight that keeps that width), pane.focus (the Terminal button, v
 // between the two panes, back to Threads after the column opens, and before the quote's paste) and pane.close (its own pane, the Pinned column once its Threads pane is gone, and a Trajectory split the row has no room for). The only programs
 // it runs besides its scripts are hc get, git remote get-url and open <the README URL> (the
 // Amp page's button; the scripts run jq, lsof, ps
@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel, weightLine, weightFor, weightNear,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -2571,6 +2571,8 @@ export default class Threads extends View {
     this.keepWidth();
     this.settleSplit(cx);
     this.trajGiveBack();
+    this.weighSoon();
+    this.weighStep();
     this.autoPinned(cx);
     if (this.syncSel()) this.selMoved = true;
     this.lookRepo(cx);
@@ -3469,9 +3471,24 @@ export default class Threads extends View {
       return true;
     }
     if (this.splitAsk) return true;
+    this.pinPx(me);
     this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
     run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
+  }
+
+  // Before a split off this pane (the Pinned column, the Trajectory): this pane at a px width,
+  // so the new pane's room comes from the terminal. A split takes half its target's weight,
+  // so at a weight this pane would lose half its room. A px of its own still applying
+  // (sizeTo), or the width a probe under way keeps, is the width it keeps, not a weight's
+  // trial width. Returns that px.
+  pinPx(me) {
+    const px = this.weighAfter?.px ?? this.weighing?.n0 ?? Math.round(this.pw()) + PANE_FRAME;
+    run("layout.resize", { id: me.pane, px });
+    this.weighing = null;
+    this.weighAfter = null;
+    this.weightNow = null;
+    return px;
   }
 
   // Once the split has applied: the new pane goes in the Pinned map and gets the column's
@@ -3495,7 +3512,7 @@ export default class Threads extends View {
       remember(this.terminal, made.pane, a.map ?? PIN_MAP_KEY);
       run("layout.resize", { id: made.pane, px: a.px });
       if (a.back) run("pane.focus", { pane: a.back });
-    } else if (Date.now() > a.until) this.splitAsk = null;
+    } else if (Date.now() > a.until) { this.splitAsk = null; this.toWeight(); }
   }
 
   // The Trajectory split's width. Herdr gives no window size, and a pane the Chat holds at a
@@ -3534,8 +3551,9 @@ export default class Threads extends View {
       run("layout.resize", { id: a.made, px: TRAJ_MIN });
       run("pane.close", { pane: a.made });
       this.trajOpen = false;
-      // The Chat at the width it had before the split, which may have taken some of it.
-      if (me) { run("layout.resize", { id: me.pane, px: a.chat }); run("pane.focus", { pane: me.pane }); }
+      // The Chat at the width it had before the split, which may have taken some of it, and
+      // then a weight that keeps it (sizeTo), as after any px of its own.
+      if (me) { this.sizeTo(a.chat); run("pane.focus", { pane: me.pane }); }
       this.enterTraj();
       return;
     }
@@ -3562,13 +3580,19 @@ export default class Threads extends View {
     if (hold !== kept.hold) setShared(TRAJ_W_KEY, { ...kept, hold });
   }
   // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
-  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading).
+  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading). Either
+  // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
+  // settles): it is at a px only while the Trajectory is open.
   trajGiveBack() {
+    const open = Boolean(this.trajPaneOpen());
+    const closed = this.trajWasOpen && !open;
+    this.trajWasOpen = open;
     const back = this.trajChatBack;
-    if (!back || panes().some((p) => p.pane === back.pane)) return;
-    this.trajChatBack = null;
-    const me = this.me();
-    if (me) run("layout.resize", { id: me.pane, px: back.px });
+    if (back && !panes().some((p) => p.pane === back.pane)) {
+      this.trajChatBack = null;
+      if (this.me()) { this.sizeTo(back.px); return; }
+    }
+    if (closed) this.weighAt = Date.now() + 500;
   }
 
   // This pane's width, for its partner (resizeColumn). In the Pinned column, a width that
@@ -3639,7 +3663,9 @@ export default class Threads extends View {
       return;
     }
     const open = Boolean(this.pinnedPaneOpen());
-    if (this.pinColOpen && !open && !this.splitAsk) this.pinColClosed = true;
+    // The column closed: Threads may have been left at a px width (- and =, w), so once
+    // the row has settled it goes back to a weight when its width is not held (toWeight).
+    if (this.pinColOpen && !open && !this.splitAsk) { this.pinColClosed = true; this.weighAt = Date.now() + 500; }
     this.pinColOpen = open;
     if (this.pinAutoDone || !this.width || !this.current()?.loaded || !this.pinsRead) return;
     this.pinAutoDone = true;
@@ -5335,7 +5361,8 @@ export default class Threads extends View {
       case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
       case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
-      case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; return true;
+      // Turned on, a pane wider than the width is sized to it first (keepWidth), then weighed.
+      case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; this.keepWidth(); this.toWeight(); return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
       case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
@@ -6131,7 +6158,7 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const w = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.fitColumn(); this.shareWidth(); cx.notify(); }
+        if (!this.forcedWidth && Math.abs(w - (this.paneW ?? -9)) > 1) { this.paneW = w; this.sizeAt = Date.now(); this.fitColumn(); this.shareWidth(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
@@ -6211,8 +6238,13 @@ export default class Threads extends View {
     if (!me || !map?.[me.pane]) return;
     const { [me.pane]: _, ...rest } = map;
     setShared(FIT_KEY, rest);
+    // The split halved the terminal's room between it and this pane, at equal weights: the
+    // row is twice this pane's first width, while the tab has the two of them alone (openRow).
+    const sib = this.rowSibling(me);
+    this.openRow = sib ? { sib, room: 2 * (this.paneW + PANE_FRAME) } : null;
     const px = this.readingPx();
-    if (Number.isFinite(px) && this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); run("layout.resize", { id: me.pane, px }); }
+    if (Number.isFinite(px) && this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); this.sizeTo(px); }
+    else this.toWeight();
   }
   // Herdr has no maximum width for a pane a split made (a layout file's min/max applies to its
   // own nodes only), so with readingWidth on (the default) the pane keeps itself there: wider
@@ -6223,7 +6255,7 @@ export default class Threads extends View {
   readingPx() { return fitWidth(this.prefs.textSize, this.chars()); }
   chars() { return widthChars(this.prefs.width); }
   keepWidth() {
-    if (this.sideKey() || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded) return;
+    if (this.sideKey() || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded || this.weighing || this.weighAfter) return;
     const me = this.me();
     if (!me || me.zoomed) return;
     const px = this.readingPx();
@@ -6231,7 +6263,111 @@ export default class Threads extends View {
     const w = Math.round(this.paneW);
     if (this.capAsked === w) return;
     this.capAsked = w;
+    this.sizeTo(px);
+  }
+  // Herdr 0.1.16 drags a divider by setting the px of the pane beside it that has a px size
+  // (window.rs drag_to), and the panes sized by weight share what is left, those past the
+  // other edge too: a Threads pane at a px width grows or shrinks from both edges, whichever
+  // one is dragged. A pane at a weight moves only the divider dragged, and changes with the
+  // window. So after each px resize this pane asks for (sizeTo), and when a width is chosen,
+  // the switch is turned, Threads opens, a split fails or the Pinned column closes, the main
+  // pane goes to a weight that keeps its width (toWeight). Never on a size change alone,
+  // which may be a drag still going on, but for keepWidth's cap: a drag past the reading
+  // width snaps back to it (sizeTo), and the weight follows once the pane has been still for
+  // 300 ms. Not in the Pinned or the Trajectory pane, not with either open beside it (- and =
+  // keep both at px; it converts when that pane closes), and not zoomed (it converts once
+  // unzoomed).
+  sizeTo(px) {
+    const me = this.me();
+    if (!me) return;
+    this.weighing = null;
+    // At a weight until now: that weight and the width it gives are a measure of the row as
+    // it is (the window may have changed size), for the next weight's first ask.
+    if (this.weightNow != null && this.paneW != null) this.lastPoint = [this.weightNow, this.paneW + PANE_FRAME];
+    this.weightNow = null;
     run("layout.resize", { id: me.pane, px });
+    this.weighAfter = { px, until: Date.now() + 1500 };
+  }
+  // The px applied (or 1.5 s gone by) and the width still for 300 ms, so a window being
+  // resized is not measured: the weight. The column closed: 500 ms for the row to settle.
+  weighSoon() {
+    const a = this.weighAfter;
+    const still = Date.now() - (this.sizeAt ?? 0) >= 300;
+    if (a && this.paneW != null && still && (Math.abs(this.paneW + PANE_FRAME - a.px) <= 2 || Date.now() > a.until)) { this.weighAfter = null; this.toWeight(); }
+    // Unzoomed: 500 ms for the row to settle, as after the column closes.
+    if (this.weighZoomed) {
+      const me = this.me();
+      if (me && !me.zoomed) { this.weighZoomed = false; this.weighAt = Date.now() + 500; }
+    }
+    if (this.weighAt != null && Date.now() >= this.weighAt) { this.weighAt = null; this.toWeight(true); }
+  }
+  // The one other pane in this pane's tab, when there is exactly one: the terminal the split
+  // came from, and with it the whole row. Else null.
+  rowSibling(me) {
+    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane);
+    return others.length === 1 ? others[0].pane : null;
+  }
+  // The first weight of the probe after Threads opens: the row it measured at the split, and
+  // the terminal beside it set to weight 1 so the others' weights are known, give the weight
+  // for n0 at once. With no measure or line, weight 1 would lay the pane out at the terminal's
+  // weight against an unknown one, up to the whole row's width for a moment (the owner saw it
+  // open wide). Only while the tab still holds the two panes alone and the row has room past
+  // n0. Used once.
+  openWeight(me, n0) {
+    const o = this.openRow;
+    this.openRow = null;
+    if (!o || o.room <= n0 || this.rowSibling(me) !== o.sib) return null;
+    run("layout.resize", { id: o.sib, weight: 1 });
+    return Number((n0 / (o.room - n0)).toPrecision(5));
+  }
+  // weightNow: the weight this pane last set and has kept since. A drag changes it but leaves
+  // a weight, so there is nothing to do; force: the column was open, and its pane may have
+  // set this one's px (- and =, w).
+  toWeight(force = false) {
+    if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.sideKey() || this.paneW == null || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen()) return;
+    const me = this.me();
+    if (!me) return;
+    if (me.zoomed) { this.weighZoomed = true; return; }
+    // Herdr's px size for a pane is its measured width and its frame.
+    const n0 = this.paneW + PANE_FRAME;
+    const p = this.lastPoint;
+    this.lastPoint = null;
+    this.weightNow = null;
+    const w = (p ? weightNear(this.weighLine, p, n0) : weightFor(this.weighLine, n0)) ?? this.openWeight(me, n0);
+    this.openRow = null;
+    this.weighing = { pane: me.pane, n0, tried: [], w: w ?? 1 };
+    this.askWeight();
+  }
+  askWeight() {
+    const g = this.weighing;
+    g.at = this.paneW;
+    g.asked = Date.now();
+    run("layout.resize", { id: g.pane, weight: g.w });
+  }
+  // A mod cannot read the weights beside it, so the weight comes from measures (ui.js
+  // weightLine): the first from the row as last measured (or 1), the second from one
+  // measure, the third from two. It stops at the first within 2 px. A weight that leaves the
+  // width as it was shows no size change, so 400 ms with none counts as a measure.
+  weighStep() {
+    const g = this.weighing;
+    if (!g) return;
+    const me = this.me();
+    // Gone, zoomed, a column or the Trajectory opening, or no answer from Herdr: stop there.
+    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen() || Date.now() - g.asked > 3000) {
+      this.weighing = null;
+      if (me?.zoomed) this.weighZoomed = true;
+      return;
+    }
+    if (Math.abs(this.paneW - g.at) <= 1 && Date.now() - g.asked < 400) return;
+    const n = this.paneW + PANE_FRAME;
+    g.tried.push([g.w, n]);
+    if (g.tried.length > 1) this.weighLine = weightLine(...g.tried.slice(-2)) ?? this.weighLine;
+    const w = Math.abs(n - g.n0) <= 2 || g.tried.length > 2 ? null
+      : g.tried.length === 1 ? weightNear(this.weighLine, g.tried[0], g.n0)
+      : weightFor(this.weighLine, g.n0);
+    if (!w) { this.weighing = null; this.weightNow = g.w; return; }
+    g.w = w;
+    this.askWeight();
   }
   // Choosing a width: with "Keep the pane at this width" on, the pane grows or shrinks to the
   // new column and the terminal gives or takes the room. Full has no column, so it leaves the
@@ -6240,6 +6376,7 @@ export default class Threads extends View {
     if (!WIDTH_NAMES.includes(w)) return false;
     this.changePrefs({ width: w }, cx);
     this.sizeToWidth();
+    this.toWeight();
     return true;
   }
   // The pane to the chosen width's column, when the switch keeps it there (Full has none).
@@ -6249,7 +6386,7 @@ export default class Threads extends View {
     const me = this.me();
     if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.sideKey() && me && !me.zoomed && this.paneW != null) {
       const px = this.readingPx();
-      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); this.trajChatBack = null; run("layout.resize", { id: me.pane, px }); }
+      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); this.trajChatBack = null; this.sizeTo(px); }
     }
   }
   // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
@@ -6273,8 +6410,8 @@ export default class Threads extends View {
     if (!main) return false;
     const px = this.readingPx();
     if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
-    run("layout.resize", { id: main.pane, px });
-    if (!this.pinnedPane) this.trajChatBack = null;
+    if (this.pinnedPane) run("layout.resize", { id: main.pane, px });
+    else { this.trajChatBack = null; this.sizeTo(px); }
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
     if (col) {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
@@ -9988,8 +10125,9 @@ export default class Threads extends View {
     const me = this.me();
     if (!me || this.pw() < TRAJ_SPLIT_MIN) { this.enterTraj(); return true; }
     if (this.splitAsk) return true;
-    // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor).
-    const chat = Math.round(this.pw()) + PANE_FRAME;
+    // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor). The
+    // Chat at that px first, and both stay at px while the Trajectory is open (pinPx).
+    const chat = this.pinPx(me);
     const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     // The widths the new pane passes through on its way (settleTraj) are not the owner's.
