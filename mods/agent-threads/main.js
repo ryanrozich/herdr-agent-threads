@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -3981,8 +3981,9 @@ export default class Threads extends View {
     });
     // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
     if (!selecting && (text.length > LONG_REPLY || left)) out.push({ ...item, kind: "fold", key: `fold:${key}`, left });
-    // What the agent said in its last background update, when that is not the reply.
-    const late = (turn.latest ?? "").trim();
+    // What the agent said in its background updates, every one in order (updatesText), when
+    // that is not the reply.
+    const late = updatesText(turn);
     if (late && late !== text) {
       // With Shorten long messages off (the default) the update is Markdown from the start,
       // like the reply above it (the owner, 18 Nov: a flat preview was all there was, since
@@ -4705,7 +4706,7 @@ export default class Threads extends View {
     const keys = [...new Set([this.sel, ...this.open, ...this.screenTurns()])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
-      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
+      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, updatesText(turn)) || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
   }

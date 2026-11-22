@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, updatesText, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -497,6 +497,28 @@ test("the latest background update keeps when its first text came, beside the te
   // One that says something moves both.
   for (const e of [{ k: "p", o: "task-notification", ts: at(30) }, { k: "t", t: "second", ts: at(31) }, { k: "d", ms: 1 }]) apply(s, e);
   expect([s.turns[0].latest, s.turns[0].latestAt]).toEqual(["second", Date.parse(at(31))]);
+});
+
+test("every background update keeps its own final text, in order; a silent one adds none", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "go" }, { k: "t", t: "done" }, { k: "d", ms: 1 },
+    { k: "p", o: "task-notification" }, { k: "t", t: "checking" }, { k: "u", n: "Read" }, { k: "t", t: "the build passed" }, { k: "d", ms: 1 },
+    { k: "p", o: "task-notification" }, { k: "u", n: "Read" }, { k: "d", ms: 1 },
+    { k: "p", o: "task-notification" }, { k: "t", t: "the deploy is out" }, { k: "s" },
+  ];
+  for (const e of ev) apply(s, e);
+  const [turn] = s.turns;
+  expect(reply(turn)).toBe("done");
+  expect(turn.followups).toBe(3);
+  expect(turn.updates).toEqual(["the build passed", "the deploy is out"]);
+  expect(turn.latest).toBe("the deploy is out");
+  expect(updatesText(turn)).toBe("the build passed\n\nthe deploy is out");
+  // A turn with no background update has none.
+  const t = newSession("t", "f");
+  for (const e of ev.slice(0, 3)) apply(t, e);
+  expect(t.turns[0].updates).toBeUndefined();
+  expect(updatesText(t.turns[0])).toBe("");
 });
 
 test("a command line from another sender is that sender's turn, not the person's (F3)", () => {

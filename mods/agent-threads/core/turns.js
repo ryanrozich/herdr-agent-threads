@@ -275,6 +275,8 @@ function newTurn(s, e) {
     latest: "", // the final text of the last background update that said something
     latestAt: null, // when that text began: the time of its first part
     latestParts: [],
+    // Each background update that said something keeps its final text here, in order
+    // (turn.updates, made with the first one), so a later update never drops an earlier one.
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
     // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
     // message id (OpenCode) or entry id (Pi). src is the temp file a Pi paste names.
@@ -465,6 +467,7 @@ function applyOne(s, e) {
       } else {
         cur.followups++;
         cur.latestParts = [];
+        s.updateAt = null;
         s.seg = "follow";
         s.followActive = true;
         // This wake-up's own clock and tool count, apart from the prompt's.
@@ -497,6 +500,10 @@ function applyOne(s, e) {
         if (!cur.latestParts.length) cur.latestAt = ms(e.ts);
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
+        // This wake-up's place in turn.updates, taken by its first text: its text after its
+        // last call replaces what it said before, as latest does.
+        if (s.updateAt?.turn !== cur) s.updateAt = { turn: cur, i: (cur.updates ??= []).push("") - 1 };
+        cur.updates[s.updateAt.i] = cur.latest;
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
         if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
       }
@@ -650,6 +657,7 @@ export function rewindTail(s) {
   s.seg = null;
   s.pendingCmd = null;
   s.followActive = false;
+  s.updateAt = null;
   s.version++;
 }
 
@@ -680,6 +688,13 @@ export function replaced(s, c) {
 
 export function reply(turn) {
   return turn.after.join("\n\n").trim();
+}
+
+// What every background update after the reply said, in order, one paragraph each: the
+// text under LATEST UPDATE. The last of turn.updates is always latest, so it is the earlier
+// ones, then latest.
+export function updatesText(turn) {
+  return [...(turn.updates?.slice(0, -1) ?? []), turn.latest ?? ""].filter(Boolean).join("\n\n").trim();
 }
 
 export function running(turn, isLast) {
