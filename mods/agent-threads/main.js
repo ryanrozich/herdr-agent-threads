@@ -6238,6 +6238,10 @@ export default class Threads extends View {
     if (!me || !map?.[me.pane]) return;
     const { [me.pane]: _, ...rest } = map;
     setShared(FIT_KEY, rest);
+    // The split halved the terminal's room between it and this pane, at equal weights: the
+    // row is twice this pane's first width, while the tab has the two of them alone (openRow).
+    const sib = this.rowSibling(me);
+    this.openRow = sib ? { sib, room: 2 * (this.paneW + PANE_FRAME) } : null;
     const px = this.readingPx();
     if (Number.isFinite(px) && this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); this.sizeTo(px); }
     else this.toWeight();
@@ -6297,6 +6301,25 @@ export default class Threads extends View {
     }
     if (this.weighAt != null && Date.now() >= this.weighAt) { this.weighAt = null; this.toWeight(true); }
   }
+  // The one other pane in this pane's tab, when there is exactly one: the terminal the split
+  // came from, and with it the whole row. Else null.
+  rowSibling(me) {
+    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane);
+    return others.length === 1 ? others[0].pane : null;
+  }
+  // The first weight of the probe after Threads opens: the row it measured at the split, and
+  // the terminal beside it set to weight 1 so the others' weights are known, give the weight
+  // for n0 at once. With no measure or line, weight 1 would lay the pane out at the terminal's
+  // weight against an unknown one, up to the whole row's width for a moment (the owner saw it
+  // open wide). Only while the tab still holds the two panes alone and the row has room past
+  // n0. Used once.
+  openWeight(me, n0) {
+    const o = this.openRow;
+    this.openRow = null;
+    if (!o || o.room <= n0 || this.rowSibling(me) !== o.sib) return null;
+    run("layout.resize", { id: o.sib, weight: 1 });
+    return Number((n0 / (o.room - n0)).toPrecision(5));
+  }
   // weightNow: the weight this pane last set and has kept since. A drag changes it but leaves
   // a weight, so there is nothing to do; force: the column was open, and its pane may have
   // set this one's px (- and =, w).
@@ -6310,7 +6333,9 @@ export default class Threads extends View {
     const p = this.lastPoint;
     this.lastPoint = null;
     this.weightNow = null;
-    this.weighing = { pane: me.pane, n0, tried: [], w: (p ? weightNear(this.weighLine, p, n0) : weightFor(this.weighLine, n0)) ?? 1 };
+    const w = (p ? weightNear(this.weighLine, p, n0) : weightFor(this.weighLine, n0)) ?? this.openWeight(me, n0);
+    this.openRow = null;
+    this.weighing = { pane: me.pane, n0, tried: [], w: w ?? 1 };
     this.askWeight();
   }
   askWeight() {
