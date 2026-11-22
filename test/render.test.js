@@ -13236,13 +13236,108 @@ test("the shared selection never selects a turn the Chat hides; a turn it shows 
   expect(hidden.length).toBeGreaterThan(0);
   expect(v.findTurn(hidden[0])).toBeTruthy();
   const before = v.sel;
-  state.shared["threads.turnSel"] = { t4: { key: hidden[0], by: "other", at: Date.now() + 1000 } };
+  state.shared["threads.turnSel"] = { t4: { key: hidden[0], by: "other", at: Date.now() + 1000, pane: "trajectory" } };
   expect(v.syncSel()).toBe(false);
   expect(v.sel).toBe(before);
   const pick = shown.find((k) => k !== before);
-  state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000 } };
+  state.shared["threads.turnSel"] = { t4: { key: pick, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
   expect(v.syncSel()).toBe(true);
   expect(v.sel).toBe(pick);
+});
+
+// The owner's report: with the Pinned column and the Trajectory open, End in the Chat reached the
+// newest turn and, a second later, the Chat was back on a pin, not following. The Pinned pane
+// ran the shared selection too and wrote its own selection, a pin, over the Chat's.
+test("with the Pinned column and the Trajectory open, End, Home and a rail tick in the Chat stay where they land after the other panes' polls", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  v.width = 700;
+  v.paneW = 700;
+  draw(v, cx);
+  const keys = v.turnKeys(v.rows());
+  // Two pins, the Chat back at the newest.
+  for (const k of [keys[3], keys[8]]) { v.sel = k; v.command("pin", cx); }
+  v.jumpLatest(true);
+  draw(v, cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" }, { pane: "p4", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p4" } };
+  const props = state.props;
+  const side = async (view) => {
+    state.props = { ...props, view };
+    const w = new Threads();
+    const wcx = makeCx();
+    w.init(state.props, wcx);
+    await settle(w);
+    state.props = props;
+    w.width = 400;
+    w.paneW = 400;
+    draw(w, wcx);
+    return { w, wcx };
+  };
+  const pin = await side("pinned");
+  const traj = await side("trajectory");
+  expect([pin.w.pinnedPane, traj.w.trajPane]).toEqual([true, true]);
+  // The Pinned pane has a pin selected.
+  pin.w.sel = keys[3];
+  // Every pane's poll, twice, at later times: what the 1 s timer does.
+  let t = Date.now();
+  const real = Date.now;
+  const polls = () => {
+    for (let k = 0; k < 2; k++) {
+      t += 1000;
+      Date.now = () => t;
+      try { for (const [x, xcx] of [[v, cx], [pin.w, pin.wcx], [traj.w, traj.wcx], [v, cx]]) x.syncSel(xcx); } finally { Date.now = real; }
+    }
+  };
+  polls();
+  const newest = keys.at(-1);
+  // End.
+  v.sel = keys[5];
+  v.follow = false;
+  v.key(keyEv("end"), cx);
+  expect([v.sel, v.follow, v.toBottom]).toEqual([newest, true, true]);
+  polls();
+  expect([v.sel, v.follow]).toEqual([newest, true]);
+  expect(v.scrollTo).toBe(null);
+  // The Trajectory took it; the Pinned pane wrote nothing.
+  expect(traj.w.turnOfRow(traj.w.tsel)).toBe(newest);
+  expect(state.shared["threads.turnSel"].t4).toMatchObject({ key: newest, pane: "chat" });
+  // Home.
+  v.key(keyEv("home"), cx);
+  const first = v.sel;
+  expect(first).toBe(keys[0]);
+  polls();
+  expect([v.sel, v.follow]).toEqual([first, false]);
+  // A click on a rail tick.
+  v.railClick(keys[12], cx);
+  polls();
+  expect([v.sel, v.follow]).toEqual([keys[12], false]);
+  expect(traj.w.turnOfRow(traj.w.tsel)).toBe(keys[12]);
+  // A move in the Trajectory still reaches the Chat.
+  traj.w.tsel = keys[20];
+  polls();
+  expect(v.sel).toBe(keys[20]);
+  // A turn written by a pane that is neither (an older copy, a Pinned pane): not taken.
+  state.shared["threads.turnSel"] = { t4: { key: keys[2], by: "elsewhere", at: Date.now() + 10000 } };
+  expect(v.syncSel()).toBe(false);
+  expect(v.sel).toBe(keys[20]);
+  state.shared["threads.turnSel"] = { t4: { key: keys[2], by: "elsewhere", at: Date.now() + 20000, pane: "chat" } };
+  expect(v.syncSel()).toBe(false);
+  expect(v.sel).toBe(keys[20]);
+  expect(traj.w.syncSel()).toBe(true);
+  expect(traj.w.turnOfRow(traj.w.tsel)).toBe(keys[2]);
+  // The Pinned pane never writes, whatever it selects.
+  const before = state.shared["threads.turnSel"];
+  pin.w.sel = keys[8];
+  expect(pin.w.syncSel()).toBe(false);
+  expect(state.shared["threads.turnSel"]).toBe(before);
+  done(pin.w);
+  done(traj.w);
+  // The pins file dropped once its write is done, so the next test's pane opens with none.
+  await saved0();
+  delete recordFiles[PINS];
+  done(v);
 });
 
 // test/herdr-still.sh reads the command record of the pane it drives: a Trajectory pane's

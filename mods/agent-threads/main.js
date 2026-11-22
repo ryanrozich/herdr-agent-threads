@@ -188,8 +188,9 @@ const MAP_KEY = "threads.byTerminal";
 const PIN_MAP_KEY = "threads.pinnedByTerminal";
 // shared("threads.trajByTerminal"): terminal -> its Trajectory pane (y), kept apart the same way.
 const TRAJ_MAP_KEY = "threads.trajByTerminal";
-// shared("threads.turnSel"): terminal -> { key, by, at }, the selected turn as the pane that last
-// moved it wrote it, so the Chat and its Trajectory pane select the same turn (syncSel).
+// shared("threads.turnSel"): terminal -> { key, by, at, pane }, the selected turn as the pane that
+// last moved it wrote it ("chat" or "trajectory"), so the Chat and its Trajectory pane select the
+// same turn (syncSel).
 const SEL_KEY = "threads.turnSel";
 // The Trajectory pane: split off the Chat from this width (narrower, y shows the Trajectory in
 // the Chat's own pane), and given this px width.
@@ -9797,13 +9798,19 @@ export default class Threads extends View {
   // The Chat and its Trajectory pane select the same turn: each writes the turn it selected
   // to shared("threads.turnSel") under the terminal, and takes the other's. Runs from poll(),
   // so on every draw and once a second. Returns true when this pane took a new turn.
+  // Not in the Pinned column: its selection is a pin, and written there it pulled the Chat
+  // back to that pin about a second after End, Home or a rail tick moved it (the owner, with
+  // the column and the Trajectory open). Each pane takes only the other's turn.
   syncSel() {
-    if (!this.terminal || this.launcher) return false;
+    if (!this.terminal || this.launcher || this.pinnedPane) return false;
     if (!this.trajPane) this.trajOpen = Boolean(this.trajPaneOpen());
     if (!this.trajPane && !this.trajOpen) return false;
     const map = shared(SEL_KEY) ?? {};
     const e = map[this.terminal];
-    if (e && e.by !== this.selId && e.at > (this.selSeenAt ?? 0)) {
+    const from = this.trajPane ? "chat" : "trajectory";
+    // Another pane's turn (an older copy's, or one no pane should write): seen, and left.
+    if (e && e.by !== this.selId && e.at > (this.selSeenAt ?? 0) && e.pane !== from) this.selSeenAt = e.at;
+    else if (e && e.by !== this.selId && e.at > (this.selSeenAt ?? 0)) {
       const have = Boolean(this.findTurn(e.key));
       // A turn this pane has not read yet: wait for it a little, then let it go.
       if (have || Date.now() - e.at > SEL_WAIT) this.selSeenAt = e.at;
@@ -9819,7 +9826,7 @@ export default class Threads extends View {
     if (!mine || mine === this.selSent) return false;
     this.selSent = mine;
     const keep = Object.fromEntries(Object.entries(map).filter(([k, v]) => k !== this.terminal && Date.now() - (v?.at ?? 0) < DAY_MS));
-    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, by: this.selId, at: Date.now() } });
+    setShared(SEL_KEY, { ...keep, [this.terminal]: { key: mine, by: this.selId, at: Date.now(), pane: this.trajPane ? "trajectory" : "chat" } });
     return false;
   }
 
