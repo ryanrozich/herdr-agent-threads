@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
@@ -3146,7 +3146,7 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: reported, height: 800 * zoom }, cx);
     handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
-    // Each run is a pane of its own size, not a drag: the column takes it at once (WIDTH_HOLD_MS).
+    // Each run is a pane of its own size, not a drag: the column takes it at once (REWRAP_PAUSE_MS).
     v.sizeAt = Date.now() - 1000;
     rec = [];
     v.render(cx);
@@ -5890,12 +5890,36 @@ test("scenario: a drag that crosses 704 px keeps the 70 character column until t
     expect(lineChars(v)).toBe(70);
     expect([v.width, v.prose()]).toEqual(before);
   }
-  // Still for WIDTH_HOLD_MS: the step the pane wants.
-  v.sizeAt = Date.now() - 1000;
+  // Still for 400 ms, past the old 300 ms: still held.
+  v.sizeAt = Date.now() - 400;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(v.chars()).toBe(70);
+  // Still for REWRAP_PAUSE_MS (1.2 s): the step the pane wants.
+  expect(REWRAP_PAUSE_MS).toBe(1200);
+  v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
   draw(v, cx);
   expect(v.widthHeld).toBe(false);
   expect(v.chars()).toBe(90);
   expect(lineChars(v)).toBe(90);
+});
+
+test("scenario: a resize inside a step waits for nothing: no hold, no timer, no rows built again", async () => {
+  const { v, cx } = await colPane(750);
+  v.rewrapMs = 151;
+  settleRows(v, cx);
+  const [key, width] = [v.rowsKey, v.width];
+  for (const w of [780, 860, 720, 900]) {
+    cx.timers = [];
+    v.paneW = w - 2;
+    v.sizeAt = Date.now();
+    draw(v, cx);
+    expect(v.chars()).toBe(90);
+    expect(v.widthHeld).toBe(false);
+    expect(cx.timers.filter((x) => x.ms >= 100)).toEqual([]);
+    expect(v.width).toBe(width);
+    expect(v.rowsKey).toBe(key);
+  }
 });
 
 test("scenario: a pane widened from 650 to 750 px shows the 90 character column", async () => {
@@ -7515,7 +7539,7 @@ test("a long session's rows are built over several frames, the old rows shown ti
   expect(rowSig(v)).toEqual(whole);
 });
 
-test("a width that changes while the pane is resized keeps the column until the pane has been still for 300 ms, then the turns re-wrap", async () => {
+test("a width that changes while the pane is resized keeps the column until the pane has been still for 1.2 s, then the turns re-wrap", async () => {
   const { v, cx } = await longSession(60);
   v.debug = false;
   // Its last full re-wrap was slow (HOLD_WORK_MS): the column is held.
@@ -7542,10 +7566,17 @@ test("a width that changes while the pane is resized keeps the column until the 
   expect(v.paneW).toBe(440);
   expect(v.width).toBeCloseTo(col(540), 6);
   expect(v.rowsKey).toBe(key);
-  const wait = cx.timers.filter((x) => x.ms > 200 && x.ms <= 310);
+  // One draw asked for, 1.2 s after the last size change (REWRAP_PAUSE_MS), not 300 ms.
+  expect(cx.timers.filter((x) => x.ms > 200 && x.ms <= 310)).toEqual([]);
+  const wait = cx.timers.filter((x) => x.ms > REWRAP_PAUSE_MS - 100 && x.ms <= REWRAP_PAUSE_MS + 10);
   expect(wait.length).toBe(1);
-  // Still for 300 ms: the column takes the pane's width and the turns are built for it.
+  // Still for 400 ms: held yet.
   v.sizeAt = Date.now() - 400;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  // Still for 1.2 s: the column takes the pane's width and the turns are built for it.
+  v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
   wait[0].fn(cx);
   draw(v, cx);
   expect(v.width).toBeCloseTo(col(440), 6);
