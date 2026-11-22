@@ -904,7 +904,7 @@ test("every place that draws an agent message can tell a rule-marked typed promp
     { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
   ]);
   v.applyPrefs(JSON.stringify(SENDERS));
-  v.prefs = { ...v.prefs, agentTurns: true };
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: true };
   draw(v, cx);
   const [you, typed, sent] = v.current().turns;
   expect([you, typed, sent].map((t) => senderOrigin(t.sender))).toEqual(["you", "rule", "sent"]);
@@ -1069,7 +1069,7 @@ test("on a Herdr whose elements have no border_dashed, the matched bubble keeps 
 test("the rail card has a second line for an agent message, matched or sent: its icon and label; none for the person's own", async () => {
   const { v, cx } = await twoKinds();
   v.applyPrefs(JSON.stringify(SENDERS));
-  v.prefs = { ...v.prefs, agentTurns: true };
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: true };
   v.width = 700;
   draw(v, cx);
   const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
@@ -1103,7 +1103,7 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
-test("agentRail: on by default, agent messages have rail ticks; off, only the person's turns and the running one do", async () => {
+test("agentRail: off by default, only the person's turns and the running one have rail ticks; the switch puts agent messages on and writes true, then false", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
     // A teammate's message with a reply of its own: folded, so it is in the list.
@@ -1113,12 +1113,19 @@ test("agentRail: on by default, agent messages have rail ticks; off, only the pe
     { k: "p", o: "peer", t: peer("Checking the docs build"), ts: at(6) },
   ]);
   const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
-  v.prefs = { ...v.prefs, agentTurns: false };
-  expect(v.prefs.agentRail).toBe(true);
+  // A settings file with no agentRail key: the default, off.
+  v.applyPrefs(JSON.stringify({ agentTurns: false }));
+  expect(v.prefs.agentRail).toBe(false);
   draw(v, cx);
+  // The folded agent message stays in the list with no tick; the running one keeps its tick.
   expect(v.rows().some((r) => r.kind === "afold" && r.turnKey === "0:2")).toBe(true);
-  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
-  // The panel's switch, next to Agent messages.
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  // With agent messages shown whole, they stay off the rail too.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // The panel's switch, next to Agent messages, shown off.
   v.settingsOpen = true;
   rec = [];
   v.render(cx);
@@ -1128,20 +1135,331 @@ test("agentRail: on by default, agent messages have rail ticks; off, only the pe
   expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
   expect(kids).toContain("Agent messages on the rail");
   v.settingsOpen = false;
-  // Off: the folded agent message leaves the rail and stays in the list; the running one keeps its tick.
+  // The switch's knob sits at the end only while it is on.
+  const switchOn = () => {
+    v.settingsOpen = true;
+    rec = [];
+    v.render(cx);
+    const r = rec;
+    rec = null;
+    v.settingsOpen = false;
+    const i = r.findIndex((e) => e[0] === "id" && e[1] === "th-set-agent-rail");
+    const j = r.findIndex((e, k) => k > i && e[0] === "id");
+    return r.slice(i, j < 0 ? undefined : j).some((e) => e[0] === "justify_end");
+  };
+  expect(switchOn()).toBe(false);
+  // On: the switch writes true, and the folded agent message gets its tick. The writes are
+  // what the next read finds, as on disk.
+  keepSettings = true;
+  settingsWrites.length = 0;
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(true);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).agentRail).toBe(true);
+  expect(switchOn()).toBe(true);
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // Off again: the switch writes false, not a missing key.
   v.action("agentRail", cx);
   expect(v.prefs.agentRail).toBe(false);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).agentRail).toBe(false);
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
-  expect(v.turnKeys(v.rows())).toContain("0:2");
-  // With agent messages shown whole, they stay off the rail too.
-  v.prefs = { ...v.prefs, agentTurns: true };
-  draw(v, cx);
-  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
-  // Back on from the file.
+  // A file that holds true keeps agent messages on the rail; one that holds false, off.
   v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: true }));
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // The setting alone changing rebuilds the rail (it is in the rows' key).
+  v.prefs = { ...v.prefs, agentRail: false };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  v.prefs = { ...v.prefs, agentRail: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: false }));
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  keepSettings = false;
+  delete recordFiles[v.prefsPath()];
+});
+
+test("agentRail alone changing builds the rows again: it is in the rows' key, so the rail follows with nothing else changed", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  for (const debug of [false, true]) {
+    v.debug = debug;
+    v.prefs = { ...v.prefs, agentTurns: false, agentRail: false };
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+    // Built and kept: a draw with nothing changed keeps the same key and the same rows.
+    const key = v.rowsKey;
+    const rows = v.baseRows;
+    draw(v, cx);
+    expect(v.rowsKey).toBe(key);
+    expect(v.baseRows).toBe(rows);
+    // Only agentRail changes: a new key, and the rail has the agent message's tick.
+    v.prefs = { ...v.prefs, agentRail: true };
+    draw(v, cx);
+    expect(v.rowsKey).not.toBe(key);
+    expect(railKeys()).toEqual(["0:1", "0:2", "0:3"]);
+    v.prefs = { ...v.prefs, agentRail: false };
+    draw(v, cx);
+    expect(v.rowsKey).toBe(key);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+  }
+});
+
+test("a settings file from a build before agentRail's new default: the first load turns it off and marks the file (look 4), once; the switch's choice after that is kept", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  const path = v.prefsPath();
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  const file = () => JSON.parse(recordFiles[path]);
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  // A pane opening: what it reads is the file on disk.
+  const load = async () => { v.prefsLoaded = false; v.prefsRaw = undefined; v.readPrefs(cx); await settle(); };
+  keepSettings = true;
+  settingsWrites.length = 0;
+  try {
+    // What an earlier build saved: agentRail true (its default), its mark 3, a key it kept.
+    recordFiles[path] = `${JSON.stringify({ agentTurns: false, agentRail: true, railSide: "left", future: "x", look: 3 }, null, 2)}\n`;
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+    // Written once, off, with the mark; the person's other values and unknown keys kept.
+    expect(settingsWrites.length).toBe(1);
+    expect(file()).toMatchObject({ agentRail: false, railSide: "left", future: "x", look: 4 });
+    // The next load finds the mark: no write, nothing changed.
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefs.agentRail).toBe(false);
+    // Turned on: written true, and a reload keeps it.
+    v.action("agentRail", cx);
+    await settle();
+    expect(file()).toMatchObject({ agentRail: true, look: 4 });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:2", "0:3"]);
+    // A later save of another setting keeps it on.
+    const writes = settingsWrites.length;
+    v.action("truncate", cx);
+    await settle();
+    expect(settingsWrites.length).toBe(writes + 1);
+    expect(file()).toMatchObject({ agentRail: true, truncate: true, look: 4 });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    // A file already marked is left alone: read as it holds, not written.
+    recordFiles[path] = JSON.stringify({ agentRail: true, look: 4 });
+    settingsWrites.length = 0;
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    expect(settingsWrites.length).toBe(0);
+    // A file with no agentRail key (an earlier build's, or written by hand): off.
+    recordFiles[path] = JSON.stringify({ agentTurns: false, look: 3 });
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    expect(file()).toMatchObject({ agentRail: false, look: 4 });
+    recordFiles[path] = JSON.stringify({ agentTurns: false });
+    settingsWrites.length = 0;
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    // A file written by hand, with no mark, holding true: kept, and not written.
+    recordFiles[path] = JSON.stringify({ agentRail: true });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    expect(settingsWrites.length).toBe(0);
+    // No file at all: off, and nothing written.
+    delete recordFiles[path];
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    expect(settingsWrites.length).toBe(0);
+    // A write that does not land (the file still holds the old text when read again) is
+    // not tried again on that text, so the pane does not write in a loop.
+    keepSettings = false;
+    recordFiles[path] = JSON.stringify({ agentRail: true, look: 3 });
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    v.readPrefs(cx);
+    await settle();
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefs.agentRail).toBe(false);
+  } finally {
+    keepSettings = false;
+    delete recordFiles[path];
+  }
+});
+
+test("a list where no turn has a tick (a finished session of agent messages only, agentRail off): up and down step one turn at a time", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(0) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(1) },
+    { k: "p", o: "peer", t: peer("The docs build is green"), ts: at(2) }, { k: "t", t: "Thanks." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(4) }, { k: "t", t: "Noted." }, { k: "d", ms: 800, ts: at(5) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+  expect((v.railTurns ?? []).length).toBe(0);
+  // Nothing selected: up goes to the newest turn, not the oldest.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:3");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:2");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  v.action("next", cx);
+  v.action("next", cx);
+  expect(v.sel).toBe("0:3");
+  // One of the person's turns after them: it has the only tick, so the keys go to it and stay.
+  const { apply } = await import("../mods/agent-threads/core/turns.js");
+  for (const e of [{ k: "p", o: "human", t: "Thanks, all", ts: at(6) }, { k: "t", t: "Done." }, { k: "d", ms: 500, ts: at(7) }]) apply(v.current(), e);
+  v.rowsKey = null;
+  draw(v, cx);
+  v.sel = "0:2";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:4");
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:4");
+});
+
+test("the Pinned view: every pin is a stop for up and down, a pinned agent message included, with agentRail off", async () => {
+  // No pins from an earlier test: the pane reads pins.json as it opens.
+  delete recordFiles[PINS];
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  await new Promise((r) => setTimeout(r, 20)); // the first read of pins.json
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  try {
+    for (const k of ["0:1", "0:2", "0:3"]) { v.sel = k; v.action("pin", cx); }
+    expect(v.pinnedList().map((p) => p.key)).toEqual(["0:1", "0:2", "0:3"]);
+    // In the list the agent message is passed over.
+    v.sel = "0:1";
+    v.action("next", cx);
+    expect(v.sel).toBe("0:3");
+    // In the Pinned view it is a stop, both ways.
+    v.setView("pinned");
+    draw(v, cx);
+    expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
+    v.sel = "0:1";
+    v.action("next", cx);
+    expect(v.sel).toBe("0:2");
+    v.action("next", cx);
+    expect(v.sel).toBe("0:3");
+    v.action("prev", cx);
+    expect(v.sel).toBe("0:2");
+  } finally {
+    v.setView("all");
+    delete recordFiles[PINS];
+  }
+});
+
+test("up and down follow the rail: with Agent messages on the rail off they pass over agent messages, on they stop at them; the running one is a stop", async () => {
+  const { keyAction } = await import("../mods/agent-threads/ui.js");
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "peer", t: peer("The docs build is green"), ts: at(4) }, { k: "t", t: "Thanks." }, { k: "d", ms: 800, ts: at(5) },
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(6) }, { k: "t", t: "Noted." }, { k: "d", ms: 800, ts: at(7) },
+    { k: "p", o: "human", t: "Add the line", ts: at(8) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(9) },
+    // An agent message still running: the running turn.
+    { k: "p", o: "peer", t: peer("Checking the release build"), ts: at(10) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3", "0:4", "0:5", "0:6"]);
+  expect(v.railTurns.map((x) => x.key)).toEqual(["0:1", "0:5", "0:6"]);
+  // j and k are the same actions as down and up.
+  expect(["j", "down", "k", "up"].map((k) => keyAction(keyEv(k), false, "q"))).toEqual(["next", "next", "prev", "prev"]);
+  // Down from turn 1 passes over the three agent messages and brings turn 5 into view.
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:5");
+  expect(v.scrollTo).toEqual({ key: "0:5", how: "center" });
+  // Up from turn 5 passes over them back to turn 1.
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  expect(v.scrollTo).toEqual({ key: "0:1", how: "center" });
+  // An agent message selected by a click: down goes to the next tick, up to the one before.
+  v.sel = "0:3";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:5");
+  v.sel = "0:3";
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  // The running agent message keeps its tick, so it is a stop; past it, nothing more.
+  v.sel = "0:5";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:6");
+  v.action("next", cx);
+  expect(v.sel).toBe("0:6");
+  v.sel = "0:1";
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:1");
+  // Nothing selected: up goes to the newest stop.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:6");
+  // With Agent messages on the rail on, down stops at the first agent message.
+  v.prefs = { ...v.prefs, agentRail: true };
+  draw(v, cx);
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  // In the outline every row stays a stop.
+  v.prefs = { ...v.prefs, agentRail: false };
+  v.setOutline(true);
+  draw(v, cx);
+  v.sel = "0:1";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:2");
+  v.setOutline(false);
+});
+
+test("an agent message with no tick, selected by a click, still takes the keys that act on the selected turn", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good. The release note needs one more line." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+    // A finished agent message last: no tick, so the last stop is turn 3.
+    { k: "p", o: "peer", t: peer("Lint is green"), ts: at(6) }, { k: "t", t: "Noted." }, { k: "d", ms: 500, ts: at(7) },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: false };
+  draw(v, cx);
+  expect(v.railTurns.map((x) => x.key)).toEqual(["0:1", "0:3"]);
+  // Down from the last stop goes nowhere: the agent message after it has no tick.
+  v.sel = "0:3";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:3");
+  // With nothing selected, up goes to the newest stop, not the newest row.
+  v.sel = null;
+  v.action("prev", cx);
+  expect(v.sel).toBe("0:3");
+  v.sel = "0:2";
+  // Enter opens it.
+  expect(v.action("open", cx)).toBe(true);
+  expect(v.open.has("0:2")).toBe(true);
+  // c copies its reply, and the selection stays on it.
+  expect(v.action("copy", cx)).toBe(true);
+  expect(v.sel).toBe("0:2");
 });
 
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
@@ -9418,15 +9736,15 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
 });
 const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
 
-test("Reset also covers Agent messages on the rail: switched off alone, Reset is lit and turns it back on", async () => {
+test("Reset also covers Agent messages on the rail: switched on alone, Reset is lit and turns it back off", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.action("settings", cx);
   expect(v.prefsDiffer()).toBe(false);
   v.action("agentRail", cx);
-  expect(v.prefs.agentRail).toBe(false);
+  expect(v.prefs.agentRail).toBe(true);
   expect(v.prefsDiffer()).toBe(true);
   v.action("resetSettings", cx);
-  expect(v.prefs.agentRail).toBe(true);
+  expect(v.prefs.agentRail).toBe(false);
   expect(v.prefsDiffer()).toBe(false);
   await new Promise((r) => setTimeout(r, 20));
 });

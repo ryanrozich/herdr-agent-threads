@@ -83,7 +83,7 @@ import {
   keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
-import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
+import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
 // build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
@@ -1167,6 +1167,10 @@ export default class Threads extends View {
       if (text === this.prefsRaw && this.prefsLoaded) return;
       this.prefsLoaded = true;
       this.applyPrefs(text, cx);
+      // A file from an earlier build: written once with the current mark (settings.js LOOK),
+      // so what it reads as now (agent messages off the rail) is what it holds. Once per
+      // text: a write that does not land is not tried again on the same text.
+      if (behindLook(text) && this.lookTried !== text) { this.lookTried = text; this.changePrefs({}, cx); }
       cx.notify();
     });
   }
@@ -2520,7 +2524,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === true ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -2799,8 +2803,8 @@ export default class Threads extends View {
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
-    // agentRail off: agent messages get no tick (the running turn keeps its own).
-    const agentRail = this.prefs.agentRail !== false;
+    // agentRail off (the default): agent messages get no tick (the running turn keeps its own).
+    const agentRail = this.prefs.agentRail === true;
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -3850,6 +3854,18 @@ export default class Threads extends View {
   findTurn(key) {
     const [si, n] = key.split(":").map(Number);
     return this.sessions[si]?.turns[n - 1] ?? null;
+  }
+
+  // Whether up and down stop at this turn: whether it has a tick on the rail (the rows'
+  // rule). An agent message has one only with agentRail on; the running turn always does.
+  // In the outline and the Pinned view every row is a stop, as before.
+  railStop(key) {
+    if (this.prefs.agentRail === true || this.view === "pinned" || this.outlined()) return true;
+    const turn = this.findTurn(key);
+    if (!turn?.agent) return true;
+    const si = Number(key.split(":")[0]);
+    const s = this.sessions[si];
+    return si === this.sessions.length - 1 && turn === s.turns[s.turns.length - 1] && !turn.done;
   }
 
   // ---- actions ----
@@ -5050,8 +5066,20 @@ export default class Threads extends View {
       this.scrollTo = { key: this.sel, how: "center" };
     };
     switch (name) {
-      case "prev": go(at < 0 ? keys.length - 1 : at - 1); return true;
-      case "next": go(at < 0 ? keys.length - 1 : at + 1); return true;
+      // Up and down (k and j) follow the rail: they stop only at turns with a tick
+      // (railStop), so with Agent messages on the rail off they pass over agent messages.
+      // From a turn with no tick (a click selected it) they go to the nearest tick that way;
+      // at either end the selection stays. When no turn in the list has a tick (a finished
+      // session of agent messages only, with agentRail off), every turn is a stop, as before.
+      case "prev": case "next": {
+        const d = name === "next" ? 1 : -1;
+        const stop = keys.some((k) => this.railStop(k)) ? (k) => this.railStop(k) : () => true;
+        let i = at < 0 ? keys.length : at + d;
+        if (at < 0) do i--; while (i > 0 && !stop(keys[i]));
+        else while (i >= 0 && i < keys.length && !stop(keys[i])) i += d;
+        go(i >= 0 && i < keys.length ? i : at);
+        return true;
+      }
       case "first": go(0); return true;
       case "latest": this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
@@ -5144,7 +5172,7 @@ export default class Threads extends View {
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       // The settings card's switch: no toast, the card shows the change.
       case "agentsQuiet": this.setAgents(!this.prefs.agentTurns, cx, true); return true;
-      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
+      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail !== true }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": if (!this.settingsOpen) cardKeys.ask(cx, "open"); return this.setSettings(!this.settingsOpen);
@@ -6841,7 +6869,7 @@ export default class Threads extends View {
         const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
         return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
       },
-      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
+      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail === true, "agentRail")],
       truncate: () => new CardParts([
         () => sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         () => (P.truncate ? this.cardCol(v_flex().pl(16).gap(4), 4, 0, [() => stepper("promptLines", "Prompt lines"), () => stepper("replyLines", "Reply lines")]) : null),

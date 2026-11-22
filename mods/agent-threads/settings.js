@@ -10,8 +10,10 @@
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
-// agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
-// false leaves them off it (the running turn keeps its tick).
+// agentRail: agent messages the list shows get ticks on the turn rail (false, the default:
+// they stay off it and the running turn keeps its tick). A file from a build before this
+// default is read with it off once and marked (LOOK); after that the switch keeps the
+// person's choice.
 // bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
 // "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
@@ -52,7 +54,7 @@ import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "
 import { MOD, PREVIOUS } from "./name.js";
 import { RULE_TEXT } from "./core/turns.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.
@@ -61,7 +63,15 @@ export const FILE = "settings.json";
 // "look": 3 marks a file written since the quiet look. Builds before it wrote the old
 // default, slate, on any change, so a file without the mark that holds slate reads as the
 // default (blue); any other colour in it was the user's choice and is kept.
-export const LOOK = 3;
+// "look": 4 marks a file written since agent messages left the rail by default. Builds
+// before it wrote agentRail: true on any save, so a file with an older mark reads it as off,
+// once: the first load writes the file again with the mark (behindLook, main.js readPrefs),
+// and from then on the file holds the person's own choice. A file with no mark keeps its
+// value: every build that knew agentRail wrote a mark, so that file was written by hand.
+// Builds before 4 read any mark of 3 or more as theirs, and their next save writes 3 again:
+// after a move back to one, or from a pane still running one, the newer build turns
+// agentRail off once more the next time it loads the file.
+export const LOOK = 4;
 
 export function settingsDir(appHome) { return `${appHome}/data/${MOD}`; }
 export function settingsPath(appHome) { return `${settingsDir(appHome)}/${FILE}`; }
@@ -83,13 +93,14 @@ export function parseSettings(text) {
   const old = raw.look == null && raw.promptLines === 2 && raw.replyLines === 3;
   const bubble = bubbleValue(raw.bubbleColor);
   const slate = bubble === "slate" && !(Number(raw.look) >= 3);
+  const railOld = raw.look != null && !(Number(raw.look) >= 4);
   return {
     values: {
       textSize: clampInt(raw.textSize, RANGES.textSize, DEFAULTS.textSize),
       promptLines: old ? DEFAULTS.promptLines : clampInt(raw.promptLines, RANGES.promptLines, DEFAULTS.promptLines),
       replyLines: old ? DEFAULTS.replyLines : clampInt(raw.replyLines, RANGES.replyLines, DEFAULTS.replyLines),
       agentTurns: typeof raw.agentTurns === "boolean" ? raw.agentTurns : DEFAULTS.agentTurns,
-      agentRail: typeof raw.agentRail === "boolean" ? raw.agentRail : DEFAULTS.agentRail,
+      agentRail: !railOld && typeof raw.agentRail === "boolean" ? raw.agentRail : DEFAULTS.agentRail,
       bubbleColor: slate ? DEFAULTS.bubbleColor : bubble ?? DEFAULTS.bubbleColor,
       agentBubbleColor: bubbleValue(raw.agentBubbleColor) ?? DEFAULTS.agentBubbleColor,
       width: WIDTH_NAMES.includes(raw.width) ? raw.width : DEFAULTS.width,
@@ -560,6 +571,15 @@ export function parseExtras(text) {
     linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
     senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
   };
+}
+
+// Whether the file's text is a settings object with a mark older than LOOK, so the first
+// load writes it again with the current mark. No mark (a file written by hand) and text that
+// does not parse are left as they are.
+export function behindLook(text) {
+  let raw = null;
+  try { raw = JSON.parse(text ?? ""); } catch { return false; }
+  return raw?.look != null && !(Number(raw.look) >= LOOK);
 }
 
 // The file's text for a set of values. Keys this version does not know are kept, so a
