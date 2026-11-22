@@ -4383,9 +4383,6 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   expect(w.view).toBe("pinned");
   // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
   // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
-  // (Keep to reading width off here, so Threads may be wider than the reading width.)
-  v.prefs = { ...v.prefs, readingWidth: false };
-  w.prefs = { ...w.prefs, readingWidth: false };
   state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
   log = [];
   w.key(keyEv("="), cx2);
@@ -4393,13 +4390,11 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
-  // With it on (the default), - narrows the column but Threads stops at the reading width:
-  // the terminal takes the rest.
-  v.prefs = { ...v.prefs, readingWidth: true };
+  // No cap at the reading width: Threads takes all 40 px however narrow its column is.
   state.shared["threads.width"] = { p2: 543, p3: 290 };
   log = [];
   v.key(keyEv("-"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 573 }]);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 585 }]);
   // The column's footer: the same one row, ? keys last (- and = are on the sheet).
   expect(w.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "? keys"]);
   // Threads closes: the column closes too, once.
@@ -5172,8 +5167,10 @@ test("reading type: message and reply text at the Text size on 1.57 lines, a rea
   await new Promise((r) => setTimeout(r, 20));
 });
 
-test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fitWidth once, a narrower one keeps its width and goes to a weight", async () => {
-  for (const [measured, size, want] of [[900, 14, 573], [900, 18, 704], [480, 14, null]]) {
+test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it once, a narrower one keeps its width and goes to a weight", async () => {
+  // The step goes by the pane's px (its measured width and the 2 px frame): 1200 is 120
+  // characters (902 px), 800 is 90 (704), 650 is 70 (573); at 18 px 900 is 90 (873).
+  for (const [measured, size, want] of [[1200, 14, 902], [800, 14, 704], [650, 14, 573], [900, 18, 873], [480, 14, null]]) {
     const { v, cx } = await pane(fixture("--extra", "2"));
     v.prefs = { ...v.prefs, textSize: size };
     // The fixture has pins: no Pinned column opening by itself here.
@@ -5190,46 +5187,45 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
     // Once only: the flag is gone, and another pane's flag stays.
     expect(state.shared["threads.fit"]).toEqual({ p9: true });
   }
-  // A pane the launcher did not just open (a restart, an existing layout, a drag): with Keep
-  // to reading width on, it is asked back once per width; off, it is left alone.
+  // A pane the launcher did not just open (a restart, an existing layout, a drag) is never
+  // asked back: no snap-back at any width.
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.pinAutoDone = true;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
-  v.paneW = 900;
-  log = [];
-  v.poll(cx);
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // (The weight that follows a px is in the weight tests below.)
-  v.weighAfter = null;
-  // Herdr left it wide (a pane alone in its tab): no second ask at the same width; a new
-  // width (a drag) asks again.
-  log = [];
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  for (const w of [900, 960, 1400, 600]) {
+    v.paneW = w;
+    log = [];
+    v.poll(cx);
+    v.poll(cx);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  }
+  // The header offers the fit button while the pane is wider than its step's width; w fits it.
   v.paneW = 960;
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // The header offers the fit button while it is wider; w fits Threads and an open column.
+  draw(v, cx);
+  expect(v.chars()).toBe(120);
   expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
   log = [];
   v.key(keyEv("w"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  v.paneW = 571;
-  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
-  // Off: a wide pane stays as it is.
-  v.prefs = { ...v.prefs, readingWidth: false };
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 902 }]);
   v.paneW = 900;
+  draw(v, cx);
+  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
+  // Between two steps (800 px shows 90 characters): w takes it to 704.
+  v.paneW = 798;
+  draw(v, cx);
+  expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
   log = [];
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  v.key(keyEv("w"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
 });
 
-test("a pane wider than the reading width lays the turns out in a centred column that wide, scaled with Text size", async () => {
+test("a pane wider than its step lays the turns out in a centred column that wide, scaled with Text size", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
-  // The text is at most a reading line with gutters of 8% of the pane each side (24 to 56 px),
-  // and the rows pad 16 px inside the column: 461 + 32 at 14 px, 592 + 32 at 18.
-  for (const [paneW, size, col] of [[960, 14, 493], [960, 18, 624], [500, 14, 452], [300, 14, 284]]) {
+  // The text is at most its step's line, with gutters that give way to 24 px before it does,
+  // and the rows pad 16 px inside the column: at 14 px 461, 592 or 790 + 32; at 18 px a 960
+  // px pane is 90 characters, 761 + 32.
+  for (const [paneW, size, col] of [[648, 14, 493], [748, 14, 624], [960, 14, 822], [960, 18, 793], [500, 14, 484], [300, 14, 284]]) {
+    v.colStep = null;
     v.prefs = { ...v.prefs, textSize: size };
     v.paneW = paneW;
     draw(v, cx);
@@ -5245,72 +5241,145 @@ test("a pane wider than the reading width lays the turns out in a centred column
   expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
 });
 
-test("width: Comfortable, Wide and Full set the column and the reading line; choosing one resizes the pane while it is kept at its width, and Full sends no px", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
+// The column steps with the pane (the ticket's eight scenarios). A pane's px is its measured
+// width (paneW) and Herdr's 2 px frame. Between two steps nothing re-wraps: the column and
+// every row's layout stay as they were, and only the margins beside the column move.
+async function colPane(px) {
+  const { v, cx } = await pane(fixture("--extra", "4"));
   v.pinAutoDone = true;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
-  // The column a wide pane lays its turns out in: the line and 16 px each side, and in Full
-  // the pane less its 56 px gutters.
-  for (const [w, col, prose] of [["comfortable", 493, 461], ["wide", 624, 592], ["full", 880, 848]]) {
-    v.prefs = { ...v.prefs, textSize: 14, width: w };
-    v.paneW = 960;
-    draw(v, cx);
-    expect(v.width).toBe(col);
-    expect(v.prose()).toBe(prose);
-  }
-  // A bubble stops at Wide's line even in Full.
-  expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
-  // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
-  // back to 573; Full leaves it alone and the switch as it was.
-  v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
-  v.paneW = 573;
+  const at = (w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 1000; draw(v, cx); };
+  at(px);
   log = [];
-  expect(v.action("width:wide", cx)).toBe(true);
-  expect(v.prefs.width).toBe("wide");
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
-  v.paneW = 704;
-  log = [];
-  v.action("width:comfortable", cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  v.paneW = 573;
-  log = [];
-  v.action("width:full", cx);
-  v.poll(cx);
-  expect(v.prefs).toMatchObject({ width: "full", readingWidth: true });
-  // No px: the pane goes to a weight (the weight tests below).
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", weight: 1 }]);
-  v.weighing = null;
-  // Full has no reading width: no fit button, and the pane is never asked back.
-  log = [];
-  v.paneW = 1200;
-  v.poll(cx);
+  return { v, cx, at };
+}
+// The characters a line holds: the text's px over the width readType gives a character.
+const lineChars = (v) => Math.round(v.prose() / (0.47 * v.prefs.textSize));
+
+test("scenario: a pane between 573 and 703 px shows the narrowest column, centred", async () => {
+  const { v } = await colPane(650);
+  expect(lineChars(v)).toBe(70);
+  expect([v.prose(), lineChars(v)]).toEqual([461, 70]);
+  expect(v.width).toBe(461 + 32);
+  expect(v.colLeft()).toBe((648 - v.width) / 2);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
-  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
-  // With the switch off, Wide changes the column and sends no px.
-  v.prefs = { ...v.prefs, readingWidth: false };
-  log = [];
-  v.action("width:wide", cx);
-  expect(log.filter((x) => x[1] === "layout.resize" && "px" in x[2])).toEqual([]);
-  v.weighing = null;
-  expect(v.action("width:huge", cx)).toBe(false);
-  // The card's Chat tab: a Width row with the three choices, each with its icon, then the
-  // pane and its reading column as a line, with the characters a line; in a pane narrower
-  // than the column, the line says it looks like Full here.
-  v.paneW = 420;
+});
+
+test("scenario: a pane widened from 650 to 750 px shows the 90 character column", async () => {
+  const { v, at } = await colPane(650);
+  at(750);
+  expect(lineChars(v)).toBe(90);
+  expect([v.prose(), lineChars(v)]).toEqual([592, 90]);
+  expect(v.colLeft()).toBe((748 - v.width) / 2);
+});
+
+test("scenario: a pane widened from 750 to 950 px shows the 120 character column", async () => {
+  const { v, at } = await colPane(750);
+  at(950);
+  expect(lineChars(v)).toBe(120);
+  expect([v.prose(), lineChars(v)]).toEqual([790, 120]);
+});
+
+test("scenario: resizing from 750 to 850 px re-wraps nothing; only the margins beside the column grow", async () => {
+  const { v, cx, at } = await colPane(750);
+  // Every turn open, so each reply's wrapped lines are in the heights.
+  for (const k of v.turnKeys(v.rows())) v.open.add(k);
+  v.rowsKey = null;
+  draw(v, cx);
+  const heights = () => v.rows().map((r) => v.height(r));
+  const before = { width: v.width, prose: v.prose(), sig: v.sigBase(), h: heights(), left: v.colLeft() };
+  expect(before.h.length).toBeGreaterThan(8);
+  for (const w of [770, 800, 850]) {
+    at(w);
+    expect([lineChars(v), v.width, v.prose(), v.sigBase()]).toEqual([90, before.width, before.prose, before.sig]);
+    expect(heights()).toEqual(before.h);
+    expect(v.colLeft()).toBe((w - 2 - before.width) / 2);
+  }
+  expect(v.colLeft() - before.left).toBe(50);
+});
+
+test("scenario: a few px back across a switch point keep the column: 704 to 700 px stays at 90 characters", async () => {
+  const { v, at } = await colPane(704);
+  expect(lineChars(v)).toBe(90);
+  for (const w of [703, 700, 690, 688]) { at(w); expect([w, lineChars(v), v.prose()]).toEqual([w, 90, 592]); }
+});
+
+test("scenario: the column steps down 16 px below where it stepped up: 704 to 680 px is 70 characters", async () => {
+  const { v, at } = await colPane(704);
+  at(680);
+  expect([lineChars(v), v.prose(), lineChars(v)]).toEqual([70, 461, 70]);
+  // The same from 120: down at 886, not at 901.
+  const w = await colPane(902);
+  expect(lineChars(w.v)).toBe(120);
+  w.at(887);
+  expect(lineChars(w.v)).toBe(120);
+  w.at(885);
+  expect(lineChars(w.v)).toBe(90);
+});
+
+test("scenario: a 500 px pane wraps the text to its own width with 24 px each side, and nothing runs past its right edge", async () => {
+  const { v, cx } = await colPane(500);
+  // The narrowest step, its line cut to the pane: 450 px, about 68 characters.
+  expect([v.prose(), lineChars(v)]).toEqual([498 - 48, 68]);
+  expect(v.side()).toBe(24);
+  expect(v.colLeft() + v.width).toBeLessThanOrEqual(v.pw());
+  // Every list item fits the column: none is wider than the pane.
+  rec = [];
+  const rows = v.rows();
+  v.listItems(theme, rows, rows.map(() => 400), { start: 0, end: rows.length }, true, false);
+  const ws = rec.filter((e) => e[0] === "w" || e[0] === "max_w").map((e) => e[1]).filter((x) => typeof x === "number");
+  rec = null;
+  expect(Math.max(...ws)).toBeLessThanOrEqual(v.pw());
+  // No pane resize asked: no snap-back at any width.
+  for (const w of [480, 520, 560]) { v.paneW = w; v.poll(cx); }
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+});
+
+test("scenario: a settings file with the old width and keep-width switch opens with no error; the card has neither; Shift w does nothing", async () => {
+  const { v, cx } = await colPane(900);
+  const text = JSON.stringify({ width: "full", readingWidth: true, textSize: 14 });
+  v.applyPrefs(text, cx);
+  expect([v.prefsError, v.prefsNotes ?? []]).toEqual([null, []]);
+  expect("width" in v.prefs || "readingWidth" in v.prefs).toBe(false);
   v.action("settings", cx);
-  rec = []; v.settingsCard(theme); const sp = rec; rec = null;
-  const ids = sp.filter((e) => e[0] === "id").map((e) => e[1]);
-  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full", "th-set-ruler"]));
-  const icons = sp.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  expect(icons).toEqual(expect.arrayContaining(["width-comfortable.svg", "width-wide.svg", "width-full.svg"]));
-  const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect(texts).toContain("Keep the pane at this width");
-  expect(texts).toContain("Up to 90 characters a line. This pane has room for less, so it looks like Full here.");
-  v.paneW = 900;
-  expect(v.widthNote()).toBe("Up to 90 characters a line.");
-  v.prefs = { ...v.prefs, width: "full" };
-  expect(v.widthNote()).toBe("Text runs the whole pane.");
+  const g = cardOf(v);
+  const gs = strsOf(g);
+  for (const gone of ["Width", "Comfortable", "Wide", "Full", "Keep the pane at this width"]) expect(gs).not.toContain(gone);
+  expect(idsIn(g).filter((id) => /^th-width-|^th-set-ruler|keep/i.test(id))).toEqual([]);
   v.closeSettings();
+  // Shift w: no action, no notice, no resize, and the column as it was.
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  const before = [lineChars(v), v.width, JSON.stringify(v.prefs)];
+  v.toast = null;
+  log = [];
+  v.key(shiftW, cx);
+  v.key(keyEv("W"), cx);
+  draw(v, cx);
+  expect([lineChars(v), v.width, JSON.stringify(v.prefs)]).toEqual(before);
+  expect(v.toast).toBe(null);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  // The old actions are gone.
+  for (const a of ["widthStep", "keepWidth", "width:wide"]) expect(v.action(a, cx)).toBeFalsy();
+});
+
+test("a table in a reply takes the pane's room past its step's line, as Full gave it: up to the pane less the gutters and the rail", async () => {
+  const { v, at } = await colPane(1400);
+  const key = v.turnKeys(v.rows()).at(-2);
+  const turn = v.findTurn(key);
+  const cells = Array.from({ length: 9 }, (_x, i) => `Column ${i} heading words`);
+  turn.after = [`Plan:\n\n| ${cells.join(" | ")} |\n|${"---|".repeat(9)}\n| ${cells.map((c) => `${c} and a long value`).join(" | ")} |\n`];
+  turn.shapeKey = null;
+  v.rowsKey = null;
+  for (const [px, chars] of [[650, 70], [750, 90], [950, 120], [1400, 120]]) {
+    at(px);
+    const row = v.rows().find((r) => r.kind === "turn" && r.key === key);
+    const extra = v.tableExtra(row);
+    const lane = v.railShown() ? 32 : 0;
+    expect([px, v.chars()]).toEqual([px, chars]);
+    // The table reaches the pane's room on the side it has least, less the gutter and the lane.
+    const room = Math.min(v.colLeft() - lane, v.pw() - v.colLeft() - 32 - v.prose() - lane);
+    expect(extra / 2).toBe(Math.floor(Math.max(0, room)));
+  }
 });
 
 // Herdr's row for the weight tests: R px shared by the panes at a weight, the others'
@@ -5327,6 +5396,7 @@ async function weightPane(prefs, paneW = 700) {
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   v.prefs = { ...v.prefs, textSize: 14, ...prefs };
   v.paneW = paneW;
+  v.fitColumn();
   // The fixture has pins: the column would open by itself (its split never comes here).
   v.pinAutoDone = true;
   log = [];
@@ -5354,13 +5424,13 @@ test("weightLine: 1/px is a line in 1/weight, so two weights tried give the weig
   expect(weightFor(null, 700)).toBe(null);
 });
 
-test("Full chosen puts the main Threads pane on a weight that keeps its width: weight 1, a guess, then the measured one; the next one in the same row asks once", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  v.action("width:full", cx);
+test("toWeight puts the main Threads pane on a weight that keeps its width: weight 1, a guess, then the measured one; the next one in the same row asks once", async () => {
+  const { v, cx } = await weightPane({}, 560);
+  v.toWeight();
   // Herdr's row: 1500 px, the others' weights 1.2. The pane is 560 wide (562 with its frame).
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  // Choosing again while it measures starts nothing new.
-  v.action("width:full", cx);
+  // Asked again while it measures: nothing new.
+  v.toWeight();
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
   for (let i = 0; i < 4; i++) { herdr(v, 1500, 1.2); v.poll(cx); }
   const asks = resized();
@@ -5369,32 +5439,36 @@ test("Full chosen puts the main Threads pane on a weight that keeps its width: w
   expect(asks[2].weight).toBeCloseTo((1.2 * 562) / (1500 - 562), 2);
   expect(Math.abs(v.paneW - 560)).toBeLessThanOrEqual(1);
   expect(v.weighing).toBe(null);
-  // At its weight now: choosing again asks nothing.
+  // At its weight now: asked again, nothing.
   log = [];
-  v.action("width:full", cx);
+  v.toWeight();
   expect(resized()).toEqual([]);
-  // The window 450 px wider: the pane at its weight grows with it. With Comfortable kept,
-  // the cap takes it back to 573, and one weight keeps that, from the width the old weight
-  // gave in the new row and the line the last probe measured.
+  // The window 450 px wider: the pane at its weight grows with it, and nothing asks it back.
   v.paneW = Math.round((v.weightNow * 1950) / (v.weightNow + 1.2)) - 2;
+  v.sizeAt = Date.now() - 1000;
   expect(v.paneW).toBeGreaterThan(700);
-  v.prefs = { ...v.prefs, width: "comfortable" };
   v.poll(cx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
+  expect(resized()).toEqual([]);
+  // w sizes it to its step's width, and one weight keeps that, from the width the old weight
+  // gave in the new row and the line the last probe measured.
+  draw(v, cx);
+  const px = v.readingPx();
+  v.key(keyEv("w"), cx);
+  expect(resized()).toEqual([{ id: "p2", px }]);
   herdr(v, 1950, 1.2);
   v.poll(cx);
   herdr(v, 1950, 1.2);
-  // It lands on 571 again: no size change, so it counts after 400 ms.
+  // It lands on its width again: no size change, so it counts after 400 ms.
   v.weighing.asked -= 500;
   v.poll(cx);
   expect(resized().length).toBe(2);
-  expect(Math.abs(v.paneW - 571)).toBeLessThanOrEqual(2);
+  expect(Math.abs(v.paneW - (px - 2))).toBeLessThanOrEqual(2);
   expect(v.weighing).toBe(null);
   expect(v.weightNow).toBe(resized()[1].weight);
 });
 
 test("opening the Pinned column puts Threads at its px width first, so the column's room comes from the terminal", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.weightNow = 0.9;
   v.openPinned(cx);
   expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.split").map((x) => [x[1], x[2].px ?? null])).toEqual([["layout.resize", 702], ["pane.split", null]]);
@@ -5403,8 +5477,8 @@ test("opening the Pinned column puts Threads at its px width first, so the colum
 
 test("the probe stops at the first weight within 2 px, and a weight that leaves the width as it was counts as a measure after 400 ms", async () => {
   // Threads not in a row with the others (or alone): no weight changes its width.
-  const { v, cx } = await weightPane({ width: "full" });
-  v.action("width:full", cx);
+  const { v, cx } = await weightPane({});
+  v.toWeight();
   v.poll(cx);
   expect(v.weighing).not.toBe(null);
   v.weighing.asked -= 500;
@@ -5413,21 +5487,21 @@ test("the probe stops at the first weight within 2 px, and a weight that leaves 
   expect(v.weighing).toBe(null);
 });
 
-test("Threads opened with Full goes to a weight once it has measured itself; opened at Comfortable it is sized first, then weighed at that width", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 900);
+test("Threads opened at its step's width goes to a weight once it has measured itself; opened wider it is sized to its step first, then weighed at that width", async () => {
+  const { v, cx } = await weightPane({}, 900);
   state.shared["threads.fit"] = { p2: true };
   v.poll(cx);
   expect(resized()).toEqual([{ id: "p1", weight: 1 }, { id: "p2", weight: 1 }]);
   expect(state.shared["threads.fit"]).toEqual({});
-  const { v: c, cx: cc } = await weightPane({ width: "comfortable", readingWidth: true }, 900);
+  const { v: c, cx: cc } = await weightPane({}, 1000);
   state.shared["threads.fit"] = { p2: true };
   c.poll(cc);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-  herdr(c, 1500, 1.2);
+  expect(resized()).toEqual([{ id: "p2", px: 902 }]);
+  herdr(c, 2000, 1.2);
   c.poll(cc);
-  // The split made a 1804 px row (twice 902): 573 of it is weight 573 / (1804 - 573).
-  expect(resized()).toEqual([{ id: "p2", px: 573 }, { id: "p1", weight: 1 }, { id: "p2", weight: 0.46548 }]);
-  expect(c.weighing.n0).toBe(573);
+  // The split made a 2004 px row (twice 1002): 902 of it is weight 902 / (2004 - 902).
+  expect(resized()).toEqual([{ id: "p2", px: 902 }, { id: "p1", weight: 1 }, { id: "p2", weight: 0.81851 }]);
+  expect(c.weighing.n0).toBe(902);
 });
 
 // The owner's report: Threads opened wide for a moment, then came back. The probe's first try
@@ -5451,7 +5525,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
     return { apply, seen };
   };
   const open = async (R, S0, paneW = 752) => {
-    const r = await weightPane({ width: "wide", readingWidth: false }, paneW);
+    const r = await weightPane({}, paneW);
     state.shared["threads.fit"] = { p2: true };
     const m = row(r.v, R, S0);
     for (let k = 0; k < 6; k++) {
@@ -5480,7 +5554,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
   // Another pane in the tab (the row is not the split's two): as before, weight 1 first, and
   // the terminal's weight is left alone.
   {
-    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    const { v, cx } = await weightPane({}, 752);
     state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
     state.shared["threads.fit"] = { p2: true };
     v.poll(cx);
@@ -5491,7 +5565,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
   }
   // A pane opened by the launcher that gets a neighbour before it is weighed: as before too.
   {
-    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    const { v, cx } = await weightPane({}, 752);
     state.shared["threads.fit"] = { p2: true };
     v.poll(cx);
     state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
@@ -5503,9 +5577,9 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
 });
 
 test("every px resize the pane asks for is followed by a weight that keeps the width it gave, once the width has applied and been still 300 ms", async () => {
-  // Wide chosen with the pane kept at its width: 704 px, then the weight for 704.
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 571);
-  v.action("width:wide", cx);
+  // w at 760 px (90 characters): 704 px, then the weight for 704.
+  const { v, cx } = await weightPane({}, 758);
+  v.key(keyEv("w"), cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }]);
   // Not applied yet, or applied but still moving (a window being resized): no weight yet.
   v.poll(cx);
@@ -5517,56 +5591,28 @@ test("every px resize the pane asks for is followed by a weight that keeps the w
   v.poll(cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
   expect(v.weighing.n0).toBe(704);
-  // keepWidth's cap: wider than the width (a window grown) snaps back, then weighs again.
-  const { v: k, cx: kx } = await weightPane({ width: "comfortable", readingWidth: true }, 900);
-  k.poll(kx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-  herdr(k, 1500, 1.2);
-  k.poll(kx);
-  expect(resized().at(-1)).toEqual({ id: "p2", weight: 1 });
-  // While it weighs, the cap waits: a probe wider than the width is not snapped back.
-  k.paneW = 800;
-  k.weighing.at = 800;
-  k.poll(kx);
-  expect(resized().filter((a) => "px" in a).length).toBe(1);
-  // w: the reading width, then its weight.
-  const { v: f, cx: fx } = await weightPane({ width: "comfortable", readingWidth: false }, 900);
+  // w at 1000 px (120 characters): 902, then its weight.
+  const { v: f, cx: fx } = await weightPane({}, 1000);
   f.key(keyEv("w"), fx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
+  expect(resized()).toEqual([{ id: "p2", px: 902 }]);
   herdr(f, 1500, 1.2);
   f.poll(fx);
   expect(resized().at(-1)).toEqual({ id: "p2", weight: 1 });
   // A Pinned split that never came: the pane is still alone, so it is weighed.
-  const { v: s, cx: sx } = await weightPane({ width: "full" }, 900);
+  const { v: s, cx: sx } = await weightPane({}, 900);
   s.splitAsk = { before: state.panes.map((p) => p.pane), px: 380, until: Date.now() - 1 };
   s.poll(sx);
   expect(s.splitAsk).toBe(null);
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
 });
 
-test("with the switch off the pane's width is not held: choosing a width, or turning the switch off, goes to a weight", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: false });
-  v.action("width:comfortable", cx);
-  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  const { v: w, cx: wx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  w.action("keepWidth", wx);
-  expect(w.prefs.readingWidth).toBe(false);
-  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  // Turned on in a pane wider than the width: sized to it first, then weighed.
-  w.weighing = null;
-  w.paneW = 900;
-  log = [];
-  w.action("keepWidth", wx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-});
-
 test("no weight with the Pinned column open, a split pending, zoomed or in the Pinned pane; the column closing converts", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  // The column open: - and = keep both panes at px, so Full chosen sends nothing.
+  const { v, cx } = await weightPane({}, 560);
+  // The column open: - and = keep both panes at px, so toWeight sends nothing.
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
   v.poll(cx);
-  v.action("width:full", cx);
+  v.toWeight();
   v.poll(cx);
   expect(resized()).toEqual([]);
   // The column closes: once the row settles (500 ms), Threads goes to a weight.
@@ -5584,9 +5630,9 @@ test("no weight with the Pinned column open, a split pending, zoomed or in the P
     (x) => { x.myPane = "p2"; x.pinnedPane = true; },
   ];
   for (const block of blocks) {
-    const { v: x, cx: xc } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+    const { v: x } = await weightPane({}, 560);
     block(x);
-    x.action("width:full", xc);
+    x.toWeight();
     expect(resized()).toEqual([]);
   }
 });
@@ -5598,7 +5644,7 @@ const trajBeside = () => {
 };
 
 test("y puts the Chat at its px before the Trajectory's split: a px of its own still applying is the one kept, and a probe under way stops", async () => {
-  const { v, cx } = await weightPane({ width: "full" }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.width = 700;
   v.weighing = { pane: "p2", n0: 702, tried: [], w: 1, at: 700, asked: Date.now() };
   v.key(keyEv("y"), cx);
@@ -5609,7 +5655,7 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
   expect(v.weighing).toBe(null);
   expect(v.splitAsk.chat).toBe(702);
   // A px of its own on its way (sizeTo): that width, not the one it is leaving.
-  const { v: w, cx: wx } = await weightPane({ width: "full" }, 700);
+  const { v: w, cx: wx } = await weightPane({}, 700);
   w.width = 700;
   w.weighAfter = { px: 573, until: Date.now() + 1500 };
   w.weightNow = 1.2;
@@ -5617,7 +5663,7 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
   expect(resized()).toEqual([{ id: "p2", px: 573 }]);
   expect([w.weighAfter, w.weightNow, w.splitAsk.chat]).toEqual([null, null, 573]);
   // Too narrow to split: the Trajectory shows in the Chat's pane, and nothing is resized.
-  const { v: n, cx: nx } = await weightPane({ width: "full" }, 400);
+  const { v: n, cx: nx } = await weightPane({}, 400);
   n.width = 400;
   n.key(keyEv("y"), nx);
   expect(n.traj).toBe(true);
@@ -5625,21 +5671,21 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
 });
 
 test("no weight with the Trajectory open beside the Chat or in the Trajectory pane, and a probe under way stops when it opens", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  const { v, cx } = await weightPane({}, 560);
   trajBeside();
   v.poll(cx);
-  v.action("width:full", cx);
+  v.toWeight();
   v.poll(cx);
   v.toWeight(true);
   expect(resized()).toEqual([]);
   // The Trajectory pane itself, with nothing else open.
-  const { v: t } = await weightPane({ width: "full" }, 560);
+  const { v: t } = await weightPane({}, 560);
   t.myPane = "p2";
   t.trajPane = true;
   t.toWeight(true);
   expect(resized()).toEqual([]);
   // A probe asked its first weight, then the Trajectory opened: no second ask.
-  const { v: g, cx: gx } = await weightPane({ width: "full" }, 700);
+  const { v: g, cx: gx } = await weightPane({}, 700);
   g.toWeight();
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
   trajBeside();
@@ -5651,22 +5697,22 @@ test("no weight with the Trajectory open beside the Chat or in the Trajectory pa
 });
 
 test("a size change alone (a drag) never converts, and the pane's own px mid-probe ends the probe", async () => {
-  for (const readingWidth of [true, false]) {
-    const { v, cx } = await weightPane({ width: readingWidth ? "full" : "comfortable", readingWidth });
+  {
+    const { v, cx } = await weightPane({});
     for (const w of [800, 650, 1100, 700]) { v.paneW = w; v.sizeAt = Date.now() - 1000; v.poll(cx); }
     expect(resized()).toEqual([]);
   }
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 560);
-  v.action("width:full", cx);
-  v.action("width:comfortable", cx);
+  const { v, cx } = await weightPane({}, 560);
+  v.toWeight();
+  v.key(keyEv("w"), cx);
   expect(v.weighing).toBe(null);
   expect(resized()).toEqual([{ id: "p2", weight: 1 }, { id: "p2", px: 573 }]);
 });
 
 test("the 300 ms stillness is timed from the pane's own size changes: a width still moving is not weighed", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 571);
+  const { v, cx } = await weightPane({}, 758);
   v.forcedWidth = null;
-  v.action("width:wide", cx);
+  v.key(keyEv("w"), cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }]);
   const real = Date.now;
   const t0 = real();
@@ -5683,7 +5729,7 @@ test("the 300 ms stillness is timed from the pane's own size changes: a width st
 
 test("a probe stops when the pane goes, changes or zooms, a split or the Pinned column opens, or Herdr has not answered in 3 s; else it asks again", async () => {
   const start = async () => {
-    const r = await weightPane({ width: "full" }, 700);
+    const r = await weightPane({}, 700);
     r.v.toWeight();
     expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
     r.v.paneW = 650;
@@ -5718,7 +5764,7 @@ test("a probe stops when the pane goes, changes or zooms, a split or the Pinned 
 
 test("a probe asks at most three weights, and keeps the third", async () => {
   // The row moving under it (a window being resized): no width within 2 px of 702.
-  const { v } = await weightPane({ width: "full" }, 700);
+  const { v } = await weightPane({}, 700);
   v.toWeight();
   for (const w of [650, 680, 690]) {
     v.paneW = w;
@@ -5731,7 +5777,7 @@ test("a probe asks at most three weights, and keeps the third", async () => {
 });
 
 test("w in the Pinned column sizes the main pane by px, not the column, and starts no weight there", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 400);
+  const { v, cx } = await weightPane({}, 400);
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
   v.myPane = "p3";
@@ -5745,7 +5791,7 @@ test("w in the Pinned column sizes the main pane by px, not the column, and star
 });
 
 test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane zoomed when it would convert converts once unzoomed", async () => {
-  const { v, cx } = await weightPane({ width: "full" }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.toWeight();
   // The trial weight laid it out 650 wide; 702 is the width being kept.
   v.paneW = 650;
@@ -5753,10 +5799,10 @@ test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane
   v.openPinned(cx);
   expect(resized()).toEqual([{ id: "p2", px: 702 }]);
   expect(v.weighing).toBe(null);
-  const { v: z, cx: zx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  const { v: z, cx: zx } = await weightPane({}, 560);
   const p2 = state.panes.find((p) => p.pane === "p2");
   p2.zoomed = true;
-  z.action("width:full", zx);
+  z.toWeight();
   z.poll(zx);
   expect(resized()).toEqual([]);
   // Unzoomed: 500 ms for the row to settle, then the weight.
@@ -7513,9 +7559,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 37 rows.
+  // Six groups (the settings card's keys among them), 36 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -9309,7 +9355,7 @@ test("a rail click lands the turn level with its tick, clear of the floating top
   const best = Math.min(...[0, ...Array.from({ length: head }, (_, k) => slots.slice(head - 1 - k, head).reduce((x, n) => x + n, 0))]
     .filter((z) => z >= 32 && z + Math.min(slots[head], 48) <= 600).map((z) => Math.abs(z - want)));
   expect(Math.abs(y - want)).toBeLessThanOrEqual(best);
-  // A pane too narrow for a whole Comfortable line hides the rail: 549 px at 14 px text.
+  // A pane too narrow for a whole 70 character line beside the rail's gutter hides the rail: 549 px at 14 px text.
   const { railMinPane } = await import("../mods/agent-threads/ui.js");
   expect(v.prefs.textSize).toBe(14);
   expect(railMinPane(14)).toBe(549);
@@ -10023,7 +10069,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const PAGE = [
     ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color", "Sender rules"]],
-    ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
+    ["Layout", ["Rail side", "Key hints at the bottom"]],
     ["Links and keys", ["Link rules", "Quote key"]],
     ["File", ["Copy path"]],
   ];
@@ -10042,7 +10088,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   // Then Reset, once, with its line, at the end.
   expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
   expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
-  for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
+  for (const x of ["Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
   expect(gs.filter((x) => x === "Layout")).toHaveLength(1);
@@ -10103,12 +10149,11 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
   const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
   expect(v.prefsDiffer()).toBe(false);
   expect(reset()).toContainEqual(["opacity", 0.45]);
-  for (const a of ["agents", "keyHints", "statusLine", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
-  v.prefs = { ...v.prefs, width: "wide" };
+  for (const a of ["agents", "keyHints", "statusLine", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
   expect(v.prefsDiffer()).toBe(true);
   expect(reset()).not.toContainEqual(["opacity", 0.45]);
   v.action("resetSettings", cx);
-  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
   expect(v.quoteKey).toBe("y");
   expect(v.links.length).toBe(1);
   await new Promise((r) => setTimeout(r, 20));
@@ -10251,49 +10296,6 @@ test("the quote key field: a free letter becomes the key and is written; a taken
   expect(v.quoteNote()).toMatch(/^quoteKey "i" is not a free letter/);
   keepSettings = false;
   delete recordFiles[v.prefsPath()];
-});
-
-test("Shift w steps the width with the toast that names all three; inside the card a width change shows none", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 900;
-  expect(v.prefs.width).toBe("comfortable");
-  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("wide");
-  expect(v.toast.icon).toBe("width-wide");
-  expect(v.toast.widths).toEqual({ cur: "wide", tight: false });
-  rec = []; v.toastView(theme); let c = rec; rec = null;
-  expect(strsOf(c)).toEqual(["Comfortable", "Wide", "Full"]);
-  expect(c).toContainEqual(["font_semibold"]);
-  // A second press changes the words in place, and the first toast's timer leaves it.
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("full");
-  const at = v.toast.at;
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("comfortable");
-  expect(v.toast.at).not.toBe(at);
-  // Too narrow for the list to change, with the pane not kept at the width: it says so, down to 420 px.
-  v.paneW = 440;
-  v.prefs = { ...v.prefs, readingWidth: false };
-  v.key(shiftW, cx);
-  expect(v.toast.widths.tight).toBe(true);
-  rec = []; v.toastView(theme); c = rec; rec = null;
-  expect(strsOf(c)).toContain("too narrow here to show");
-  v.paneW = 400;
-  rec = []; v.toastView(theme); c = rec; rec = null;
-  expect(strsOf(c)).not.toContain("too narrow here to show");
-  // With the card open the toast is drawn after it, so it sits over the card.
-  v.toast = null;
-  v.action("settings", cx);
-  v.key(shiftW, cx);
-  const f = idsIn(frame(v, cx));
-  expect(f.indexOf("th-toast-widths")).toBeGreaterThan(f.indexOf("th-set-card"));
-  // A width chosen in the card says nothing.
-  v.toast = null;
-  c = frame(v, cx);
-  onOf(c, "th-width-full", "on_click")({}, cx);
-  expect(v.prefs.width).toBe("full");
-  expect(v.toast).toBe(null);
 });
 
 test("key hints at the bottom are off by default; the switch brings the row back, and ? keys sits at the card's foot", async () => {
@@ -10735,30 +10737,6 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no t
   expect(narrow.length).toBeLessThan(full.length);
 });
 
-test("the width line under Width ends on the controls' right edge: it fills its row, the column centered in the row's width", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
-  v.width = 545; v.paneW = 573; v.rootH = 700;
-  v.action("settings", cx);
-  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
-  for (const [paneW, pad] of [[573, 16], [330, 12]]) {
-    v.paneW = paneW;
-    const w = v.setCardW();
-    const c = cardOf(v);
-    expect(own(c, "th-set-rows-main")).toContainEqual(["px", pad]);
-    const ruler = own(c, "th-set-ruler");
-    // The line takes its row's width, as the chooser's row and the switch rows do, so no fixed
-    // width can run past them (it was 2 px over: the card's border).
-    expect(ruler).toContainEqual(["w_full"]);
-    expect(ruler[0]).toEqual(["id", "th-set-ruler"]);
-    const ws = ruler.filter((e) => e[0] === "w").map((e) => e[1]);
-    expect(ws.length).toBe(1); // the column's only
-    const row = w - 2 - 2 * pad;
-    const left = ruler.find((e) => e[0] === "left")[1];
-    expect(Math.abs(left * 2 + ws[0] - row)).toBeLessThanOrEqual(1);
-    expect(left + ws[0]).toBeLessThanOrEqual(row);
-  }
-});
-
 test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.applyPrefs(JSON.stringify({ links: [
@@ -10808,30 +10786,6 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   v.action("settings", cx);
   v.setPage = "links";
   expect(strsOf(cardOf(v))).toContain("No rules yet.");
-});
-
-test("Shift w through Full keeps Keep the pane at this width as it was, and Reset resizes the pane the way a width change does", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 573;
-  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
-  for (const want of ["wide", "full", "comfortable"]) { v.key(shiftW, cx); expect(v.prefs.width).toBe(want); expect(v.prefs.readingWidth).toBe(true); }
-  // Off by hand stays off through a cycle too.
-  v.prefs = { ...v.prefs, readingWidth: false };
-  for (let i = 0; i < 3; i++) v.key(shiftW, cx);
-  expect(v.prefs.readingWidth).toBe(false);
-  // Reset: back to Comfortable with the switch on, and the pane to its column.
-  v.prefs = { ...v.prefs, width: "wide", readingWidth: true };
-  v.paneW = 704;
-  log = [];
-  v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ width: "comfortable", readingWidth: true });
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // At the defaults already, at that width: nothing to resize.
-  v.paneW = 573;
-  log = [];
-  v.action("resetSettings", cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
-  await new Promise((r) => setTimeout(r, 20));
 });
 
 test("a rule that turned slow on a reply shows Not working with the reason on the page and in the count", async () => {
@@ -13077,8 +13031,8 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   state.props = props;
   log = [];
   w.key(keyEv("-"), cx2);
-  // The Chat gives way up to its reading width (readingWidth on), as beside the Pinned column.
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: Math.min(602, w.readingPx()) }]);
+  // The Chat takes all 40 px: no cap at its reading width.
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: 602 }]);
   expect(state.shared["threads.trajWidth"]).toEqual({ px: 920 });
   // The Chat at its 240 px: = does nothing, with no notice.
   state.shared["threads.width"] = { p2: 238, p3: 918 };
@@ -13721,12 +13675,9 @@ test("with no width kept, the split's 560 px is held to what a 600 px Chat can g
 });
 
 // The Trajectory split takes its room from the terminal first, then the Chat, then itself
-// (settleTraj, ui.js trajFit). A 704 px Chat (the Wide reading width) with 600 px kept asks
-// for 464.
+// (settleTraj, ui.js trajFit). A 704 px Chat (90 characters) with 600 px kept asks for 464.
 async function trajSplit(chatW = 702, kept = 600) {
   const r = await pane(fixture("--extra", "3"));
-  // The Wide reading width, 704 px, so the Chat is at it and keepWidth leaves it there.
-  r.v.prefs = { ...r.v.prefs, width: "wide" };
   r.v.width = chatW;
   r.v.paneW = chatW;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -13790,21 +13741,8 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   expect(resizes()).toEqual([]);
 });
 
-test("a reading width chosen while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
-  // Shift w or the settings card: Comfortable, wider than the 475 px the Chat was narrowed to.
-  let { v, cx } = await trajSplit();
-  roomIs(v, cx, "p3", 433);
-  expect(resizes().at(-1)).toEqual({ id: "p2", px: 475 });
-  v.paneW = 473;
-  log = [];
-  v.chooseWidth("comfortable", cx);
-  const px = v.readingPx();
-  expect(px).toBeGreaterThan(475);
-  expect(resizes()).toEqual([{ id: "p2", px }]);
-  closeTraj(v, cx);
-  expect(resizes()).toEqual([]);
-  // w, the reading width at once.
-  ({ v, cx } = await trajSplit());
+test("w while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
+  const { v, cx } = await trajSplit();
   roomIs(v, cx, "p3", 433);
   v.paneW = 473;
   log = [];
@@ -13814,9 +13752,8 @@ test("a reading width chosen while the Trajectory is open stands: closing it doe
   expect(resizes()).toEqual([]);
 });
 
-test("a reading width chosen beside the Trajectory is the Chat's own px (sizeTo), and stays a px while the Trajectory is open", async () => {
-  const ways = [(v, cx) => v.chooseWidth("comfortable", cx), (v, cx) => v.fitToReading(cx)];
-  for (const choose of ways) {
+test("w beside the Trajectory sizes the Chat by its own px (sizeTo), and it stays a px while the Trajectory is open", async () => {
+  for (const choose of [(v, cx) => v.fitToReading(cx)]) {
     const { v, cx } = await trajSplit();
     roomIs(v, cx, "p3", 433);
     expect(v.trajChatBack).toEqual({ px: 704, pane: "p3" });
@@ -13940,7 +13877,6 @@ test("no width the split passes through is kept as the owner's Trajectory width,
   const t0 = real();
   const at = (ms, fn) => { Date.now = () => t0 + ms; try { fn(); } finally { Date.now = real; } };
   const { v, cx } = await pane(fixture("--extra", "3"));
-  v.prefs = { ...v.prefs, width: "wide" };
   v.width = 702;
   v.paneW = 702;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };

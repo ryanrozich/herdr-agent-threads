@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
+const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -196,11 +196,19 @@ test("a file that still names you (youName, now gone) loads without a note, and 
   expect(JSON.parse(settingsText({ ...r.values, textSize: 16 }, text))).toMatchObject({ youName: "Sam", textSize: 16 });
 });
 
-test("width is comfortable, wide or full; anything else reads as comfortable", () => {
-  expect(parseSettings('{"width": "wide"}').values.width).toBe("wide");
-  expect(parseSettings('{"width": "full"}').values.width).toBe("full");
-  expect(parseSettings('{"width": "huge"}').values.width).toBe("comfortable");
-  expect(parseSettings('{"width": 90}').values.width).toBe("comfortable");
+// The column steps with the pane now (ui.js columnStep): the Width setting and "Keep the pane
+// at this width" are gone. A file from an earlier version that holds them reads with no error
+// and no note, and a save keeps them, as it keeps any key it does not know.
+test("a file holding the old width and keep-width keys reads with no error or note, and a save keeps them", () => {
+  for (const text of ['{"width": "wide", "readingWidth": false}', '{"width": "full", "readingWidth": true, "textSize": 16}', '{"width": 90, "readingWidth": "yes"}']) {
+    const r = parseSettings(text);
+    expect(r.error).toBeNull();
+    expect("width" in r.values || "readingWidth" in r.values).toBe(false);
+    expect(parseExtras(text).notes).toEqual([]);
+    const saved = JSON.parse(settingsText({ ...r.values, promptLines: 5 }, text));
+    expect([saved.width, saved.readingWidth]).toEqual([JSON.parse(text).width, JSON.parse(text).readingWidth]);
+  }
+  expect(parseSettings('{"width": "wide", "readingWidth": false}').values).toEqual(DEFAULTS);
 });
 
 test("a fresh install (no file, or an empty one) has the pull request rule, on; the first write records it; a file of its own keeps its links or none", () => {

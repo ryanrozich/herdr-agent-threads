@@ -60,8 +60,8 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, weightLine, weightFor, weightNear, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
-  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, weightLine, weightFor, weightNear, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText,
+  keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious } from "./settings.js";
@@ -256,7 +256,7 @@ const KEYS_COL_MIN = 520;
 const CARD_SECTIONS = [
   ["Messages", ["textSize", "userColor", "truncate", "time"]],
   ["Agent messages", ["agents", "agentRail", "agentColor", "senderRules"]],
-  ["Layout", ["width", "keepWidth", "railSide", "keyHints", "statusLine"]],
+  ["Layout", ["railSide", "keyHints", "statusLine"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
@@ -267,13 +267,11 @@ const SWATCH = 24;
 // A text button's size: the usual, and the card's, which is the height of its rows' controls.
 const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
 const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
-// The Width chooser's words.
-const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey, links and senders are never reset.
 // The status line's height (statusRow).
 const STATUS_H = 24;
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The rule editor's fields: key, label, placeholder, the most it takes.
@@ -2384,7 +2382,6 @@ export default class Threads extends View {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
     this.fitOnOpen();
-    this.keepWidth();
     this.settleSplit(cx);
     this.trajGiveBack();
     this.weighSoon();
@@ -2435,7 +2432,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
+      `${P.textSize}.${this.chars()}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
       this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -3387,8 +3384,8 @@ export default class Threads extends View {
   // other panes give first, down to TERM_KEEP each (trajKeep), then the Chat, then the
   // Trajectory. With too little room even then, the new pane closes and the Trajectory shows
   // in the Chat's pane, as under TRAJ_SPLIT_MIN, so no pane is squeezed for it. A Chat
-  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless a
-  // reading width was chosen in the Chat while it was open.
+  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless w
+  // resized the Chat while it was open.
   settleTraj(a, cx) {
     // Closed while it was measured: nothing to fit, and the Chat stays as it is.
     if (!panes().some((p) => p.pane === a.made)) { this.splitAsk = null; return; }
@@ -3443,7 +3440,7 @@ export default class Threads extends View {
     if (hold !== kept.hold) setShared(TRAJ_W_KEY, { ...kept, hold });
   }
   // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
-  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading). Either
+  // unless w fitted the Chat since (fitToReading). Either
   // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
   // settles): it is at a px only while the Trajectory is open.
   trajGiveBack() {
@@ -3501,8 +3498,6 @@ export default class Threads extends View {
     const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640);
     if (!next && traj) return true;
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
-    // With readingWidth on, Threads stops at the reading width and the terminal takes the rest.
-    if (this.prefs.readingWidth && Number.isFinite(this.readingPx())) next.main = Math.min(next.main, this.readingPx());
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
@@ -3606,7 +3601,7 @@ export default class Threads extends View {
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
+    const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
@@ -3651,15 +3646,15 @@ export default class Threads extends View {
     const q = this.filterText();
     const w = Math.round(this.width);
     const m = this.lookMemo;
-    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === P.width && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
-    const s = `${w}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
-    this.lookMemo = { w, q, a: P.textSize, b: P.width, c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
+    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === this.chars() && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
+    const s = `${w}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
+    this.lookMemo = { w, q, a: P.textSize, b: this.chars(), c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
     return s;
   }
   // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
   // reply at the pane's width and text size.
   blankShape() {
-    const k = `${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}`;
+    const k = `${Math.round(this.width)}|${this.prefs.textSize}|${this.chars()}`;
     if (this.blankMemo?.k !== k) {
       const sh = rowShape({ prompt: " ", reply: " ", width: this.width, promptLines: 1, replyLines: 1, size: this.prefs.textSize, chars: this.chars() });
       this.blankMemo = { k, sh: { ...sh, tone: "reply", cmd: null, blank: true } };
@@ -5194,11 +5189,8 @@ export default class Threads extends View {
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
       case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "fit": return this.fitToReading(cx);
-      case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
       case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
-      // Turned on, a pane wider than the width is sized to it first (keepWidth), then weighed.
-      case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; this.keepWidth(); this.toWeight(); return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
       case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
@@ -5238,7 +5230,7 @@ export default class Threads extends View {
       case "settings": return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
-      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.fitColumn(); return true;
       // The card's keys as commands (for key bindings, and for a window no keys reach).
       case "settingsScroll:down": case "settingsScroll:up": case "settingsScroll:pagedown": case "settingsScroll:pageup":
       case "settingsScroll:home": case "settingsScroll:end":
@@ -5279,8 +5271,6 @@ export default class Threads extends View {
       this.pick(c, cx);
       return true;
     }
-    // "width:wide": the reading width (settings width), for every pane.
-    if (name.startsWith("width:")) return this.chooseWidth(name.slice(6), cx);
     // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
@@ -6049,14 +6039,16 @@ export default class Threads extends View {
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
-    if (Math.abs(w - this.width) <= 0.5) { this.widthHeld = false; return; }
+    const step = this.paneStep();
+    const w = columnWidth(this.paneW, this.prefs.textSize, step);
+    if (Math.abs(w - this.width) <= 0.5 && step === this.colStep) { this.widthHeld = false; return; }
     // The pane resized less than WIDTH_HOLD_MS ago: the column keeps its width, centred in a
     // wider pane and cut off on the right in a narrower one, until it is still (frame asks
     // for a draw then). The first width the pane measures is taken at once.
     if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < WIDTH_HOLD_MS && this.rewrapCostly()) { this.widthHeld = true; return; }
     const first = !this.colFit;
     this.width = w;
+    this.colStep = step;
     this.colFit = true;
     this.widthHeld = false;
     // The re-wrap's draw time is counted (render) until nothing is left to build, shape or
@@ -6073,7 +6065,7 @@ export default class Threads extends View {
   // From the pane's edge to the text: the side gutter.
   side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
-  // reading width shrinks to it. A narrower one keeps what it was given.
+  // reading width (its step's, readingPx) shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
     if (this.paneW == null || !this.prefsLoaded) return;
     const me = this.me();
@@ -6086,38 +6078,26 @@ export default class Threads extends View {
     const sib = this.rowSibling(me);
     this.openRow = sib ? { sib, room: 2 * (this.paneW + PANE_FRAME) } : null;
     const px = this.readingPx();
-    if (Number.isFinite(px) && this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); this.sizeTo(px); }
+    if (this.paneW > px + 2) this.sizeTo(px);
     else this.toWeight();
   }
-  // Herdr has no maximum width for a pane a split made (a layout file's min/max applies to its
-  // own nodes only), so with readingWidth on (the default) the pane keeps itself there: wider
-  // than the reading width, from a drag, a restart or an older layout, it asks Herdr once to
-  // resize it, and the terminal gets the room. One ask per width, so a pane Herdr cannot
-  // resize (alone in its tab, or zoomed) is not asked again and again.
-  // The width's column (settings width): Infinity for Full, which has no limit.
-  readingPx() { return fitWidth(this.prefs.textSize, this.chars()); }
-  chars() { return widthChars(this.prefs.width); }
-  keepWidth() {
-    if (this.sideKey() || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded || this.weighing || this.weighAfter) return;
-    const me = this.me();
-    if (!me || me.zoomed) return;
-    const px = this.readingPx();
-    if (!Number.isFinite(px) || this.paneW <= px + 2) { this.capAsked = null; return; }
-    const w = Math.round(this.paneW);
-    if (this.capAsked === w) return;
-    this.capAsked = w;
-    this.sizeTo(px);
-  }
+  // The column's step (ui.js columnStep), from the pane's px size (its measured width and the
+  // frame, as Herdr and a person count it): the step the pane wants now (paneStep), and the
+  // one the column shows (chars), which follows it in fitColumn, held through a drag as the
+  // width is. 70 until the pane has measured itself.
+  paneStep() { return columnStep(this.paneW == null ? NaN : this.paneW + PANE_FRAME, this.prefs.textSize, this.colStep ?? null); }
+  chars() { return this.colStep ?? STEPS[0]; }
+  // The width of the column's step, its line and the widest gutters (ui.js fitWidth): what w
+  // and the fit button size the pane to, and what Cmd-Shift-T opens it at.
+  readingPx() { return fitWidth(this.prefs.textSize, this.colStep ?? this.paneStep()); }
   // Herdr 0.1.16 drags a divider by setting the px of the pane beside it that has a px size
   // (window.rs drag_to), and the panes sized by weight share what is left, those past the
   // other edge too: a Threads pane at a px width grows or shrinks from both edges, whichever
   // one is dragged. A pane at a weight moves only the divider dragged, and changes with the
-  // window. So after each px resize this pane asks for (sizeTo), and when a width is chosen,
-  // the switch is turned, Threads opens, a split fails or the Pinned column closes, the main
-  // pane goes to a weight that keeps its width (toWeight). Never on a size change alone,
-  // which may be a drag still going on, but for keepWidth's cap: a drag past the reading
-  // width snaps back to it (sizeTo), and the weight follows once the pane has been still for
-  // 300 ms. Not in the Pinned or the Trajectory pane, not with either open beside it (- and =
+  // window. So after each px resize this pane asks for (sizeTo), and when Threads opens, a
+  // split fails or the Pinned column closes, the main pane goes to a weight that keeps its
+  // width (toWeight), once the pane has been still for 300 ms. Never on a size change alone,
+  // which may be a drag still going on. Not in the Pinned or the Trajectory pane, not with either open beside it (- and =
   // keep both at px; it converts when that pane closes), and not zoomed (it converts once
   // unzoomed).
   sizeTo(px) {
@@ -6212,47 +6192,12 @@ export default class Threads extends View {
     g.w = w;
     this.askWeight();
   }
-  // Choosing a width: with "Keep the pane at this width" on, the pane grows or shrinks to the
-  // new column and the terminal gives or takes the room. Full has no column, so it leaves the
-  // pane as it is; the switch stays as the person set it, so Comfortable after Full resizes again.
-  chooseWidth(w, cx) {
-    if (!WIDTH_NAMES.includes(w)) return false;
-    this.changePrefs({ width: w }, cx);
-    this.sizeToWidth();
-    this.toWeight();
-    return true;
-  }
-  // The pane to the chosen width's column, when the switch keeps it there (Full has none).
-  sizeToWidth() {
-    this.fitColumn();
-    this.capAsked = null;
-    const me = this.me();
-    if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.sideKey() && me && !me.zoomed && this.paneW != null) {
-      const px = this.readingPx();
-      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); this.trajChatBack = null; this.sizeTo(px); }
-    }
-  }
-  // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
-  // names all three, the one now on in the full text color. A second press inside its two
-  // seconds changes the words in place. In a pane too narrow for the list to change, and
-  // with the pane not kept at the width, it adds that it is too narrow here to show.
-  stepWidth(cx) {
-    const next = WIDTH_NAMES[(WIDTH_NAMES.indexOf(this.prefs.width) + 1) % WIDTH_NAMES.length];
-    this.chooseWidth(next, cx);
-    const pw = this.pw();
-    const sz = this.prefs.textSize;
-    const same = Math.abs(columnWidth(pw, sz, widthChars("comfortable")) - columnWidth(pw, sz, Infinity)) < 1;
-    this.say(`Width: ${WIDTH_WORDS[next]}`, `width-${next}`, cx);
-    this.toast.widths = { cur: next, tight: same && !this.prefs.readingWidth };
-    return true;
-  }
-  // w, or the header's fit button: Threads to the reading width, and an open Pinned column to
-  // its own width for that, wider or narrower than they are now.
+  // w, or the header's fit button: Threads to its column's step's width (readingPx), and an
+  // open Pinned column to its own width for that, wider or narrower than they are now.
   fitToReading(cx) {
     const main = this.pinnedPane ? this.mainPane() : this.me();
     if (!main) return false;
     const px = this.readingPx();
-    if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     if (this.pinnedPane) run("layout.resize", { id: main.pane, px });
     else { this.trajChatBack = null; this.sizeTo(px); }
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
@@ -6260,7 +6205,6 @@ export default class Threads extends View {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
       run("layout.resize", { id: col.pane, px: pinColumn(px, this.keptPinWidth()) ?? PIN_COL[0] });
     }
-    this.capAsked = null;
     this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
     return true;
   }
@@ -6878,12 +6822,6 @@ export default class Threads extends View {
         P.truncate ? v_flex().pl(16).gap(4).child(stepper("promptLines", "Prompt lines")).child(stepper("replyLines", "Reply lines")) : null,
       ],
       time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
-      width: () => [
-        row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
-        this.widthRuler(t, w),
-        note(this.widthNote()),
-      ],
-      keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
       statusLine: () => [sw("th-set-status", "Chat stats at the bottom", P.statusLine !== false, "statusLine")],
@@ -6918,27 +6856,6 @@ export default class Threads extends View {
   senderRulesEntry(t) {
     const bad = (this.senderList ?? []).filter((r) => r.why).length;
     return this.pageEntry(t, "th-set-senders", "senders", "Sender rules", this.senderCount ?? 0, bad);
-  }
-
-  // Under Width: the pane as a thin line and the reading column as its dark part, at their
-  // real proportions in this pane.
-  widthRuler(t, w) {
-    const pw = this.pw();
-    const room = Math.max(1, pw - 2 * gutter(pw));
-    const want = this.prefs.width === "full" ? room : readType(this.prefs.textSize, this.chars()).measure;
-    // The line fills its row, so it ends on the controls' right edge; the column is placed in
-    // the row's width, the card less its 1 px border and the inset on each side.
-    const inner = w - 2 - 2 * cardPad(w);
-    const col = Math.max(4, Math.round((Math.min(want, room) / Math.max(1, pw)) * inner));
-    return div().id("th-set-ruler").relative().w_full().h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
-      .child(div().absolute().top(0).h(4).rounded(2).left(Math.round((inner - col) / 2)).w(col).bg(t.muted));
-  }
-  widthNote() {
-    const w = this.prefs.width;
-    if (w === "full") return "Text runs the whole pane.";
-    const pw = this.pw();
-    const tight = readType(this.prefs.textSize, this.chars()).measure > pw - 2 * gutter(pw);
-    return `Up to ${widthChars(w)} characters a line.${tight ? " This pane has room for less, so it looks like Full here." : ""}`;
   }
 
   // A message color: its name, then a dot for each preset (ui.js BUBBLES) and, when the file
@@ -8223,7 +8140,7 @@ export default class Threads extends View {
     // MATCHED BY RULE", 11.5 px capitals, about 7.5 px each, after an 11 px icon and a 5 px
     // gap), up to the bubble's limit.
     const head = r.turn.agent ? Math.ceil(this.youLabel(r.turn).length * 7.5) + 16 + 2 * ROW.BUBBLE_PX : 0;
-    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}|${head}`;
+    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.chars()}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}|${head}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
@@ -8389,9 +8306,9 @@ export default class Threads extends View {
   sigBase() {
     const r = this.renders ?? 0, w = Math.round(this.width), P = this.prefs;
     const m = this.sigMemo;
-    if (m && m.r === r && m.w === w && m.ts === P.textSize && m.pw === P.width) return m.v;
-    const v = `${w}|${this.zoom()}|${settings()?.ui_font ?? ""}|${P.textSize}|${P.width}`;
-    this.sigMemo = { r, w, ts: P.textSize, pw: P.width, v };
+    if (m && m.r === r && m.w === w && m.ts === P.textSize && m.pw === this.chars()) return m.v;
+    const v = `${w}|${this.zoom()}|${settings()?.ui_font ?? ""}|${P.textSize}|${this.chars()}`;
+    this.sigMemo = { r, w, ts: P.textSize, pw: this.chars(), v };
     return v;
   }
   partSig(r, base = this.sigBase()) {
@@ -10483,7 +10400,7 @@ export default class Threads extends View {
   // on screen are brighter, the selected turn's tick is longer, a pinned turn's takes the
   // accent colour and the running turn's pulses. A search dims the turns it leaves out. A
   // click brings the turn level with its tick (railJump).
-  // A pane too narrow for a whole Comfortable line hides the rail (ui.js railRoom), as Codex
+  // A pane too narrow for a whole 70 character line hides the rail (ui.js railRoom), as Codex
   // hides its side rail.
   railShown() {
     return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1 && railRoom(this.pw(), this.prefs.textSize);
@@ -10852,13 +10769,6 @@ export default class Threads extends View {
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
-        .when(!this.toast.widths, (el) => el.child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)))
-        // Shift w: the three widths, the one now on strong.
-        .when(Boolean(this.toast.widths), (el) => el
-          .child(h_flex().id("th-toast-widths").flex_none().gap(10).items_center().children(WIDTH_NAMES.map((k) => {
-            const on = k === this.toast.widths.cur;
-            return div().flex_none().whitespace_nowrap().text_color(on ? t.foreground : t.dim).when(on, (x) => x.font_semibold()).child(WIDTH_WORDS[k]);
-          })))
-          .when(this.toast.widths.tight && this.pw() >= 420, (x) => x.child(div().flex_none().whitespace_nowrap().text_size(11.5).text_color(t.dim).child("too narrow here to show")))));
+        .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
   }
 }
