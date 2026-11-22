@@ -45,17 +45,14 @@ test("keys: plain keys act, chords with cmd, ctrl, alt or fn never do", () => {
   expect(keyAction(key("escape"), true)).toBe("escape");
 });
 
-test("Shift w steps the reading width; plain w still fits the pane, and a filter being typed takes the letter", () => {
-  expect(keyAction(key("w", { shift: true }))).toBe("widthStep");
-  expect(keyAction(key("W", { shift: true }))).toBe("widthStep");
-  expect(keyAction(key("W"))).toBe("widthStep");
+test("Shift w does nothing now the column steps with the pane; plain w still fits the pane, and a filter being typed takes the letter", () => {
+  for (const e of [key("w", { shift: true }), key("W", { shift: true }), key("W")]) expect(keyAction(e)).toBe(null);
   expect(keyAction(key("w"))).toBe("fit");
-  expect(keyAction(key("w", { shift: true }), true)).toBe(null);
-  expect(keyAction(key("W"), true)).toBe(null);
-  expect(keyAction(key("w", { shift: true, platform: true }))).toBe(null);
-  // Listed under View, beside w.
+  expect(keyAction(key("w"), true)).toBe(null);
+  // Listed under View, and no Shift w anywhere on the sheet.
   const view = keySheet().find(([g]) => g === "View")[1].map(([k, what]) => `${k.join(" ")}: ${what}`);
-  expect(view.slice(0, 2)).toEqual(["w: Fit to the reading width", "Shift w: Step the reading width: Comfortable, Wide, Full"]);
+  expect(view[0]).toBe("w: Fit the pane to its column");
+  expect(keySheet().flatMap(([, items]) => items).some(([k]) => k.some((x) => /shift w/i.test(x)))).toBe(false);
 });
 
 // TRD-37: n steps to the older search match and Shift n to the newer one, as in less and vim.
@@ -1287,21 +1284,27 @@ test("callTime prefers the agent's own duration when it records one", () => {
   expect(callTime(null, null, null)).toBe("");
 });
 
-test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column between them, and the rail's ticks", async () => {
+test("round 6: the rail's gutter of 8% of the pane between 24 and 56 px; the column between gutters that give way before the text does; the rail's ticks", async () => {
   const { gutter, columnWidth, railLook, GUTTER } = await import("../mods/agent-threads/ui.js");
   expect(GUTTER).toEqual({ PCT: 0.08, MIN: 24, MAX: 56 });
   expect([200, 300, 500, 700, 960].map(gutter)).toEqual([24, 24, 40, 56, 56]);
   // The column is the text and 16 px each side; the side gutter is what is left, split evenly.
   const side = (w, size, chars) => (w - columnWidth(w, size, chars)) / 2 + 16;
-  // At the kept width the text is one reading line with 56 px each side.
+  // At a step's own width the text is one reading line with 56 px each side.
   expect(columnWidth(573)).toBe(461 + 32);
   expect(side(573)).toBe(56);
   expect(side(704, 14, 90)).toBe(56);
-  // Narrower, 8% of the pane; never under 24 px.
-  expect(side(400)).toBe(32);
+  expect(side(902, 14, 120)).toBe(56);
+  // Narrower, the gutters give way first: the whole line down to 24 px a side (509 px)...
+  expect([560, 540, 509].map((w) => columnWidth(w))).toEqual([493, 493, 493]);
+  expect(side(509)).toBe(24);
+  // ...then the text follows the pane, 24 px in from each side.
+  expect(columnWidth(500)).toBe(500 - 48 + 32);
+  expect(side(400)).toBe(24);
   expect(side(250)).toBe(24);
-  // Full: the pane less its gutters.
-  expect(columnWidth(960, 14, Infinity)).toBe(960 - 112 + 32);
+  // Wider, the column stays its step's and the margins take the rest.
+  expect(columnWidth(1400, 14, 120)).toBe(790 + 32);
+  expect(columnWidth(850, 14, 90)).toBe(592 + 32);
   // The ticks: 10 px, 16 selected, 14 px in, in a lane up to 32 px; in a gutter under 40 px,
   // 8, 12 and 6.
   expect(railLook(56)).toEqual({ lane: 32, mark: 10, sel: 16, right: 14, peak: 24, grow: 36 });
@@ -1309,17 +1312,36 @@ test("round 6: side gutters of 8% of the pane between 24 and 56 px, the column b
   expect(railLook(24)).toEqual({ lane: 24, mark: 8, sel: 12, right: 6, peak: 16, grow: 24 });
 });
 
-test("width: the reading line and column for Comfortable, Wide and Full at 12, 14 and 18 px", async () => {
-  const { readType, fitWidth, widthChars, WIDTH_NAMES } = await import("../mods/agent-threads/ui.js");
-  expect(WIDTH_NAMES).toEqual(["comfortable", "wide", "full"]);
-  expect(widthChars("nope")).toBe(70);
-  const at = (w, size) => [readType(size, widthChars(w)).measure, fitWidth(size, widthChars(w))];
-  expect([12, 14, 18].map((s) => at("comfortable", s))).toEqual([[395, 507], [461, 573], [592, 704]]);
-  expect([12, 14, 18].map((s) => at("wide", s))).toEqual([[508, 620], [592, 704], [761, 873]]);
-  expect(at("full", 14)).toEqual([Infinity, Infinity]);
-  // A bubble's line stops at Wide's in Full.
-  expect(readType(14, Infinity).bubble).toBe(592);
+test("steps: the reading line and the width that fits it for 70, 90 and 120 characters at 12, 14 and 18 px", async () => {
+  const { readType, fitWidth, STEPS } = await import("../mods/agent-threads/ui.js");
+  expect(STEPS).toEqual([70, 90, 120]);
+  const at = (chars, size) => [readType(size, chars).measure, fitWidth(size, chars)];
+  expect([12, 14, 18].map((s) => at(70, s))).toEqual([[395, 507], [461, 573], [592, 704]]);
+  expect([12, 14, 18].map((s) => at(90, s))).toEqual([[508, 620], [592, 704], [761, 873]]);
+  expect([12, 14, 18].map((s) => at(120, s))).toEqual([[677, 789], [790, 902], [1015, 1127]]);
+  // A bubble's line stops at 90 characters in the widest step.
+  expect(readType(14, 120).bubble).toBe(592);
   expect(readType(14).bubble).toBe(461);
+});
+
+test("columnStep: up at 704 and 902 px, down 16 px under each, from the step shown; the switch points scale with the text size", async () => {
+  const { columnStep } = await import("../mods/agent-threads/ui.js");
+  // With no step yet, the pane's own.
+  expect([500, 650, 703, 704, 901, 902, 2000].map((w) => columnStep(w))).toEqual([70, 70, 70, 90, 90, 120, 120]);
+  // Up from the step shown, one or two at once.
+  expect([703, 704, 1000].map((w) => columnStep(w, 14, 70))).toEqual([70, 90, 120]);
+  // Down only 16 px under where it stepped up.
+  expect([700, 689, 688, 687, 600].map((w) => columnStep(w, 14, 90))).toEqual([90, 90, 90, 70, 70]);
+  expect([900, 887, 886, 885, 680].map((w) => columnStep(w, 14, 120))).toEqual([120, 120, 120, 90, 70]);
+  // Scaled with the text size: up at 873 and 1127 at 18 px, down 21 px under; 620 and 789 at
+  // 12 px, down 14 px under.
+  expect([872, 873, 1126, 1127].map((w) => columnStep(w, 18))).toEqual([70, 90, 90, 120]);
+  expect([853, 852, 851].map((w) => columnStep(w, 18, 90))).toEqual([90, 90, 70]);
+  expect([1107, 1106, 1105].map((w) => columnStep(w, 18, 120))).toEqual([120, 120, 90]);
+  expect([619, 620, 789].map((w) => columnStep(w, 12))).toEqual([70, 90, 120]);
+  expect([607, 606, 605].map((w) => columnStep(w, 12, 90))).toEqual([90, 90, 70]);
+  // No width yet: the step shown, or the narrowest.
+  expect([columnStep(Number.NaN), columnStep(Number.NaN, 14, 90)]).toEqual([70, 90]);
 });
 
 test("level 3 paths: relative to the working folder inside it, from ~ elsewhere, others as they are", () => {
