@@ -17265,17 +17265,19 @@ test("the Pinned column opens at px and the pair then goes on weights that keep 
     t.run(4000);
     // Every frame on the way: the Chat at 722, never half of it.
     expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
-    // Both on weights, the terminal at weight 1 (it was the one pane on a weight, so that
-    // moved nothing), the widths as they were.
+    // Both on weights, the terminal's weight as it was (the mod never resizes it), the widths
+    // as they were.
     expect(t.row.size.p2.weight).toBeGreaterThan(0);
     expect(t.row.size.p3.weight).toBeGreaterThan(0);
-    expect(t.row.size.p1).toEqual({ weight: 1 });
+    expect(t.row.size.p1).toEqual({ weight: 0.5 });
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
     const end = t.row.widths();
     expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(1);
     expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(1);
     expect(Math.abs(end.p1 - at.p1)).toBeLessThanOrEqual(2);
     const pair = state.shared["threads.pinPair"].t4;
-    expect(pair).toMatchObject({ S: 1 });
+    // The probe's S, from two rounded widths: a first guess for later, near the terminal's 0.5.
+    expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.06);
     expect(Math.abs(pair.k - 722 / t.row.size.p2.weight)).toBeLessThan(0.01);
     // The probe's widths were not taken as the owner's column width.
     expect(state.shared["threads.pinWidth"]?.px ?? 380).toBe(380);
@@ -17424,11 +17426,8 @@ test("the Trajectory opened with the column open puts the pair back to px for it
   } finally { t.restore(); }
 });
 
-test("the pair's arithmetic: the room from one measure, the weights that keep both widths, what moved, the Chat alone, and the column's keep", async () => {
-  const { pairRoom, pairWeights, pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
-  // A column at weight 0.5 beside a terminal at 1, 400 px wide: the two share 1200.
-  expect(pairRoom(1, 0.5, 400)).toBe(1200);
-  expect(pairRoom(1, 0, 400)).toBe(null);
+test("the pair's arithmetic: the weights that keep both widths, what moved, the Chat alone, and the column's keep", async () => {
+  const { pairWeights, pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
   // The Chat at 722 joins a room of 1084 the column (380) shares with the terminal (S 1):
   // the terminal keeps 704, and every pane gets the same px a unit of weight.
   const f = pairWeights(1, 1084, 722, 380);
@@ -17447,6 +17446,11 @@ test("the pair's arithmetic: the room from one measure, the weights that keep bo
   // The column closed: the Chat's weight keeps 722 beside the terminal (S 1, k 704): the
   // terminal and the column's old room are 704 + 380.
   expect(pairAlone({ k: 704, m: 722, p: 380, S: 1 })).toBeCloseTo(722 / 1084, 4);
+  // From the wide width: S 1, wc 722 / 704, wp 380 / 704: the Chat at its old weight takes
+  // 722 (1 + 1102 / 704) / (1 + 722 / 704) = 1102 · 1806 / 1426 px; S from it is 1, whatever
+  // the S passed.
+  const wide = (722 * (1 + 1102 / 704)) / (1 + 722 / 704);
+  expect(pairAlone({ k: 704, m: 722, p: 380, S: 0.6 }, wide)).toBeCloseTo(722 / 1084, 4);
   expect(pairAlone({ k: 704, m: 722, p: 380, S: 0 })).toBe(null);
   expect(pairAlone({ k: 0, m: 722, p: 380, S: 1 })).toBe(null);
   // The column's keep, as the Trajectory's fit: the terminals give down to keep, then the
@@ -17555,5 +17559,35 @@ test("with the pair on weights, a drag that takes the Chat across 704 px and a w
     expect(t.v.chars()).toBe(90);
     expect(widths.length).toBe(2);
     expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("a terminal at px beside the pair is never resized: its width holds through the opening, both drags of the column's edge, and - and =", async () => {
+  const t = await pairPanes();
+  try {
+    // The terminal at px before the pair is made: the column is then the one pane on a weight.
+    t.row.size.p1 = { px: 704 };
+    t.run(5000);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+    expect(t.frames.every((f) => f.p1 === 704 && f.p2 === 722)).toBe(true);
+    expect(t.row.size.p1).toEqual({ px: 704 });
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(state.shared["threads.pinPair"].t4.S).toBe(0);
+    for (const dx of [-100, 100]) {
+      const was = t.row.widths();
+      t.row.drag("p2", dx);
+      t.run(1000);
+      const now = t.row.widths();
+      expect(now.p2).toBe(was.p2 + dx);
+      expect(Math.abs(now.p3 - (was.p3 - dx))).toBeLessThanOrEqual(1);
+      expect(now.p1).toBe(704);
+    }
+    const was = t.row.widths();
+    t.v.key(keyEv("="), t.cx);
+    t.run(1000);
+    expect(Math.abs(t.row.widths().p3 - (was.p3 + 40))).toBeLessThanOrEqual(1);
+    expect(t.row.widths().p1).toBe(704);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
   } finally { t.restore(); }
 });
