@@ -10277,11 +10277,12 @@ test("anchorPlan: one layout brings the offset to the place asked, with the leas
   expect(anchorPlan(pre, 700, 100, 300)).toEqual({ end: true, lift: 0 });
   // Up: the top row at the top edge, 10 px lower for a frame (the middle would take 130).
   expect(anchorPlan(pre, 150, 400, 300)).toEqual({ j: 2, how: "top", lift: 10 });
-  // Down: the last row whose bottom is above the bottom edge at that edge (70; the middle
-  // would take 90). Not one that would sit above the top edge, which goes to the top.
-  expect(anchorPlan(pre, 250, 100, 300)).toEqual({ j: 4, how: "top", lift: 70 });
-  // A row taller than the list at the top edge: its middle at the middle.
-  expect(anchorPlan([0, 50, 100, 1100, 1150, 1200], 500, 200, 300)).toEqual({ j: 2, how: "center", lift: 50 });
+  // Down: the row that will cross the bottom edge (row 5, from 480) given 70 px for the
+  // layout, so its bottom is at the bottom edge: no lift, nothing on screen off.
+  expect(anchorPlan(pre, 250, 100, 300)).toEqual({ j: 5, how: "top", lift: 0, slot: { i: 5, h: 70 } });
+  // Down into a row taller than the list, which starts above the top edge: its middle at the
+  // middle, at a height that keeps its bottom below the bottom edge.
+  expect(anchorPlan([0, 50, 100, 1100, 1150, 1200], 500, 200, 300)).toEqual({ j: 2, how: "center", lift: 0, slot: { i: 2, h: 1100 } });
   // Up a short way inside a tall row, near the start: row 0 made shorter for the frame, kept
   // above the view, puts row 1's top at the top edge.
   expect(anchorPlan([0, 400, 800, 1200], 30, 90, 300)).toEqual({ j: 1, how: "top", lift: -370 });
@@ -10292,6 +10293,7 @@ test("anchorPlan: one layout brings the offset to the place asked, with the leas
   let seed = 7;
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   let checked = 0;
+  let slotChecked = 0;
   for (let k = 0; k < 400; k++) {
     const n = 4 + Math.floor(rnd() * 30);
     const p = [0];
@@ -10305,16 +10307,34 @@ test("anchorPlan: one layout brings the offset to the place asked, with the leas
     if (Math.abs(want - off) < 0.5) { expect(plan).toBe(null); continue; }
     expect(plan).not.toBe(null);
     if (plan.end) { expect(want).toBeGreaterThanOrEqual(room - 0.5); continue; }
+    if (plan.slot) {
+      // Down: nothing lifted; every row on screen keeps its place in that layout, the row at
+      // the bottom edge keeps its bottom below it, and the offset lands at want.
+      const { i, h } = plan.slot;
+      expect(want > off).toBe(true);
+      expect(plan.lift).toBe(0);
+      expect(p[i] < want + H && p[i] + h >= want + H - 0.5).toBe(true);
+      const d = h - (p[i + 1] - p[i]);
+      const slotted = p.map((x, r) => (r > i ? x + d : x));
+      const got = listOffset(slotted, off, H, { i: plan.j, how: plan.how }, -1, -1);
+      expect(Math.abs(got - want)).toBeLessThanOrEqual(0.5);
+      slotChecked++;
+      checked++;
+      continue;
+    }
     if (plan.j === 0) continue;
     // Row 0 keeps 1 px at least, and when made shorter it is above the view.
     expect(p[1] + plan.lift).toBeGreaterThanOrEqual(1);
     if (plan.lift < 0) expect(want).toBeGreaterThanOrEqual(p[1] + plan.lift);
+    // Up only: a lift moves what is on screen for the layout.
+    expect(want < off).toBe(true);
     const lifted = p.map((x, i) => (i >= 1 ? x + plan.lift : x));
     const got = listOffset(lifted, off, H, { i: plan.j, how: plan.how }, -1, -1);
     expect(Math.abs(got - want)).toBeLessThanOrEqual(0.5);
     checked++;
   }
   expect(checked).toBeGreaterThan(300);
+  expect(slotChecked).toBeGreaterThan(100);
 });
 
 test("landExact: the nearest earlier item at least want above, lifted by the rest", async () => {
@@ -16778,6 +16798,34 @@ test("a column step crossed mid-chat keeps the row at the top edge at the same s
     expect(seen.length).toBeGreaterThan(4);
     // Let go once the probe had measured the rows above, before the 2 s.
     expect(whys).toEqual(["settled", "settled"]);
+  } finally { listWindow = null; }
+});
+
+test("the release frame: narrowing, every frame from the swap on shows the top row at the same px; widening, one frame at most off, by its lift", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 750);
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    for (const w of [650, 750]) {
+      const before = sim.last();
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      const from = frames.findIndex((f) => f.held);
+      expect(from).toBeGreaterThanOrEqual(0);
+      const after = frames.slice(from);
+      const into = after[0].into;
+      const off = after.filter((f) => f.key !== before.key || Math.abs(f.into - into) > 1);
+      if (w === 650) expect(off).toEqual([]);
+      else {
+        expect(off.length).toBeLessThanOrEqual(1);
+        for (const f of off) expect(f.lift).not.toBe(0);
+      }
+    }
   } finally { listWindow = null; }
 });
 

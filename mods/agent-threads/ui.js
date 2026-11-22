@@ -2561,12 +2561,23 @@ export function placeAt(pre, off) {
 //   the top edge, or it would go to the top);
 // - a row's middle at the middle.
 // The one with the smallest lift wins: the frame with it shows the place that many px off.
-// Returns { j, how, lift }, { end } for the end of the list, or null when the offset is at
-// want already.
+// Down (want below off) there is a landing with nothing off, tried first: the row k that will
+// cross the bottom edge, given for that layout a height (slot) that puts its bottom at the
+// bottom edge, below the view: what it shows is its top part, which does not move. With its
+// top at or below off, the near edge brings that bottom to the bottom edge; with its top at or
+// above want (a row taller than the view), its middle at the middle does, its bottom still
+// below the edge. Only the rows below it move when its height comes back.
+// Returns { j, how, lift, slot? }, { end } for the end of the list, or null when the offset is
+// at want already.
 export function anchorPlan(pre, want, off, H) {
   const n = pre.length - 1;
   if (Math.abs(want - off) < 0.5) return null;
   if (want >= pre[n] - H - 0.5) return { end: true, lift: 0 };
+  if (want > off) {
+    const k = placeAt(pre, want + H - 0.5).i;
+    if (pre[k] >= off) return { j: k, how: "top", lift: 0, slot: { i: k, h: Math.round(want + H - pre[k]) } };
+    if (pre[k] <= want) return { j: k, how: "center", lift: 0, slot: { i: k, h: Math.round(2 * (want - pre[k]) + H) } };
+  }
   const short = 1 - pre[1];
   let best = null;
   const take = (j, how, lift) => {

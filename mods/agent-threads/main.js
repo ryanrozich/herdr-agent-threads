@@ -2660,7 +2660,7 @@ export default class Threads extends View {
     const gap = this.floating() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -2688,6 +2688,9 @@ export default class Threads extends View {
       // A held place put back (letGo): row 0 lift px taller (or shorter) for the layout that
       // lands it.
       if (this.anchorLift && this.slotsMemo.length) this.slotsMemo[0] = Math.max(1, this.slotsMemo[0] + this.anchorLift);
+      // Or the row that crosses the bottom edge at the height that lands it, for that layout.
+      const slot = this.anchorSlot;
+      if (slot && slot.i < this.slotsMemo.length) this.slotsMemo[slot.i] = Math.max(1, slot.h);
       // A rail click's landing (landExact): the first row is lift px taller for the frame of
       // the scroll, far above the view, then its own height again.
       if (this.landLift > 0 && this.slotsMemo.length) this.slotsMemo[0] += Math.ceil(this.landLift);
@@ -4250,7 +4253,7 @@ export default class Threads extends View {
     // The reader's wheel count when the place is taken: a wheel after it lets the place go.
     const wheels = this.wheelN ?? 0;
     if (this.follow && this.bottomShown && this.view !== "pinned" && !this.outlined()) return { end: true, wheels };
-    if (this.landLift > 0 || this.anchorLift) return null;
+    if (this.landLift > 0 || this.anchorLift || this.anchorSlot) return null;
     const off = this.listOff ?? 0;
     const p = placeAt(this.slotPre(slots), off);
     const held = new Map();
@@ -4332,7 +4335,7 @@ export default class Threads extends View {
     const p = anchorPlan(pre, want, Math.min(this.listOff ?? 0, room), this.listH);
     if (!p) return;
     if (p.end) { this.askEnd(); return; }
-    if (p.lift) { this.anchorLift = p.lift; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
+    if (p.lift || p.slot) { this.anchorLift = p.lift; this.anchorSlot = p.slot ?? null; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
     this.askScroll(p.j, p.how);
   }
 
@@ -6290,7 +6293,7 @@ export default class Threads extends View {
     if (this.drawingRow) this.rowCut(this.drawingRow);
     // A placement's lift (letGo) is for the one layout that lands it, gone before anything in
     // this frame builds the list's heights.
-    if (this.anchorLift) { this.anchorLift = 0; this.fitKey = null; }
+    if (this.anchorLift || this.anchorSlot) { this.anchorLift = 0; this.anchorSlot = null; this.fitKey = null; }
     if (this.renderOpen) {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
