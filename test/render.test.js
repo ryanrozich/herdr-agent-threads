@@ -15437,6 +15437,50 @@ test("the Trajectory in the Chat's own pane below 200 px keeps its way back: the
   expect([hasId(c, "th-traj-chat"), hasId(c, "th-settings"), hasId(c, "th-traj-icon")]).toEqual([false, false, true]);
 });
 
+test("what the compact rows draw: every row box 24 px, a turn's band over its activity line, the selected step raised, and a step's status in its tooltip", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  const s = v.current();
+  const groups = s.turns.flatMap((x) => x.steps.filter((st) => st.k === "group"));
+  groups.at(-1).info[0].f = true;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  for (const w of [98, 58]) {
+    v.width = w;
+    v.paneW = w;
+    let c = frame(v, cx);
+    for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); c = frame(v, cx); }
+    const rows = v.ledgerRows().filter((r) => r.kind !== "sess");
+    const steps = rows.filter((r) => r.kind === "tr");
+    const heads = rows.filter((r) => r.kind === "trh");
+    // The box each row draws: 24 px tall, whatever the list is told.
+    for (const r of rows) expect([w, r.key, afterId(c, r.key).find((e) => e[0] === "h")?.[1]]).toEqual([w, r.key, 24]);
+    // A turn's band over its activity line, the line drawn in segments.
+    const head = heads.find((r) => r.line?.tools?.length || r.line?.model?.length);
+    expect(hasId(c, `${head.key}-line`)).toBe(true);
+    expect(c.some((e) => e[0] === "id" && (String(e[1]).startsWith(`${head.key}-tools-`) || String(e[1]).startsWith(`${head.key}-model-`)))).toBe(true);
+    // The selected step is raised; the others only take the hover's.
+    const [a, b] = steps;
+    // The box's own calls: up to its first child (the row it holds).
+    const box = (key) => { const a = afterId(c, key); return a.slice(0, a.findIndex((e) => e[0] === "child")); };
+    const bgs = (key) => box(key).filter((e) => e[0] === "bg").map((e) => e[1]);
+    v.tsel = a.key;
+    c = frame(v, cx);
+    const hover = bgs(b.key);
+    expect([w, hover.length]).toEqual([w, 1]);
+    const raised = bgs(a.key).filter((x) => !hover.includes(x));
+    expect([w, raised.length]).toEqual([w, 1]);
+    v.tsel = b.key;
+    c = frame(v, cx);
+    expect([w, bgs(a.key)]).toEqual([w, hover]);
+    expect([w, bgs(b.key).includes(raised[0])]).toEqual([w, true]);
+    // The failed step's status ends its tooltip.
+    const failed = steps.find((r) => r.failed && r.status);
+    expect(afterId(c, failed.key).find((e) => e[0] === "tooltip")[1].endsWith(failed.status)).toBe(true);
+  }
+});
+
 test("the compact switch goes through the size handler by the rounded Herdr px: 199 to 200 and back by 1 px, 64 to 63, and a 200 px pane at zoom 1.25 that reads 199.99", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.enterTraj();
