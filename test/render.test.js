@@ -17356,7 +17356,8 @@ async function threeRow(chat = 722, opts = {}) {
   Date.now = () => now;
   const total = opts.total ?? 1806;
   const row = pairRow(total, { p1: { weight: 0.5 }, p2: { px: chat } });
-  row.gap = opts.gap ?? 0;
+  // Herdr's divider gap as on the rig (8 px), unless a test says otherwise.
+  row.gap = opts.gap ?? 8;
   row.seen = log.length;
   if (opts.weighed) {
     const wc = (0.5 * chat) / (total - chat);
@@ -17436,7 +17437,8 @@ const termAsked = () => log.some(([k, n, a]) => k === "run" && n === "layout.res
 test("the row with the Trajectory open goes on weights for both opening orders, ending the same: terminal, Chat, Trajectory, Pinned, the Chat never moving and the terminal never asked", async () => {
   const ends = {};
   for (const first of ["traj", "col"]) {
-    const t = await threeOpen(first);
+    // Room enough that the terminal keeps its 200 px whichever opens first (the keep has its own test).
+    const t = await threeOpen(first, 722, { total: 1830 });
     try {
       expect(t.ids()).toBe("p1,p2,p4,p3");
       for (const id of ["p1", "p2", "p3", "p4"]) expect(t.row.size[id].weight).toBeGreaterThan(0);
@@ -17445,8 +17447,9 @@ test("the row with the Trajectory open goes on weights for both opening orders, 
       expect(r.ids).toEqual({ chat: "p2", traj: "p4", pin: "p3" });
       ends[first] = t.row.widths();
       expect(r.n).toEqual({ p2: ends[first].p2, p4: ends[first].p4, p3: ends[first].p3 });
-      // The Chat at 722 in every frame from the first opening on.
-      expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+      // The Chat at 722 in every frame from the first opening on, within the pair's 2 px landing
+      // (the column first lands the pair, at 721 with the divider's 8 px).
+      expect(t.frames.every((f) => Math.abs(f.p2 - 722) <= 2)).toBe(true);
       expect(ends[first].p1).toBeGreaterThanOrEqual(200);
       expect(termAsked()).toBe(false);
     } finally { t.restore(); }
@@ -17518,7 +17521,7 @@ test("- and = with the row on weights: in the Chat the Trajectory steps against 
 });
 
 test("with the row on weights, a drag on the Chat's divider with the Trajectory and a window resize take the Chat across 704 px: one re-wrap each after the pause, the top row kept", async () => {
-  const t = await threeOpen("traj");
+  const t = await threeOpen("traj", 722, { total: 1830 });
   try {
     t.v.rewrapMs = 151;
     expect(t.v.chars()).toBe(90);
@@ -17545,7 +17548,7 @@ test("with the row on weights, a drag on the Chat's divider with the Trajectory 
     expect(rowRec().n.p2).toBe(674);
     // The window 8% wider: the Chat back past 704 by the weights alone, then one re-wrap.
     t.v.rewrapMs = 151;
-    t.row.total = Math.round(1806 * 1.08);
+    t.row.total = Math.round(1830 * 1.08);
     t.step(100);
     expect(t.row.widths().p2).toBeGreaterThanOrEqual(704);
     expect(t.v.chars()).toBe(70);
@@ -17560,20 +17563,20 @@ test("with the row on weights, a drag on the Chat's divider with the Trajectory 
   } finally { t.restore(); }
 });
 
-test("the column opened with the row on weights keeps the terminal 200 px: the Chat gives the rest, then all four go on weights", async () => {
-  const t = await threeRow(722, { total: 1700 });
+test("the column opened with the row on weights keeps the terminal 200 px, counting the 8 px its divider takes: the Chat gives the rest, then all four go on weights", async () => {
+  const t = await threeRow(722, { total: 1700, gap: 8 });
   try {
     t.run(1000);
     await t.openTraj();
     t.run(3000);
-    expect(t.row.widths().p1).toBe(1700 - 722 - 482);
+    expect(t.row.widths().p1).toBe(1700 - 722 - 482 - 16);
     await t.openCol();
     t.run(3000);
     const w = t.row.widths();
     expect(Math.abs(w.p1 - 200)).toBeLessThanOrEqual(2);
     expect(w.p4).toBe(482);
     expect(Math.abs(w.p3 - 380)).toBeLessThanOrEqual(2);
-    expect(Math.abs(w.p2 - (722 - (380 + 200 - (1700 - 722 - 482))))).toBeLessThanOrEqual(2);
+    expect(Math.abs(w.p2 - (722 - (380 + 8 + 200 - (1700 - 722 - 482 - 16))))).toBeLessThanOrEqual(2);
     for (const id of ["p1", "p2", "p3", "p4"]) expect(t.row.size[id].weight).toBeGreaterThan(0);
     expect(rowRec().ids).toEqual({ chat: "p2", traj: "p4", pin: "p3" });
     expect(termAsked()).toBe(false);
@@ -17761,10 +17764,13 @@ test("the Trajectory closed with the column open: the Chat takes its weight, the
     const pair = state.shared["threads.pinPair"].t4;
     expect(pair.k).toBeGreaterThan(0);
     expect(rowRec()?.k ?? null).toBe(null);
-    // The pair came from the close: one weight for the column, and no probe of its own.
-    expect(log.slice(closedAt).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null).length).toBe(1);
-    // Wide for one step only: the corrective weights go once the Chat measures wider.
-    expect(wide(t, n, "p2", was.p2).frames).toBeLessThanOrEqual(1);
+    // The pair came from the close: two weights for the column (the close's, then the one for
+    // the divider's room Herdr gave back), and no probe of its own.
+    expect(log.slice(closedAt).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null).length).toBe(2);
+    // Wide by the closed pane's room for one step only: the corrective weights go once the Chat
+    // measures wider; then a few px wide (the divider's room) for two steps, until the second.
+    expect(wide(t, n, "p2", was.p2 + 8).frames).toBeLessThanOrEqual(1);
+    expect(wide(t, n, "p2", was.p2).frames).toBeLessThanOrEqual(3);
     // The pair's tracking takes it from there: a drag on their divider moves only them.
     t.run(2000);
     const w2 = t.row.widths();
