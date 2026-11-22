@@ -2,13 +2,13 @@
 // error in render() fails here instead of in a window. Every element method returns the same
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
-import { test, expect, mock } from "bun:test";
+import { test, expect, mock, setSystemTime } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 
 const root = join(import.meta.dir, "..");
@@ -71,6 +71,8 @@ const editors = [];
 // Plain scroll handles made (the image viewer's panel), with the children each was asked to reveal.
 const scrollHandles = [];
 let focusCalls = 0;
+// Every list given to cx.bind_keys, for the whole file: the mod installs its keys once.
+const keyBinds = [];
 const never = () => new Promise(() => {});
 // The items the virtual list draws, as Herdr does for what is on screen: all of them unless a
 // test sets this (n) => { start, end }.
@@ -221,6 +223,7 @@ function makeCx() {
     flush(ms = 200, rounds = 10) { for (let i = 0; i < rounds; i++) { const due = cx.timers.filter((x) => x.ms <= ms); cx.timers = cx.timers.filter((x) => x.ms > ms); if (!due.length) return; for (const x of due) x.fn(cx); } },
     spawn: (fn) => { const p = fn(cx); cx.pending.push(p); return p; },
     pending: [], notify() { cx.notifyHook?.(); }, stop_propagation() {},
+    bind_keys(list) { keyBinds.push(list); return list.length; },
     clip: null,
     write_to_clipboard(t) { cx.clip = t; log.push(["clipboard", t]); },
     read_from_clipboard() { return cx.clip ?? undefined; },
@@ -6809,9 +6812,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 36 rows.
+  // Six groups (the settings card's keys among them), 37 rows.
   v.rootH = 1300;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 36 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -9320,7 +9323,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const gs = strsOf(g);
   // The page as the owner approved it: each section with its rows, in order. Moving a row or
   // renaming a section is one line here (and one in CARD_SECTIONS). A section's heading is
-  // recorded after its rows, so a row belongs to the first heading that follows it.
+  // recorded before its rows, so a row belongs to the last heading before it.
   const PAGE = [
     ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color", "Sender rules"]],
@@ -9331,17 +9334,16 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const heads = PAGE.map(([name]) => gs.indexOf(name));
   expect(PAGE.filter((_x, n) => heads[n] < 0)).toEqual([]);
   expect(heads).toEqual([...heads].sort((a, b) => a - b));
-  let last = -1;
   PAGE.forEach(([name, labels], n) => {
+    let last = heads[n];
     for (const label of labels) {
       const at = gs.indexOf(label);
-      expect([name, label, at > last && at < heads[n]]).toEqual([name, label, true]);
+      expect([name, label, at > last && at < (heads[n + 1] ?? Infinity)]).toEqual([name, label, true]);
       last = at;
     }
-    last = heads[n];
   });
   // Then Reset, once, with its line, at the end.
-  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(heads.at(-1));
+  expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(gs.indexOf("Copy path"));
   expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
   for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
@@ -12126,3 +12128,911 @@ test("a pasted block keeps its long hyphenated tokens as typed, while the messag
   expect(paste.rows).toBeNull();
   expect(typed.draw).toContain(TOKEN.replaceAll("-", `-${B}`));
 });
+
+// ---- the settings card's keys (issue 104): Tab, Shift-Tab, Enter and Space, and the ring ----
+
+const tabEv = (shift = false) => ({ key: "tab", keystroke: shift ? "shift-tab" : "tab", modifiers: { shift, control: false, alt: false, platform: false, function: false } });
+const stopsOf = (v) => { cardOf(v); return v.cardStops.map((s) => s.id); };
+const ringed = (c) => idsIn(c).filter((id) => ownOf(c, id).some((e) => e[0] === "top" && e[1] === -3) && ownOf(c, id).some((e) => e[0] === "border_color" && e[1] === theme.accent));
+const pressKey = (v, cx, key, extra = {}) => { let stopped = 0; v.key({ ...keyEv(key), ...extra }, { ...cx, stop_propagation() { stopped++; } }); return stopped; };
+async function cardPane() {
+  const r = await pane(fixture("--extra", "4", "--agents"));
+  r.v.width = 545; r.v.paneW = 573; r.v.rootH = 700;
+  r.v.action("settings", r.cx);
+  return r;
+}
+const SWATCHES = (key) => ["slate", "plum", "blue", "purple", "teal", "green", "amber", "rose", "gray", "plain"].map((n) => `th-${key}-${n}`);
+
+test("card keys: Tab goes through every control of the card in the order they are drawn, section by section", async () => {
+  const { v } = await cardPane();
+  expect(stopsOf(v)).toEqual(["th-set-close",
+    "th-textSize-minus", "th-textSize-plus", ...SWATCHES("bubbleColor"), "th-set-truncate", "th-set-time",
+    "th-set-agents", "th-set-agent-rail", ...SWATCHES("agentBubbleColor"), "th-set-senders",
+    "th-width-comfortable", "th-width-wide", "th-width-full", "th-set-width", "th-rail-left", "th-rail-right", "th-set-hints", "th-set-status",
+    "th-set-links", "th-set-quote", "th-set-copy", "th-set-reset", "th-set-keys"]);
+  v.prefs = { ...v.prefs, truncate: true };
+  const all = stopsOf(v);
+  expect(all.slice(all.indexOf("th-set-truncate"), all.indexOf("th-set-time") + 1))
+    .toEqual(["th-set-truncate", "th-promptLines-minus", "th-promptLines-plus", "th-replyLines-minus", "th-replyLines-plus", "th-set-time"]);
+});
+
+test("card keys: the Link rules page goes Back, Close, then each rule's Edit, Delete and switch, Add rule, Copy path; an open rule's controls sit in its place", async () => {
+  const { v } = await rulesPane();
+  try {
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close",
+      "th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-on-1", "th-rule-edit-btn-2", "th-rule-delete-btn-2", "th-rule-on-2",
+      "th-rule-add", "th-set-copy", "th-set-keys"]);
+    v.openRule(1);
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close",
+      "th-rule-edit-btn-1", "th-rule-delete-btn-1", "th-rule-on-1",
+      "th-rule-type-change", "th-rule-f-name", "th-rule-f-description", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-url", "th-rule-f-example",
+      "th-rule-open", "th-rule-keep", "th-rule-discard", "th-rule-up", "th-rule-dup", "th-rule-delete",
+      "th-set-copy", "th-set-keys"]);
+    v.closeRule();
+    v.openRule(null);
+    const s = stopsOf(v);
+    expect(s.slice(s.indexOf("th-rule-on-2") + 1, s.indexOf("th-set-copy")))
+      .toEqual(["th-rule-type-custom", "th-rule-type-ticket", "th-rule-type-pull-request", "th-rule-f-name", "th-rule-f-description", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-url", "th-rule-f-example", "th-rule-keep", "th-rule-discard"]);
+    v.closeRule();
+    // No rules: the examples' Use buttons, then Add rule.
+    v.applyPrefs(JSON.stringify({ textSize: 15, links: [] }));
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-rule-use-ticket", "th-rule-use-pull-request", "th-rule-add", "th-set-copy", "th-set-keys"]);
+  } finally { done(v); }
+});
+
+// The card's parts that are not columns report their heights (cardCol); each handler
+// carries the part's key: its column's path, a slash, its kid's place, a dot, its place in
+// what the kid returned, a colon and the first control it holds. A column that is a kid is
+// at its column's path, a slash and its kid's place.
+// A section's heading is its first part.
+const cardLeaf = (p) => { const s = p.split("/"); return s.length === 3 && /^0\./.test(s[2]) ? 16 : 28; };
+const cardWithCx = (v, cx) => { rec = []; v.settingsCard(theme, cx); const c = rec; rec = null; return c; };
+const sizeHandlers = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_size_change" && e[1]?.cardPath).map((e) => [e[1].cardPath, e[1]]));
+const parentOf = (p) => p.slice(0, p.lastIndexOf("/"));
+const rankOf = (p) => { const [n, j] = p.split("/").at(-1).split(":")[0].split("."); const [a, m] = n.split("-"); return Number(a) * 1000 + Number(m ?? 0) * 10 + Number(j ?? 0); };
+// The rows of a frame as drawn: each part that is not a column is leaf(key) tall, and a
+// column (the page's rows at its key included) its padding top and bottom (pad(path)), its
+// parts and its gaps (gap(path)). The parts report their heights, then the rows theirs.
+// Returns the heights by key and path, and parts(path).
+function feedSizes(c, cx, leaf, gap, pad = () => 0) {
+  const fns = sizeHandlers(c);
+  const leaves = Object.keys(fns);
+  const cols = new Set();
+  for (const l of leaves) for (let q = parentOf(l); q; q = q.includes("/") ? parentOf(q) : "") cols.add(q);
+  const parts = (P) => [...leaves.filter((l) => parentOf(l) === P), ...[...cols].filter((q) => q.includes("/") && parentOf(q) === P)].sort((a, b) => rankOf(a) - rankOf(b));
+  const H = {};
+  const height = (p) => {
+    if (H[p] != null) return H[p];
+    if (!cols.has(p)) return (H[p] = leaf(p));
+    const ks = parts(p);
+    return (H[p] = 2 * pad(p) + ks.reduce((s, k) => s + height(k), 0) + gap(p) * Math.max(0, ks.length - 1));
+  };
+  for (const l of leaves) fns[l]({ width: 400, height: height(l) }, cx);
+  for (const q of cols) height(q);
+  return { H, parts };
+}
+// A page's rows: 16 px above and below, sections 20 px apart; inside, gap(path).
+const rowsGap = (inner) => (p) => (p.includes("/") ? inner(p) : 20);
+const rowsPad = (inner) => (p) => (p.includes("/") ? inner(p) : 16);
+// Measures a card page with feedSizes, reports the rows' height, and draws it once more.
+function measureCard(v, cx, key, leaf, gap, pad = () => 0) {
+  const r = feedSizes(cardWithCx(v, cx), cx, leaf, rowsGap(gap), rowsPad(pad));
+  onOf(cardWithCx(v, cx), `th-set-rows-${key}`, "on_size_change")({ height: r.H[key], width: 400 }, cx);
+  cardWithCx(v, cx);
+  return { ...r, rowsH: r.H[key] };
+}
+
+test("card ring: a move to a control out of view scrolls the card to show it in full; one in view, or in the head or foot, scrolls nothing", async () => {
+  const { v, cx } = await cardPane();
+  try {
+    v.rootH = 600;
+    const handle = v.cardScrolls.main;
+    // Every row 28 px and every heading 16; a section's parts 4 px apart.
+    const { H, parts, rowsH } = measureCard(v, cx, "main", cardLeaf, () => 4);
+    const top = parts("main");
+    const place = v.cardPlace("main");
+    expect(place.viewH).toBeLessThan(rowsH);
+    // By hand: Text size sits under the first heading; Copy path under the File heading, after
+    // four sections and their 20 px gaps; Reset after the five.
+    const before = (n) => 16 + top.slice(0, n).reduce((s, k) => s + H[k] + 20, 0);
+    const at = (id) => v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === id));
+    expect(at("th-textSize-minus")).toEqual([16 + 16 + 4, 16 + 16 + 4 + 28]);
+    expect(at("th-set-copy")).toEqual([before(4) + 16 + 4, before(4) + 16 + 4 + 28]);
+    expect(at("th-set-reset")).toEqual([before(5), before(5) + 28]);
+    expect(at("th-set-close")).toBeNull();
+    expect(at("th-set-keys")).toBeNull();
+    // Tab through every control and back: after each move the control shows in full, and the
+    // card moves only when it did not.
+    const toast = v.toast;
+    const ids = v.cardStops.map((s) => s.id);
+    let moves = 0;
+    for (const shift of [...ids.map(() => false), ...ids.map(() => true)]) {
+      const was = place.y;
+      const asked = handle.asked.length;
+      pressKey(v, cx, "tab", tabEv(shift));
+      cardWithCx(v, cx);
+      cx.flush(0);
+      const span = at(v.cardRing);
+      if (!span) { expect([v.cardRing, handle.asked.length]).toEqual([v.cardRing, asked]); continue; }
+      expect([v.cardRing, span[0] >= place.y && span[1] <= place.y + place.viewH]).toEqual([v.cardRing, true]);
+      const shown = span[0] >= was && span[1] <= was + place.viewH;
+      expect([v.cardRing, handle.asked.length - asked]).toEqual([v.cardRing, shown ? 0 : 1]);
+      if (!shown) moves++;
+    }
+    expect(moves).toBeGreaterThan(1);
+    expect(v.toast).toBe(toast);
+    // The debug report says where the view is and where the ringed control is in the rows.
+    v.report();
+    const card = state.shared["threads.debug"].t4.settingsCard;
+    expect(card.view).toEqual({ y: place.y, h: place.viewH });
+    expect(card.ringAt).toEqual(at(v.cardRing));
+    v.cardRing = "th-set-close";
+    v.report();
+    expect(state.shared["threads.debug"].t4.settingsCard.ringAt).toBeNull();
+  } finally { done(v); }
+});
+
+// A card in a 600 px pane, measured, whose ring then moves to Copy path while the height of
+// the section before it is not known: the scroll to it waits. feed() reports that height.
+async function waitingReveal() {
+  const { v, cx } = await cardPane();
+  v.rootH = 600;
+  const handle = v.cardScrolls.main;
+  const { H, parts, rowsH } = measureCard(v, cx, "main", cardLeaf, () => 4);
+  // The Link rules row, in the fourth section.
+  const gone = parts(parts("main")[3])[1];
+  delete v.cardSizes[gone];
+  delete v.cardSlots[sizeHandlers(cardWithCx(v, cx))[gone].cardSlot];
+  const was = v.cardPlace("main").y;
+  v.ringTo("th-set-copy");
+  const asked = handle.asked.length;
+  cardWithCx(v, cx);
+  cx.flush(0);
+  expect(handle.asked.length).toBe(asked);
+  expect(v.ringShow).toBeTruthy();
+  const feed = () => sizeHandlers(cardWithCx(v, cx))[gone]({ width: 400, height: H[gone] }, cx);
+  return { v, cx, handle, feed, rowsH, was };
+}
+
+test("card ring: a scroll waiting for heights is dropped by the wheel, the scroll keys, another page, closing the card, or 250 ms", async () => {
+  const drops = {
+    wheel: (v, cx) => onOf(cardWithCx(v, cx), "th-set-rows-main", "on_scroll_wheel")({ delta: { y: -40 }, position: { x: 1, y: 1 } }, cx),
+    keys: (v, cx) => v.action("settingsScroll:down", cx),
+    page: (v, cx) => { v.setPage = "links"; cardWithCx(v, cx); v.setPage = "main"; },
+    time: () => setSystemTime(new Date(Date.now() + 300)),
+  };
+  for (const [name, drop] of Object.entries(drops)) {
+    const { v, cx, handle, feed } = await waitingReveal();
+    try {
+      drop(v, cx);
+      if (name !== "page") cardWithCx(v, cx);
+      expect([name, v.ringShow]).toEqual([name, null]);
+      const asked = handle.asked.length;
+      feed();
+      cardWithCx(v, cx);
+      cx.flush(0);
+      expect([name, handle.asked.length]).toEqual([name, asked]);
+      expect(v.cardRing).toBe("th-set-copy");
+    } finally { setSystemTime(); done(v); }
+  }
+  // Closing the card drops it too.
+  const { v } = await waitingReveal();
+  try {
+    v.closeSettings();
+    expect(v.ringShow).toBeNull();
+  } finally { done(v); }
+  // Under 250 ms it still waits, and scrolls once the height comes.
+  const w = await waitingReveal();
+  try {
+    setSystemTime(new Date(Date.now() + 200));
+    cardWithCx(w.v, w.cx);
+    expect(w.v.ringShow).toBeTruthy();
+    const asked = w.handle.asked.length;
+    w.feed();
+    cardWithCx(w.v, w.cx);
+    w.cx.flush(0);
+    expect(w.handle.asked.length).toBe(asked + 1);
+  } finally { setSystemTime(); done(w.v); }
+});
+
+test("card ring: a scroll waits for a height not yet measured, a new height asks for a redraw only while one waits, and the card is asked for the mark the reveal chose", async () => {
+  const { v, cx, handle, feed, rowsH, was } = await waitingReveal();
+  try {
+    let notes = 0;
+    cx.notifyHook = () => notes++;
+    // Waiting: the missing height arrives and asks for a redraw; that draw scrolls.
+    feed();
+    expect(notes).toBe(1);
+    const place = v.cardPlace("main");
+    const asked = handle.asked.length;
+    cardWithCx(v, cx);
+    const span = v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === "th-set-copy"));
+    const r = cardReveal(span[0], span[1], was, rowsH, place.viewH);
+    expect(r).not.toBeNull();
+    cx.flush(0);
+    expect(handle.asked.length).toBe(asked + 1);
+    expect(handle.asked.at(-1)).toBe(1 + r.mark);
+    expect(cardMarks(rowsH)[r.mark]).toBe(r.y + place.viewH - 1);
+    expect(place.y).toBe(r.y);
+    expect(v.ringShow).toBeNull();
+    // Nothing waits now: a changed height is kept, and asks for no redraw.
+    const fns = sizeHandlers(cardWithCx(v, cx));
+    notes = 0;
+    const k = Object.keys(fns).find((p) => p.split("/").length === 3);
+    fns[k]({ width: 400, height: 99 }, cx);
+    expect(v.cardSizes[k]).toBe(99);
+    expect(notes).toBe(0);
+  } finally { done(v); }
+});
+
+test("card ring: on a rules page the card scrolls to a control inside an open rule, not to the rule's top", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.rootH = 560;
+    v.openRule(null);
+    const handle = v.cardScrolls.links;
+    const { rowsH } = measureCard(v, cx, "links", () => 28, () => 10);
+    const place = v.cardPlace("links");
+    const at = (id) => v.ringSpan(v.cardRoot, v.cardStops.findIndex((s) => s.id === id));
+    // Keep rule is one 28 px row of the open rule, found inside it.
+    const keep = at("th-rule-keep");
+    expect(keep[1] - keep[0]).toBe(28);
+    expect(keep[0]).toBeGreaterThan(at("th-rule-type-custom")[0]);
+    expect(at("th-rule-f-example")[0]).toBeGreaterThan(at("th-rule-f-url")[0]);
+    expect(rowsH).toBeGreaterThan(place.viewH + 200);
+    // Shift-Tab from no ring goes to the last control (? keys, in the foot), then back up.
+    for (let i = 0; i < 40 && v.cardRing !== "th-rule-keep"; i++) { pressKey(v, cx, "tab", tabEv(true)); cardWithCx(v, cx); cx.flush(0); }
+    expect(v.cardRing).toBe("th-rule-keep");
+    expect(keep[0] >= place.y && keep[1] <= place.y + place.viewH).toBe(true);
+    for (const id of ["th-rule-f-name", "th-rule-type-custom"]) {
+      for (let i = 0; i < 40 && v.cardRing !== id; i++) { pressKey(v, cx, "tab", tabEv(true)); cardWithCx(v, cx); cx.flush(0); }
+      const s = at(id);
+      expect([id, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([id, true]);
+    }
+    expect(handle.asked.length).toBeGreaterThan(1);
+  } finally { done(v); }
+});
+
+// A stand-in for Herdr's layout and size reports, for rows that change. Each part not a
+// column has a height of its own (truth, by the part, so parts differ), and a column is its
+// padding, parts and gaps, as the card lays it out. frame() draws the card; a part reports
+// its height when Herdr would: by "part", only a part new to it or whose height changed (a
+// part that moves does not report); by "place", only a place in a column whose height there
+// changed (a new part as tall as the one it replaced does not report). The rows report
+// their height when it changed. Then the scroll's timers run.
+// A part is known by its column, the first control it and the parts built with it hold,
+// and its place among those parts (a part with none, by its place in the column).
+function herdrStandIn(v, cx, key, by) {
+  const partOf = (fn) => {
+    const it = fn.cardItem;
+    const [col, at] = fn.cardSlot.split("#");
+    return it.to > it.from ? `${col}|${v.cardStops[it.from].id}|${Number(at) - it.first}` : `${col}|#${at}`;
+  };
+  const truth = (fn) => { let n = 7; for (const ch of partOf(fn)) n = (n * 31 + ch.charCodeAt(0)) % 9973; return 20 + (n % 7) * 6; };
+  let fns = {};
+  const partH = (node, j) => (node.cols[j] ? colH(node.cols[j]) : truth(fns[node.keys[j]]));
+  const colH = (node) => 2 * node.pad + node.keys.reduce((s, _k, j) => s + partH(node, j), 0) + node.gap * Math.max(0, node.keys.length - 1);
+  const span = (node, i, y = 0) => {
+    const it = node.items.find((x) => i >= x.from && i < x.to);
+    if (!it) return null;
+    let at = y + node.pad;
+    for (let j = 0; j < it.first; j++) at += partH(node, j) + node.gap;
+    if (it.child) return span(it.child, i, at);
+    let end = at;
+    for (let j = it.first; j <= it.last; j++) end += partH(node, j) + (j < it.last ? node.gap : 0);
+    return [at, end];
+  };
+  const seen = new Map();
+  let rows = null;
+  const frame = () => {
+    for (let n = 0; n < 3; n++) {
+      const c = cardWithCx(v, cx);
+      fns = sizeHandlers(c);
+      for (const fn of Object.values(fns)) {
+        const h = truth(fn);
+        const id = by === "part" ? partOf(fn) : fn.cardSlot;
+        if (seen.get(id) !== h) { seen.set(id, h); fn({ width: 400, height: h }, cx); }
+      }
+      const h = colH(v.cardRoot);
+      if (rows !== h) { rows = h; onOf(c, `th-set-rows-${key}`, "on_size_change")({ height: h, width: 400 }, cx); }
+      cx.flush(0);
+    }
+  };
+  // Where the control with the ring is in the rows as drawn.
+  const ringTruth = () => { fns = sizeHandlers(cardWithCx(v, cx)); return span(v.cardRoot, v.cardStops.findIndex((s) => s.id === v.cardRing)); };
+  return { frame, ringTruth };
+}
+
+test("card ring: after an open rule above or below the ring closes, or one opened from an example, on both rule pages, the control's place matches the rows as drawn and shows in the view", async () => {
+  for (const by of ["part", "place"]) {
+    for (const kind of ["links", "senders"]) {
+      for (const where of ["above", "below", "example"]) {
+        const { v, cx } = kind === "links" ? await rulesPane() : await sendersPane();
+        const name = `${by} ${kind} ${where}`;
+        try {
+          v.rootH = 420;
+          const edit = (n) => (kind === "links" ? `th-rule-edit-btn-${n}` : `th-sender-edit-btn-${n}`);
+          const use = kind === "links" ? "th-rule-use-ticket" : "th-sender-use-brackets";
+          const back = { above: "th-rule-add", below: edit(1), example: use }[where];
+          if (where === "example") v.applyPrefs(JSON.stringify({ textSize: 15, [kind]: [] }));
+          const { frame, ringTruth } = herdrStandIn(v, cx, kind, by);
+          frame();
+          // Above: the ring on Add rule, under the list, and the first rule opens in its place.
+          // Below: the ring on the first rule's Edit, and the second rule opens in its place.
+          // Example: no rules, the ring on the first example's Use, pressed.
+          v.ringTo(back);
+          frame();
+          if (where === "example") pressKey(v, cx, "enter");
+          else v.openRule(where === "above" ? 0 : 1, null, null, kind);
+          frame();
+          expect([name, Boolean(v.ruleEdit)]).toEqual([name, true]);
+          const place = v.cardPlace(kind);
+          const inView = () => { const s = v.cardView().ringAt; return Boolean(s) && s[0] >= place.y && s[1] <= place.y + place.viewH; };
+          expect([name, v.cardView().ringAt]).toEqual([name, ringTruth()]);
+          expect([name, inView()]).toEqual([name, true]);
+          // Down through the open rule, so the card scrolls with it.
+          for (let i = 0; i < 6; i++) { pressKey(v, cx, "tab", tabEv(false)); frame(); }
+          expect([name, v.cardView().ringAt, inView()]).toEqual([name, ringTruth(), true]);
+          v.closeRule();
+          frame();
+          expect([name, v.cardRing]).toEqual([name, back]);
+          expect([name, v.cardView().ringAt]).toEqual([name, ringTruth()]);
+          expect([name, inView()]).toEqual([name, true]);
+        } finally { done(v); }
+      }
+    }
+  }
+});
+
+test("card ring: when a rule closes and the rows get shorter, the card's place stays inside them, and the next scroll starts from there", async () => {
+  for (const back of ["th-set-copy", "th-set-close"]) {
+    const { v, cx } = await rulesPane();
+    try {
+      v.rootH = 700;
+      const handle = v.cardScrolls.links;
+      const { frame, ringTruth } = herdrStandIn(v, cx, "links", "part");
+      frame();
+      // The ring on Copy path, near the rows' end, or on Close, in the head; a rule opens
+      // above, the ring goes to Copy path, so the card is at the end of the longer rows, and
+      // back. Closing the rule takes the ring back there.
+      v.ringTo(back);
+      frame();
+      v.openRule(0);
+      frame();
+      v.ringTo("th-set-copy");
+      frame();
+      const place = v.cardPlace("links");
+      const long = v.cardBody.h;
+      expect(long).toBeGreaterThan(place.viewH);
+      expect(place.y).toBeGreaterThan(0);
+      v.ringTo(back);
+      frame();
+      v.closeRule();
+      frame();
+      // Shorter now: the place is no further than the new end, and the report says so.
+      const end = Math.max(0, v.cardBody.h - place.viewH);
+      expect([back, v.cardBody.h < long, v.cardRing]).toEqual([back, true, back]);
+      expect([back, v.cardView().view.y]).toEqual([back, place.y]);
+      expect([back, place.y >= 0 && place.y <= end]).toEqual([back, true]);
+      const s = v.cardView().ringAt;
+      expect([back, s]).toEqual([back, ringTruth()]);
+      if (s) expect([back, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([back, true]);
+      // The next moves are worked out from that place.
+      for (let i = 0; i < 4; i++) {
+        const was = place.y;
+        const asked = handle.asked.length;
+        pressKey(v, cx, "tab", tabEv(back === "th-set-copy"));
+        cardWithCx(v, cx);
+        const span = ringTruth();
+        cx.flush(0);
+        const r = span ? cardReveal(span[0], span[1], was, v.cardBody.h, place.viewH) : null;
+        expect([back, v.cardRing, handle.asked.slice(asked)]).toEqual([back, v.cardRing, r ? [1 + r.mark] : []]);
+        expect([back, v.cardRing, place.y]).toEqual([back, v.cardRing, r ? r.y : was]);
+        frame();
+      }
+    } finally { done(v); }
+  }
+});
+
+test("card ring: Space on Shorten long messages adds its line steppers, and Tab goes on through them and on, each shown where it is drawn", async () => {
+  for (const by of ["part", "place"]) {
+    const { v, cx } = await cardPane();
+    try {
+      v.rootH = 600;
+      const { frame, ringTruth } = herdrStandIn(v, cx, "main", by);
+      frame();
+      const place = v.cardPlace("main");
+      const check = (what) => {
+        const s = v.cardView().ringAt;
+        expect([by, what, v.cardRing, s]).toEqual([by, what, v.cardRing, ringTruth()]);
+        if (s) expect([by, what, v.cardRing, s[0] >= place.y && s[1] <= place.y + place.viewH]).toEqual([by, what, v.cardRing, true]);
+      };
+      const tab = (shift = false) => { pressKey(v, cx, "tab", tabEv(shift)); frame(); check(shift ? "shift-tab" : "tab"); };
+      for (let i = 0; i < 14; i++) tab();
+      expect(v.cardRing).toBe("th-set-truncate");
+      pressKey(v, cx, "space");
+      frame();
+      check("space");
+      expect([v.prefs.truncate, v.cardRing]).toEqual([true, "th-set-truncate"]);
+      const after = ["th-promptLines-minus", "th-promptLines-plus", "th-replyLines-minus", "th-replyLines-plus", "th-set-time", "th-set-agents", "th-set-agent-rail", "th-agentBubbleColor-slate"];
+      const spans = { "th-set-truncate": v.cardView().ringAt };
+      for (const id of after) { tab(); expect(v.cardRing).toBe(id); spans[id] = v.cardView().ringAt; }
+      // Each stepper is found in its own row, 4 px under the one before.
+      expect(spans["th-promptLines-minus"][0]).toBe(spans["th-set-truncate"][1] + 4);
+      expect(spans["th-promptLines-plus"]).toEqual(spans["th-promptLines-minus"]);
+      expect(spans["th-replyLines-minus"][0]).toBe(spans["th-promptLines-minus"][1] + 4);
+      expect(spans["th-set-time"][0]).toBe(spans["th-replyLines-minus"][1] + 4);
+      // Back up to the switch, off again, and on down past where the steppers were.
+      for (let i = 0; i < after.length; i++) tab(true);
+      expect(v.cardRing).toBe("th-set-truncate");
+      pressKey(v, cx, "space");
+      frame();
+      check("space off");
+      expect(v.prefs.truncate).toBe(false);
+      for (const id of ["th-set-time", "th-set-agents", "th-set-agent-rail"]) { tab(); expect(v.cardRing).toBe(id); }
+    } finally { done(v); }
+  }
+});
+
+test("card keys: Tab and Shift-Tab move one ring round the card, the pane keeps the keyboard, and nothing else appears", async () => {
+  const { v, cx } = await cardPane();
+  const ids = stopsOf(v);
+  const before = strsOf(cardOf(v));
+  expect(ringed(cardOf(v))).toEqual([]); // opening the card shows no ring
+  const toasts = v.toast;
+  const f0 = focusCalls;
+  expect(pressKey(v, cx, "tab", tabEv())).toBe(1);
+  expect(v.cardRing).toBe(ids[0]);
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([ids[0]]);
+  // The ring: 2 px of the accent, 3 px outside the control, round its corners.
+  for (const x of [["absolute"], ["top", -3], ["left", -3], ["right", -3], ["bottom", -3], ["border_2"], ["border_color", theme.accent]]) expect(ownOf(c, ids[0])).toContainEqual(x);
+  // Nothing but the ring: the same words, no toast, no new element besides the ring.
+  expect(strsOf(c)).toEqual(before);
+  expect(v.toast).toBe(toasts);
+  draw(v, cx);
+  expect(state.shared["threads.debug"].t4.settingsCard.ring).toBe(ids[0]); // for the rig
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe(ids[1]);
+  pressKey(v, cx, "tab", tabEv(true));
+  pressKey(v, cx, "tab", tabEv(true));
+  expect(v.cardRing).toBe(ids.at(-1)); // round the start to the end
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe(ids[0]); // and back
+  expect(focusCalls).toBe(f0); // the pane had the keyboard all along
+  expect(v.fieldFocused).toBe(null);
+  // Shift-Tab with no ring starts at the end.
+  v.cardRing = null;
+  pressKey(v, cx, "tab", tabEv(true));
+  expect(v.cardRing).toBe(ids.at(-1));
+  // Ctrl-Tab and Cmd-Tab are Herdr's and the system's.
+  v.cardRing = null;
+  expect(pressKey(v, cx, "tab", { modifiers: { ...tabEv().modifiers, control: true } })).toBe(0);
+  expect(pressKey(v, cx, "tab", { modifiers: { ...tabEv().modifiers, platform: true } })).toBe(0);
+  expect(v.cardRing).toBe(null);
+  // With the card shut Tab is not the pane's.
+  v.closeSettings();
+  expect(pressKey(v, cx, "tab", tabEv())).toBe(0);
+  expect(v.action("ring:next", cx)).toBe(false);
+});
+
+test("card keys: Enter and Space press the control with the ring, as a click does; without a ring they do what they did", async () => {
+  const { v, cx } = await cardPane();
+  stopsOf(v);
+  v.cardRing = "th-set-truncate";
+  const was = Boolean(v.prefs.truncate);
+  expect(pressKey(v, cx, "enter")).toBeGreaterThan(0); // the key stops here
+  expect(Boolean(v.prefs.truncate)).toBe(!was);
+  stopsOf(v);
+  pressKey(v, cx, "space");
+  expect(Boolean(v.prefs.truncate)).toBe(was);
+  expect(v.cardRing).toBe("th-set-truncate");
+  // A choice, a stepper and a color dot.
+  v.cardRing = "th-width-full"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.width).toBe("full");
+  const size = v.prefs.textSize;
+  v.cardRing = "th-textSize-plus"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.textSize).toBe(size + 1);
+  v.cardRing = "th-bubbleColor-teal"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.bubbleColor).toBe("teal");
+  const sw = cardOf(v);
+  expect(ringed(sw)).toEqual(["th-bubbleColor-teal"]);
+  // Round a dot the ring is a rounded square, so it does not read as the chosen color's ring.
+  expect(ownOf(sw, "th-bubbleColor-teal")).toContainEqual(["rounded", 8]);
+  // The same press through the command the key runs (how the rig drives it).
+  v.cardRing = "th-bubbleColor-rose"; stopsOf(v);
+  expect(v.action("ring:press", cx)).toBe(true);
+  expect(v.prefs.bubbleColor).toBe("rose");
+  // No ring: Enter is the list's and Space scrolls the card; no control on the card is pressed.
+  v.cardRing = null;
+  const prefs = JSON.stringify(v.prefs);
+  pressKey(v, cx, "enter");
+  pressKey(v, cx, "space");
+  expect(JSON.stringify(v.prefs)).toBe(prefs);
+  expect(v.cardRing).toBe(null);
+});
+
+test("card keys: a text field takes the keyboard while the ring is on it and hands it back to the pane when Tab leaves; Enter and Space stay the field's", async () => {
+  const { v, cx } = await cardPane();
+  let fieldFocus = 0;
+  v.quoteInput.focus = () => { fieldFocus++; };
+  stopsOf(v);
+  v.cardRing = "th-set-links";
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.cardRing).toBe("th-set-quote");
+  expect([fieldFocus, v.fieldFocused]).toEqual([1, "quote"]);
+  // The field shows it has the keys by its own accent edge, not a second ring.
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([]);
+  expect(ownOf(c, "th-set-quote")).toContainEqual(["border_color", theme.accent]);
+  // Space and Enter are the field's: not pressed, not stopped.
+  expect(pressKey(v, cx, "space")).toBe(0);
+  expect(pressKey(v, cx, "enter")).toBe(0);
+  const f0 = focusCalls;
+  pressKey(v, cx, "tab", tabEv());
+  expect([v.cardRing, v.fieldFocused, focusCalls]).toEqual(["th-set-copy", null, f0 + 1]);
+  pressKey(v, cx, "tab", tabEv(true));
+  pressKey(v, cx, "tab", tabEv(true));
+  expect([v.cardRing, v.fieldFocused]).toEqual(["th-set-links", null]);
+  // A field clicked into: Tab goes on from it.
+  v.cardRing = null;
+  v.quoteInput.handlers.focus({}, cx);
+  stopsOf(v);
+  pressKey(v, cx, "tab", tabEv());
+  expect([v.cardRing, v.fieldFocused]).toEqual(["th-set-copy", null]);
+});
+
+test("card keys: where the ring goes when a press takes its control away (Link rules, Back, Edit, Delete, Undo, Keep, Discard)", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    v.cardRing = "th-set-links"; stopsOf(v);
+    pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["links", "th-set-back"]);
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["main", "th-set-links"]);
+    v.setPage = "links";
+    // Edit: into the rule, at its first control; Esc back to Edit.
+    v.cardRing = "th-rule-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([0, "th-rule-type-change"]);
+    expect(ringed(cardOf(v))).toEqual(["th-rule-type-change"]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen, v.cardRing]).toEqual([null, true, "th-rule-edit-btn-1"]);
+    // Delete: Undo in its place takes the ring; Undo gives it to the rule's Edit again.
+    v.cardRing = "th-rule-delete-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastLinks()).toEqual([RULES[1]]);
+    expect(v.cardRing).toBe("th-rule-undo");
+    expect(ringed(cardOf(v))).toEqual(["th-rule-undo"]);
+    stopsOf(v); pressKey(v, cx, "space");
+    await settleAll(cx);
+    expect(lastLinks()).toEqual(RULES);
+    expect(v.cardRing).toBe("th-rule-edit-btn-1");
+    // Keep rule: back on the kept rule's Edit. Discard of a new rule: back on Add rule.
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-edit-btn-2"]);
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([null, "th-rule-type-custom"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-add"]);
+    // Delete from the open rule: Undo again.
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-delete"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-undo"]);
+    // Keep rule that would not run: the ring goes to the field that says why, which takes the keys.
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.ruleEdit).not.toBe(null);
+    expect(v.cardRing).toBe("th-rule-f-pattern");
+    expect(v.fieldFocused).toBe("rule-pattern");
+  } finally { done(v); }
+});
+
+test("card keys: the card closing (x, Esc, ? keys, a press elsewhere) drops the ring, and the pane keeps or takes back the keyboard", async () => {
+  const { v, cx } = await cardPane();
+  v.cardRing = "th-set-close"; stopsOf(v);
+  pressKey(v, cx, "enter");
+  expect([v.settingsOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, null]);
+  // It opens again with no ring.
+  v.action("settings", cx);
+  expect(v.cardRing).toBe(null);
+  v.cardRing = "th-set-keys"; stopsOf(v);
+  pressKey(v, cx, "space");
+  expect([v.settingsOpen, v.keysOpen, v.cardRing]).toEqual([false, true, null]);
+  v.action("keys", cx);
+  // Esc from a field: the pane takes the keyboard back.
+  v.action("settings", cx);
+  v.quoteInput.focus = () => {};
+  v.cardRing = "th-set-links"; stopsOf(v);
+  pressKey(v, cx, "tab", tabEv());
+  expect(v.fieldFocused).toBe("quote");
+  const f0 = focusCalls;
+  pressKey(v, cx, "escape");
+  expect([v.settingsOpen, v.cardRing, v.fieldFocused, focusCalls]).toEqual([false, null, null, f0 + 1]);
+  // A press in another pane closes it without taking the keyboard from there.
+  v.action("settings", cx);
+  v.cardRing = "th-set-agents";
+  const f1 = focusCalls;
+  onOf(frame(v, cx), "th-set-card", "on_mouse_down_out")({}, cx);
+  expect([v.settingsOpen, v.cardRing, focusCalls]).toEqual([false, null, f1]);
+});
+
+test("card keys: a pointer press on the card takes the ring away, and a click never shows one", async () => {
+  const { v, cx } = await cardPane();
+  v.cardRing = "th-set-agents";
+  const c = cardOf(v);
+  const down = c.find((e) => e[0] === "on_mouse_down" && e[1] === "left" && ownOf(c, "th-set-card").includes(e));
+  expect(down).toBeTruthy();
+  down.at(-1)({}, cx);
+  expect(v.cardRing).toBe(null);
+  onOf(cardOf(v), "th-set-truncate", "on_click")({}, cx);
+  expect(v.cardRing).toBe(null);
+  expect(ringed(cardOf(v))).toEqual([]);
+  // A pointer press that opens a rule or deletes one shows no ring either.
+  const r = await rulesPane();
+  try {
+    onOf(cardOf(r.v), "th-rule-edit-btn-1", "on_click")({}, r.cx);
+    expect(r.v.cardRing).toBe(null);
+    r.v.closeRule();
+    onOf(cardOf(r.v), "th-rule-delete-btn-1", "on_click")({}, r.cx);
+    await settleAll(r.cx);
+    expect(r.v.cardRing).toBe(null);
+    expect(ringed(cardOf(r.v))).toEqual([]);
+  } finally { done(r.v); }
+});
+
+test("card keys: a ring whose control went another way (a file change, a switch) moves to the control now in its place", async () => {
+  const { v, cx } = await cardPane();
+  v.prefs = { ...v.prefs, truncate: true };
+  stopsOf(v);
+  v.cardRing = "th-replyLines-plus";
+  stopsOf(v);
+  v.prefs = { ...v.prefs, truncate: false };
+  // This frame draws no ring and takes the control at the ring's place; the next shows it.
+  const c = cardOf(v);
+  expect(ringed(c)).toEqual([]);
+  expect(v.cardRing).toBe("th-set-time");
+  expect(ringed(cardOf(v))).toEqual(["th-set-time"]);
+  // Drawn with a frame's context, the card asks for the next frame itself.
+  v.cardRing = "gone";
+  cx.timers = [];
+  rec = []; v.settingsCard(theme, cx); rec = null;
+  expect(cx.timers.length).toBe(1);
+  cx.timers = [];
+});
+
+test("card keys: Change, a type, Move up and Duplicate keep the ring on the open rule", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-type-change"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-rule-type-custom"); // its own type's row
+    expect(stopsOf(v)).toContain("th-rule-type-custom");
+    v.cardRing = "th-rule-type-ticket"; pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.type, v.cardRing]).toEqual(["ticket", "th-rule-type-change"]);
+    // Move up to the top: the button goes, Duplicate beside it takes the ring.
+    v.cardRing = "th-rule-up"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect([v.ruleEdit.at, v.cardRing]).toEqual([0, "th-rule-dup"]);
+    expect(ringed(cardOf(v))).toEqual(["th-rule-dup"]);
+    // Duplicate: the copy opens under it at its first control; Discard goes back where the first opened from.
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.cardRing]).toEqual([null, "th-rule-type-change"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-edit-btn-2"]);
+  } finally { done(v); }
+});
+
+// The Sender rules page (and its row on the card) take the ring as the Link rules page does.
+
+test("card keys: the Sender rules page goes Back, Close, each rule's Edit, Delete and switch (none on a rule that is not working), Add rule, Copy path; an open rule's controls sit in its place", async () => {
+  const { v } = await sendersPane();
+  try {
+    const rows = (ns) => ns.flatMap((n) => [`th-sender-edit-btn-${n}`, `th-sender-delete-btn-${n}`, ...(n === 3 ? [] : [`th-sender-on-${n}`])]);
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1, 2, 3, 4, 5]), "th-rule-add", "th-set-copy", "th-set-keys"]);
+    // A kept rule found by its pattern: Change, Name, Pattern and its Reference, Example, the buttons.
+    v.openRule(1, null, null, "senders");
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", ...rows([1]),
+      "th-sender-type-change", "th-rule-f-name", "th-rule-f-pattern", "th-rule-reference", "th-rule-f-example",
+      "th-rule-keep", "th-rule-discard", "th-rule-up", "th-rule-dup", "th-rule-delete",
+      ...rows([3, 4, 5]), "th-set-copy", "th-set-keys"]);
+    v.closeRule();
+    // A new rule, under the list: both types, then Starts with in place of Pattern.
+    v.openRule(null, null, null, "senders");
+    const s = stopsOf(v);
+    expect(s.slice(s.indexOf("th-sender-on-5") + 1, s.indexOf("th-set-copy")))
+      .toEqual(["th-sender-type-prefix", "th-sender-type-pattern", "th-rule-f-name", "th-rule-f-prefix", "th-rule-f-example", "th-rule-keep", "th-rule-discard"]);
+    v.closeRule();
+    // No rules: the examples' Use buttons, then Add rule.
+    v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
+    expect(stopsOf(v)).toEqual(["th-set-back", "th-set-close", "th-sender-use-brackets", "th-sender-use-from", "th-rule-add", "th-set-copy", "th-set-keys"]);
+  } finally { done(v); }
+});
+
+test("card keys: on Sender rules the ring follows a press the way it does on Link rules (the row, Back, Edit, Change, a type, the switch, Delete, Undo, Keep, Discard, Use)", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    v.setPage = "main";
+    v.cardRing = "th-set-senders"; stopsOf(v);
+    pressKey(v, cx, "enter");
+    expect([v.setPage, v.cardRing]).toEqual(["senders", "th-set-back"]);
+    stopsOf(v); pressKey(v, cx, "space");
+    expect([v.setPage, v.cardRing]).toEqual(["main", "th-set-senders"]);
+    v.setPage = "senders";
+    // Edit: into the rule at Change; Change to its own type's row; the other type folds the
+    // rows back, and the ring goes to Change; Esc back to Edit.
+    v.cardRing = "th-sender-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.at, v.cardRing]).toEqual([0, "th-sender-type-change"]);
+    expect(ringed(cardOf(v))).toEqual(["th-sender-type-change"]);
+    pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-sender-type-prefix");
+    expect(stopsOf(v)).toContain("th-sender-type-prefix");
+    v.cardRing = "th-sender-type-pattern"; pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.by, v.cardRing]).toEqual(["pattern", "th-sender-type-change"]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen, v.cardRing]).toEqual([null, true, "th-sender-edit-btn-1"]);
+    // The switch: pressed in place.
+    v.cardRing = "th-sender-on-1"; stopsOf(v); pressKey(v, cx, "space");
+    await settleAll(cx);
+    expect(lastSenders()[0].on).toBe(false);
+    expect(v.cardRing).toBe("th-sender-on-1");
+    // Delete: Undo takes the ring; Undo gives it to the rule's Edit again.
+    v.cardRing = "th-sender-delete-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Broken", "Bare", "Miss"]);
+    expect(v.cardRing).toBe("th-rule-undo");
+    expect(ringed(cardOf(v))).toEqual(["th-rule-undo"]);
+    stopsOf(v); pressKey(v, cx, "enter");
+    await settleAll(cx);
+    expect(lastSenders().map((r) => r.name)).toEqual(["Checker", "Nightly", "Broken", "Bare", "Miss"]);
+    expect(v.cardRing).toBe("th-sender-edit-btn-2");
+    // Keep rule: back on the kept rule's Edit. Add rule, then Discard: back on Add rule.
+    v.cardRing = "th-sender-edit-btn-4"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-sender-edit-btn-4"]);
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.ruleEdit?.at, v.cardRing]).toEqual(["senders", null, "th-sender-type-prefix"]);
+    v.cardRing = "th-rule-discard"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit, v.cardRing]).toEqual([null, "th-rule-add"]);
+    // Keep rule that would not run: the ring goes to the field that says why, which takes the keys.
+    let focused = 0;
+    v.senderInputs.prefix.focus = () => { focused++; };
+    v.cardRing = "th-rule-add"; stopsOf(v); pressKey(v, cx, "enter");
+    v.cardRing = "th-rule-keep"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.cardRing, v.fieldFocused, focused]).toEqual(["senders", "th-rule-f-prefix", "rule-sender-prefix", 1]);
+    // Shift-Tab out of the field: back to Name, which takes the keys in its place.
+    let named = 0;
+    v.senderInputs.name.focus = () => { named++; };
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect([v.cardRing, v.fieldFocused, named]).toEqual(["th-rule-f-name", "rule-sender-name", 1]);
+    pressKey(v, cx, "escape");
+    expect([v.ruleEdit, v.settingsOpen]).toEqual([null, true]);
+    // No rules: Use opens the example's rule at its first control.
+    v.applyPrefs(JSON.stringify({ textSize: 15, senders: [] }));
+    v.cardRing = "th-sender-use-from"; stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit?.kind, v.cardRing]).toEqual(["senders", "th-sender-type-prefix"]);
+  } finally { done(v); }
+});
+
+// ---- the settings card's bound Tab (issue 104): the window takes plain Tab before on_key_down ----
+
+const CARD_BOUND = [
+  { keystroke: "tab", action: "agent-threads.ringNext", context: "ThreadsCard" },
+  { keystroke: "shift-tab", action: "agent-threads.ringBack", context: "ThreadsCard" },
+];
+const rootOf = (v, cx) => { rec = []; v.render(cx); const c = rec; rec = null; return c; };
+const actionsOf = (c) => Object.fromEntries(c.filter((e) => e[0] === "on_action").map((e) => [e[1], e[2]]));
+
+test("card bound keys: Tab and Shift-Tab are bound once for every pane, to the ring's actions, in the card's key context", async () => {
+  const a = await cardPane();
+  const b = await cardPane();
+  b.v.action("settings", b.cx);
+  b.v.action("settings", b.cx);
+  expect(keyBinds).toEqual([CARD_BOUND]);
+  a.v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
+});
+
+test("card bound keys: when init's call throws, a second pane's init asks nothing, the card's first opening installs the keys, and later openings ask nothing", async () => {
+  // A fresh copy of the mod, so its keys have not been installed by another test's pane.
+  const { default: Fresh } = await import("../mods/agent-threads/main.js?card-keys-retry");
+  state = {
+    terminals: [{ address: "t4", status: "idle", name: "claude" }],
+    panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
+    props: { terminal: "t4", transcript: fixture("--extra", "2"), debug: true }, shared: {},
+  };
+  const v = new Fresh();
+  const cx = makeCx();
+  const asked = [];
+  cx.bind_keys = (list) => { asked.push(list); if (asked.length === 1) throw new Error("not from init"); return list.length; };
+  v.init(state.props, cx);
+  await settle(v);
+  expect(asked).toEqual([CARD_BOUND]);
+  // Another Threads pane starts before the card opens: its init does not spend the try.
+  const v2 = new Fresh();
+  v2.init(state.props, cx);
+  await settle(v2);
+  expect(asked).toEqual([CARD_BOUND]);
+  done(v2);
+  v.action("settings", cx);
+  expect(asked).toEqual([CARD_BOUND, CARD_BOUND]);
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsCard.keys).toBe(2);
+  v.action("settings", cx);
+  v.action("settings", cx);
+  expect(asked).toEqual([CARD_BOUND, CARD_BOUND]);
+  done(v);
+});
+
+test("card bound keys: the pane's root is the ThreadsCard key context, with the ring's actions, only while the card is open", async () => {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  const shut = rootOf(v, cx);
+  expect(shut.filter((e) => e[0] === "key_context")).toEqual([]);
+  expect(actionsOf(shut)).toEqual({});
+  v.action("settings", cx);
+  const open = rootOf(v, cx);
+  expect(open.filter((e) => e[0] === "key_context")).toEqual([["key_context", "ThreadsCard"]]);
+  expect(Object.keys(actionsOf(open)).sort()).toEqual(["agent-threads.ringBack", "agent-threads.ringNext"]);
+  v.action("settings", cx);
+  expect(rootOf(v, cx).filter((e) => e[0] === "key_context")).toEqual([]);
+});
+
+test("card bound keys: the bound actions move the ring as Tab and Shift-Tab do in on_key_down, and nothing else appears", async () => {
+  const { v, cx } = await cardPane();
+  const ids = stopsOf(v);
+  const run = (name) => { let stopped = 0, told = 0; actionsOf(rootOf(v, cx))[name]({ action: name }, { ...cx, stop_propagation() { stopped++; }, notify() { told++; } }); return [v.cardRing, stopped, told]; };
+  const byKey = (shift) => { pressKey(v, cx, "tab", tabEv(shift)); return v.cardRing; };
+  const toast = v.toast;
+  expect(run("agent-threads.ringNext")).toEqual([ids[0], 1, 1]);
+  expect(run("agent-threads.ringNext")).toEqual([ids[1], 1, 1]);
+  expect(run("agent-threads.ringBack")).toEqual([ids[0], 1, 1]);
+  expect(run("agent-threads.ringBack")).toEqual([ids.at(-1), 1, 1]);
+  const actions = [];
+  v.cardRing = null;
+  for (const n of ["agent-threads.ringNext", "agent-threads.ringNext", "agent-threads.ringBack", "agent-threads.ringBack"]) actions.push(run(n)[0]);
+  const keys = [];
+  v.cardRing = null;
+  for (const s of [false, false, true, true]) keys.push(byKey(s));
+  expect(actions).toEqual(keys);
+  expect(v.toast).toBe(toast);
+  // A field with the keyboard: the bound Tab takes the ring on out of it, as the key does.
+  v.cardRing = "th-set-quote"; v.fieldFocused = "quote";
+  expect(run("agent-threads.ringNext")[0]).toBe(ids[ids.indexOf("th-set-quote") + 1]);
+  expect(v.fieldFocused).toBeNull();
+});
+
+test("card bound keys: the card's fields are kept out of the window's Tab order", async () => {
+  const { v } = await cardPane();
+  const stops = (c) => c.filter((e) => e[0] === "tab_stop");
+  expect(stops(cardOf(v))).toEqual([["tab_stop", false]]); // the quote key field
+  const r = await rulesPane();
+  try {
+    r.v.openRule(1);
+    const fields = stopsOf(r.v).filter((id) => id.startsWith("th-rule-f-"));
+    expect(fields.length).toBeGreaterThan(1);
+    expect(stops(cardOf(r.v))).toEqual(fields.map(() => ["tab_stop", false]));
+  } finally { done(r.v); }
+});
+
+test("card bound keys: the debug report says where the keyboard is: the pane, a card field, or elsewhere", async () => {
+  const { v, cx } = await cardPane();
+  const at = () => { v.report(); return state.shared["threads.debug"].t4.keyboard; };
+  let focused = true;
+  v.h = { focus() {}, is_focused: () => focused };
+  expect(at()).toBe("pane");
+  focused = false;
+  expect(at()).toBe("elsewhere");
+  v.quoteInput.handlers.focus(null, cx);
+  expect(at()).toBe("field:quote");
+  v.quoteInput.handlers.blur(null, cx);
+  expect(at()).toBe("elsewhere");
+  v.fieldFocused = "rule-name";
+  expect(at()).toBe("field:rule-name");
+  // A handle without is_focused (an older Herdr) is never read as the pane's.
+  v.h = { focus() {} };
+  v.fieldFocused = null;
+  expect(at()).toBe("elsewhere");
+});
+
