@@ -17218,7 +17218,8 @@ function pairRow(total, sizes) {
   const row = { total, order: Object.keys(sizes), size: { ...sizes }, seen: 0 };
   row.widths = () => {
     const px = row.order.filter((id) => row.size[id].px != null);
-    const room = row.total - px.reduce((s, id) => s + row.size[id].px, 0);
+    // gap: the px each divider takes (Herdr gives it back when a pane closes).
+    const room = row.total - px.reduce((s, id) => s + row.size[id].px, 0) - (row.gap ?? 0) * (row.order.length - 1);
     const sw = row.order.filter((id) => row.size[id].px == null).reduce((s, id) => s + row.size[id].weight, 0);
     // colStep: the column at a weight lands on a multiple of it (as a column on the rig stayed
     // 2 px short at two weights 0.4% apart).
@@ -17355,6 +17356,7 @@ async function threeRow(chat = 722, opts = {}) {
   Date.now = () => now;
   const total = opts.total ?? 1806;
   const row = pairRow(total, { p1: { weight: 0.5 }, p2: { px: chat } });
+  row.gap = opts.gap ?? 0;
   row.seen = log.length;
   if (opts.weighed) {
     const wc = (0.5 * chat) / (total - chat);
@@ -17793,6 +17795,49 @@ test("the column closed with the Trajectory open: the Trajectory takes its weigh
     const w3 = t.row.widths();
     expect([w3.p1 - w2.p1, w3.p2 - w2.p2, Math.abs(w3.p4 - w2.p4 + 50) <= 1]).toEqual([0, 50, true]);
   } finally { t.restore(); }
+});
+
+test("rowEvent: two panes trading width a px apart in rounding are a drag the terminals take nothing from; a small move of the Chat alone is a drag, never the window", async () => {
+  const { rowEvent } = await import("../mods/agent-threads/ui.js");
+  expect(rowEvent([716, 240, 380], [716, 241, 380])).toEqual({ kind: "same" });
+  expect(rowEvent([716, 240, 380], [685, 272, 380])).toEqual({ kind: "drag", d: 0 });
+  expect(rowEvent([716, 240, 380], [721, 240, 380])).toEqual({ kind: "drag", d: 5 });
+  expect(rowEvent([716, 240, 380], [788, 264, 418])).toEqual({ kind: "scale" });
+  expect(rowEvent([716, 240], [716, 240, 380])).toEqual({ kind: "stale" });
+});
+
+test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
+  for (const closed of ["p4", "p3"]) {
+    const t = await threeOpen("traj", 722, { gap: 8 });
+    try {
+      const was = t.row.widths();
+      const left = closed === "p4" ? ["p2", "p3"] : ["p2", "p4"];
+      const at = log.length;
+      t.close(closed);
+      if (closed === "p3") t.inst.p2.x.autoPinned?.(t.cx);
+      t.run(3000);
+      const now = t.row.widths();
+      for (const id of left) {
+        expect(Math.abs(now[id] - was[id])).toBeLessThanOrEqual(2);
+        expect(log.slice(at).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === id && a.weight != null).length).toBe(2);
+      }
+      expect(termAsked()).toBe(false);
+      if (closed === "p4") {
+        const pair = state.shared["threads.pinPair"].t4;
+        expect([Math.abs(pair.m - now.p2) <= 2, Math.abs(pair.p - now.p3) <= 2, Math.abs(pair.k * pair.S - now.p1) <= 2]).toEqual([true, true, true]);
+      } else {
+        const r = rowRec();
+        expect(r.ids).toEqual({ chat: "p2", traj: "p4" });
+        expect([Math.abs(r.n.p2 - now.p2) <= 2, Math.abs(r.n.p4 - now.p4) <= 2, Math.abs(r.k * r.S - now.p1) <= 2]).toEqual([true, true, true]);
+      }
+      // A drag after it moves only its two panes.
+      const w2 = t.row.widths();
+      t.row.drag("p2", -40);
+      t.run(1500);
+      const w3 = t.row.widths();
+      expect([w3.p1 - w2.p1, w3.p2 - w2.p2]).toEqual([0, -40]);
+    } finally { t.restore(); }
+  }
 });
 
 test("the Trajectory closed alone: the Chat takes its weight, then a weight of its own at its width beside the terminal", async () => {

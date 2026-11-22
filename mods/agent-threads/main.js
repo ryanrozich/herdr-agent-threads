@@ -3748,7 +3748,7 @@ export default class Threads extends View {
     // the pane before it), and rowClose asks the weights that keep each pane left, the Chat at
     // the width it had before the split narrowed it.
     const ent = this.rowNow();
-    if (closed && ent?.k > 0 && ent.ids?.traj && this.me()) {
+    if (closed && !this.pinnedPane && !this.trajPane && ent?.k > 0 && ent.ids?.traj && this.me()) {
       const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.traj).map((id) => [id, ent.n[id]]));
       if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = back.px;
       this.trajChatBack = null;
@@ -4076,10 +4076,11 @@ export default class Threads extends View {
   rowPoll(cx) {
     if (this.pinnedPane || this.trajPane || !this.terminal) return;
     this.rowCloseStep(cx);
+    this.rowFixStep(cx);
     const rp = this.rowPanes();
     if (!rp) { this.rowLand = null; this.rowPlan = null; return; }
     this.rowTick(cx);
-    if (rp.me.zoomed || rp.traj.zoomed || rp.pin?.zoomed || this.splitAsk || this.rowCloseDue) return;
+    if (rp.me.zoomed || rp.traj.zoomed || rp.pin?.zoomed || this.splitAsk || this.rowCloseDue || this.rowCloseFix) return;
     const ent = this.rowNow();
     if (this.rowCrowded(rp)) { if (ent?.k > 0 || this.rowLand) this.rowPx(cx); this.rowPlan = null; return; }
     const n = this.rowWidths(rp.ids);
@@ -4105,7 +4106,7 @@ export default class Threads extends View {
   }
   // Measures 50 ms apart while a landing, a plan or a close is under way.
   rowTick(cx) {
-    if (this.rowTimer || !cx?.timer || !(this.rowLand || this.rowPlan || this.rowCloseDue)) return;
+    if (this.rowTimer || !cx?.timer || !(this.rowLand || this.rowPlan || this.rowCloseDue || this.rowCloseFix)) return;
     this.rowTimer = true;
     cx.timer.after(50, (cx) => { this.rowTimer = false; this.rowPoll(cx); });
   }
@@ -4239,15 +4240,10 @@ export default class Threads extends View {
     if (!grew) { this.rowSave({ S: ent.S }, cx); return; }
     for (const [id, w] of Object.entries(r.w)) if (panes().some((p) => p.pane === id)) run("layout.resize", { id, weight: w });
     const ids = Object.fromEntries(Object.entries(ent.ids).filter(([, id]) => id !== closed));
-    if (ids.traj) {
-      this.rowSave({ k: r.k, S: ent.S, ids, n: { ...targets } }, cx);
-      return;
-    }
     this.rowSave({ S: ent.S }, cx);
-    if (ids.pin) {
-      // The Chat and the column: the column's pairTrack takes them from here.
-      const v = { k: r.k, m: targets[ids.chat], p: targets[ids.pin], S: ent.S };
-      cx?.timer?.after(0, () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v }));
+    if (ids.traj || ids.pin) {
+      this.rowCloseFix = { ids, w: r.w, S: ent.S, targets, asked: Date.now(), seen: null };
+      this.rowTick(cx);
       return;
     }
     // The Chat alone: on its weight with the terminals, R the room they share, and the weigh
@@ -4257,6 +4253,36 @@ export default class Threads extends View {
     this.weighLine = { a: 1 / R, b: ent.S / R };
     this.weighing = { pane: me.pane, n0: targets[ids.chat], tried: [], w: r.w[ids.chat] };
     this.askWeight();
+  }
+  // After a close's weights: Herdr gives the room the closed pane's divider took back to the
+  // weight panes too, so each pane left lands a few px wide (about 8 on the rig). Once they are
+  // still, the room they share measured (each pane is k w px) and the weights that put them at
+  // their targets with the terminals taking the rest, in one ask; then the record: the row's
+  // (the Chat and the Trajectory left) or the pair's (the Chat and the column), which tracks
+  // them from there.
+  rowFixStep(cx) {
+    const f = this.rowCloseFix;
+    if (!f) return;
+    const now = Date.now();
+    const ids = Object.values(f.ids);
+    const n = ids.every((id) => panes().some((p) => p.pane === id)) ? this.rowWidths(f.ids) : null;
+    if (!n) { this.rowCloseFix = null; return; }
+    const sig = ids.map((id) => n[id]).join(",");
+    if (f.seen?.sig !== sig) f.seen = { sig, at: now };
+    if ((now - f.seen.at < 150 || now - f.asked < 150) && now - f.asked < 1500) { this.rowTick(cx); return; }
+    this.rowCloseFix = null;
+    const sw = ids.reduce((s, id) => s + f.w[id], 0);
+    const R = (ids.reduce((s, id) => s + n[id], 0) / sw) * (f.S + sw);
+    const T = ids.reduce((s, id) => s + f.targets[id], 0);
+    let k = (R - T) / f.S;
+    let at = f.targets;
+    if (!(k > 0)) { k = R / (f.S + sw); at = n; }
+    else if (ids.some((id) => Math.abs(n[id] - f.targets[id]) > 2)) {
+      for (const id of ids) run("layout.resize", { id, weight: Number((f.targets[id] / k).toPrecision(5)) });
+    }
+    if (f.ids.traj) { this.rowSave({ k, S: f.S, ids: f.ids, n: { ...at } }, cx); return; }
+    const v = { k, m: at[f.ids.chat], p: at[f.ids.pin], S: f.S };
+    cx?.timer?.after(0, () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v }));
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.
