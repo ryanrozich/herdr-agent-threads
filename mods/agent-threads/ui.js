@@ -2805,6 +2805,57 @@ export function weightNear(line, [w1, n1], n0) {
 }
 export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 
+// ---- the Pinned pair on weights (TRD-75) ----
+// Herdr drags a divider beside a px pane by setting that pane's px alone, so with the Chat
+// and the Pinned column both at px a drag on the divider between them moves the Chat's far
+// edge instead (Herdr issue 1332). Two panes on weights trade width with each other alone.
+// So once the column's split has applied at px, the pair goes to weights that keep both
+// widths. All widths here are Herdr px (the measured width and the frame).
+// The room the column shares with the other weight panes (the terminals), from one measure
+// of it (c px at weight w) with their weights S known.
+export function pairRoom(S, w, c) {
+  return w > 0 ? (c * (S + w)) / w : null;
+}
+// The weights that keep the Chat at m and the column at p once the Chat, at px until now,
+// joins the room R1 that the column and the terminals share (weights S): the terminals keep
+// R1 - p. null when the terminals would have no room.
+export function pairWeights(S, R1, m, p) {
+  const d = R1 - p;
+  if (!(d > 0) || !(S > 0)) return null;
+  return { wc: w5((S * m) / d), wp: w5((S * p) / d) };
+}
+// What moved between two measures of the pair, the Chat at m and the column at p. Every pane
+// on a weight gets the same px for each unit of weight (k), so the weights follow from the
+// widths as long as k is known: "chat" (the Chat's left edge dragged, the column as it was)
+// and "divider" (the divider between them dragged: their sum held) keep k; "scale" (both
+// grew or shrank by one factor: the window, or a pane opened or closed in the row) changes k
+// by that factor; "stale" is anything else, more than one change between measures.
+export function pairEvent(was, now) {
+  const dm = now.m - was.m;
+  const dp = now.p - was.p;
+  if (Math.abs(dm) <= 1 && Math.abs(dp) <= 1) return "same";
+  if (Math.abs(dp) <= 1) return "chat";
+  if (Math.abs(dm + dp) <= 2) return "divider";
+  if (Math.abs(now.m / was.m - now.p / was.p) <= 0.01) return "scale";
+  return "stale";
+}
+// The column closed with the pair on weights: Herdr shares its room among the weights left.
+// The Chat's weight that keeps it at m beside the terminals (weights S): the row was k px a
+// unit over S + wc + wp, so the terminals and the column's old room are k S + p. null with no
+// terminals' weights known (S 0: the Chat is alone in the row and any weight fills it).
+export function pairAlone({ k, m, p, S }) {
+  return k > 0 && S > 0 && m > 0 ? w5((m * S) / (k * S + p)) : null;
+}
+// The Pinned column's opening with the terminals' keep, as the Trajectory's fit takes it
+// (trajFit): want is the column's width, room what the terminals have now, keep what they
+// keep (TERM_KEEP each). The room comes from the terminals down to keep, then from the Chat
+// down to PIN_MAIN_MIN, then from the column down to PIN_COL[0]. { chat, col }, or null when
+// even that does not fit.
+export function pinFit(chat, want, room, keep) {
+  const f = trajFit(chat, want, room, keep);
+  return f && f.traj >= Math.min(want, PIN_COL[0]) ? { chat: f.chat, col: f.traj } : null;
+}
+
 // The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane
 // and a step (PIN_STEP) more, 380 to 440 px (PIN_COL_WANT), so a compact row shows about 48
 // characters of its prompt a line (the row's text is the column less PIN_ROW's 54 px of
