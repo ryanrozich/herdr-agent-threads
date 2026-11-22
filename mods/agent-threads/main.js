@@ -4087,7 +4087,9 @@ export default class Threads extends View {
     this.rowTick(cx);
     if (rp.me.zoomed || rp.traj.zoomed || rp.pin?.zoomed || this.splitAsk || this.rowCloseDue || this.rowCloseFix) return;
     const ent = this.rowNow();
-    if (this.rowCrowded(rp)) { if (ent?.k > 0 || this.rowLand) this.rowPx(cx); this.rowPlan = null; return; }
+    // The other may take this pane for its own (me() by the terminal's map) and measure its own
+    // width as the Chat's: the record's widths, not a measure.
+    if (this.rowCrowded(rp)) { if (ent?.k > 0 || this.rowLand) this.rowPx(cx, true); this.rowPlan = null; return; }
     const n = this.rowWidths(rp.ids);
     if (!n) return;
     const now = Date.now();
@@ -4200,7 +4202,7 @@ export default class Threads extends View {
   }
   // Every pane of the row back to px where it is: for w, a second Threads pane, a change it
   // cannot follow, or the column's opening. The row's S is kept for the next landing.
-  rowPx(cx) {
+  rowPx(cx, kept = false) {
     const ent = this.rowNow();
     const g = this.rowLand;
     this.rowLand = null;
@@ -4212,7 +4214,7 @@ export default class Threads extends View {
     for (const id of ids) {
       if (!panes().some((p) => p.pane === id)) continue;
       const x = id === me ? this.paneW : w[id];
-      const px = Number.isFinite(x) ? Math.round(x) + PANE_FRAME : ent?.n?.[id];
+      const px = kept && ent?.n?.[id] > 0 ? ent.n[id] : Number.isFinite(x) ? Math.round(x) + PANE_FRAME : ent?.n?.[id];
       if (px > 0) run("layout.resize", { id, px });
     }
     this.rowSave({ S: ent?.S ?? g?.S ?? null }, cx);
