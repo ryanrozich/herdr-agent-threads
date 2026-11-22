@@ -6366,6 +6366,63 @@ test("a size change alone (a drag) never converts, and the pane's own px mid-pro
   expect(resized()).toEqual([{ id: "p2", weight: 1 }, { id: "p2", px: 573 }]);
 });
 
+// Where the steps meet the weights. keepWidth's cap is gone: no px resize after a drag, past
+// the step's width or not, on a weight or on a px; a weight probe's answers past it are
+// measures, not a cap's cue; and the column follows the pane's step instead.
+test("a drag past the step's width on a weight: no snap-back, no new weight, the weight kept, and the column steps with it", async () => {
+  const { v, cx } = await weightPane({}, 700);
+  v.toWeight();
+  for (let i = 0; i < 4; i++) { herdr(v, 1500, 1.2); v.poll(cx); }
+  expect(v.weighing).toBe(null);
+  const w = v.weightNow;
+  expect(w).toBeGreaterThan(0);
+  log = [];
+  // 1100 is past 902, the widest step's width; 650 is under 704; then 980. Each still past
+  // the 1.2 s pause, polled and drawn.
+  for (const [px, step] of [[1100, 120], [650, 70], [980, 120]]) {
+    v.paneW = px - 2;
+    v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 100;
+    v.poll(cx);
+    draw(v, cx);
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+    expect([v.weightNow, v.weighing, v.weighAfter ?? null]).toEqual([w, null, null]);
+    expect(v.chars()).toBe(step);
+    expect(lineChars(v)).toBe(step);
+  }
+  // The same drags on a px pane (an older layout): it stays on its px.
+  const { v: p, cx: px } = await weightPane({}, 700);
+  for (const w2 of [1100, 650, 980]) { p.paneW = w2 - 2; p.sizeAt = Date.now() - 2000; p.poll(px); draw(p, px); p.poll(px); }
+  expect(resized()).toEqual([]);
+  expect([p.weightNow ?? null, p.weighing ?? null]).toEqual([null, null]);
+});
+
+test("a weight probe whose answer lands past the step's width asks only weights: the width it keeps is the one it started from", async () => {
+  const { v, cx } = await weightPane({}, 700);
+  v.toWeight();
+  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+  // Herdr lays weight 1 out at 1100 px (a row of 2200 at weight 1 beside it): past 902.
+  v.paneW = 1098;
+  v.sizeAt = Date.now() - 1000;
+  v.weighing.asked -= 500;
+  v.poll(cx);
+  draw(v, cx);
+  const asks = resized();
+  expect(asks.every((a) => a.px === undefined)).toBe(true);
+  expect(asks.length).toBe(2);
+  expect(v.weighing.n0).toBe(702);
+});
+
+test("the Width setting's old actions resize nothing: no width choice, Shift w or keep-width switch sizes the pane", async () => {
+  const { v, cx } = await weightPane({}, 1100);
+  for (const a of ["widthStep", "keepWidth", "width:wide", "width:comfortable", "width:full"]) {
+    log = [];
+    v.action(a, cx);
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+  }
+});
+
 test("the 300 ms stillness is timed from the pane's own size changes: a width still moving is not weighed", async () => {
   const { v, cx } = await weightPane({}, 758);
   v.forcedWidth = null;
