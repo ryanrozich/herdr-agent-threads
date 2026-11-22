@@ -4,8 +4,8 @@
 // docs/develop.md has the steps that turn this into the screenshots.
 // Usage: bun test/make-hero.js <out.jsonl> <cwd> <startISO> [days] [wake] [pair] [long] [many]
 // With "days", turns 3 and 5 start a day after the turn before, so the pane shows day bands.
-// With "wake", a background update follows the last turn: a task notification woke the agent
-// 95 s before the script ran and it is still working, so with the terminal reporting working the
+// With "wake", a background update follows the last turn: an automatic continuation woke the
+// agent 95 s before the script ran and it is still working, so with the terminal reporting working the
 // last turn shows its "Updating" line. Its times are relative to now, so write it just before the shot.
 // With "pair", turn 5 has two pasted images, so the image viewer has one to step to.
 // With "long", turn 7's reply goes on after the code block with a write-up of about 6,000
@@ -336,12 +336,13 @@ assistant([{ type: "text", text: [
 ].join("\n") }], { out: 420, read: 88000, write: 3600 });
 end(151000);
 
-// A background update after the turn ended, still running (only with "wake").
+// A background update after the turn ended, still running (only with "wake"): an automatic
+// continuation, which folds into the turn above (a task notification would be a row of its own).
 if (flags.includes("wake")) {
   const now = Date.now();
   const at = (ago) => new Date(now - ago * 1000).toISOString();
-  push({ ...base(), type: "user", origin: { kind: "task-notification" }, promptSource: "system",
-    message: { role: "user", content: "<task-notification>the nightly checkout run finished</task-notification>" }, uuid: uid(), timestamp: at(95) });
+  push({ ...base(), type: "user", origin: { kind: "auto-continuation" }, promptSource: "system",
+    message: { role: "user", content: "Continue from where you left off." }, uuid: uid(), timestamp: at(95) });
   const wake = (block, ago) => push({ ...base(), type: "assistant", message: { id: `msg_01w${++msg}`, model, role: "assistant", type: "message",
     content: [block], stop_reason: "tool_use", usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 90000, cache_creation_input_tokens: 0 } }, uuid: uid(), timestamp: at(ago) });
   wake({ type: "text", text: "The nightly run finished. Checking its log for the checkout tests." }, 92);

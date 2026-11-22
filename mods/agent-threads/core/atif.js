@@ -38,7 +38,12 @@
 // - Calls counted but not named (past STEP_CALLS) are a count, extra.calls_not_listed.
 // - A background update after the reply is an agent step with extra.kind
 //   "background_update". From the command line, each wake-up's texts and calls are steps of
-//   their own; from the panel's reader, only its last text.
+//   their own; from the panel's reader, each wake-up's last text, in order. Background
+//   updates are auto-continuations, and task notifications that land while a turn is open.
+// - A task notification that wakes the agent after a turn has finished is a turn of its own:
+//   a user step with an empty message (the notice's text is not kept) and extra.sender
+//   { kind: "task-notification" }, then its agent steps. Harbor would keep the notice's
+//   text as the message (test/atif-harbor/differences.js).
 // Times are ISO 8601 where the transcript gives one, else left out, never made up.
 
 import { trajectories } from "./trajectory.js";
