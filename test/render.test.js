@@ -16867,6 +16867,38 @@ test("while a place is held the probe measures the rows above it and only a few 
   } finally { listWindow = null; }
 });
 
+test("a held place ends with parts that never report and over 4,000 tries kept: the tries are not cleared while it is held, and are after", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off * 0.5);
+    probeFrame(v, cx);
+    // Tries from other layouts, past the 4,000 at which they are cleared.
+    for (let i = 0; i < 4001; i++) v.probeTries.set(`old${i}|x`, 3);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    expect(Boolean(v.anchor) && !v.anchor.end).toBe(true);
+    // Frames in which no part reports its size: each is tried 3 times, then passed.
+    let frames = 0;
+    let least = Infinity;
+    for (; frames < 300 && v.anchor; frames++) {
+      draw(v, cx);
+      cx.flush(120, 3);
+      dropTimers(v, cx);
+      if (v.anchor) least = Math.min(least, v.probeTries.size);
+    }
+    expect(v.anchor).toBe(null);
+    expect(frames).toBeLessThan(300);
+    expect(least).toBeGreaterThan(4000);
+    // Let go, the next walk clears them.
+    for (let k = 0; k < 5; k++) { draw(v, cx); cx.flush(120, 3); dropTimers(v, cx); }
+    expect(v.probeTries.size).toBeLessThan(4000);
+  } finally { listWindow = null; }
+});
+
 test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
   const { v, cx } = await wrapSession(300);
   v.debug = false;

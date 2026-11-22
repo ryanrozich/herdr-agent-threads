@@ -9346,7 +9346,9 @@ export default class Threads extends View {
     this.probeAbove = top - clean < 0;
     this.probeLeft = done ? 0 : 1;
     this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
-    if (this.probeTries.size > 4000) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
+    // Not while a place is held: cleared tries would be tried again, and the hold, which waits
+    // for every part above to be measured or tried 3 times, might never end.
+    if (this.probeTries.size > 4000 && !this.anchor) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
     return out.map(([r, sig]) => [r, sig]);
   }
 
