@@ -2552,21 +2552,19 @@ export function placeAt(pre, off) {
   return { i: lo, share: h > 0 ? Math.max(0, Math.min(1, (off - pre[lo]) / h)) : 0 };
 }
 // How to bring the offset from off to want in one layout, when Herdr can only bring a row to
-// the near edge or put its middle at the middle. The pane can change row 0's height by lift
-// px for that layout and put it back at the next. The offset stays in px, so everything below
-// row 0 then moves by lift. Row 0 can be made taller, or shorter while it keeps 1 px and is
-// above the view. The options, each with the rows on both sides of the edge:
-// - a row's top at the top edge, when want is above off;
-// - a row's bottom at the bottom edge, when want is below off (its top must not be above
-//   the top edge, or it would go to the top);
-// - a row's middle at the middle.
-// The one with the smallest lift wins: the frame with it shows the place that many px off.
-// Down (want below off) there is a landing with nothing off, tried first: the row k that will
-// cross the bottom edge, given for that layout a height (slot) that puts its bottom at the
-// bottom edge, below the view: what it shows is its top part, which does not move. With its
-// top at or below off, the near edge brings that bottom to the bottom edge; with its top above
-// off (so above want too: a row taller than the view), its middle at the middle does, its
-// bottom still below the edge. Only the rows below it move when its height comes back.
+// the near edge or put its middle at the middle.
+// - Down (want below off) there is a landing with nothing off: the row k that will cross the
+//   bottom edge, given for that layout a height (slot) that puts its bottom at the bottom
+//   edge, below the view. What it shows is its top part, which does not move. With its top at
+//   or below off, the near edge brings that bottom to the bottom edge; with its top above off
+//   (so above want too: a row taller than the view), its middle at the middle does, its
+//   bottom still below the edge. Only the rows below it move when its height comes back.
+// - Up, the pane changes row 0's height by lift px for that layout and puts it back at the
+//   next. The offset stays in px, so everything below row 0 then moves by lift. Row 0 can be
+//   made taller, or shorter while it keeps 1 px and is above the view. The options, each with
+//   the rows on both sides of the edge: a row's top at the top edge, or a row's middle at the
+//   middle. The one with the smallest lift wins: the frame with it shows the place that many
+//   px off.
 // Returns { j, how, lift, slot? }, { end } for the end of the list, or null when the offset is
 // at want already.
 export function anchorPlan(pre, want, off, H) {
@@ -2585,22 +2583,13 @@ export function anchorPlan(pre, want, off, H) {
     if (j < 1 || j >= n || lift < short || (lift < 0 && want < pre[1] + lift) || want > pre[n] + lift - H) return;
     if (!best || Math.abs(lift) < Math.abs(best.lift)) best = { j, how, lift: Math.round(lift) };
   };
-  // Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
-  if (want < off) {
-    const t = placeAt(pre, want).i;
-    for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
-  }
-  if (want > off) {
-    const b = placeAt(pre, want + H).i;
-    for (const k of [b - 1, b]) {
-      const lift = want + H - pre[k + 1];
-      if (pre[k] + lift >= off) take(k, "top", lift);
-    }
-  }
+  // Up. Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
+  const t = placeAt(pre, want).i;
+  for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
   const c = placeAt(pre, want + H / 2).i;
   for (const j of [c - 1, c, c + 1]) if (j >= 0 && j < n) take(j, "center", want + H / 2 - (pre[j] + pre[j + 1]) / 2);
   // Near the start with no option: the start at the top.
-  return best ?? (want < off ? { j: 0, how: "top", lift: 0 } : null);
+  return best ?? { j: 0, how: "top", lift: 0 };
 }
 // The rail shows only in a pane that holds a whole 70 character reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
