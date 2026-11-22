@@ -2761,6 +2761,8 @@ export function columnResize(c, m, d, max = 640, mainMin = PIN_MAIN_MIN) {
   if (!(c > 0) || !(m > 0)) return null;
   let dd = Math.max(200, Math.min(max, Math.round(c + d))) - Math.round(c);
   if (Math.round(m) - dd < mainMin) dd = Math.round(m) - mainMin;
+  // The other's floor never takes this one under its own.
+  if (Math.round(c) + dd < 200) dd = 200 - Math.round(c);
   if (d > 0 ? dd <= 0 : dd >= 0) return null;
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }

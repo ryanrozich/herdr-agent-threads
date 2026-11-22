@@ -3828,7 +3828,9 @@ export default class Threads extends View {
     const w = shared(WIDTH_KEY) ?? {};
     // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
     const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640, mainMin);
-    if (!next && traj) return true;
+    // At the Trajectory's limit, or a key that would take it further under its floor: nothing,
+    // and no notice.
+    if (!next && (traj || mainMin === TRAJ_MIN)) return true;
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
     // The pair, or the row with the Trajectory open, on weights: weight moves from one to the
     // other with their sum held, so the terminals keep theirs (k, the px a unit of weight
