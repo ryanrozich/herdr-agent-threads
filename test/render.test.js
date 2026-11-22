@@ -7585,6 +7585,58 @@ test("a width that changes while the pane is resized keeps the column until the 
   expect(v.rowsKey).not.toBe(key);
 });
 
+test("a second drag holds the column too: the draw asked for once the pane is still is asked for again after it comes", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  v.rewrapMs = 400;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  const waits = () => cx.timers.filter((x) => x.ms > REWRAP_PAUSE_MS - 100 && x.ms <= REWRAP_PAUSE_MS + 10);
+  size(540);
+  settleRows(v, cx);
+  // Two drags, each held until the pane is still, then built for its width.
+  for (const w of [440, 360]) {
+    // Each one after a slow re-wrap, so the hold applies (HOLD_WORK_MS).
+    v.rewrapMs = 400;
+    const key = v.rowsKey;
+    const was = v.width;
+    cx.timers = [];
+    size(w);
+    draw(v, cx);
+    expect(v.widthHeld).toBe(true);
+    expect(v.width).toBe(was);
+    const wait = waits();
+    expect(wait.length).toBe(1);
+    cx.timers = [];
+    v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
+    wait[0].fn(cx);
+    draw(v, cx);
+    expect(v.widthHeld).toBe(false);
+    expect(v.width).toBeCloseTo(col(w), 6);
+    settleRows(v, cx);
+    expect(v.rowsKey).not.toBe(key);
+  }
+  // A draw that comes while the pane still moves asks for another.
+  v.rewrapMs = 400;
+  cx.timers = [];
+  size(300);
+  draw(v, cx);
+  const first = waits();
+  expect(first.length).toBe(1);
+  cx.timers = [];
+  v.sizeAt = Date.now();
+  first[0].fn(cx);
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(waits().length).toBe(1);
+});
+
 test("the hold is for a conversation whose last full re-wrap took over 150 ms, or, before one has finished, one of over 500 turns", async () => {
   const { v, cx } = await longSession(60);
   v.debug = false;
