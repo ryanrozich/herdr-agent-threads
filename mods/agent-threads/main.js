@@ -3919,9 +3919,7 @@ export default class Threads extends View {
   pairTrack(ent, m, p, cx) {
     const ev = pairEvent(ent, { m, p });
     if (ev === "same") return;
-    // Made again from px: both are on weights until then, so the column's px is kept as a
-    // probe's is (pairPx).
-    if (ev === "stale") { this.pairSave({ S: ent.S, probe: p }, cx); return; }
+    if (ev === "stale") { this.pairSave({ S: ent.S }, cx); return; }
     const k = ev === "scale" ? (ent.k * (m + p)) / (ent.m + ent.p) : ent.k;
     // The Chat's left edge: the Chat traded width with the panes on its left, the terminal's
     // weight with it (px panes there would take it instead; S is then only a first guess).

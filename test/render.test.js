@@ -17567,6 +17567,39 @@ test("three probes the Chat moves under end with the column back at its px and n
   } finally { t.restore(); }
 });
 
+test("three probes whose final check finds the column moved end with both back at px and no fourth probe", async () => {
+  const t = await pairPanes();
+  try {
+    // Each time the Chat's weight lands, something other than the mod moves 10 px of weight
+    // from the column to the terminal, the Chat's width held: the column misses its width.
+    const apply = t.row.apply;
+    t.row.apply = () => {
+      const from = t.row.seen;
+      apply();
+      const chatWeight = log.slice(from, t.row.seen).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p2" && a.weight != null);
+      if (!chatWeight || t.row.size.p3.weight == null) return;
+      const k = t.row.widths().p2 / t.row.size.p2.weight;
+      t.row.size.p3 = { weight: t.row.size.p3.weight - 10 / k };
+      t.row.size.p1 = { weight: t.row.size.p1.weight + 10 / k };
+    };
+    for (let s = 0; s < 20000 && (t.w.pairTries ?? 0) < 3; s += 100) t.step(100);
+    expect(t.w.pairTries).toBe(3);
+    t.run(3000);
+    t.row.apply = apply;
+    t.row.apply();
+    // The cap: the column at the px it had before the first probe, the Chat at px where it is.
+    expect(t.w.pairing).toBe(null);
+    expect(state.shared["threads.pinPair"].t4.k ?? null).toBe(null);
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2.px).toBeGreaterThan(0);
+    log = [];
+    t.row.seen = 0;
+    t.run(6000);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  } finally { t.restore(); }
+});
+
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
