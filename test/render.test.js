@@ -15334,7 +15334,8 @@ test("the Trajectory below 200 px: one line a row (a step's mark, its turn's num
   c = at(98);
   expect(wordsOf(c)).not.toContain("Trajectory");
   expect(hasId(c, "th-traj-icon")).toBe(true);
-  expect(hasId(c, "th-settings")).toBe(false);
+  // In the Chat's own pane its way back stays (the next test).
+  expect(hasId(c, "th-settings")).toBe(true);
   expect(listSizes()).toBe(24);
   const words = wordsOf(c);
   expect(words).toContain(`#${step.turn.n}`);
@@ -15408,6 +15409,32 @@ test("a running turn's total in the compact band is drawn in the working colour"
     return c.slice(0, i).filter((e) => e[0] === "text_color").at(-1)[1];
   };
   expect([ink(true), ink(false)]).toEqual([t.working, t.muted]);
+});
+
+test("the Trajectory in the Chat's own pane below 200 px keeps its way back: the settings and Chat buttons as icons, the Chat button going back; in its own pane, the icon alone", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  expect(Boolean(v.traj) && !v.trajPane).toBe(true);
+  for (const w of [198, 98, 58]) {
+    v.width = w;
+    v.paneW = w;
+    const c = frame(v, cx);
+    expect([w, hasId(c, "th-settings"), hasId(c, "th-traj-chat")]).toEqual([w, true, true]);
+    // The list icon where there is room for it beside them.
+    expect([w, hasId(c, "th-traj-icon")]).toEqual([w, w === 98]);
+  }
+  v.width = 98;
+  v.paneW = 98;
+  let c = frame(v, cx);
+  const after = (id, name) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === id); return c.slice(i + 1, i + 20).find((e) => e[0] === name)?.at(-1) ?? null; };
+  expect(after("th-traj-chat", "tooltip")).toBe("Back to the Chat (y)");
+  after("th-traj-chat", "on_click")({ stop_propagation() {} }, { ...cx, stop_propagation() {} });
+  expect(Boolean(v.traj)).toBe(false);
+  // In the Trajectory's own pane: no Chat button, the icon alone.
+  v.enterTraj();
+  v.trajPane = true;
+  c = frame(v, cx);
+  expect([hasId(c, "th-traj-chat"), hasId(c, "th-settings"), hasId(c, "th-traj-icon")]).toEqual([false, false, true]);
 });
 
 test("the compact switch goes through the size handler by the rounded Herdr px: 199 to 200 and back by 1 px, 64 to 63, and a 200 px pane at zoom 1.25 that reads 199.99", async () => {

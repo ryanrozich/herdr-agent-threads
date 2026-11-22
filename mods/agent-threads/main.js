@@ -11566,11 +11566,21 @@ export default class Threads extends View {
     const arrow = (id, icon, tip, name) => this.iconButton(t, id, icon, tip, (_e, cx) => { this.ledgerAction(name, cx); cx.notify(); });
     // Below 200 px, the icon alone (ledger.js trajCompact), with a red dot at its corner when
     // calls failed, and the count in its tooltip; f and Shift f still go through them.
-    if (trajCompact(this.trajPx())) {
-      return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(COMPACT_PAD).items_center().justify_center().border_b(1).border_color(t.border)
-        .child(div().id("th-traj-icon").flex_none().relative().tooltip(fails ? `Trajectory · ${fails}` : "Trajectory")
-          .child(svg(ICON("list")).size(14).text_color(t.muted))
-          .when(Boolean(fails), (el) => el.child(div().id("th-traj-icon-fails").absolute().top(-2).right(-3).size(6).rounded(3).bg(t.blocked))));
+    // In the Chat's own pane (y in a Chat under 480 px) its way back stays: the settings and the
+    // Chat buttons as icons after it, the list icon given up under 64 px for them.
+    const form = trajCompact(this.trajPx());
+    if (form) {
+      const inChat = this.traj && !this.trajPane;
+      const icon = () => div().id("th-traj-icon").flex_none().relative().tooltip(fails ? `Trajectory · ${fails}` : "Trajectory")
+        .child(svg(ICON("list")).size(14).text_color(t.muted))
+        .when(Boolean(fails), (el) => el.child(div().id("th-traj-icon-fails").absolute().top(-2).right(-3).size(6).rounded(3).bg(t.blocked)));
+      const head = h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(COMPACT_PAD).gap(2).items_center().border_b(1).border_color(t.border);
+      if (!inChat) return head.justify_center().child(icon());
+      return head
+        .when(form === "line", (el) => el.child(icon()).child(div().flex_1()))
+        .when(form !== "line", (el) => el.justify_center())
+        .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
+        .child(this.iconButton(t, "th-traj-chat", "messages", "Back to the Chat (y)", (_e, cx) => { this.leaveTraj(); cx.notify(); }));
     }
     return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(10).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg(ICON("list")).size(14).flex_none().text_color(t.muted))
