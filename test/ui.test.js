@@ -643,7 +643,7 @@ test("sender labels, icons and kinds", () => {
   expect(senderLabel({ kind: "peer" }, 240)).toBe("Agent message");
   expect(senderLabel({ kind: "scheduled" }, 380)).toBe("Scheduled");
   expect(senderLabel({ kind: "sdk" }, 240)).toBe("SDK");
-  expect(senderLabel({ kind: "task-notification" }, 380)).toBe("Task notification");
+  expect(senderLabel({ kind: "task-notification" }, 380)).toBe("Background task finished");
   expect(senderLabel({ kind: "something-new" }, 380)).toBe("Background agent");
   expect(senderIcon(hc)).toBe("bot");
   expect(senderIcon({ kind: "scheduled" })).toBe("clock");

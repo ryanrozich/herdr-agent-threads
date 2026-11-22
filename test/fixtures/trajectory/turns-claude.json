@@ -46,7 +46,7 @@
  },
  {
   "n": 2,
-  "v": 30,
+  "v": 24,
   "ts": 1793524384000,
   "origin": "human",
   "prompt": "Fix the flaky login test so it stops timing out in CI",
@@ -139,7 +139,46 @@
     "o": 410,
     "cr": 61000,
     "cc": 2400
-   },
+   }
+  },
+  "model": "claude-opus-5-5",
+  "effort": "high",
+  "durationMs": 102000,
+  "done": true,
+  "interrupted": false,
+  "followups": 0,
+  "errors": [],
+  "compactions": 0,
+  "endTs": 1793524412000,
+  "answeredBy": null,
+  "answeredIn": null,
+  "latest": "",
+  "latestAt": null,
+  "latestParts": [],
+  "images": [],
+  "imgLine": null
+ },
+ {
+  "n": 3,
+  "v": 30,
+  "ts": 1793524432000,
+  "origin": "task-notification",
+  "prompt": "",
+  "sender": {
+   "kind": "task-notification"
+  },
+  "agent": true,
+  "cmd": false,
+  "after": [
+   "The background build finished cleanly."
+  ],
+  "tools": 0,
+  "followTools": 0,
+  "wakeTools": 0,
+  "toolNames": {},
+  "steps": [],
+  "afterAt": 1793524436000,
+  "usage": {
    "msg_000007": {
     "i": 6,
     "o": 20,
@@ -149,28 +188,23 @@
   },
   "model": "claude-opus-5-5",
   "effort": "high",
-  "durationMs": 105000,
+  "durationMs": 3000,
   "done": true,
   "interrupted": false,
-  "followups": 1,
+  "followups": 0,
   "errors": [],
   "compactions": 0,
   "endTs": 1793524436000,
   "answeredBy": null,
   "answeredIn": null,
-  "latest": "The background build finished cleanly.",
-  "latestAt": 1793524436000,
-  "latestParts": [
-   "The background build finished cleanly."
-  ],
+  "latest": "",
+  "latestAt": null,
+  "latestParts": [],
   "images": [],
-  "imgLine": null,
-  "updates": [
-   "The background build finished cleanly."
-  ]
+  "imgLine": null
  },
  {
-  "n": 3,
+  "n": 4,
   "v": 36,
   "ts": 1793524466000,
   "origin": "human",
@@ -234,7 +268,7 @@
   "imgLine": null
  },
  {
-  "n": 4,
+  "n": 5,
   "v": 48,
   "ts": 1793524553000,
   "origin": "human",
@@ -321,7 +355,7 @@
   "imgLine": null
  },
  {
-  "n": 5,
+  "n": 6,
   "v": 59,
   "ts": 1793524607000,
   "origin": "human",
@@ -395,7 +429,7 @@
   "imgLine": null
  },
  {
-  "n": 6,
+  "n": 7,
   "v": 87,
   "ts": 1793524650000,
   "origin": "human",

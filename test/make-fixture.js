@@ -22,7 +22,7 @@
 //   --commands   add slash commands that Claude answers: a long plugin name with args, a
 //                bare /x, and a malformed command line (command-message and command-args,
 //                no command-name)
-//   --latest     add a turn whose background update (a task notification after its
+//   --latest     add a turn whose background update (an auto-continuation after its
 //                turn_duration) says something new
 //   --langs      add a turn whose reply has code blocks in many languages
 //   --long       add a 40-line prompt, a 5,000-character one-line prompt and a reply
@@ -396,7 +396,8 @@ if (latestFx) {
   tool("Bash", { command: "bun run export &" }, "…", a);
   assistant([{ type: "text", text: "Started the export; I will report when it finishes." }], { out: 30 });
   end(8000);
-  prompt("<task-notification>export finished: 1,204 rows</task-notification>", "task-notification", 90);
+  // A task notification here would start a row of its own; an auto-continuation still folds.
+  prompt("Continue from where you left off.", "auto-continuation", 90);
   tool("Read", { file_path: "out/export.csv" }, "…", null);
   assistant([{ type: "text", text: "The export finished: 1,204 rows, no errors. The file is out/export.csv." }], { out: 30 });
   end(6000);

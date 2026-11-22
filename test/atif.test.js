@@ -455,18 +455,19 @@ test("atif: a subagent's own subagent is found in the session's one subagents fo
   expect(a.subagent_trajectories[0].steps.flatMap((st) => st.tool_calls ?? []).map((c) => c.function_name)).toEqual(["Read"]);
 });
 
-test("atif: the work after a background notice wakes the agent is kept, call by call, and the panel's reader still only counts it", () => {
+test("atif: the work after an auto-continuation wakes the agent is kept, call by call, and the panel's reader still only counts it", () => {
   const { f, lines, save } = freshClaude("00000000-0000-4000-8000-000000000045");
   const ref = lines.find((l) => l.type === "assistant" && JSON.stringify(l.message?.content ?? "").includes("All three reviews are back"));
-  const note = lines.find((l) => l.type === "user" && l.origin?.kind === "task-notification");
+  // A task notification after a turn starts a turn of its own; an auto-continuation folds.
+  const note = { ...lines.find((l) => l.type === "user" && l.origin?.kind === "task-notification"), origin: { kind: "auto-continuation" }, message: { role: "user", content: "Continue from where you left off." } };
   const last = lines.findLast((l) => typeof l.timestamp === "string").timestamp;
   let clock = Date.parse(last) + 60000;
   const at = (sec) => new Date((clock += sec * 1000)).toISOString();
   const usage = { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 };
   const said = (k, content, stop) => ({ ...ref, uuid: `00000000-0000-4000-f000-0000000000${k}`, timestamp: at(3), message: { ...ref.message, id: `msg_wake${k}`, content, stop_reason: stop, usage } });
   const result = (k, id, text, err) => ({ ...ref, type: "user", uuid: `00000000-0000-4000-f000-0000000001${k}`, timestamp: at(2), toolUseResult: { stdout: text }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text, ...(err ? { is_error: true } : {}) }] } });
-  // The turn has ended; a late notice wakes the agent, which says something, runs two
-  // commands (the second fails) and answers.
+  // The turn has ended; the agent wakes again, says something, runs two commands (the
+  // second fails) and answers.
   save([...lines,
     { ...note, uuid: "00000000-0000-4000-f000-000000000000", timestamp: at(0) },
     said(10, [{ type: "text", text: "A late report came in; checking the tests." }, { type: "tool_use", id: "toolu_wake1", name: "Bash", input: { command: "bun test test/range.test.ts" } }], "tool_use"),
@@ -478,18 +479,17 @@ test("atif: the work after a background notice wakes the agent is kept, call by 
   const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), f, "claude"], { encoding: "utf8" }));
   expect(problems(t)).toEqual([]);
   const wake = t.steps.filter((st) => st.extra?.kind === "background_update");
-  // Both wake-ups, each with its own steps: the fixture's earlier one (its text only), then
-  // this one's text with its two calls (no text between them, so one step, as in the prompt's
-  // own work), then its answer.
+  // The wake-up's own steps: its text with its two calls (no text between them, so one step,
+  // as in the prompt's own work), then its answer. The fixture's task notification after its
+  // turn is a turn of its own, so none of its steps are here.
   expect(wake.map((st) => [st.message, (st.tool_calls ?? []).map((c) => c.tool_call_id)])).toEqual([
-    ["The background build finished cleanly.", []],
     ["A late report came in; checking the tests.", ["toolu_wake1", "toolu_wake2"]],
     ["Fixed the clock in two tests; the build still exits 1.", []],
   ]);
   const results = wake.flatMap((st) => st.observation?.results ?? []);
   expect(results.map((r) => [r.source_call_id, r.content, r.extra?.tool_result_is_error ?? false])).toEqual([["toolu_wake1", "2 fail", false], ["toolu_wake2", "exit 1", true]]);
-  expect(wake[1].tool_calls[1].arguments).toEqual({ command: "bun run build" });
-  expect(wake[1].timestamp).toBeDefined();
+  expect(wake[0].tool_calls[1].arguments).toEqual({ command: "bun run build" });
+  expect(wake[0].timestamp).toBeDefined();
   // The panel's reader is unchanged: the wake-up's calls are counted, not kept as steps.
   const s = readFile(f, "claude");
   const turn = s.turns.at(-1);
@@ -965,7 +965,7 @@ test("atif: a background wake-up's reasoning stays on the wake-up's step", () =>
     thinkingEvents[0],
     { ...thinkingEvents[1], message: { ...thinkingEvents[1].message, content: [{ type: "text", text: "Started." }] } },
     { type: "system", subtype: "turn_duration", durationMs: 1000, timestamp: "2026-11-01T09:00:06Z", sessionId: "s" },
-    { type: "user", timestamp: "2026-11-01T09:01:00Z", sessionId: "s", message: { role: "user", content: "<task-notification><task-id>bg1</task-id><status>completed</status></task-notification>" }, origin: { kind: "task-notification" } },
+    { type: "user", timestamp: "2026-11-01T09:01:00Z", sessionId: "s", message: { role: "user", content: "Continue from where you left off." }, origin: { kind: "auto-continuation" } },
     { type: "assistant", timestamp: "2026-11-01T09:01:05Z", sessionId: "s", message: { id: "msg_w", role: "assistant", model: "claude-sonnet-5-5", content: [{ type: "thinking", thinking: "Wake thought." }, { type: "text", text: "The job finished." }], stop_reason: "end_turn" } },
   ];
   writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);

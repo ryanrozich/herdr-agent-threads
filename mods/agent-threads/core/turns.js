@@ -1,10 +1,11 @@
 // agent-threads: turns from extractor events. Plain JavaScript with no Herdr imports, so
 // the tests run it under bun or node.
 //
-// One row per prompt a person (or another session, or a schedule) gave the agent.
-// Task notifications and auto-continuations start model turns of their own, but they are
-// folded into the row above: their tokens and tool calls count, their text does not
-// replace the row's final reply.
+// One row per prompt a person (or another session, or a schedule) gave the agent, and one
+// per task notification that wakes the agent after a row has ended (its sender is
+// "task-notification"). Auto-continuations, and task notifications that land while a row
+// is still open, are folded into the row above: their tokens and tool calls count, their
+// text does not replace the row's final reply.
 //
 // A slash command line (/usage, /clear, a skill) waits as s.pendingCmd. Local commands
 // never start a model turn, so they never become rows; a skill or custom command does,
@@ -457,7 +458,10 @@ function applyOne(s, e) {
         s.pendingCmd = e;
         return;
       }
-      if (OWN_ROW.has(e.o) || !cur) {
+      // A task notification that wakes the agent once the row above has ended starts a row of
+      // its own: what the agent says then is a reply for the person, so it shows in the Chat
+      // (the owner, 21 Nov). One that lands while a row is open still counts on that row.
+      if (OWN_ROW.has(e.o) || !cur || (e.o === "task-notification" && !s.open.length)) {
         clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
         // A notification while the row is open: Claude still owes this row its reply. One

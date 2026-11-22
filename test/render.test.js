@@ -810,17 +810,18 @@ test("an agent turn with a reply of its own shows while agent messages are hidde
 
 // The owner's fault, 21 Nov: on a long live session, three replies the agent wrote after
 // background-task notices were missing; the last thing the Chat showed was the reply before
-// them, and the turn's LATEST UPDATE kept only the last of the three. A made-up session of that shape, the lines as Claude Code writes them: a slash
-// command the session ran with no reply, cut off by a usage limit; a /login (a local command);
-// a typed prompt with a second one queued while it worked; then three turns that a
-// task-notification user line started, each ending in a reply (the last stops on a stop
-// sequence).
+// them, and the turn's LATEST UPDATE kept only the last of the three. A made-up session of
+// that shape, the lines as Claude Code writes them: a slash command the session ran with no
+// reply, cut off by a usage limit; a /login (a local command); a typed prompt with a second
+// one queued while it worked; then three turns that a task-notification user line started
+// (or, with kind "auto-continuation", an auto-continuation line), each ending in a reply
+// (the last stops on a stop sequence).
 const NOTICE_REPLIES = [
   "The build finished clean: no warnings.",
   "The e2e run has one failure, in the coupon step; it needs your call on the expiry rule.",
   "Staging is deployed and the smoke check passed.",
 ];
-function noticeSession() {
+function noticeSession(kind = "task-notification") {
   const at = (s) => new Date(Date.parse("2026-11-20T10:00:00.000Z") + s * 1000).toISOString();
   let n = 0;
   const base = (secs) => ({ uuid: `00000000-0000-4000-9000-${String(++n).padStart(12, "0")}`, timestamp: at(secs), sessionId: "00000000-0000-4000-8000-0000000000f1", isSidechain: false, userType: "external", version: "2.1.316" });
@@ -830,7 +831,9 @@ function noticeSession() {
   const call = (secs, id, name, input) => ({ ...base(secs), type: "assistant", message: { id: `msg_${String(++msg).padStart(6, "0")}`, model: "claude-opus-5-5", role: "assistant", content: [{ type: "tool_use", id, name, input }], stop_reason: "tool_use", usage } });
   const result = (secs, id, text) => ({ ...base(secs), type: "user", toolUseResult: { stdout: text }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] } });
   const end = (secs, ms) => [{ ...base(secs), type: "system", subtype: "stop_hook_summary", hookCount: 1 }, { ...base(secs), type: "system", subtype: "turn_duration", durationMs: ms }];
-  const notice = (secs, task, summary) => ({ ...base(secs), type: "user", origin: { kind: "task-notification", producer: "session-task" }, promptSource: "system",
+  const notice = (secs, task, summary) => kind === "auto-continuation"
+    ? { ...base(secs), type: "user", origin: { kind }, promptSource: "system", message: { role: "user", content: "Continue from where you left off." } }
+    : ({ ...base(secs), type: "user", origin: { kind: "task-notification", producer: "session-task" }, promptSource: "system",
     message: { role: "user", content: `<task-notification>\n<task-id>${task}</task-id>\n<tool-use-id>toolu_00000000${task}</tool-use-id>\n<output-file>/tmp/threads-demo/tasks/${task}.output</output-file>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>` } });
   const lines = [
     { ...base(0), type: "user", message: { role: "user", content: "<command-name>/review-pr</command-name>\n<command-message>review-pr</command-message>\n<command-args>12</command-args>" } },
@@ -867,10 +870,12 @@ function noticeSession() {
 }
 
 test("three background updates after a done row keep all three replies, in order, under LATEST UPDATE; the pane reads Done", async () => {
-  const { v, cx } = await pane(noticeSession());
+  // Auto-continuations fold into the row above as background updates (task notifications
+  // after a finished turn are turns of their own: the next test).
+  const { v, cx } = await pane(noticeSession("auto-continuation"));
   draw(v, cx);
   const s = v.current();
-  // The notices fold into the queued prompt's row, the one with the reply, as before.
+  // The wake-ups fold into the queued prompt's row, the one with the reply.
   expect(s.turns.map((t) => t.prompt)).toEqual(["/review-pr 12", "Run the checkout tests and fix what fails", "Also check the cart badge"]);
   const turn = s.turns[2];
   expect(reply(turn)).toBe("Fixed both checkout failures, and the cart badge reads the store now.");
@@ -900,6 +905,112 @@ test("three background updates after a done row keep all three replies, in order
   expect(v.rows().some((r) => r.kind === "wake" || r.kind === "wrow" || r.kind === "working")).toBe(false);
   expect(turn.done).toBe(true);
   expect(v.agentStateNow()).toMatchObject({ word: "Done" });
+});
+
+test("replies after background-task notices show in the Chat, each its own row in order after the reply before them, and the pane reads Done", async () => {
+  const { v, cx } = await pane(noticeSession());
+  v.prefs = { ...v.prefs, agentTurns: false };
+  draw(v, cx);
+  const s = v.current();
+  // The slash command cut off by the limit, the typed prompt and the one queued behind it.
+  expect(s.turns.slice(0, 3).map((t) => [t.prompt, t.done])).toEqual([["/review-pr 12", true], ["Run the checkout tests and fix what fails", true], ["Also check the cart badge", true]]);
+  expect(s.turns[0].errors).toEqual(["You've hit your usage limit · resets 3pm"]);
+  expect(s.turns[1].answeredBy).toBe(3);
+  // The Chat's closed rows, in order: each notice's reply after the queued prompt's reply.
+  const rows = v.rows().filter((r) => r.kind === "turn");
+  const said = rows.map((r) => (r.shape.md ?? r.shape.reply.join(" ")).trim());
+  const at = (text) => said.findIndex((x) => x.includes(text));
+  const before = at("Fixed both checkout failures");
+  expect(before).toBeGreaterThan(-1);
+  const after = NOTICE_REPLIES.map(at);
+  expect(after).toEqual([before + 1, before + 2, before + 3]);
+  // Each is a finished reply under one quiet line, never a bubble with the notice's text.
+  const keys = after.map((i) => rows[i].key);
+  for (const i of after) {
+    expect(rows[i].shape.tone).toBe("reply");
+    expect(rows[i].turn.done).toBe(true);
+    expect(rows[i].turn.sender.kind).toBe("task-notification");
+    expect(rows[i].fold).toBe("folded");
+  }
+  const detail = () => state.shared["threads.debug"].t4.detail;
+  expect(detail().filter((d) => /^afold#[4-6] folded Background task finished/.test(d))).toHaveLength(3);
+  // The reply before them is still the queued prompt's, with no background updates on it.
+  expect(rows[before].turn.followups).toBe(0);
+  expect(v.rows().some((r) => r.kind === "wake" || r.kind === "wrow" || r.kind === "working")).toBe(false);
+  expect(v.agentStateNow()).toMatchObject({ word: "Done" });
+  // The newest of them is the newest turn, so End lands on it.
+  expect(v.turnKeys(v.rows()).at(-1)).toBe(keys[2]);
+  // The rail follows Agent messages on the rail (off by default): no tick, and up and down
+  // pass over them; turned on, each has its tick and is a stop.
+  expect(v.railTurns.map((x) => x.key).filter((k) => keys.includes(k))).toEqual([]);
+  expect(keys.map((k) => v.railStop(k))).toEqual([false, false, false]);
+  v.prefs = { ...v.prefs, agentRail: true };
+  draw(v, cx);
+  expect(v.railTurns.map((x) => x.key).filter((k) => keys.includes(k))).toEqual(keys);
+  expect(keys.map((k) => v.railStop(k))).toEqual([true, true, true]);
+  // With agent messages shown, under a search and opened, the line still stands in for the
+  // message: no bubble, no chevron to show one, and a press on it only selects the turn.
+  v.prefs = { ...v.prefs, agentRail: false, agentTurns: true };
+  draw(v, cx);
+  expect(v.rows().filter((r) => r.kind === "turn" && keys.includes(r.key)).map((r) => r.fold)).toEqual(["folded", "folded", "folded"]);
+  v.query = "smoke check";
+  draw(v, cx);
+  expect(v.rows().filter((r) => r.kind === "turn").map((r) => [r.key, r.fold])).toEqual([[keys[2], "folded"]]);
+  v.query = "";
+  v.open.add(keys[2]);
+  draw(v, cx);
+  const open = v.rows().filter((r) => r.si === 0 && r.turn?.n === 6).map((r) => r.kind);
+  expect(open.slice(0, 2)).toEqual(["head", "afold"]);
+  expect(open.includes("you")).toBe(false);
+  v.click(`af:${keys[2]}`, cx);
+  draw(v, cx);
+  expect(v.sel).toBe(keys[2]);
+  expect(v.rows().some((r) => r.kind === "you" && r.turn.n === 6)).toBe(false);
+  // The outline names it the same way, not with an empty line.
+  v.open.clear();
+  v.outline = true;
+  draw(v, cx);
+  expect(JSON.stringify(v.rows().find((r) => r.kind === "line" && r.key === keys[2]).text)).toContain("Background task finished");
+  v.outline = false;
+});
+
+// While its turn runs, a task notification's row has the same quiet line in place of the
+// bubble, closed and selected, and its height leaves the bubble and its strip out.
+test("a running task-notification turn draws its quiet line, not a bubble, and its height counts no bubble", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Start the build in the background", ts: at(0) }, { k: "t", t: "Started." }, { k: "s", ts: at(1) },
+    { k: "p", o: "task-notification", t: null, ts: at(5) }, { k: "u", n: "Read", id: "toolu_1" },
+  ]);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  state.terminals[0].status = "working";
+  draw(v, cx);
+  v.sel = "0:1";
+  draw(v, cx);
+  const r = v.rows().find((x) => x.key === "0:2");
+  expect(r.kind).toBe("wrow");
+  expect(v.estimate(r)).toBe(ROW.PAD_T + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + ROW.STATS + ROW.PAD_B);
+  rec = [];
+  views.length = 0;
+  v.workingRow(theme, r, true);
+  let drawn = rec;
+  rec = null;
+  const strings = (c) => c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect(strings(drawn).join(" ")).toContain("Background task finished");
+  expect(strings(drawn).join(" ")).not.toContain("no message text");
+  // Selected: the card's line in place of the message and its strip.
+  v.sel = "0:2";
+  draw(v, cx);
+  const w = v.rows().find((x) => x.key === "0:2");
+  expect(w.kind).toBe("working");
+  const g = v.workingGeom(w.turn, w.shape);
+  expect(v.estimate(w)).toBe(ROW.PAD_T + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * 20 + ROW.PAD_B);
+  rec = [];
+  v.workingItem(theme, w);
+  drawn = rec;
+  rec = null;
+  expect(strings(drawn).join(" ")).toContain("Background task finished");
+  expect(strings(drawn).join(" ")).not.toContain("no message text");
+  state.terminals[0].status = "idle";
 });
 
 test("an agent turn whose reply is shared with the person's prompt stays hidden: the person's row has the reply", async () => {
@@ -2726,7 +2837,7 @@ test("S1: the read's longest synchronous stretch is at most 30 ms of work at the
   });
   const r = JSON.parse(readFileSync(out, "utf8"));
   expect(r.loaded).toBe(true);
-  expect(r.turns).toBe(1305);
+  expect(r.turns).toBe(1306);
   // The bounds are in ms of work at the interpreter's prices (PRICE, the child's clock), so
   // they are the same in CI, on any machine and under load. The longest stretch is the last:
   // it builds the rows (BUILD_MS) and shapes the turns in view (SHAPE_MS), 18.6 ms here.
@@ -2791,13 +2902,13 @@ test("S1: a read that dies mid-step restarts after 4 s, with no duplicate turns"
   } finally { Date.now = real; }
   await settle(v, 1000);
   const turns = v.current().turns;
-  expect(turns.length).toBe(1305);
+  expect(turns.length).toBe(1306);
   expect(turns.map((t) => t.n)).toEqual(turns.map((_, i) => i + 1));
-  expect(new Set(turns.map((t) => `${t.ts}|${t.prompt.slice(0, 80)}`)).size).toBe(1305);
-  expect(before).toBeLessThan(1305);
+  expect(new Set(turns.map((t) => `${t.ts}|${t.prompt.slice(0, 80)}`)).size).toBe(1306);
+  expect(before).toBeLessThan(1306);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).toMatch(/^1,?\d{3} turns|^\d+ turns/);
-  // Two reads of a 1305-turn session: more than bun's 5 s default on a slow machine. The
+  // Two reads of a 1306-turn session: more than bun's 5 s default on a slow machine. The
   // limit only ends a hung run; every wait above ends on what it checks.
 }, 60000);
 
@@ -2845,10 +2956,10 @@ test("S1: a second stall shows Read failed with Retry, and Retry reads the sessi
   if (s.turns.length) expect(v.bannerTitles()).toContain("Could not read the transcript");
   v.retryRead(cx);
   await settle(v, 1000);
-  expect(v.current().turns.length).toBe(1305);
+  expect(v.current().turns.length).toBe(1306);
   expect(v.current().error).toBe(null);
   expect(v.headerText()).not.toBe("Read failed");
-  // Three reads of a 1305-turn session: more than bun's 5 s default on a busy machine. The
+  // Three reads of a 1306-turn session: more than bun's 5 s default on a busy machine. The
   // limit only ends a hung run; every wait above ends on what it checks.
 }, 60000);
 
@@ -2902,11 +3013,11 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
     v.read(cx);
     await settle(v, 1000);
     const turns = v.current().turns;
-    expect(turns.length).toBe(1305);
+    expect(turns.length).toBe(1306);
     expect(turns.map((t) => t.n)).toEqual(turns.map((_, i) => i + 1));
     expect(v.current().error).toBe(null);
   } finally { performance.now = realPerf; }
-  // Three reads of a 1305-turn session, two of them cut short: more than bun's 5 s default
+  // Three reads of a 1306-turn session, two of them cut short: more than bun's 5 s default
   // on a slow machine. The limit only ends a hung run.
 }, 60000);
 
@@ -2914,7 +3025,7 @@ test("S1: two stalls mid-apply leave no half-applied chunk, so a later read has 
 test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   const { v, cx } = await paneWith(busy(), null, 1000);
   const s = v.current();
-  expect(s.turns.length).toBe(1305);
+  expect(s.turns.length).toBe(1306);
   // Make the next read apply a chunk that throws after part of it: a fresh start whose
   // sleep hook throws on the first yield while partial.
   const realPerf = performance.now.bind(performance);
@@ -2935,9 +3046,9 @@ test("S1: a throw mid-apply drops the half-applied chunk", async () => {
   expect(v.current().turns.length).toBe(0);
   v.read(cx);
   await settle(v, 1000);
-  expect(v.current().turns.length).toBe(1305);
+  expect(v.current().turns.length).toBe(1306);
   expect(v.current().error).toBe(null);
-  // Three reads of a 1305-turn session, one cut short: more than bun's 5 s default on a slow
+  // Three reads of a 1306-turn session, one cut short: more than bun's 5 s default on a slow
   // machine. The limit only ends a hung run.
 }, 60000);
 
@@ -2957,7 +3068,7 @@ test("S1: a slow extractor call or a sleep never wipes a loaded session", async 
     Date.now = () => real(); tick(cx);
     Date.now = () => real() + 60000; tick(cx);
     expect(v.reading).toBe(true);
-    expect(s.turns.length).toBe(1305);
+    expect(s.turns.length).toBe(1306);
     // 2. The call is slow, the timer runs: still waiting at 20 s past the beat.
     for (let k = 1; k <= 20; k++) { Date.now = () => real() + 60000 + k * 1000; tick(cx); }
     expect(v.reading).toBe(true);
@@ -2966,9 +3077,9 @@ test("S1: a slow extractor call or a sleep never wipes a loaded session", async 
     for (let k = 21; k <= 31; k++) { Date.now = () => real() + 60000 + k * 1000; tick(cx); }
   } finally { Date.now = real; }
   expect(s.loaded).toBe(true);
-  expect(s.turns.length).toBe(1305);
+  expect(s.turns.length).toBe(1306);
   await settle(v, 1000);
-  expect(v.current().turns.length).toBe(1305);
+  expect(v.current().turns.length).toBe(1306);
   expect(v.current().error).toBe(null);
 });
 
@@ -5318,7 +5429,8 @@ test("a part that fails to draw shows as an error row, not a blank list", async 
 
 test("the list measuring its first item does not move a pin's place", async () => {
   const { v, cx } = await pinPane();
-  const key = v.turnKeys(v.rows())[2];
+  // The third of the person's own turns (the task notification's row before it is folded).
+  const key = v.turnKeys(v.rows()).filter((k) => !v.findTurn(k).agent)[2];
   v.toggle(key, cx);
   v.togglePin(key, cx);
   v.placeHold = null; v.placeBase = null;
@@ -8383,7 +8495,8 @@ test("the rail replaces the scrollbar: a tick per turn, on screen brighter, sele
   v.paneW = Math.max(573, v.width + 80);
   v.listH = 600;
   draw(v, cx);
-  const ks = keys();
+  // The task notification's row has no tick while Agent messages on the rail is off.
+  const ks = keys().filter((k) => !v.findTurn(k).agent);
   expect(v.railShown()).toBe(true);
   let { L, ticks } = v.railTicks();
   expect(L.pitch).toBe(9);
