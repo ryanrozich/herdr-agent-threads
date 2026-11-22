@@ -17189,6 +17189,14 @@ function pairRow(total, sizes) {
       row.size[a.id] = a.px != null ? { px: a.px } : { weight: a.weight };
     }
   };
+  // Herdr closes a pane: its weight goes to the pane before it.
+  row.close = (id) => {
+    const i = row.order.indexOf(id);
+    const before = row.order[i - 1];
+    if (row.size[id].weight != null && row.size[before]?.weight != null) row.size[before] = { weight: row.size[before].weight + row.size[id].weight };
+    row.order.splice(i, 1);
+    delete row.size[id];
+  };
   row.drag = (left, dx) => {
     const i = row.order.indexOf(left);
     const right = row.order[i + 1];
@@ -17379,11 +17387,14 @@ test("the column closing with the pair on weights: the Chat goes back to its wid
     const m = t.row.widths().p2;
     // Herdr closes the column: its room goes to the weights left, the Chat's among them.
     state.panes = state.panes.filter((p) => p.pane !== "p3");
-    t.row.order = t.row.order.filter((id) => id !== "p3");
-    delete t.row.size.p3;
+    t.row.close("p3");
     t.w = null;
     const n = t.frames.length;
+    log = [];
+    t.row.seen = 0;
     t.run(1500);
+    // One weight to the Chat, which lands it.
+    expect(log.filter(([, n2, a]) => n2 === "layout.resize" && a.id === "p2").map((x) => Object.keys(x[2]).sort().join())).toEqual(["id,weight"]);
     // Herdr draws the Chat wide until the ask lands, between these frames; each frame here
     // is after it.
     const wide = t.frames.slice(n).filter((f) => f.p2 > m + 1);
@@ -17426,16 +17437,8 @@ test("the Trajectory opened with the column open puts the pair back to px for it
   } finally { t.restore(); }
 });
 
-test("the pair's arithmetic: the weights that keep both widths, what moved, the Chat alone, and the column's keep", async () => {
-  const { pairWeights, pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
-  // The Chat at 722 joins a room of 1084 the column (380) shares with the terminal (S 1):
-  // the terminal keeps 704, and every pane gets the same px a unit of weight.
-  const f = pairWeights(1, 1084, 722, 380);
-  expect(f.wc / f.wp).toBeCloseTo(722 / 380, 3);
-  const k = 722 / f.wc;
-  expect(k * 1).toBeCloseTo(704, 0);
-  expect(pairWeights(1, 380, 722, 380)).toBe(null);
-  expect(pairWeights(0, 1084, 722, 380)).toBe(null);
+test("the pair's arithmetic: what moved, the Chat alone, and the column's keep", async () => {
+  const { pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
   // What moved.
   const was = { m: 722, p: 380 };
   expect(pairEvent(was, { m: 723, p: 379 })).toBe("same");
@@ -17446,11 +17449,6 @@ test("the pair's arithmetic: the weights that keep both widths, what moved, the 
   // The column closed: the Chat's weight keeps 722 beside the terminal (S 1, k 704): the
   // terminal and the column's old room are 704 + 380.
   expect(pairAlone({ k: 704, m: 722, p: 380, S: 1 })).toBeCloseTo(722 / 1084, 4);
-  // From the wide width: S 1, wc 722 / 704, wp 380 / 704: the Chat at its old weight takes
-  // 722 (1 + 1102 / 704) / (1 + 722 / 704) = 1102 · 1806 / 1426 px; S from it is 1, whatever
-  // the S passed.
-  const wide = (722 * (1 + 1102 / 704)) / (1 + 722 / 704);
-  expect(pairAlone({ k: 704, m: 722, p: 380, S: 0.6 }, wide)).toBeCloseTo(722 / 1084, 4);
   expect(pairAlone({ k: 704, m: 722, p: 380, S: 0 })).toBe(null);
   expect(pairAlone({ k: 0, m: 722, p: 380, S: 1 })).toBe(null);
   // The column's keep, as the Trajectory's fit: the terminals give down to keep, then the
@@ -17459,6 +17457,8 @@ test("the pair's arithmetic: the weights that keep both widths, what moved, the 
   expect(pinFit(722, 380, 500, 200)).toEqual({ chat: 642, col: 380 });
   expect(pinFit(300, 380, 400, 200)).toEqual({ chat: 240, col: 260 });
   expect(pinFit(250, 380, 300, 200)).toBe(null);
+  // The Trajectory would take 210 here; the column's floor is 240.
+  expect(pinFit(250, 380, 400, 200)).toBe(null);
 });
 
 test("the column's opening keeps the terminal's 200 px when the row's room is known: narrower, the Chat giving, or Pinned in the pane", async () => {

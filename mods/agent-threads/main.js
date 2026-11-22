@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairWeights, pairEvent, pairAlone, pinFit,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -247,7 +247,7 @@ const WIDTH_KEY = "threads.width";
 const PIN_W_KEY = "threads.pinWidth";
 // The Trajectory pane's width as the owner last left it, kept the same way: { px }.
 const TRAJ_W_KEY = "threads.trajWidth";
-// The Pinned pair on weights (ui.js pairWeights), by terminal: { k, m, p, S } once the Chat
+// The Pinned pair on weights (pairBegin), by terminal: { k, m, p, S } once the Chat
 // and the column are both on weights (k the px a unit of weight gets in the row, m and p
 // their widths as last seen, S the terminals' weights); { S, hold } while they are at px,
 // with no new pair before hold. The column's pane makes and keeps it (pairPoll); either pane
@@ -3574,6 +3574,12 @@ export default class Threads extends View {
     }
     if (this.splitAsk) return true;
     this.pinPx(me, fit.chat);
+    // The row as this pane knew it: the column's first weight lands at its width (pairBegin).
+    if (fit.R > 0) {
+      const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { S: fit.S, R: fit.R } });
+      if (cx?.timer) cx.timer.after(0, put);
+      else put();
+    }
     this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
     run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
@@ -3746,12 +3752,10 @@ export default class Threads extends View {
     if (pair?.k > 0 && !this.trajPaneOpen()) {
       run("layout.resize", { id: col.pane, weight: Number((next.column / pair.k).toPrecision(5)) });
       run("layout.resize", { id: main.pane, weight: Number((next.main / pair.k).toPrecision(5)) });
-      setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...pair, m: next.main, p: next.column } });
     } else {
+      // Both at px, as before the pair is made (pairPoll makes it once they are still).
       run("layout.resize", { id: col.pane, px: next.column });
       run("layout.resize", { id: main.pane, px: next.main });
-      // Both at px now: the column's pane puts them back on weights once they are still.
-      if (!traj) this.pairPx(0, false);
     }
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
     setShared(traj ? TRAJ_W_KEY : PIN_W_KEY, { px: next.column });
@@ -3760,9 +3764,10 @@ export default class Threads extends View {
 
   // The column's opening width with the terminals' keep (ui.js pinFit), when the row's room
   // can be known: this pane on a weight it set (weightNow) and the terminals' weights S known,
-  // from its weight line or from the last pair. Then its width n at weight w says the room the
-  // weights share, n (w + S) / w, and the terminals have that less this pane. Else the width
-  // as asked. { chat (this pane's px, or null to keep it), col }, or null with no column.
+  // from its weight line or from the last pair. Then its width n at weight w says the room R
+  // the weights share, n (w + S) / w, and the terminals have that less this pane. Else the
+  // width as asked. { chat (this pane's px, or null to keep it), col, R, S }, or null with no
+  // column.
   pinKeep(me, px) {
     if (!me || !px) return null;
     const S = this.weighLine ? this.weighLine.b / this.weighLine.a : shared(PAIR_KEY)?.[this.terminal]?.S;
@@ -3770,8 +3775,9 @@ export default class Threads extends View {
     if (!(S > 0) || !(w > 0) || this.paneW == null) return { chat: null, col: px };
     const m = Math.round(this.paneW) + PANE_FRAME;
     const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane).length;
-    const f = pinFit(m, px, Math.round((m * (w + S)) / w) - m, TERM_KEEP * others);
-    return f ? { chat: f.chat === m ? null : f.chat, col: f.col } : null;
+    const R = Math.round((m * (w + S)) / w);
+    const f = pinFit(m, px, R - m, TERM_KEEP * others);
+    return f ? { chat: f.chat === m ? null : f.chat, col: f.col, R, S } : null;
   }
   // The pair back to px, as the Trajectory's split and the px resizes (w, - and = with no
   // pair) need: the column at its width (when send), and no new pair for hold ms. The Chat's
@@ -3799,7 +3805,9 @@ export default class Threads extends View {
     const p = Math.round(this.paneW) + PANE_FRAME;
     if (this.pairSeen?.m !== m) this.pairSeen = { m, at: now };
     const ent = shared(PAIR_KEY)?.[this.terminal] ?? null;
-    const blocked = Boolean(me.zoomed || main.zoomed || this.trajPaneOpen()) || now < (ent?.hold ?? 0);
+    // The Trajectory closing gives the Chat its width back (trajGiveBack): 1.5 s for that.
+    if (this.trajPaneOpen()) this.pairTrajAt = now;
+    const blocked = Boolean(me.zoomed || main.zoomed || this.trajPaneOpen()) || now < (ent?.hold ?? 0) || now - (this.pairTrajAt ?? -1e9) < 1500;
     if (this.pairing) { this.pairProbe(m, p, blocked, cx); return; }
     const still = now - (this.sizeAt ?? 0) >= PAIR_STILL_MS && now - this.pairSeen.at >= PAIR_STILL_MS;
     if (blocked || !still) return;
@@ -3807,12 +3815,13 @@ export default class Threads extends View {
     if (now - (this.firstSizeAt ?? now) < 1500 || (this.pairTries ?? 0) >= 3) return;
     this.pairBegin(me, main, m, p, ent);
   }
-  // The Chat at px m (where it is), and the column measured at two weights (ui.js weightLine):
-  // the line gives the room the column shares with the other weight panes and their weights.
-  // A mod cannot read a pane's size, so the other panes are never resized: one at px stays at
-  // its px, and when every other pane is at px the column is the one pane on a weight (the
-  // same width at both weights). The first weight guesses from the last pair's S, else 0.5 (a
-  // terminal split once), with the terminals about as wide as the Chat. The Chat does not move.
+  // The Chat at px m (where it is), and the column to a weight that lands it at its width p:
+  // then the column and the other weight panes get the same px a unit of weight, p / w, and
+  // the Chat's weight is m w / p. A mod cannot read a pane's size, so the other panes are
+  // never resized; one at px keeps its px. The first weight comes from the row as the Chat
+  // knew it when it opened the column (pinKeep: the weight room R and the others' weights S,
+  // so the others have R - m - p), else from the last pair's S with the others about as wide
+  // as the Chat; then toward p from the measures (ui.js weightLine). The Chat does not move.
   pairBegin(me, main, m, p, ent) {
     const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane);
     this.pairTries = (this.pairTries ?? 0) + 1;
@@ -3826,8 +3835,9 @@ export default class Threads extends View {
     }
     // The probe's widths are not the owner's (shareWidth).
     setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
-    const guess = ent?.S > 0 ? ent.S : 0.5;
-    this.pairing = { m, p, S: null, tried: [], w: Number(((guess * p) / m).toPrecision(5)), asked: Date.now(), at: this.paneW };
+    const S = ent?.S > 0 ? ent.S : 0.5;
+    const d = ent?.R > 0 ? ent.R - m - p : 0;
+    this.pairing = { m, p, S: ent?.S > 0 ? ent.S : null, tried: [], w: Number(((S * p) / (d > 0 ? d : m)).toPrecision(5)), asked: Date.now(), at: this.paneW };
     run("layout.resize", { id: me.pane, weight: this.pairing.w });
   }
   pairProbe(m, p, blocked, cx) {
@@ -3844,41 +3854,35 @@ export default class Threads extends View {
     if (g.final) {
       if (now - (this.sizeAt ?? 0) < PAIR_STILL_MS && now - g.asked < 1500) return;
       this.pairing = null;
-      // Landed: the pair is on weights. Else a fresh try once still (three at most).
-      if (Math.abs(p - g.p) <= 3) {
+      // Both landed: the pair is on weights. Else a fresh try once still (three at most).
+      if (Math.abs(p - g.p) <= 2) {
         this.pairTries = 0;
         this.pairSave({ k: g.m / g.final.wc, m, p, S: g.S }, cx);
       }
       return;
     }
     if (Math.abs(this.paneW - g.at) <= 1 && now - g.asked < 400) return;
-    g.tried.push([g.w, Math.round(this.paneW) + PANE_FRAME]);
-    let S = null;
-    let R1 = null;
-    let f = null;
-    if (g.tried.length > 1) {
-      const [a, b] = g.tried.slice(-2);
-      const line = weightLine(a, b);
-      if (line) { S = line.b / line.a; R1 = 1 / line.a; f = pairWeights(S, R1, g.m, g.p); }
-      // The same width at two weights: no other pane on a weight. The column keeps that
-      // width beside the Chat in the ratio of the two.
-      else if (Math.abs(a[1] - b[1]) <= 1) { S = 0; g.p = b[1]; f = { wc: g.m, wp: b[1] }; }
-    }
-    if (!f) {
-      if (R1 != null || g.tried.length > 2) { this.pairing = null; run("layout.resize", { id: me.pane, px: g.p }); return; }
-      // The second weight: toward the column's width, or 10% off it when the first landed on it.
-      const [w1, n1] = g.tried[0];
-      g.w = Math.abs(n1 - g.p) <= 1 ? Number((w1 * 1.1).toPrecision(5)) : weightNear(null, g.tried[0], g.p);
-      g.at = this.paneW;
+    const n = Math.round(this.paneW) + PANE_FRAME;
+    g.tried.push([g.w, n]);
+    const [a, b] = g.tried.slice(-2);
+    const line = g.tried.length > 1 ? weightLine(a, b) : null;
+    if (line) g.S = line.b / line.a;
+    // Landed at its width, or the same width at two weights (no other pane on a weight: the
+    // column keeps that width beside the Chat): the Chat's weight at the same px a unit.
+    const lone = g.tried.length > 1 && !line && Math.abs(a[1] - b[1]) <= 1;
+    if (Math.abs(n - g.p) <= 1 || lone) {
+      if (lone) { g.p = n; g.S = 0; }
+      g.final = { wc: Number(((g.w * g.m) / n).toPrecision(5)), wp: g.w };
       g.asked = now;
-      run("layout.resize", { id: me.pane, weight: g.w });
+      run("layout.resize", { id: main.pane, weight: g.final.wc });
       return;
     }
-    g.final = f;
-    g.S = S;
+    const w = g.tried.length > 2 ? null : line ? weightFor(line, g.p) : weightNear(null, g.tried[0], g.p);
+    if (!w) { this.pairing = null; run("layout.resize", { id: me.pane, px: g.p }); return; }
+    g.w = w;
+    g.at = this.paneW;
     g.asked = now;
-    run("layout.resize", { id: main.pane, weight: f.wc });
-    run("layout.resize", { id: me.pane, weight: f.wp });
+    run("layout.resize", { id: me.pane, weight: w });
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.
@@ -3892,22 +3896,19 @@ export default class Threads extends View {
     const S = ev === "chat" && ent.S > 0 ? Math.max(1e-4, ent.S - (m - ent.m) / ent.k) : ent.S;
     this.pairSave({ k, m, p, S }, cx);
   }
-  // The column closed with the pair on weights. Its room has gone to the weights left, so the
-  // Chat, still at its weight, measures wide: with k known that width gives the other panes'
-  // weights (ui.js pairAlone), and the weight that keeps the Chat at its width goes in one
-  // ask, then measured as any weight is (weighStep). The wide width not in yet (400 ms): the
-  // weights the pair last had.
-  pairClose() {
-    const c = this.pairClosed;
+  // The column closed with the pair on weights: Herdr gave its weight to the Chat, which takes
+  // the column's room. The weight that keeps the Chat at its width (ui.js pairAlone) in one
+  // ask, then measured as any weight is (weighStep), with the row's line from the pair for a
+  // second ask if one is needed. No other weights known: the width at px, then a weight.
+  pairClose(pair) {
     const me = this.me();
-    if (!c || !me || this.paneW == null) return;
-    const grew = Math.round(this.paneW) + PANE_FRAME - c.pair.m > 2;
-    if (!grew && Date.now() - c.at < 400) return;
-    this.pairClosed = null;
-    const wc = pairAlone(c.pair, grew ? Math.round(this.paneW) + PANE_FRAME : null);
-    if (!wc) { this.sizeTo(Math.round(c.pair.m)); return; }
+    const wc = me ? pairAlone(pair) : null;
+    if (!wc) { if (me) this.sizeTo(Math.round(pair.m)); return; }
+    const R = pair.k * pair.S + pair.m + pair.p;
+    this.weighLine = { a: 1 / R, b: pair.S / R };
     this.weightNow = null;
-    this.weighing = { pane: me.pane, n0: Math.round(c.pair.m), tried: [], w: wc };
+    this.weighAfter = null;
+    this.weighing = { pane: me.pane, n0: Math.round(pair.m), tried: [], w: wc };
     this.askWeight();
   }
   pairSave(v, cx) {
@@ -3937,13 +3938,11 @@ export default class Threads extends View {
     if (this.pinColOpen && !open && !this.splitAsk) {
       this.pinColClosed = true;
       this.weighAt = Date.now() + 500;
-      // The pair was on weights: Herdr gives the column's room to the weights left, the Chat's
-      // among them. Back to the width it had once that lands (pairClose).
+      // The pair was on weights: Herdr gives the column's weight to the Chat (pairClose).
       const pair = shared(PAIR_KEY)?.[this.terminal];
-      if (pair?.k > 0 && pair.m > 0) { this.pairClosed = { pair, at: Date.now() }; this.weighAt = null; }
+      if (pair?.k > 0 && pair.m > 0) { this.weighAt = null; this.pairClose(pair); }
       if (pair) cx?.timer?.after(0, () => { const map = { ...(shared(PAIR_KEY) ?? {}) }; delete map[this.terminal]; setShared(PAIR_KEY, map); });
     }
-    this.pairClose();
     this.pinColOpen = open;
     if (this.pinAutoDone || !this.width || !this.current()?.loaded || !this.pinsRead) return;
     this.pinAutoDone = true;

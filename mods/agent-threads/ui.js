@@ -2811,14 +2811,6 @@ export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 // edge instead (Herdr issue 1332). Two panes on weights trade width with each other alone.
 // So once the column's split has applied at px, the pair goes to weights that keep both
 // widths. All widths here are Herdr px (the measured width and the frame).
-// The weights that keep the Chat at m and the column at p once the Chat, at px until now,
-// joins the room R1 that the column and the terminals share (weights S): the terminals keep
-// R1 - p. null when the terminals would have no room.
-export function pairWeights(S, R1, m, p) {
-  const d = R1 - p;
-  if (!(d > 0) || !(S > 0)) return null;
-  return { wc: w5((S * m) / d), wp: w5((S * p) / d) };
-}
 // What moved between two measures of the pair, the Chat at m and the column at p. Every pane
 // on a weight gets the same px for each unit of weight (k), so the weights follow from the
 // widths as long as k is known: "chat" (the Chat's left edge dragged, the column as it was)
@@ -2834,18 +2826,13 @@ export function pairEvent(was, now) {
   if (Math.abs(now.m / was.m - now.p / was.p) <= 0.01) return "scale";
   return "stale";
 }
-// The column closed with the pair on weights: Herdr shares its room among the weights left.
-// The Chat's weight that keeps it at m beside the other weight panes (weights S): the row was
-// k px a unit over S + wc + wp, so those panes and the column's old room are k S + p. S comes
-// from wide, the Chat's width at its old weight once the column's room is shared out: wide =
-// m (S + wc + wp) / (S + wc). Without it, the S the probe found. null with no other weights
-// (S 0: the Chat is alone in the row and any weight fills it).
-export function pairAlone({ k, m, p, S }, wide = null) {
-  if (!(k > 0) || !(m > 0)) return null;
-  const wc = m / k;
-  const wp = p / k;
-  const s = wide > m + 2 ? (m * (wc + wp) - wide * wc) / (wide - m) : S;
-  return s > 0 ? w5((m * s) / (k * s + p)) : null;
+// The column closed with the pair on weights: Herdr gives a closed pane's weight to the pane
+// before it, so the Chat takes the column's room. The weight that keeps it at m beside the
+// other weight panes (weights S): the row was k px a unit over S + wc + wp, so those panes and
+// the column's old room are k S + p. null with no other weights known (S 0: the Chat is the
+// one pane on a weight, and any weight fills the room).
+export function pairAlone({ k, m, p, S }) {
+  return k > 0 && m > 0 && S > 0 ? w5((m * S) / (k * S + p)) : null;
 }
 // The Pinned column's opening with the terminals' keep, as the Trajectory's fit takes it
 // (trajFit): want is the column's width, room what the terminals have now, keep what they
