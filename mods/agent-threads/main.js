@@ -3754,9 +3754,11 @@ export default class Threads extends View {
       run("layout.resize", { id: col.pane, weight: Number((next.column / pair.k).toPrecision(5)) });
       run("layout.resize", { id: main.pane, weight: Number((next.main / pair.k).toPrecision(5)) });
     } else {
-      // Both at px, as before the pair is made (pairPoll makes it once they are still).
+      // Both at px, as before the pair is made (pairPoll makes it once they are still). A
+      // probe's kept px no longer holds.
       run("layout.resize", { id: col.pane, px: next.column });
       run("layout.resize", { id: main.pane, px: next.main });
+      if (pair?.probe) { const rest = { ...pair }; delete rest.probe; setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: rest }); }
     }
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
     setShared(traj ? TRAJ_W_KEY : PIN_W_KEY, { px: next.column });
@@ -3789,7 +3791,10 @@ export default class Threads extends View {
     const w = shared(WIDTH_KEY) ?? {};
     const map = shared(PAIR_KEY) ?? {};
     const was = map[this.terminal];
-    if (send && was?.k > 0 && Number.isFinite(w[col.pane])) run("layout.resize", { id: col.pane, px: Math.round(w[col.pane]) + PANE_FRAME });
+    // On weights, the column at its width; on a probe's trial weight (or left there by a
+    // dropped probe), at the px it had before the probe.
+    const px = was?.k > 0 && Number.isFinite(w[col.pane]) ? Math.round(w[col.pane]) + PANE_FRAME : was?.probe > 0 ? was.probe : null;
+    if (send && px) run("layout.resize", { id: col.pane, px });
     // The row's weight room as the pair last had it (the terminals' kS and the two widths), so
     // the pair made again after the hold starts from the terminals' width (pairBegin).
     const R = was?.k > 0 ? Math.round(was.k * (was.S ?? 0) + was.m + was.p) : was?.R ?? null;
@@ -3830,6 +3835,9 @@ export default class Threads extends View {
   pairBegin(me, main, m, p, ent) {
     const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane);
     this.pairTries = (this.pairTries ?? 0) + 1;
+    // The column's px is kept in the record while it is on a trial weight, so the Trajectory
+    // opening mid-probe puts it back at px from the Chat's pane (pairPx).
+    setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...(ent ?? {}), probe: p } });
     run("layout.resize", { id: main.pane, px: m });
     // No terminal beside them: the two share the row in the ratio of their widths.
     if (!others.length) {
@@ -3895,7 +3903,9 @@ export default class Threads extends View {
   pairTrack(ent, m, p, cx) {
     const ev = pairEvent(ent, { m, p });
     if (ev === "same") return;
-    if (ev === "stale") { this.pairSave({ S: ent.S }, cx); return; }
+    // Made again from px: both are on weights until then, so the column's px is kept as a
+    // probe's is (pairPx).
+    if (ev === "stale") { this.pairSave({ S: ent.S, probe: p }, cx); return; }
     const k = ev === "scale" ? (ent.k * (m + p)) / (ent.m + ent.p) : ent.k;
     // The Chat's left edge: the Chat traded width with the panes on its left, the terminal's
     // weight with it (px panes there would take it instead; S is then only a first guess).

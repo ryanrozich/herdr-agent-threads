@@ -17647,6 +17647,56 @@ test("the Trajectory opened with the column open puts the pair back to px for it
   } finally { t.restore(); }
 });
 
+test("y pressed while the column is on a probe's trial weight, or left on one by a dropped probe, puts the column back at its px for the Trajectory", async () => {
+  // Mid-probe: the column on its first trial weight, no pair yet.
+  const t = await pairPanes();
+  try {
+    untilProbe(t);
+    t.row.apply();
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(state.shared["threads.pinPair"].t4.k ?? null).toBe(null);
+    log = [];
+    t.row.seen = 0;
+    t.v.openTraj();
+    t.row.apply();
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2.px).toBeGreaterThan(0);
+    // The record no longer keeps the probe's px: the pair is held, made again after.
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+  } finally { t.restore(); }
+  // A probe dropped because the Chat moved leaves the column on its trial weight: y still
+  // puts it back at the px it had.
+  const u = await pairPanes();
+  try {
+    untilProbe(u);
+    u.row.size.p2 = { px: 680 };
+    u.step(100);
+    expect(u.w.pairing).toBe(null);
+    u.row.apply();
+    expect(u.row.size.p3.weight).toBeGreaterThan(0);
+    log = [];
+    u.row.seen = 0;
+    u.v.openTraj();
+    u.row.apply();
+    expect(u.row.size.p3).toEqual({ px: 380 });
+  } finally { u.restore(); }
+  // - and = at px after a dropped probe: the kept px no longer holds, so y sends the column
+  // nothing of the probe's.
+  const x = await pairPanes();
+  try {
+    untilProbe(x);
+    x.row.size.p2 = { px: 680 };
+    x.step(100);
+    x.v.key(keyEv("="), x.cx);
+    x.row.apply();
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    log = [];
+    x.row.seen = 0;
+    x.v.openTraj();
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p3")).toBe(false);
+  } finally { x.restore(); }
+});
+
 test("the pair's arithmetic: what moved, the Chat alone, and the column's keep", async () => {
   const { pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
   // What moved.
