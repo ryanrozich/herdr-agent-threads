@@ -16829,6 +16829,44 @@ test("the release frame: narrowing, every frame from the swap on shows the top r
   } finally { listWindow = null; }
 });
 
+test("while a place is held the probe measures the rows above it and only a few below, so it is let go sooner; the rest below come after", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off * 0.4);
+    probeFrame(v, cx);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    const A = v.anchor;
+    expect(Boolean(A) && !A.end).toBe(true);
+    const rows = v.rows();
+    const a = rows.findIndex((r) => r.key === A.key);
+    expect(rows.length - a).toBeGreaterThan(100);
+    // Each part the probe asks for, by its row's index, until the place is let go.
+    const at = new Map(rows.map((r, i) => [r.key, i]));
+    let below = 0;
+    while (v.anchor) {
+      const wanted = [];
+      v.probeDue = function () { const due = Threads.prototype.probeDue.call(this); wanted.push(...due); return due; };
+      try { draw(v, cx); } finally { delete v.probeDue; }
+      cx.flush(120, 3);
+      dropTimers(v, cx);
+      for (const [p2, sig] of wanted) {
+        const tk = p2.key.match(/\d+:\d+/)?.[0];
+        const i = tk ? at.get(tk) : null;
+        if (i != null && i > a + 60) below++;
+        v.probed(p2.key, sig, { width: 300, height: fakeH(p2) * v.zoom() }, cx);
+      }
+    }
+    expect(below).toBe(0);
+    // Once let go the probe goes on below.
+    expect(v.probeLeft).toBe(1);
+  } finally { listWindow = null; }
+});
+
 test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
   const { v, cx } = await wrapSession(300);
   v.debug = false;
@@ -16845,6 +16883,19 @@ test("a column step crossed at the top of the chat keeps the start at the top, b
       for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([top, 0]);
     }
   } finally { listWindow = null; }
+});
+
+test("an end held through a re-wrap asks for the end once more as it is let go, when following and the reader did not scroll it away", async () => {
+  const { v, cx } = await wrapSession(40);
+  let toEnd = 0;
+  v.scroll = { scroll_to_bottom() { toEnd++; }, scroll_to_item() {} };
+  for (const [why, follow, asks] of [["settled", true, 1], ["jump", true, 1], ["scroll", true, 0], ["settled", false, 0]]) {
+    toEnd = 0;
+    v.follow = follow;
+    v.anchor = { end: true, wheels: v.wheelN ?? 0 };
+    v.letGo(why, cx);
+    expect([why, follow, toEnd, v.anchor]).toEqual([why, follow, asks, null]);
+  }
 });
 
 test("a reader at the end stays at the end through a column step, both ways: the end on screen in every frame while the rows come in and the probe measures them", async () => {
