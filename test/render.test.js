@@ -18203,6 +18203,19 @@ test("the landing's record is kept only once the row has been still after the he
   } finally { t.restore(); }
 });
 
+test("rowBegin's width hold and a close's pair record are written with no timer too", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    delete state.shared["threads.trajWidth"];
+    t.v.rowBegin({ probe: "p4", t: 482, S: 0.5, Rr: 1400, held: {} }, { p2: 722, p4: 700 }, { ids: { chat: "p2", traj: "p4" } }, {});
+    expect(state.shared["threads.trajWidth"].hold).toBeGreaterThan(t.now());
+    delete state.shared["threads.pinPair"];
+    t.v.rowFixSave({ ids: { chat: "p2", pin: "p3" }, S: 0.5 }, 400, { p2: 722, p3: 380 }, {});
+    expect(state.shared["threads.pinPair"].t4).toEqual({ k: 400, m: 722, p: 380, S: 0.5 });
+  } finally { t.restore(); }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });

@@ -4163,11 +4163,14 @@ export default class Threads extends View {
     if (!(Rr > plan.t)) return;
     const w = Number(((S * plan.t) / (Rr - plan.t)).toPrecision(5));
     this.rowLand = { probe: plan.probe, t: plan.t, seed: plan.seed ?? null, S, held: plan.held, ids: rp.ids, tried: [], w, asked: Date.now(), at: n[plan.probe] };
-    // The probe's widths are not the owner's (shareWidth).
-    cx?.timer?.after(0, () => {
+    // The probe's widths are not the owner's (shareWidth). After the drawing pass, or at once
+    // with no timer (tests), as rowSave.
+    const hold = () => {
       if (plan.probe === rp.ids.traj) this.holdTrajWidth(4000);
       else setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
-    });
+    };
+    if (cx?.timer) cx.timer.after(0, hold);
+    else hold();
     run("layout.resize", { id: plan.probe, weight: w });
   }
   // Each new width (or 400 ms with none) is a measure. The second weight comes from the line
@@ -4388,12 +4391,15 @@ export default class Threads extends View {
     this.rowTick(cx);
   }
   // The record a close leaves once its panes hold their widths: the row's (the Chat and the
-  // Trajectory) or the pair's (the Chat and the column), the pair's after the drawing pass.
+  // Trajectory) or the pair's (the Chat and the column). After the drawing pass, or at once
+  // with no timer (tests).
   rowFixSave(f, k, n, cx) {
     const at = Object.fromEntries(Object.values(f.ids).map((id) => [id, n[id]]));
     if (f.ids.traj) { this.rowSave({ k, S: f.S, ids: f.ids, n: at }, cx); return; }
     const v = { k, m: at[f.ids.chat], p: at[f.ids.pin], S: f.S };
-    cx?.timer?.after(0, () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v }));
+    const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v });
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.
