@@ -5,6 +5,7 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 ## Unreleased
 
 - A Codex subagent rollout exported by itself now starts at its own history boundary.
+- The column now steps with the pane: 70, 90 or 120 characters a line by the pane's width. The Width setting, `Shift w` and Keep the pane at this width are gone.
 
 ### The Trajectory
 
