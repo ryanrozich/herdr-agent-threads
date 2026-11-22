@@ -5182,7 +5182,8 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
     v.poll(cx);
     v.poll(cx);
     const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
-    expect(resized).toEqual(want ? [{ id: "p2", px: want }] : [{ id: "p2", weight: 1 }]);
+    // A narrower pane is half the row the split made: with the terminal at weight 1, weight 1.
+    expect(resized).toEqual(want ? [{ id: "p2", px: want }] : [{ id: "p1", weight: 1 }, { id: "p2", weight: 1 }]);
     // Once only: the flag is gone, and another pane's flag stays.
     expect(state.shared["threads.fit"]).toEqual({ p9: true });
   }
@@ -5413,7 +5414,7 @@ test("Threads opened with Full goes to a weight once it has measured itself; ope
   const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 900);
   state.shared["threads.fit"] = { p2: true };
   v.poll(cx);
-  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+  expect(resized()).toEqual([{ id: "p1", weight: 1 }, { id: "p2", weight: 1 }]);
   expect(state.shared["threads.fit"]).toEqual({});
   const { v: c, cx: cc } = await weightPane({ width: "comfortable", readingWidth: true }, 900);
   state.shared["threads.fit"] = { p2: true };
@@ -5421,8 +5422,81 @@ test("Threads opened with Full goes to a weight once it has measured itself; ope
   expect(resized()).toEqual([{ id: "p2", px: 573 }]);
   herdr(c, 1500, 1.2);
   c.poll(cc);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }, { id: "p2", weight: 1 }]);
+  // The split made a 1804 px row (twice 902): 573 of it is weight 573 / (1804 - 573).
+  expect(resized()).toEqual([{ id: "p2", px: 573 }, { id: "p1", weight: 1 }, { id: "p2", weight: 0.46548 }]);
   expect(c.weighing.n0).toBe(573);
+});
+
+// The owner's report: Threads opened wide for a moment, then came back. The probe's first try
+// was weight 1 against a terminal whose weight it could not know (0.25 on the rig after an
+// earlier pane closed): 1204 px, then 1054, then 702.
+test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no width past the one it keeps, whatever the terminal's weight was", async () => {
+  // Herdr's row: Threads at px, or at weight w beside the terminal's weight (p1), sharing R.
+  const row = (v, R, S0) => {
+    let S = S0;
+    const seen = [];
+    const apply = () => {
+      for (const a of resized().slice(apply.n)) {
+        if (a.id === "p1") S = a.weight;
+        else v.paneW = (a.px ?? Math.round((a.weight * R) / (a.weight + S))) - 2;
+        if (a.id === "p2") seen.push(v.paneW);
+      }
+      apply.n = resized().length;
+      v.sizeAt = Date.now() - 1000;
+    };
+    apply.n = 0;
+    return { apply, seen };
+  };
+  const open = async (R, S0, paneW = 752) => {
+    const r = await weightPane({ width: "wide", readingWidth: false }, paneW);
+    state.shared["threads.fit"] = { p2: true };
+    const m = row(r.v, R, S0);
+    for (let k = 0; k < 6; k++) {
+      r.v.poll(r.cx);
+      m.apply();
+      if (r.v.weighing) r.v.weighing.asked -= 500;
+    }
+    return { ...r, ...m };
+  };
+  for (const S0 of [0.25, 1, 3]) {
+    // The split's 754 px is half a 1508 px row: 704 of it is weight 704 / 804.
+    const { v, seen } = await open(1508, S0);
+    expect(resized()[0]).toEqual({ id: "p2", px: 704 });
+    expect(resized().slice(1, 3)).toEqual([{ id: "p1", weight: 1 }, { id: "p2", weight: 0.87562 }]);
+    expect(seen).toEqual([702, 702]);
+    expect([v.weighing, v.weightNow]).toEqual([null, 0.87562]);
+  }
+  // The window a little wider since the split: still never past the split's width, and kept
+  // within 2 px of 704 in at most three weights.
+  {
+    const { v, seen } = await open(1540, 0.25, 752);
+    expect(Math.max(...seen)).toBeLessThanOrEqual(752);
+    expect(resized().filter((a) => a.id === "p2" && a.weight === 1)).toEqual([]);
+    expect(Math.abs(v.paneW - 702)).toBeLessThanOrEqual(2);
+  }
+  // Another pane in the tab (the row is not the split's two): as before, weight 1 first, and
+  // the terminal's weight is left alone.
+  {
+    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
+    state.shared["threads.fit"] = { p2: true };
+    v.poll(cx);
+    v.paneW = 702;
+    v.sizeAt = Date.now() - 1000;
+    v.poll(cx);
+    expect(resized()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  }
+  // A pane opened by the launcher that gets a neighbour before it is weighed: as before too.
+  {
+    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    state.shared["threads.fit"] = { p2: true };
+    v.poll(cx);
+    state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
+    v.paneW = 702;
+    v.sizeAt = Date.now() - 1000;
+    v.poll(cx);
+    expect(resized()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  }
 });
 
 test("every px resize the pane asks for is followed by a weight that keeps the width it gave, once the width has applied and been still 300 ms", async () => {
