@@ -17248,14 +17248,23 @@ function pairRow(total, sizes) {
 // The Chat (v, p2) and its Pinned column (w, p3) beside the terminal (p1), on a clock the
 // test moves. step(ms): Herdr applies the asks, lays the row out, each pane hears its width
 // (as on_size_change) and draws; deferred writes run.
-async function pairPanes(chat = 722) {
+// opts.total: the row's width; opts.weighed: the Chat on a weight it set, with its row's line
+// known (as after the mod's own sizing), in place of px.
+async function pairPanes(chat = 722, opts = {}) {
   const { v, cx } = await pinPane("--extra", "6");
   v.debug = false;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   let now = 1_000_000;
   const real = Date.now;
   Date.now = () => now;
-  const row = pairRow(1806, { p1: { weight: 0.5 }, p2: { px: chat } });
+  const total = opts.total ?? 1806;
+  const row = pairRow(total, { p1: { weight: 0.5 }, p2: { px: chat } });
+  if (opts.weighed) {
+    const wc = (0.5 * chat) / (total - chat);
+    row.size.p2 = { weight: wc };
+    v.weightNow = wc;
+    v.weighLine = { a: 1 / total, b: 0.5 / total };
+  }
   const panesSeen = [];
   const hear = (x, c, id) => {
     const wd = row.widths()[id] - 2;
@@ -17412,6 +17421,107 @@ test("the pair's weights follow a window resize (both scale), and two changes be
   } finally { t.restore(); }
 });
 
+// Steps until the column's pane starts the probe (its pairing set); the frames before it.
+function untilProbe(t, max = 4000) {
+  for (let s = 0; s < max && !t.w.pairing; s += 100) t.step(100);
+  expect(Boolean(t.w.pairing)).toBe(true);
+}
+
+test("with the row known when the column opens (the Chat on its own weight), the probe's first weight lands the column at its width: no jump, and the owner's column width untouched", async () => {
+  // A terminal much wider than the Chat, so a guess from the Chat's width alone is far off.
+  const t = await pairPanes(722, { total: 2200, weighed: true });
+  try {
+    const pins = [];
+    for (let s = 0; s < 4000; s += 100) { t.step(100); pins.push(state.shared["threads.pinWidth"]?.px ?? null); }
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    // The column within 2 px of 380 in every frame, the first weight's included.
+    expect(Math.max(...t.frames.map((f) => Math.abs(f.p3 - 380)))).toBeLessThanOrEqual(2);
+    expect(pins.every((x) => x == null || x === 380)).toBe(true);
+  } finally { t.restore(); }
+  // With the Chat at px (the row not known) the first guess takes the terminal as wide as the
+  // Chat: the column jumps on the first weight, and back on the next. The owner's column
+  // width is not taken from the probe's widths.
+  const u = await pairPanes(722, { total: 2200 });
+  try {
+    const pins = [];
+    for (let s = 0; s < 4000; s += 100) { u.step(100); pins.push(state.shared["threads.pinWidth"]?.px ?? null); }
+    const jump = Math.max(...u.frames.map((f) => Math.abs(f.p3 - 380)));
+    expect(jump).toBeGreaterThan(50);
+    expect(Math.abs(u.row.widths().p3 - 380)).toBeLessThanOrEqual(2);
+    expect(pins.every((x) => x == null || x === 380)).toBe(true);
+  } finally { u.restore(); }
+});
+
+test("the probe stops when the Chat moves under it, or after three weights Herdr does not answer: the column back at its px either way", async () => {
+  const t = await pairPanes();
+  try {
+    untilProbe(t);
+    // The owner drags the Chat's left edge while the probe waits.
+    log = [];
+    t.row.seen = 0;
+    t.row.size.p2 = { px: 680 };
+    t.step(100);
+    expect(t.w.pairing).toBe(null);
+    expect(log.filter(([, n, a]) => n === "layout.resize" && a.id === "p3").map((x) => x[2])).toEqual([]);
+  } finally { t.restore(); }
+  const u = await pairPanes();
+  try {
+    untilProbe(u);
+    // Herdr drops the column's weights from here on (the first one landed).
+    const apply = u.row.apply;
+    u.row.apply = () => { for (; u.row.seen < log.length; u.row.seen++) { const [k, n, a] = log[u.row.seen]; if (k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null) continue; if (k === "run" && n === "layout.resize" && u.row.size[a.id]) u.row.size[a.id] = a.px != null ? { px: a.px } : { weight: a.weight }; } };
+    let s = 0;
+    for (; s < 4000 && u.w.pairing; s += 100) u.step(100);
+    // Each weight with no change is a measure after 400 ms; the third ends it.
+    expect(u.w.pairing).toBe(null);
+    expect(s).toBeGreaterThanOrEqual(800);
+    expect(log.filter(([, n, a]) => n === "layout.resize" && a.id === "p3").at(-1)[2]).toEqual({ id: "p3", px: 380 });
+    expect(u.row.widths().p3).toBe(380);
+    u.row.apply = apply;
+  } finally { u.restore(); }
+});
+
+test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
+  const t = await pairPanes();
+  try {
+    log = [];
+    t.row.seen = 0;
+    // A drag of the terminal|Chat edge, 10 px every 200 ms for 4 s.
+    for (let s = 0; s < 4000; s += 200) { t.row.drag("p1", -10); t.step(100); t.step(100); }
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.weight != null)).toBe(false);
+    t.run(4000);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("w with the pair on weights puts both back to px and drops the pair at once; the pair is made again once still", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    t.v.fitToReading(t.cx);
+    expect(state.shared["threads.pinPair"].t4.k).toBeUndefined();
+    t.run(6000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("a drag of the pane's outer edge keeps the terminals' weight up to date with the pair", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    for (const dx of [-100, 60]) {
+      t.row.drag("p1", dx);
+      t.run(1000);
+      expect(Math.abs(state.shared["threads.pinPair"].t4.S - t.row.size.p1.weight)).toBeLessThan(0.04);
+    }
+  } finally { t.restore(); }
+});
+
 test("the column closing with the pair on weights: the Chat goes back to its width in one weight when the terminals' weights are known, within the probe's error and then exact when they were measured", async () => {
   for (const [exact, early] of [[true, false], [false, false], [true, true]]) {
     const t = await pairPanes();
@@ -17503,7 +17613,12 @@ test("the Trajectory opened with the column open puts the pair back to px for it
     state.panes = state.panes.filter((p) => p.pane !== "p4");
     delete state.shared["threads.trajByTerminal"].t4;
     const n = t.frames.length;
-    t.run(5000);
+    // Not for 1.5 s: the Trajectory's close gives the Chat its width back first.
+    log = [];
+    t.row.seen = 0;
+    t.run(1400);
+    expect(log.some(([, n2, a]) => n2 === "layout.resize" && a.weight != null)).toBe(false);
+    t.run(3600);
     expect(t.row.size.p2.weight).toBeGreaterThan(0);
     expect(t.row.size.p3.weight).toBeGreaterThan(0);
     expect(t.frames.slice(n).every((f) => f.p2 === was.p2)).toBe(true);
@@ -17567,8 +17682,16 @@ test("the column's opening keeps the terminal's 200 px when the row's room is kn
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(v.view).toBe("pinned");
   expect(v.toast?.text).toBe("Pinned shows here: the row has no room for the Pinned column");
-  // Nothing known about the row: the column as asked, as before.
+  // No line, but the last pair's S: the room from it.
+  v.splitAsk = null;
+  v.paneW = 720;
+  v.width = 720;
+  v.weightNow = 1;
   v.weighLine = null;
+  state.shared["threads.pinPair"] = { t4: { S: 1 } };
+  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380, R: 1444, S: 1 });
+  // Nothing known about the row: the column as asked, as before.
+  delete state.shared["threads.pinPair"];
   expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380 });
 });
 

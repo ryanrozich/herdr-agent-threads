@@ -3808,7 +3808,8 @@ export default class Threads extends View {
     const ent = shared(PAIR_KEY)?.[this.terminal] ?? null;
     // The Trajectory closing gives the Chat its width back (trajGiveBack): 1.5 s for that.
     if (this.trajPaneOpen()) this.pairTrajAt = now;
-    const blocked = Boolean(me.zoomed || main.zoomed || this.trajPaneOpen()) || now < (ent?.hold ?? 0) || now - (this.pairTrajAt ?? -1e9) < 1500;
+    // The Trajectory open, or closed less than 1.5 s ago (pairTrajAt is set while it is open).
+    const blocked = Boolean(me.zoomed || main.zoomed) || now < (ent?.hold ?? 0) || now - (this.pairTrajAt ?? -1e9) < 1500;
     if (this.pairing) { this.pairProbe(m, p, blocked, cx); return; }
     const still = now - (this.sizeAt ?? 0) >= PAIR_STILL_MS && now - this.pairSeen.at >= PAIR_STILL_MS;
     if (blocked || !still) return;
@@ -3846,8 +3847,9 @@ export default class Threads extends View {
     const me = this.me();
     const main = this.mainPane();
     const now = Date.now();
-    // The Chat moved, the Trajectory opened, or no answer: the column back to its px.
-    if (blocked || Math.abs(m - g.m) > 2 || now - g.asked > 3000) {
+    // The Chat moved or the Trajectory opened: the column back to its px. (No answer is a
+    // measure after 400 ms, below, and the third ends the probe.)
+    if (blocked || Math.abs(m - g.m) > 2) {
       this.pairing = null;
       if (!blocked && Math.abs(m - g.m) <= 2) run("layout.resize", { id: me.pane, px: g.p });
       return;
@@ -3868,11 +3870,10 @@ export default class Threads extends View {
     const [a, b] = g.tried.slice(-2);
     const line = g.tried.length > 1 ? weightLine(a, b) : null;
     if (line) g.S = line.b / line.a;
-    // Landed at its width, or the same width at two weights (no other pane on a weight: the
-    // column keeps that width beside the Chat): the Chat's weight at the same px a unit.
-    const lone = g.tried.length > 1 && !line && Math.abs(a[1] - b[1]) <= 1;
-    if (Math.abs(n - g.p) <= 1 || lone) {
-      if (lone) { g.p = n; g.S = 0; }
+    // Landed at its width: the Chat's weight at the same px a unit. With no other pane on a
+    // weight the column takes the rest of the row at any weight, the width it has, so the
+    // first measure lands (and S stays unknown).
+    if (Math.abs(n - g.p) <= 1) {
       g.final = { wc: Number(((g.w * g.m) / n).toPrecision(5)), wp: g.w };
       g.asked = now;
       run("layout.resize", { id: main.pane, weight: g.final.wc });
