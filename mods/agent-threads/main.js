@@ -1622,6 +1622,10 @@ export default class Threads extends View {
       from: this.cardRing };
     this.ruleEdit = e;
     this.ringMove(this.editorFirst(e));
+    // A new rule (Add rule, or Use on a template) opens at the end of the list, which may be
+    // out of view: the card scrolls to show as much of it as fits from its first line, ring
+    // or no ring.
+    if (at == null && !from) this.askReveal(this.editorFirst(e), true);
     for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, d[k], kind);
     this.ruleCheck();
     // A kept rule that is not working says why at once.
@@ -6680,7 +6684,7 @@ export default class Threads extends View {
   // Where the control at stop i is in the card's rows: [top, bottom] from the rows' top, or
   // null when it is not in them (the head and foot always show) or a height it needs has not
   // been measured yet.
-  ringSpan(node, i, y = 0) {
+  ringSpan(node, i, y = 0, head = false) {
     const it = node?.items.find((x) => i >= x.from && i < x.to);
     if (!it) return null;
     let at = y + node.pad;
@@ -6689,7 +6693,14 @@ export default class Threads extends View {
       if (h == null) return null;
       at += h + node.gap;
     }
-    if (it.child) return this.ringSpan(it.child, i, at);
+    if (it.child) {
+      const span = this.ringSpan(it.child, i, at, head);
+      // With head, a control in an open rule stands for the whole rule, so a scroll to it
+      // shows as much of the rule as fits, from its first line.
+      if (!span || !head || !it.child.ruleShell) return span;
+      const h = this.cardColH(it.child);
+      return [at, h == null ? span[1] : Math.max(span[1], at + h)];
+    }
     let end = at;
     for (let j = it.first; j <= it.last; j++) {
       const h = this.cardPartH(node, j);
@@ -6698,8 +6709,10 @@ export default class Threads extends View {
     }
     return [at, end];
   }
-  // The ring moved: a scroll to it is pending (ringShow), for this page, from now.
-  askReveal() { this.ringShow = { key: this.cardPageKey(), at: Date.now() }; }
+  // The ring moved: a scroll to it is pending (ringShow), for this page, from now. id: a
+  // control to show in place of the ring's; head: the whole open rule holding it (ruleShell),
+  // from its first line, as much as fits.
+  askReveal(id = null, head = false) { this.ringShow = { key: this.cardPageKey(), at: Date.now(), id, head }; }
   cardPageKey() { return this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main"; }
   // After the ring moves (ringShow), the card scrolls so the control with it shows in full
   // (cardReveal), by bringing one mark into view as the keys do, from the next frame. Nothing
@@ -6710,7 +6723,8 @@ export default class Threads extends View {
     const want = this.ringShow;
     if (!want) return;
     if (want.key !== key || Date.now() - want.at > REVEAL_WAIT) { this.ringShow = null; return; }
-    const i = this.cardRing ? this.cardStops.findIndex((s) => s.id === this.cardRing) : -1;
+    const id = want.id ?? this.cardRing;
+    const i = id ? this.cardStops.findIndex((s) => s.id === id) : -1;
     const root = this.cardRoot;
     const handle = this.cardScrolls?.[key] ?? null;
     if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = null; return; }
@@ -6720,7 +6734,7 @@ export default class Threads extends View {
     const h = this.cardBody?.key === key ? this.cardBody.h : null;
     const sum = this.cardColH(root);
     const fresh = h != null && sum != null && (Math.abs(h - sum) <= 2 || this.cardBody.shape === root.shape);
-    const span = fresh ? this.ringSpan(root, i) : null;
+    const span = fresh ? this.ringSpan(root, i, 0, want.head) : null;
     if (!span) return;
     this.ringShow = null;
     const place = this.cardPlace(key);
@@ -7260,11 +7274,14 @@ export default class Threads extends View {
   // A column (cardCol), 10 px in and a 1 px edge, its parts 10 px apart.
   ruleShell(t, e, kids) {
     const isNew = e.at == null;
-    return this.cardCol(v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent), 10, 11, [
+    const el = this.cardCol(v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent), 10, 11, [
       isNew ? div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
         .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule."
           : e.template ? `New rule from ${e.template}, not kept yet` : "New rule, not kept yet") : null,
       ...kids]);
+    // Its column, for a scroll to its top (ringSpan head).
+    this.cardColLast.ruleShell = true;
+    return el;
   }
   // Keep rule, Discard, and on a kept rule Move up (not the first), Duplicate and Delete.
   // Whether the open rule shows why its Keep rule was not saved: while the File line shows

@@ -13123,6 +13123,98 @@ test("card ring: on a rules page the card scrolls to a control inside an open ru
   } finally { done(v); }
 });
 
+test("a new sender rule, from a template's Use or from Add rule, scrolls the card to its first line with no ring; a rule opened in place does not", async () => {
+  for (const press of ["th-sender-use-colon", "th-rule-add", "th-sender-1"]) {
+    const { v, cx } = await sendersPane();
+    try {
+      v.width = 545; v.paneW = 573; v.rootH = 560;
+      measureCard(v, cx, "senders", () => 40, () => 10);
+      const handle = v.cardScrolls.senders;
+      const place = v.cardPlace("senders");
+      expect(place.y).toBe(0);
+      expect(v.cardRing).toBe(null);
+      onOf(cardWithCx(v, cx), press, "on_click")({}, cx);
+      const asked = handle.asked.length;
+      measureCard(v, cx, "senders", () => 40, () => 10);
+      cx.flush(0);
+      const first = v.cardStops.findIndex((x) => x.id === v.editorFirst(v.ruleEdit));
+      const rule = v.ringSpan(v.cardRoot, first, 0, true);
+      if (press === "th-sender-1") {
+        // Opened in place, at the top: nothing moves.
+        expect([press, handle.asked.length, place.y]).toEqual([press, asked, 0]);
+        continue;
+      }
+      // The rule opened under five rules and a template, out of view. It is taller than the
+      // view, so the card scrolls it to the top: its first line ("New rule from ..." or "New
+      // rule, not kept yet", 11 px in) and as much under it as fits.
+      expect(rule[0]).toBeGreaterThan(place.viewH);
+      expect(rule[0]).toBeLessThan(v.ringSpan(v.cardRoot, first)[0]);
+      expect(rule[1] - rule[0]).toBeGreaterThan(place.viewH);
+      expect([press, handle.asked.length - asked]).toEqual([press, 1]);
+      expect([press, place.y >= rule[0] && place.y <= rule[0] + 11]).toEqual([press, true]);
+    } finally { done(v); }
+  }
+});
+
+test("on the Link rules page, Add rule scrolls the card to the new rule's first line too", async () => {
+  const many = Array.from({ length: 6 }, (_x, i) => ({ name: `Rule ${i + 1}`, pattern: `R${i + 1}-(\\d+)`, url: `https://r.example/${i + 1}/$1`, example: `See R${i + 1}-4.` }));
+  const { v, cx } = await rulesPane(many);
+  try {
+    v.width = 545; v.paneW = 573; v.rootH = 560;
+    measureCard(v, cx, "links", () => 40, () => 10);
+    const handle = v.cardScrolls.links;
+    const place = v.cardPlace("links");
+    onOf(cardWithCx(v, cx), "th-rule-add", "on_click")({}, cx);
+    const asked = handle.asked.length;
+    measureCard(v, cx, "links", () => 40, () => 10);
+    cx.flush(0);
+    const first = v.cardStops.findIndex((x) => x.id === v.editorFirst(v.ruleEdit));
+    const rule = v.ringSpan(v.cardRoot, first, 0, true);
+    expect(rule[0]).toBeGreaterThan(place.viewH);
+    expect(handle.asked.length - asked).toBe(1);
+    expect(place.y <= rule[0] + 11 && rule[0] + 27 <= place.y + place.viewH).toBe(true);
+  } finally { done(v); }
+});
+
+test("a new rule's scroll shows its first line even when the view is shorter than the rule", async () => {
+  // The rule's length, and its first control's.
+  let top = 0;
+  let ctrl = 0;
+  {
+    const { v, cx } = await sendersPane();
+    try {
+      v.width = 545; v.paneW = 573; v.rootH = 560;
+      onOf(cardWithCx(v, cx), "th-sender-use-colon", "on_click")({}, cx);
+      measureCard(v, cx, "senders", () => 40, () => 10);
+      const first = v.cardStops.findIndex((x) => x.id === v.editorFirst(v.ruleEdit));
+      const [a, b] = v.ringSpan(v.cardRoot, first, 0, true);
+      top = b - a;
+      const [c, d] = v.ringSpan(v.cardRoot, first);
+      ctrl = d - c;
+    } finally { done(v); }
+  }
+  expect(top).toBeGreaterThan(ctrl + 20);
+  const { v, cx } = await sendersPane();
+  try {
+    v.width = 545; v.paneW = 573;
+    // A pane whose card view is between the two.
+    let h = 150;
+    for (; h < 900; h++) { v.rootH = h; cardWithCx(v, cx); const w = v.cardPlace("senders").viewH; if (w > ctrl + 4 && w < top - 30) break; }
+    expect(h).toBeLessThan(900);
+    measureCard(v, cx, "senders", () => 40, () => 10);
+    const place = v.cardPlace("senders");
+    onOf(cardWithCx(v, cx), "th-sender-use-colon", "on_click")({}, cx);
+    measureCard(v, cx, "senders", () => 40, () => 10);
+    cx.flush(0);
+    const first = v.cardStops.findIndex((x) => x.id === v.editorFirst(v.ruleEdit));
+    const rule = v.ringSpan(v.cardRoot, first, 0, true);
+    // The rule's first line in view: the view starts at most the rule's 11 px padding below
+    // its top (the card scrolls by marks, so it may not land on the top itself).
+    expect(place.y).toBeLessThanOrEqual(rule[0] + 11);
+    expect(rule[0] + 11 + 16).toBeLessThanOrEqual(place.y + place.viewH);
+  } finally { done(v); }
+});
+
 // A stand-in for Herdr's layout and size reports, for rows that change. Each part not a
 // column has a height of its own (truth, by the part, so parts differ), and a column is its
 // padding, parts and gaps, as the card lays it out. frame() draws the card; a part reports
