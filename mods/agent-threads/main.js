@@ -3749,15 +3749,18 @@ export default class Threads extends View {
     const closed = this.trajWasOpen && !open;
     this.trajWasOpen = open;
     const back = this.trajChatBack;
+    const side = !this.pinnedPane && !this.trajPane;
+    // Closed during a landing: the landing given up first (rowQuit), so the Chat's width back
+    // below is the last px it is sent.
+    if (closed && side && this.rowLand) this.rowQuit(cx);
     // The row on weights: the Chat gets the Trajectory's weight (Herdr gives a closed pane's to
     // the pane before it), and rowClose asks the weights that keep each pane left, the Chat at
     // the width it had before the split narrowed it.
     const ent = this.rowNow();
-    if (closed && !this.pinnedPane && !this.trajPane && ent?.k > 0 && ent.ids?.traj && this.me()) {
+    if (closed && side && ent?.k > 0 && ent.ids?.traj && this.me()) {
       const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.traj).map((id) => [id, ent.n[id]]));
       if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = back.px;
-      this.trajChatBack = null;
-      if (this.rowClose(ent.ids.traj, targets, cx)) return;
+      if (this.rowClose(ent.ids.traj, targets, cx)) { this.trajChatBack = null; return; }
     }
     if (back && !panes().some((p) => p.pane === back.pane)) {
       this.trajChatBack = null;
@@ -4083,7 +4086,9 @@ export default class Threads extends View {
     this.rowCloseStep(cx);
     this.rowFixStep(cx);
     const rp = this.rowPanes();
-    if (!rp) { this.rowLand = null; this.rowPlan = null; return; }
+    // The Trajectory gone during a landing: the landing given up, the new pane and any held
+    // pane back at px (rowQuit), as for any other end of a landing.
+    if (!rp) { if (this.rowLand) this.rowQuit(cx); this.rowPlan = null; return; }
     this.rowTick(cx);
     if (rp.me.zoomed || rp.traj.zoomed || rp.pin?.zoomed || this.splitAsk || this.rowCloseDue || this.rowCloseFix) return;
     const ent = this.rowNow();
@@ -4224,6 +4229,9 @@ export default class Threads extends View {
   // its target (ui.js closeWeights), and the record that follows: the row's, the pair's (the
   // Chat and the column left), or the Chat's own weight line (the Chat alone).
   rowClose(closed, targets, cx) {
+    // During a landing the row is not on weights yet: the landing given up (rowQuit), and the
+    // close goes the way it did before the row was on weights.
+    if (this.rowLand) { this.rowQuit(cx); return false; }
     const ent = this.rowNow();
     const r = ent?.k > 0 ? closeWeights({ k: ent.k, S: ent.S, n: ent.n, closed, targets }) : null;
     if (!r) return false;
