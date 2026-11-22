@@ -17812,6 +17812,70 @@ test("rowEvent: two panes trading width a px apart in rounding are a drag the te
   expect(rowEvent([716, 240], [716, 240, 380])).toEqual({ kind: "stale" });
 });
 
+// Helpers for the row's cases below.
+const rowIds = ["p1", "p2", "p4", "p3"];
+const near = (a, b, d = 2) => Math.abs(a - b) <= d;
+// A key in a pane of the row, and the row left to settle: the widths before and after.
+function rowKey(t, where, k) {
+  const was = t.row.widths();
+  const { x, c } = t.inst[where];
+  x.key(keyEv(k), c);
+  t.run(3000);
+  return { was, now: t.row.widths() };
+}
+const allWeights = (t, ids) => ids.every((id) => t.row.size[id].weight > 0);
+const allPx = (t, ids) => ids.every((id) => t.row.size[id].px > 0);
+
+// A close during a landing, and both side panes closed together.
+test("the Trajectory closed during the column's landing gives the landing up: the column back at its px, the Chat at its width, in one state", async () => {
+  for (const after of [100, 300]) {
+    const t = await threeRow(722);
+    try {
+      t.run(1000);
+      await t.openTraj();
+      t.run(3000);
+      await t.openCol();
+      for (let s = 0; s < 4000 && !t.v.rowLand; s += 100) t.step(100);
+      expect(t.v.rowLand?.probe).toBe("p3");
+      t.run(after);
+      t.close("p4");
+      t.run(8000);
+      const now = t.row.widths();
+      expect(near(now.p3, 380)).toBe(true);
+      expect(near(now.p2, 722, 3)).toBe(true);
+      expect(t.v.rowLand ?? null).toBe(null);
+      expect(allWeights(t, ["p2", "p3"]) || allPx(t, ["p2", "p3"])).toBe(true);
+    } finally { t.restore(); }
+  }
+});
+
+test("the Trajectory closed during its own landing after the held panes' weights went (final): both held panes back at px, the column at 380 and the Chat at its width", async () => {
+  for (const after of [0, 300]) {
+    const t = await threeRow(722);
+    try {
+      t.run(1000);
+      await t.openCol();
+      t.run(5000);
+      await t.openTraj();
+      for (let s = 0; s < 6000 && !t.v.rowLand?.final; s += 50) t.step(50);
+      expect(Boolean(t.v.rowLand?.final)).toBe(true);
+      const from = log.length;
+      t.run(after, 50);
+      t.close("p4");
+      t.step(50);
+      // rowQuit's final branch: each held pane back at the px it was held at.
+      const px = log.slice(from).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.px != null).map(([, , a]) => a.id);
+      expect(px).toContain("p3");
+      // Then the pair is made again once its hold from the Trajectory's opening is over.
+      t.run(8000);
+      const now = t.row.widths();
+      expect(near(now.p3, 380)).toBe(true);
+      expect(near(now.p2, 722)).toBe(true);
+      expect(allWeights(t, ["p2", "p3"]) || allPx(t, ["p2", "p3"])).toBe(true);
+    } finally { t.restore(); }
+  }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });
