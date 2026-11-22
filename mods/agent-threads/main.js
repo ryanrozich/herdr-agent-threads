@@ -277,11 +277,28 @@ const SENDER_TYPES = [
   ["prefix", "Starts with", "text-cursor", "Text at the start, with {name} where the sender's name is."],
   ["pattern", "Pattern", "regex", "A regular expression with a group named sender."],
 ];
-// No sender rules: two that fill a new rule, with Use.
+// Sender rule templates: each fills a new rule, with Use, under the rules while no rule has
+// its type and text (senderTemplatesLeft). by is the rule's type, the key its text is under.
+// Name and a colon asks for a hyphen in the name, so "Note:", "TODO:" and a web address
+// stay the person's own; any lowercase hyphenated word before a colon counts, so "follow-up:"
+// or "re-run:" at the start shows as from that word, as its line in the box says, while
+// "Follow-up:" with a capital stays the person's own.
 const SENDER_EXAMPLES = {
-  brackets: { line: "[build-bot] at the start of a prompt", rule: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" } },
-  from: { line: "From build-bot: at the start of a prompt", rule: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" } },
+  brackets: { by: "prefix", line: "[build-bot] at the start of a prompt", rule: { name: "Name in brackets", prefix: "[{name}] ", example: "[build-bot] nightly build green on main" } },
+  from: { by: "prefix", line: "From build-bot: at the start of a prompt", rule: { name: "From line", prefix: "From {name}: ", example: "From build-bot: tag the release notes draft" } },
+  colon: { by: "pattern", line: "seat-one: or any hyphenated word, so follow-up: too.", rule: { name: "Name and a colon", pattern: "^(?<sender>[a-z][a-z0-9]*-[a-z0-9-]*[a-z0-9]): ", example: "seat-one: 3 changes open, 1 waiting on review" } },
 };
+// The templates no sender rule in the file has, as [key, template] in the shipped order. A
+// template is in use when a rule (on or off, working or not) has its type and its text, with
+// spaces at the end of both left out; the name is not compared. A rule's type is the one the
+// editor opens it with (openRule).
+function senderTemplatesLeft(list) {
+  const has = new Set((list ?? []).map((r) => {
+    const by = r.pattern && !r.prefix ? "pattern" : "prefix";
+    return `${by}\u0000${(r[by] ?? "").trimEnd()}`;
+  }));
+  return Object.entries(SENDER_EXAMPLES).filter(([, x]) => !has.has(`${x.by}\u0000${x.rule[x.by].trimEnd()}`));
+}
 // A rule's example with the sender's name marked (as examplePieces draws a link), or null
 // when the rule finds no sender in it. The rule reads it as core/turns.js ruleSender does:
 // the first line from its first non-space, RULE_TEXT characters.
@@ -1404,6 +1421,7 @@ export default class Threads extends View {
   // and Undo goes.
   leaveLinks() {
     this.ruleEdit = null;
+    this.senderHits = null;
     this.ruleUndo = null;
   }
   // While the settings card or the keys sheet is open, it and its clear layer are all that
@@ -1606,6 +1624,10 @@ export default class Threads extends View {
       from: this.cardRing };
     this.ruleEdit = e;
     this.ringMove(this.editorFirst(e));
+    // A new rule (Add rule, or Use on a template) opens at the end of the list, which may be
+    // out of view: the card scrolls to show as much of it as fits from its first line, ring
+    // or no ring.
+    if (at == null && !from) this.askReveal(this.editorFirst(e), true);
     for (const [k] of this.fieldsOf(kind)) this.setRuleField(k, d[k], kind);
     this.ruleCheck();
     // A kept rule that is not working says why at once.
@@ -1614,6 +1636,7 @@ export default class Threads extends View {
   closeRule() {
     const from = this.ruleEdit?.from;
     this.ruleEdit = null;
+    this.senderHits = null;
     if (this.fieldFocused?.startsWith("rule-")) { this.fieldFocused = null; this.h.focus(); }
     this.ringMove(from);
   }
@@ -1646,15 +1669,17 @@ export default class Threads extends View {
     e.shown = { prefix: null, pattern: null };
     this.ruleCheck();
   }
-  // Use on an example: a new rule filled from it, not kept until Keep rule.
+  // Use on a template: a new rule filled from it, its type pressed, not kept until Keep rule.
+  // The open rule names the template it started from (ruleShell).
   useSenderExample(k) {
     const x = SENDER_EXAMPLES[k];
     if (!x) return;
     this.openRule(null, null, null, "senders");
     const e = this.ruleEdit;
     if (e?.kind !== "senders") return;
-    Object.assign(e.draft, x.rule, { by: "prefix" });
+    Object.assign(e.draft, x.rule, { by: x.by });
     e.touched = true;
+    e.template = x.rule.name;
     for (const [f] of SENDER_FIELDS) this.setRuleField(f, e.draft[f], "senders");
     this.ruleCheck();
   }
@@ -1739,9 +1764,12 @@ export default class Threads extends View {
   // cut back to where the session settled (turns.js rewindTail). So for the rule's text each
   // session keeps how far its turns were read and the last turn read: a draw reads only the
   // turns added since, and a session is read again from its start only when its turns were
-  // cut back or it is another session.
+  // cut back or it is another session. That progress holds the sessions it read, so it goes
+  // when the rule closes, the page is left, the pane follows another transcript (pick), or a
+  // draw draws no count (render, senderHitsDrawn).
   senderMatches(rule) {
     if (!rule) return null;
+    this.senderHitsDrawn = true;
     const rk = `${rule.re.source}/${rule.re.flags}|${rule.named ? 1 : 0}`;
     let c = this.senderHits;
     if (c?.rk !== rk) c = this.senderHits = { rk, per: [], shown: null };
@@ -5336,6 +5364,7 @@ export default class Threads extends View {
     this.pinnedVia = "picked";
     this.choosing = false;
     this.sessions = [];
+    this.senderHits = null;
     this.open.clear();
     this.full.clear();
     this.sel = null;
@@ -5948,6 +5977,10 @@ export default class Threads extends View {
     // A sender rule's count the card above left for the next draw (senderMatches). Taken
     // here each draw, so once the editor is not drawn (closed, its page left, the card
     // closed) or its draft stops compiling, no next draw is asked for.
+    // The count's progress holds the sessions and turns it read: a draw that drew no count
+    // drops it, so a closed editor, or sessions the pane no longer follows, are not kept.
+    if (!this.senderHitsDrawn) this.senderHits = null;
+    this.senderHitsDrawn = false;
     if (this.senderHitsLeft) {
       this.senderHitsLeft = false;
       if (!this.countNext) {
@@ -6653,7 +6686,7 @@ export default class Threads extends View {
   // Where the control at stop i is in the card's rows: [top, bottom] from the rows' top, or
   // null when it is not in them (the head and foot always show) or a height it needs has not
   // been measured yet.
-  ringSpan(node, i, y = 0) {
+  ringSpan(node, i, y = 0, head = false) {
     const it = node?.items.find((x) => i >= x.from && i < x.to);
     if (!it) return null;
     let at = y + node.pad;
@@ -6662,7 +6695,14 @@ export default class Threads extends View {
       if (h == null) return null;
       at += h + node.gap;
     }
-    if (it.child) return this.ringSpan(it.child, i, at);
+    if (it.child) {
+      const span = this.ringSpan(it.child, i, at, head);
+      // With head, a control in an open rule stands for the whole rule, so a scroll to it
+      // shows as much of the rule as fits, from its first line.
+      if (!span || !head || !it.child.ruleShell) return span;
+      const h = this.cardColH(it.child);
+      return [at, h == null ? span[1] : Math.max(span[1], at + h)];
+    }
     let end = at;
     for (let j = it.first; j <= it.last; j++) {
       const h = this.cardPartH(node, j);
@@ -6671,8 +6711,10 @@ export default class Threads extends View {
     }
     return [at, end];
   }
-  // The ring moved: a scroll to it is pending (ringShow), for this page, from now.
-  askReveal() { this.ringShow = { key: this.cardPageKey(), at: Date.now() }; }
+  // The ring moved: a scroll to it is pending (ringShow), for this page, from now. id: a
+  // control to show in place of the ring's; head: the whole open rule holding it (ruleShell),
+  // from its first line, as much as fits.
+  askReveal(id = null, head = false) { this.ringShow = { key: this.cardPageKey(), at: Date.now(), id, head }; }
   cardPageKey() { return this.setPage === "links" || this.setPage === "senders" ? this.setPage : "main"; }
   // After the ring moves (ringShow), the card scrolls so the control with it shows in full
   // (cardReveal), by bringing one mark into view as the keys do, from the next frame. Nothing
@@ -6683,7 +6725,8 @@ export default class Threads extends View {
     const want = this.ringShow;
     if (!want) return;
     if (want.key !== key || Date.now() - want.at > REVEAL_WAIT) { this.ringShow = null; return; }
-    const i = this.cardRing ? this.cardStops.findIndex((s) => s.id === this.cardRing) : -1;
+    const id = want.id ?? this.cardRing;
+    const i = id ? this.cardStops.findIndex((s) => s.id === id) : -1;
     const root = this.cardRoot;
     const handle = this.cardScrolls?.[key] ?? null;
     if (i < 0 || !handle || !root?.items.some((x) => i >= x.from && i < x.to)) { this.ringShow = null; return; }
@@ -6693,7 +6736,7 @@ export default class Threads extends View {
     const h = this.cardBody?.key === key ? this.cardBody.h : null;
     const sum = this.cardColH(root);
     const fresh = h != null && sum != null && (Math.abs(h - sum) <= 2 || this.cardBody.shape === root.shape);
-    const span = fresh ? this.ringSpan(root, i) : null;
+    const span = fresh ? this.ringSpan(root, i, 0, want.head) : null;
     if (!span) return;
     this.ringShow = null;
     const place = this.cardPlace(key);
@@ -7128,7 +7171,7 @@ export default class Threads extends View {
   // type pressed.
   ruleExamples(t) {
     return this.cardCol(v_flex().gap(6), 6, 0, [
-      div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"),
+      div().text_size(11).font_semibold().text_color(t.muted).child("Templates, not rules until you keep one"),
       ...["ticket", "pull-request"].map((k) => () => {
         const tpl = LINK_TEMPLATES[k];
         const use = (_e, cx) => { this.openRule(null); this.chooseType(k); cx.notify(); };
@@ -7233,10 +7276,14 @@ export default class Threads extends View {
   // A column (cardCol), 10 px in and a 1 px edge, its parts 10 px apart.
   ruleShell(t, e, kids) {
     const isNew = e.at == null;
-    return this.cardCol(v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent), 10, 11, [
+    const el = this.cardCol(v_flex().id(isNew ? "th-rule-new" : `th-rule-edit-${e.at + 1}`).p(10).gap(10).rounded(6).border_1().border_color(t.accent), 10, 11, [
       isNew ? div().text_size(11).font_semibold().text_color(e.lost ? t.blocked : t.muted)
-        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule." : "New rule, not kept yet") : null,
+        .child(e.lost ? "This rule changed in the file or was removed. Keep rule adds it as a new rule."
+          : e.template ? `New rule from ${e.template}, not kept yet` : "New rule, not kept yet") : null,
       ...kids]);
+    // Its column, for a scroll to its top (ringSpan head).
+    this.cardColLast.ruleShell = true;
+    return el;
   }
   // Keep rule, Discard, and on a kept rule Move up (not the first), Duplicate and Delete.
   // Whether the open rule shows why its Keep rule was not saved: while the File line shows
@@ -7276,8 +7323,8 @@ export default class Threads extends View {
     return [
       note("A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.", t.muted),
       () => group(`Rules${list.length ? ` · ${list.length}` : ""}`, [() => (rows.length ? this.cardCol(v_flex().gap(8), 8, 0, rows) : note("No rules yet."))]),
-      () => (!list.length && !e && edit ? this.senderExamples(t) : null),
       list.length >= 2 ? note("When two rules match the same prompt, the higher one wins.") : null,
+      () => (edit && !e && list.length < MAX_RULES ? this.senderExamples(t, list) : null),
       () => (edit && !e && list.length < MAX_RULES
         ? h_flex().child(this.cardStop(this.button(t, "th-rule-add", "Add rule", add, "plus", CARD_BUTTON), t, "th-rule-add", (e, cx) => { cx.stop_propagation(); add(e, cx); })) : null),
       ...other.map((n) => note(n, t.blocked)),
@@ -7367,16 +7414,19 @@ export default class Threads extends View {
     return out;
   }
 
-  // No sender rules: two that fill a rule, in dashed boxes, each with Use.
-  senderExamples(t) {
+  // The templates no rule in the file has, under the rules, in dashed boxes, each with Use;
+  // when every one is in use, a line says so.
+  senderExamples(t, list) {
+    const left = senderTemplatesLeft(list);
+    if (!left.length) return div().id("th-sender-templates-used").text_size(12.5).text_color(t.muted).child("Every template is in use.");
     return this.cardCol(v_flex().gap(6), 6, 0, [
-      div().text_size(11).font_semibold().text_color(t.muted).child("Examples, not rules until you keep one"),
-      ...Object.entries(SENDER_EXAMPLES).map(([k, x]) => () => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
-        .child(svg(ICON("text-cursor")).size(14).flex_none().text_color(t.dim))
+      div().text_size(11).font_semibold().text_color(t.muted).child("Templates, not rules until you keep one"),
+      ...left.map(([k, x]) => () => h_flex().id(`th-sender-example-${k}`).p(12).gap(8).items_center().rounded(6).border_1().border_dashed().border_color(t.border)
+        .child(svg(ICON(SENDER_TYPES.find(([b]) => b === x.by)[2])).size(14).flex_none().text_color(t.dim))
         .child(v_flex().flex_1().min_w(0).gap(4)
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child(x.rule.name))
           .child(div().text_size(12).text_color(t.muted).child(x.line)))
-        .child(this.miniStop(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }, `Use ${x.rule.name}`)))]);
+        .child(this.miniStop(t, `th-sender-use-${k}`, "Use", (_e, cx) => { this.useSenderExample(k); cx.notify(); }, "Start a new rule from this template")))]);
   }
 
   // The open sender rule: Type (two rows on a new rule, else one line with Change), Name,
