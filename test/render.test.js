@@ -17366,7 +17366,19 @@ async function threeRow(chat = 722, opts = {}) {
   const frames = [];
   const hear = (x, c, id) => {
     const wd = row.widths()[id] - 2;
-    if (Math.abs(wd - (x.paneW ?? -9)) > 1) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
+    const moved = Math.abs(wd - (x.paneW ?? -9)) > 1;
+    if (moved) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
+    // A quiet Chat (t.quietChat) draws only when asked (t.drawChat) or its own width changes,
+    // and runs its timers when they are due; no 1 s poll.
+    if (t.quiet && x === v) {
+      if (moved || t.drawDue) { t.drawDue = false; draw(x, c); }
+      for (;;) {
+        const i = t.quiet.findIndex((d) => d.at <= now);
+        if (i < 0) break;
+        t.quiet.splice(i, 1)[0].fn(c);
+      }
+      return;
+    }
     draw(x, c);
     c.flush(0);
   };
@@ -17402,6 +17414,8 @@ async function threeRow(chat = 722, opts = {}) {
   t.openCol = async () => { v.key(keyEv("v"), cx); row.apply(); return addPane("p3", target(), "pinned"); };
   t.close = (id) => { row.close(id); state.panes = state.panes.filter((p) => p.pane !== id); delete inst[id]; };
   t.ids = () => row.order.join(",");
+  t.quietChat = () => { t.quiet = []; cx.timer.after = (ms, fn) => t.quiet.push({ at: now + ms, fn }); };
+  t.drawChat = () => { t.drawDue = true; };
   hear(v, cx, "p2");
   return t;
 }
@@ -17564,16 +17578,49 @@ test("the column opened with the row on weights keeps the terminal 200 px: the C
   } finally { t.restore(); }
 });
 
-test("two dividers moved between still measures put the row back to px where it is", async () => {
+test("two dividers and the outer edge moved between still measures leave the row on weights: the record follows, k holds, and the terminals' S gives up only what the edge took", async () => {
+  for (const edge of [0, -50]) {
+    const t = await threeOpen("traj");
+    try {
+      const r0 = rowRec();
+      const from = log.length;
+      t.row.drag("p2", -30);
+      t.row.drag("p4", 40);
+      if (edge) t.row.drag("p1", edge);
+      t.step(100);
+      t.run(2000);
+      const now = t.row.widths();
+      for (const id of ["p1", "p2", "p4", "p3"]) expect(t.row.size[id].weight).toBeGreaterThan(0);
+      expect(log.slice(from).some(([k, n]) => k === "run" && n === "layout.resize")).toBe(false);
+      const r = rowRec();
+      expect(r.k).toBe(r0.k);
+      expect(r.n).toEqual({ p2: now.p2, p4: now.p4, p3: now.p3 });
+      expect(Math.abs(r.k * r.S - now.p1)).toBeLessThanOrEqual(2);
+      if (!edge) expect(r.S).toBe(r0.S);
+      // Then a drag on its own is followed as before.
+      t.row.drag("p4", -20);
+      t.run(1500);
+      expect(rowRec().n.p4).toBe(t.row.widths().p4);
+    } finally { t.restore(); }
+  }
+});
+
+test("a divider past the Chat moved while the Chat does not draw again: its record follows once the row is still, before the next drag, without the 1 s poll", async () => {
   const t = await threeOpen("traj");
   try {
-    t.row.drag("p2", -30);
-    t.row.drag("p4", 40);
+    t.quietChat();
+    t.row.drag("p4", 30);
     t.step(100);
-    const was = t.row.widths();
-    t.run(2000);
-    for (const id of ["p2", "p4", "p3"]) expect(t.row.size[id]).toEqual({ px: was[id] });
-    expect(rowRec().k ?? null).toBe(null);
+    // The Chat hears the others' widths once, then nothing draws it.
+    t.drawChat();
+    t.step(100);
+    t.run(700);
+    expect(rowRec().n.p4).toBe(t.row.widths().p4);
+    expect(rowRec().n.p3).toBe(t.row.widths().p3);
+    t.row.drag("p1", -15);
+    t.run(1500);
+    for (const id of ["p1", "p2", "p4", "p3"]) expect(t.row.size[id].weight).toBeGreaterThan(0);
+    expect(rowRec().n.p2).toBe(t.row.widths().p2);
   } finally { t.restore(); }
 });
 
