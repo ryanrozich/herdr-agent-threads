@@ -2538,6 +2538,8 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: reported, height: 800 * zoom }, cx);
     handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
+    // Each run is a pane of its own size, not a drag: the column takes it at once (WIDTH_HOLD_MS).
+    v.sizeAt = Date.now() - 1000;
     rec = [];
     v.render(cx);
     const drawn = rec;
@@ -2578,6 +2580,7 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       const calls = rec;
       rec = null;
       handlerAfterId(calls, "threads-root", "on_size_change")({ width: w * 0.9, height: 720 }, cx);
+      v.sizeAt = Date.now() - 1000;
       rec = [];
       v.render(cx);
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
@@ -6759,6 +6762,161 @@ test("a long session's rows are built over several frames, the old rows shown ti
   expect(rowSig(v)).toEqual(whole);
 });
 
+test("a width that changes while the pane is resized keeps the column until the pane has been still for 300 ms, then the turns re-wrap", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  // The first width the pane measures is taken at once.
+  size(540);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  settleRows(v, cx);
+  const key = v.rowsKey;
+  // A step of a drag: the column stays, nothing is built again, and a draw is asked for once
+  // the pane has been still.
+  cx.timers = [];
+  size(440);
+  draw(v, cx);
+  draw(v, cx);
+  expect(v.paneW).toBe(440);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  expect(v.rowsKey).toBe(key);
+  const wait = cx.timers.filter((x) => x.ms > 200 && x.ms <= 310);
+  expect(wait.length).toBe(1);
+  // Still for 300 ms: the column takes the pane's width and the turns are built for it.
+  v.sizeAt = Date.now() - 400;
+  wait[0].fn(cx);
+  draw(v, cx);
+  expect(v.width).toBeCloseTo(col(440), 6);
+  expect(v.widthHeld).toBe(false);
+  settleRows(v, cx);
+  expect(v.rowsKey).not.toBe(key);
+});
+
+test("a column width among the last three is laid out from what was kept: no reshape, no probe, no row heights", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  const measureAll = () => {
+    for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+    settleRows(v, cx);
+  };
+  at(545);
+  measureAll();
+  const kept = rowSig(v);
+  at(480);
+  measureAll();
+  let shaped = 0;
+  let sized = 0;
+  const reshape = v.reshape.bind(v);
+  const height = v.height.bind(v);
+  v.reshape = (...a) => { shaped++; return reshape(...a); };
+  v.height = (...a) => { sized++; return height(...a); };
+  at(545);
+  expect(shaped).toBe(0);
+  expect(sized).toBeLessThan(20);
+  expect(v.probeRows.every((r) => v.measured(r) != null)).toBe(true);
+  expect(rowSig(v)).toEqual(kept);
+  // A turn that changed since is shaped again.
+  const turn = v.sessions[0].turns[100];
+  turn.prompt += " And the tax line too.";
+  turn.v = (turn.v ?? 0) + 1;
+  v.sessions[0].version++;
+  at(480);
+  expect(shaped).toBe(1);
+  // Three widths are kept: a fourth pushes out the one used longest ago (545 here).
+  at(420);
+  at(400);
+  shaped = 0;
+  at(545);
+  expect(shaped).toBeGreaterThan(250);
+});
+
+test("the kept widths are the three used last: one used again is kept over one used before it", async () => {
+  const { v, cx } = await longSession(200);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  for (const w of [545, 480, 420, 545, 400]) at(w);
+  let shaped = 0;
+  let sized = 0;
+  const reshape = v.reshape.bind(v);
+  const height = v.height.bind(v);
+  v.reshape = (...a) => { shaped++; return reshape(...a); };
+  v.height = (...a) => { sized++; return height(...a); };
+  // 545 was used again after 480 and 420, so 480 went when 400 came, and 545 stayed.
+  at(545);
+  expect(shaped).toBe(0);
+  expect(sized).toBeLessThan(20);
+  shaped = 0;
+  at(480);
+  expect(shaped).toBeGreaterThan(150);
+});
+
+test("a measure taken for a width the pane has left is used when the pane comes back to it", async () => {
+  const { v, cx } = await longSession(120);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  at(545);
+  for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+  settleRows(v, cx);
+  const part = v.probeRows[60];
+  const sig = v.partSig(part);
+  // The pane is narrower now; the probe's answer for the 545 px layout comes in late.
+  at(480);
+  v.probed(part.key, sig, { width: 300, height: 140 * v.zoom() }, cx);
+  at(545);
+  expect(v.measured(part)).toBe(140);
+  const kept = rowSig(v);
+  // The same rows as a build with nothing kept.
+  v.keptBases = null;
+  for (const t of v.sessions[0].turns) t.shapesKept = null;
+  v.rowsKey = null;
+  v.rowJob = null;
+  settleRows(v, cx);
+  expect(kept).toEqual(rowSig(v));
+});
+
+test("a rebuild sizes its rows inside the slice's time too, and the rows on screen stay until every new row has its height", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const whole = rowSig(v);
+  const height = v.height.bind(v);
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  let per = 0;
+  let most = 0;
+  // Building costs nothing on this clock, and each row's height 1 ms.
+  performance.now = () => fake;
+  let building = false;
+  const step = v.buildStep.bind(v);
+  v.buildStep = (...a) => { building = true; try { return step(...a); } finally { building = false; } };
+  v.height = (r) => { fake += 1; if (building) per++; return height(r); };
+  try {
+    v.width = 520;
+    const old = v.baseRows;
+    draw(v, cx);
+    expect(v.rowJob?.sizing).toBeTruthy();
+    expect(v.baseRows).toBe(old);
+    let slices = 1;
+    for (; slices < 400 && v.rowJob; slices++) { per = 0; draw(v, cx); most = Math.max(most, per); }
+    // A slice sizes 32 rows past its time at most, or the last few (SIZE_REST, 64) with them.
+    expect(slices).toBeGreaterThan(5);
+    expect(most).toBeLessThanOrEqual(96);
+    expect(v.baseRows).not.toBe(old);
+  } finally { performance.now = realPerf; v.height = height; v.buildStep = step; }
+  v.width = 545;
+  settleRows(v, cx);
+  expect(rowSig(v)).toEqual(whole);
+});
+
 test("a long session whose read ends while its first rows still build selects the newest turn when the build is done", async () => {
   // The read's end selects the newest turn, but on a long session or a slow machine the first
   // rows build is still going over several frames then, so there is no turn to select yet.
@@ -9290,7 +9448,7 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
 
-test("a rebuild keeps a closed turn's rows until the turn, its measures or the look change", async () => {
+test("a rebuild keeps a closed turn's rows until the turn or the look changes, with the size a new measure gives", async () => {
   const { v, cx } = await pane(fixture("--extra", "30"));
   for (let i = 0; i < 40; i++) draw(v, cx);
   const keys = v.turnKeys(v.rows());
@@ -9315,14 +9473,14 @@ test("a rebuild keeps a closed turn's rows until the turn, its measures or the l
   expect(rowOf(a)).toBe(before.a);
   expect(rowOf(b)).not.toBe(before.b);
   expect(rowOf(b).shape).not.toBe(before.b.shape);
-  // A new measure of a closed turn's reply: its kept rows carry the old size, so it is built
-  // again with the measured one.
+  // A new measure of a closed turn's reply: its kept row takes the measured size, so the
+  // next build keeps the row with that size.
   const rc = rowOf(c);
   const part = v.cmdFor(rc);
   v.probed(part.key, v.partSig(part), { height: 400 * v.zoom() }, cx);
   v.open.add(keys.at(-8));
   draw(v, cx);
-  expect(rowOf(c)).not.toBe(rc);
+  expect(rowOf(c)).toBe(rc);
   expect(sizeOf(c)).toBe(rc.shape.mdBase + 400);
   // A new width: every row is built again.
   const wa = rowOf(a);
