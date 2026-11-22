@@ -11610,6 +11610,27 @@ test("the card's Sender rules row and the settings line keep the number of rules
   } finally { done(v); }
 });
 
+test("the Pattern and Finds hints wrap inside the card: the hint's text may shrink, with Reference after it", async () => {
+  // The calls on the element right before the hint's text: min_w(0), not flex_none, which
+  // kept the text one line wide and ran it past the card's right edge.
+  const before = (c, text) => { const i = c.findIndex((x) => x[0] === "child" && x[1] === text); expect(i).toBeGreaterThan(0); return c[i - 1]; };
+  const { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-sender-2", "on_click")({}, cx);
+    expect(v.ruleEdit.draft.by).toBe("pattern");
+    const c = cardOf(v);
+    const hint = "A JavaScript regular expression with a group named sender. Capitals count.";
+    expect(before(c, hint)).toEqual(["min_w", 0]);
+    expect(c.findIndex((x) => x[0] === "child" && x[1] === hint)).toBeLessThan(idsAt(c, "th-rule-reference"));
+    expect(c).toContainEqual(["flex_wrap"]);
+  } finally { done(v); }
+  const r = await rulesPane();
+  try {
+    onOf(cardOf(r.v), "th-rule-1", "on_click")({}, r.cx);
+    expect(before(cardOf(r.v), "A JavaScript regular expression. Capitals count.")).toEqual(["min_w", 0]);
+  } finally { done(r.v); }
+});
+
 test("a press on a sender rule opens it in place: Name, Matches by, the prefix, Example and what it does to the example; Keep rule writes it, keeping keys this version does not know", async () => {
   const { v, cx } = await sendersPane();
   try {
