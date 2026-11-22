@@ -3873,10 +3873,11 @@ export default class Threads extends View {
     const [a, b] = g.tried.slice(-2);
     const line = g.tried.length > 1 ? weightLine(a, b) : null;
     if (line) g.S = line.b / line.a;
-    // Landed at its width: the Chat's weight at the same px a unit. With no other pane on a
-    // weight the column takes the rest of the row at any weight, the width it has, so the
-    // first measure lands (and S stays unknown).
-    if (Math.abs(n - g.p) <= 1) {
+    // Landed within 2 px of its width: the Chat's weight at the same px a unit. (On the rig a
+    // column stayed 2 px short at two weights 0.4% apart, so 1 px never landed.) With no other
+    // pane on a weight the column takes the rest of the row at any weight, the width it has,
+    // so the first measure lands (and S stays unknown).
+    if (Math.abs(n - g.p) <= 2) {
       g.final = { wc: Number(((g.w * g.m) / n).toPrecision(5)), wp: g.w };
       g.asked = now;
       run("layout.resize", { id: main.pane, weight: g.final.wc });

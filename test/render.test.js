@@ -17212,7 +17212,10 @@ function pairRow(total, sizes) {
     const px = row.order.filter((id) => row.size[id].px != null);
     const room = row.total - px.reduce((s, id) => s + row.size[id].px, 0);
     const sw = row.order.filter((id) => row.size[id].px == null).reduce((s, id) => s + row.size[id].weight, 0);
-    return Object.fromEntries(row.order.map((id) => [id, row.size[id].px ?? Math.round((room * row.size[id].weight) / sw)]));
+    // colStep: the column at a weight lands on a multiple of it (as a column on the rig stayed
+    // 2 px short at two weights 0.4% apart).
+    const at = (id) => { const x = (room * row.size[id].weight) / sw; return row.colStep && id === "p3" ? Math.round(x / row.colStep) * row.colStep : Math.round(x); };
+    return Object.fromEntries(row.order.map((id) => [id, row.size[id].px ?? at(id)]));
   };
   row.apply = () => {
     for (; row.seen < log.length; row.seen++) {
@@ -17322,8 +17325,9 @@ test("the Pinned column opens at px and the pair then goes on weights that keep 
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
     const end = t.row.widths();
     expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(1);
-    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(1);
-    expect(Math.abs(end.p1 - at.p1)).toBeLessThanOrEqual(2);
+    // The probe lands within 2 px.
+    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(2);
+    expect(Math.abs(end.p1 - at.p1)).toBeLessThanOrEqual(3);
     const pair = state.shared["threads.pinPair"].t4;
     // The probe's S, from two rounded widths: a first guess for later, near the terminal's 0.5.
     expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.06);
@@ -17452,6 +17456,20 @@ test("with the row known when the column opens (the Chat on its own weight), the
     expect(Math.abs(u.row.widths().p3 - 380)).toBeLessThanOrEqual(2);
     expect(pins.every((x) => x == null || x === 380)).toBe(true);
   } finally { u.restore(); }
+});
+
+test("a column that cannot land exactly at its width on a weight (2 px off at best) is paired within 2 px, on the first probe", async () => {
+  const t = await pairPanes(722, { total: 2200, weighed: true });
+  try {
+    // Opened at 380; at a weight it lands on a multiple of 6: 378 or 384.
+    t.row.colStep = 6;
+    t.run(4000);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(Math.abs(t.row.widths().p3 - 380)).toBeLessThanOrEqual(2);
+    expect(t.w.pairTries ?? 0).toBe(0);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+  } finally { t.restore(); }
 });
 
 test("the probe stops when the Chat moves under it, or after three weights Herdr does not answer: the column back at its px either way", async () => {
@@ -17745,7 +17763,7 @@ test("with the pair on weights, a drag that takes the Chat across 704 px and a w
     expect(widths.length).toBe(2);
     // The column's sum held and the terminal still.
     const f = t.row.widths();
-    expect(Math.abs(pairSum(f) - (722 + 380))).toBeLessThanOrEqual(1);
+    expect(Math.abs(pairSum(f) - (722 + 380))).toBeLessThanOrEqual(2);
     // The window 8% wider: the Chat back past 704 by the weights alone, then one re-wrap
     // (the re-wrap just done was quick here; one that took long holds again).
     t.v.rewrapMs = 151;
