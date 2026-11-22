@@ -18094,6 +18094,52 @@ test("a row record a closed Chat pane left behind does not stop the next Traject
   } finally { t.restore(); }
 });
 
+test("with the Trajectory dragged to 60 px: a key that grows it takes it to its 200 px floor in one press, a key that would shrink it does nothing and says nothing", async () => {
+  const setup = async () => {
+    const t = await threeOpen("traj");
+    const w = t.row.widths();
+    t.row.drag("p2", w.p4 - 60);
+    t.run(2000);
+    expect(t.row.widths().p4).toBe(60);
+    return t;
+  };
+  // [pane, key, the pane that gives, or null for nothing]
+  for (const [where, k, gives] of [["p3", "-", "p3"], ["p4", "=", "p2"], ["p2", "=", "p2"], ["p3", "=", null], ["p4", "-", null], ["p2", "-", null]]) {
+    const t = await setup();
+    try {
+      const said = [];
+      const x = t.inst[where].x;
+      const say = x.say.bind(x);
+      x.say = (...a) => { said.push(a[0]); return say(...a); };
+      const { was, now } = rowKey(t, where, k);
+      expect(said).toEqual([]);
+      if (!gives) { expect([where, k, now]).toEqual([where, k, was]); continue; }
+      expect([where, k, now.p4]).toEqual([where, k, 200]);
+      expect(now[gives] - was[gives]).toBe(-140);
+      for (const id of rowIds) if (id !== "p4" && id !== gives) expect(now[id]).toBe(was[id]);
+    } finally { t.restore(); }
+  }
+  // At its floor and over, no press moves more than its step.
+  const t = await setup();
+  try {
+    rowKey(t, "p4", "=");
+    for (const [where, k] of [["p4", "="], ["p2", "="], ["p3", "-"], ["p3", "="], ["p4", "-"]]) {
+      const { was, now } = rowKey(t, where, k);
+      for (const id of rowIds) expect([where, k, id, Math.abs(now[id] - was[id]) <= 40]).toEqual([where, k, id, true]);
+    }
+  } finally { t.restore(); }
+});
+
+test("columnResize keeps the stepped pane's own 200 px floor when the other pane's floor asks for more than it has", async () => {
+  const { columnResize } = await import("../mods/agent-threads/ui.js");
+  // The column at 220 against the Trajectory at 60: the column gives what it has over 200.
+  expect(columnResize(220, 60, -40, Infinity, 200)).toEqual({ column: 200, main: 80 });
+  // At its floor already: nothing.
+  expect(columnResize(200, 60, -40, Infinity, 200)).toBe(null);
+  // Room: the Trajectory to its floor in one press.
+  expect(columnResize(380, 60, -40, Infinity, 200)).toEqual({ column: 240, main: 200 });
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });
