@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -129,6 +129,7 @@ const IMG_DIR = `data/${MOD}/images`;
 // percentage moves, and each call's parse and apply run in slices (read()).
 const CHUNK = 2 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
+const COUNT_MS = 6; // a sender rule's count in the editor, a draw at most (senderMatches)
 // Reshaping collapsed rows (shape) in one draw: a change of Reply lines, Prompt lines, text
 // size, the width or the search reshapes every row, and in a long session that ran past
 // Herdr's time for a draw ("This view could not be re-rendered", interrupted). Past this
@@ -1703,6 +1704,7 @@ export default class Threads extends View {
     const { rule, why } = d[f] ? checkSender({ [f]: d[f] }) : { rule: null, why: `no ${f}` };
     e.faults = { prefix: null, pattern: null, [f]: why };
     for (const k of ["prefix", "pattern"]) if (e.shown[k] != null) e.shown[k] = e.faults[k];
+    e.rule = why ? null : rule;
     if (why) { e.stale = true; return; }
     e.result = this.senderResult(e, rule);
     e.lastGood = e.result;
@@ -1723,6 +1725,54 @@ export default class Threads extends View {
     const first = above.length ? ruleSender(above, d.example) : null;
     const beaten = first ? (this.senderList[first.rule - 1]?.name ?? "A rule above") : null;
     return { pieces: senderPieces(rule, d.example) ?? [{ t: d.example }], label: hit.name ? `${hit.name} · matched by rule` : "matched by rule", beaten, past };
+  }
+  // How many of the prompts typed in this pane's sessions a sender rule matches on its own
+  // (a rule above it may take some first), as the reader marks them (turns.js typedTurn and
+  // ruleSender): { hits, of }, or null with no rule or no typed prompt, and null while the
+  // count is still going. A rule may take many steps on a prompt (settings.js senderCost), so
+  // the count runs for COUNT_MS a draw at most and goes on in the next (senderHitsLeft).
+  // A turn's prompt never changes and a typed turn stays typed, and turns are only added or
+  // cut back to where the session settled (turns.js rewindTail). So for the rule's text each
+  // session keeps how far its turns were read and the last turn read: a draw reads only the
+  // turns added since, and a session is read again from its start only when its turns were
+  // cut back or it is another session.
+  senderMatches(rule) {
+    if (!rule) return null;
+    const rk = `${rule.re.source}/${rule.re.flags}|${rule.named ? 1 : 0}`;
+    let c = this.senderHits;
+    if (c?.rk !== rk) c = this.senderHits = { rk, per: [], shown: null };
+    const fresh = (s) => ({ s, id: s.id, n: 0, last: null, hits: 0, of: 0 });
+    c.per = this.sessions.map((s) => c.per.find((p) => p.s === s && p.id === s.id) ?? fresh(s));
+    const until = now() + COUNT_MS;
+    let hits = 0;
+    let of = 0;
+    let left = false;
+    for (let i = 0; i < c.per.length; i++) {
+      let p = c.per[i];
+      const turns = p.s.turns;
+      if (p.n > turns.length || (p.n && turns[p.n - 1] !== p.last)) p = c.per[i] = fresh(p.s);
+      while (!left && p.n < turns.length) {
+        const t = (p.last = turns[p.n++]);
+        if (!typedTurn(t)) continue;
+        p.of++;
+        if (ruleSender([rule], t.prompt)) p.hits++;
+        if (now() > until) left = true;
+      }
+      if (p.n < turns.length) left = true;
+      hits += p.hits;
+      of += p.of;
+    }
+    // Read by the draw that built this editor (render), and set again only by the next one.
+    if (left) { this.senderHitsLeft = true; return null; }
+    if (!of) return null;
+    if (c.shown?.hits !== hits || c.shown.of !== of) c.shown = { hits, of };
+    return c.shown;
+  }
+  // The line under the open rule's result: how many typed prompts here it matches.
+  senderMatchLine(n) {
+    if (n.of === 1) return n.hits ? "Matches the one prompt typed in this conversation." : "Does not match the one prompt typed in this conversation.";
+    const of = `${fmtCount(n.of)} prompts typed in this conversation`;
+    return n.hits ? `Matches ${fmtCount(n.hits)} of the ${of}.` : `Matches none of the ${of}.`;
   }
   // The session's repository changed (another session, another folder) under the open
   // rule: its example's result is worked out again for the new one.
@@ -5838,7 +5888,7 @@ export default class Threads extends View {
     const banners = this.banners(t);
     // The day at the top of the list, read before the list draws (body), for the day pill.
     this.stickyNow = null;
-    return v_flex()
+    const root = v_flex()
       .id("threads-root")
       .track_focus(this.h)
       // The pointer in the pane: the floating top shows its icons.
@@ -5867,6 +5917,17 @@ export default class Threads extends View {
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(this.settingsOpen, (el) => el.child(this.settingsCard(t, cx)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
+    // A sender rule's count the card above left for the next draw (senderMatches). Taken
+    // here each draw, so once the editor is not drawn (closed, its page left, the card
+    // closed) or its draft stops compiling, no next draw is asked for.
+    if (this.senderHitsLeft) {
+      this.senderHitsLeft = false;
+      if (!this.countNext) {
+        this.countNext = true;
+        cx.timer.after(0, (cx) => { this.countNext = false; cx.notify(); });
+      }
+    }
+    return root;
   }
 
   // props().debug: how long the last full build of the rows took (buildMs, its slices added
@@ -7337,7 +7398,12 @@ export default class Threads extends View {
         .when(Boolean(r.beaten), (el) => el.child(note(this.beatenLine(e, r.beaten, "takes this prompt first"))))
         .when(Boolean(r.past), (el) => el.child(note(`Only the first ${RULE_TEXT} characters of the first line are read.`)))
       : null;
-    return this.ruleShell(t, e, [typeBlock, ...fields, result, () => this.ruleButtons(t, e),
+    // How many prompts typed here the rule matches (senderMatches), under the result.
+    const count = () => {
+      const n = this.senderMatches(e.rule);
+      return n ? div().id("th-sender-count").child(note(this.senderMatchLine(n))) : null;
+    };
+    return this.ruleShell(t, e, [typeBlock, ...fields, result, count, () => this.ruleButtons(t, e),
       () => (this.refusedHere(e) ? this.cardKit(t).note(e.refused, t.blocked) : null)]);
   }
 

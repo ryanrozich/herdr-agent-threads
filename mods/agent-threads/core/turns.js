@@ -197,7 +197,7 @@ export function ruleSender(rules, prompt) {
 }
 
 // A turn the rules may mark: typed in the terminal, or marked by a rule before.
-const typedTurn = (t) => !t.cmd && (t.sender?.kind === "you" || t.sender?.rule != null);
+export const typedTurn = (t) => !t.cmd && (t.sender?.kind === "you" || t.sender?.rule != null);
 
 // Marks one turn by the rules; true when its sender changed.
 export function markTurn(turn, rules) {

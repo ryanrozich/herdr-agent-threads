@@ -10907,8 +10907,8 @@ const SENDS = [
 ];
 const SENDER_NOTE = "A sender rule names who sent a prompt that was typed into the terminal. A rule can make \"[build-bot] nightly build green\" show as a message from build-bot.";
 const SENDERS_NOT_LIST = "\"senders\" in settings.json is not a list, so the rule change was not saved. Fix the file first.";
-async function sendersPane(senders = SENDS) {
-  const r = await pane(fixture("--extra", "2"));
+async function sendersPane(senders = SENDS, file = null) {
+  const r = await pane(file ?? fixture("--extra", "2"));
   keepSettings = true;
   settingsWrites.length = 0;
   r.v.applyPrefs(JSON.stringify({ textSize: 15, links: RULES, senders }));
@@ -11079,6 +11079,216 @@ test("Delete takes a sender rule at once with Undo in its place; Undo puts it ba
     expect(v.ruleUndo).toBe(null);
     await settleAll(cx);
     expect(JSON.parse(settingsWrites.at(-1)).links).toEqual(RULES);
+  } finally { done(v); }
+});
+
+// The prompts a sender rule may mark: typed in the terminal (not a command), whether a rule
+// marked them already or not.
+const typedCount = (v) => v.sessions.flatMap((s) => s.turns).filter((t) => !t.cmd && (t.sender.kind === "you" || t.sender.rule != null)).length;
+const countLine = (c) => strsOf(ownOf(c, "th-sender-count"));
+
+test("the open sender rule says how many prompts typed here it matches, as it is edited; none for a rule that does not run", async () => {
+  const { v, cx } = await sendersPane([], fixture("--extra", "2", "--agents", "--commands"));
+  try {
+    // Commands and agents' messages are not prompts a rule reads.
+    const of = typedCount(v);
+    expect(of).toBeGreaterThan(2);
+    expect(of).toBeLessThan(v.sessions.flatMap((s) => s.turns).length);
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    // No rule yet: no count.
+    expect(idsIn(cardOf(v))).not.toContain("th-sender-count");
+    typeSender(v, "prefix", "Bump {name} ", cx);
+    expect(countLine(cardOf(v))).toEqual([`Matches 1 of the ${of} prompts typed in this conversation.`]);
+    // It follows each key, with no example typed.
+    typeSender(v, "prefix", "Zebra {name}:", cx);
+    expect(countLine(cardOf(v))).toEqual([`Matches none of the ${of} prompts typed in this conversation.`]);
+    onOf(cardOf(v), "th-sender-type-pattern", "on_click")({}, cx);
+    typeSender(v, "pattern", "^(?<sender>[A-Z][a-z]+) ", cx);
+    const caps = v.sessions.flatMap((s) => s.turns).filter((t) => !t.cmd && (t.sender.kind === "you" || t.sender.rule != null) && /^[A-Z][a-z]+ /.test(t.prompt.trimStart())).length;
+    expect(caps).toBeGreaterThan(1);
+    expect(countLine(cardOf(v))).toEqual([`Matches ${caps} of the ${of} prompts typed in this conversation.`]);
+    // A pattern that does not compile, or has no group named sender: no count at all.
+    typeSender(v, "pattern", "^(?<sender>[A-Z", cx);
+    expect(idsIn(cardOf(v))).not.toContain("th-sender-count");
+    expect(strsOf(cardOf(v)).some((x) => x.startsWith("Matches "))).toBe(false);
+    typeSender(v, "pattern", "^[A-Z][a-z]+ ", cx);
+    expect(idsIn(cardOf(v))).not.toContain("th-sender-count");
+    // One prompt, and thousands.
+    expect(v.senderMatchLine({ hits: 1, of: 1 })).toBe("Matches the one prompt typed in this conversation.");
+    expect(v.senderMatchLine({ hits: 0, of: 1 })).toBe("Does not match the one prompt typed in this conversation.");
+    expect(v.senderMatchLine({ hits: 1200, of: 2005 })).toBe("Matches 1,200 of the 2,005 prompts typed in this conversation.");
+    // The count comes after the result, above Keep rule.
+    typeSender(v, "pattern", "^(?<sender>[A-Z][a-z]+) ", cx);
+    typeSender(v, "example", "Bump deps to the latest", cx);
+    const c = cardOf(v);
+    expect(idsAt(c, "th-sender-count")).toBeGreaterThan(idsAt(c, "th-rule-result"));
+    expect(strsOf(c).indexOf(countLine(c)[0])).toBeLessThan(strsOf(c).indexOf("Keep rule"));
+  } finally { done(v); }
+});
+
+// A typed prompt to add to a session in a count test (only senderMatches reads it).
+const typedTurnOf = (prompt) => ({ prompt, cmd: false, sender: { kind: "you" } });
+
+test("the count takes a prompt a kept rule marked already, is kept for the rule's text, and reads only the turns added since", async () => {
+  const { v, cx } = await sendersPane([{ name: "Bump", prefix: "Bump {name} " }]);
+  try {
+    const marked = v.sessions.flatMap((s) => s.turns).filter((t) => t.sender.rule === 1);
+    expect(marked.length).toBe(1);
+    const of = typedCount(v);
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    expect(countLine(cardOf(v))).toEqual([`Matches 1 of the ${of} prompts typed in this conversation.`]);
+    // The same rule and sessions: the count kept.
+    const rule = v.ruleEdit.rule;
+    const n = v.senderMatches(rule);
+    expect(v.senderMatches(rule)).toBe(n);
+    cardOf(v);
+    expect(v.senderMatches(rule)).toBe(n);
+    // A session event with nothing new: the same count, no turn read again.
+    const s = v.current();
+    const per = v.senderHits.per.find((p) => p.s === s);
+    const read = per.n;
+    s.version++;
+    expect(v.senderMatches(rule)).toBe(n);
+    expect(per.n).toBe(read);
+    // A new typed prompt: only it is read.
+    s.turns.push(typedTurnOf("Bump Rex the lockfile"));
+    s.version++;
+    expect(v.senderMatches(rule)).toEqual({ hits: 2, of: of + 1 });
+    expect(v.senderHits.per.find((p) => p.s === s)).toBe(per);
+    expect(per.n).toBe(read + 1);
+    // Turns cut back (turns.js rewindTail) and one read in its place: the session is read
+    // again from its start.
+    s.turns.length -= 1;
+    s.turns.push(typedTurnOf("What next"));
+    s.version++;
+    expect(v.senderMatches(rule)).toEqual({ hits: 1, of: of + 1 });
+    s.turns.length -= 1;
+    s.version++;
+    expect(v.senderMatches(rule)).toEqual({ hits: 1, of });
+    // Another session with the same version and turns: its own count.
+    const other = { ...s, id: "another-session", turns: s.turns.map((t) => ({ ...t, prompt: `x ${t.prompt}` })) };
+    const was = v.sessions;
+    v.sessions = was.map((x) => (x === s ? other : x));
+    expect(v.senderMatches(rule)).toEqual({ hits: 0, of });
+    v.sessions = was;
+    expect(v.senderMatches(rule)).toEqual({ hits: 1, of });
+    // Another rule text: worked out again.
+    typeSender(v, "prefix", "What {name} ", cx);
+    expect(v.senderMatches(v.ruleEdit.rule)).toEqual({ hits: 1, of });
+  } finally { done(v); }
+});
+
+test("the count reads a prompt as the reader does: its first line, its first 100 characters; no prompt typed shows no line", async () => {
+  const { v, cx } = await sendersPane([]);
+  try {
+    const of = typedCount(v);
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    onOf(cardOf(v), "th-sender-type-pattern", "on_click")({}, cx);
+    typeSender(v, "pattern", "Zed (?<sender>[A-Z][a-z]+)", cx);
+    const s = v.current();
+    s.turns.push(typedTurnOf("Zed Bob, take this"), typedTurnOf("A first line\nZed Bob on the second"),
+      typedTurnOf(`${"x".repeat(100)} Zed Bob past the first 100`), typedTurnOf(`${"x".repeat(80)} Zed Bob inside them`));
+    s.version++;
+    expect(v.senderMatches(v.ruleEdit.rule)).toEqual({ hits: 2, of: of + 4 });
+    // No prompt typed in any session: no count and no line, not "0 of 0".
+    for (const x of v.sessions) x.turns = x.turns.map((t) => ({ ...t, cmd: true }));
+    s.version++;
+    expect(v.senderMatches(v.ruleEdit.rule)).toBe(null);
+    expect(idsIn(cardOf(v))).not.toContain("th-sender-count");
+    expect(strsOf(cardOf(v)).some((x) => /prompts? typed/.test(x))).toBe(false);
+  } finally { done(v); }
+});
+
+test("a slow count goes on over draws, asking for each; turns added between draws do not start it again", async () => {
+  const { v, cx } = await sendersPane([], fixture("--extra", "60"));
+  const clock = performance.now;
+  let at = 0;
+  try {
+    const of = typedCount(v);
+    expect(of).toBeGreaterThan(40);
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    typeSender(v, "prefix", "Bump {name} ", cx);
+    const { hits } = v.senderMatches(v.ruleEdit.rule);
+    v.senderHits = null;
+    v.countNext = false;
+    // Each clock read moves 4 ms: two prompts a draw.
+    performance.now = () => (at += 4);
+    const s = v.current();
+    const base = s.turns.find((t) => !t.cmd && t.sender.kind === "you");
+    let draws = 0;
+    let added = 0;
+    while (draws < 200) {
+      draws++;
+      v.render(cx);
+      if (!v.countNext) break;
+      // No line while the count is going: not a part of it.
+      if (draws === 1) expect(idsIn(cardOf(v))).not.toContain("th-sender-count");
+      cx.flush(0);
+      // An agent at work: a turn read between each draw.
+      if (added < 20) { s.turns.push({ ...base, n: s.turns.length + 1, prompt: `Bump Ada step ${added}` }); s.version++; added++; }
+    }
+    performance.now = clock;
+    expect(draws).toBeGreaterThan(10);
+    expect(draws).toBeLessThan(100);
+    expect(countLine(cardOf(v))).toEqual([`Matches ${hits + added} of the ${of + added} prompts typed in this conversation.`]);
+  } finally { performance.now = clock; done(v); }
+});
+
+test("a count given up part way asks for no more draws: the draft stops working, Discard, the page left, the card closed", async () => {
+  const clock = performance.now;
+  let at = 0;
+  for (const leave of ["draft", "discard", "page", "card"]) {
+    const { v, cx } = await sendersPane([], fixture("--extra", "60"));
+    try {
+      onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+      typeSender(v, "prefix", "Bump {name} ", cx);
+      v.senderHits = null;
+      v.countNext = false;
+      performance.now = () => (at += 4);
+      v.render(cx);
+      expect(v.countNext).toBe(true);
+      cx.flush(0);
+      v.render(cx);
+      expect(v.countNext).toBe(true);
+      if (leave === "draft") typeSender(v, "prefix", "", cx);
+      else if (leave === "discard") onOf(cardOf(v), "th-rule-discard", "on_click")({}, cx);
+      else if (leave === "page") v.action("settingsPage:main", cx);
+      else v.action("settings", cx);
+      // The draw already asked for, and at most one more; then none.
+      cx.flush(0);
+      v.render(cx);
+      cx.flush(0);
+      for (let i = 0; i < 3; i++) {
+        v.render(cx);
+        expect([leave, v.countNext]).toEqual([leave, false]);
+        cx.flush(0);
+      }
+    } finally { performance.now = clock; done(v); }
+  }
+});
+
+test("the card's Sender rules row and the settings line keep the number of rules after the editor counted", async () => {
+  const { v, cx } = await sendersPane();
+  try {
+    v.action("settingsPage:main", cx);
+    const row = strsOf(ownOf(cardOf(v), "th-set-senders"));
+    const settings = v.settingsLine();
+    expect(row.slice(0, 2)).toEqual(["Sender rules", String(SENDS.length)]);
+    expect(settings).toContain(`Sender rules · ${SENDS.length} `);
+    v.setPage = "senders";
+    onOf(cardOf(v), "th-sender-1", "on_click")({}, cx);
+    const of = typedCount(v);
+    const line = countLine(cardOf(v));
+    expect(line.length).toBe(1);
+    expect(line[0]).toContain(`${of} prompts typed`);
+    expect(v.settingsLine()).toBe(settings);
+    // The settings file read again while the editor is open: both stay right.
+    v.applyPrefs(JSON.stringify({ textSize: 15, links: RULES, senders: SENDS }));
+    expect(countLine(cardOf(v))).toEqual(line);
+    expect(v.settingsLine()).toBe(settings);
+    v.action("settingsPage:main", cx);
+    expect(strsOf(ownOf(cardOf(v), "th-set-senders"))).toEqual(row);
+    expect(v.settingsLine()).toBe(settings);
   } finally { done(v); }
 });
 
