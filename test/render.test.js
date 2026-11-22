@@ -11997,6 +11997,8 @@ test("templates: the ones not in use stay on the page under the rules after a ru
     expect(lastSenders()).toEqual([TEMPLATE_RULES.brackets]);
     const c = cardOf(v);
     expect(strsOf(c)).toEqual(expect.arrayContaining(["Rules · 1", "Templates, not rules until you keep one", "From line", "Name and a colon", "Add rule"]));
+    // Name and a colon's line says what else it takes.
+    expect(strsOf(c)).toContain("seat-one: or any hyphenated word, so follow-up: too.");
     expect(templatesOn(c)).toEqual(["from", "colon"]);
     // Under the rules, before Add rule.
     expect(idsAt(c, "th-sender-example-from")).toBeGreaterThan(idsAt(c, "th-sender-1"));
@@ -12086,11 +12088,13 @@ test("templates: Name and a colon reads a name with a hyphen and a colon, and le
     expect(lastSenders()).toEqual([TEMPLATE_RULES.colon]);
     // As the reader marks a typed prompt with the kept rules.
     expect(ruleSender(v.senders, "seat-one: 3 changes open")).toMatchObject({ kind: "peer", name: "seat-one", rule: 1, ruleLabel: "Name and a colon" });
+    // Any hyphenated word before a colon counts, as the template's line says.
+    for (const word of ["follow-up", "re-run", "pre-commit"]) expect(ruleSender(v.senders, `${word}: the tests please`)).toMatchObject({ kind: "peer", name: word });
     for (const own of ["Note: check the flaky test", "note: check the flaky test", "fix: the build on main", "TODO: rename the flag", "https://example.com/build: look", "seat-one 3 changes open"]) expect([own, ruleSender(v.senders, own)]).toEqual([own, null]);
   } finally { done(v); }
 });
 
-test("templates: a template is in use when a rule has its type and its text, on or off, working or not; spaces at the end and the name are not compared", async () => {
+test("templates: a template is in use when a rule has its type and its text, case and all, on or off, working or not; spaces at the end and the name are not compared", async () => {
   const cases = [
     [[{ name: "Mine", prefix: "[{name}] " }], ["from", "colon"]],
     [[{ prefix: "[{name}] ", on: false }], ["from", "colon"]],
@@ -12104,6 +12108,10 @@ test("templates: a template is in use when a rule has its type and its text, on 
     [[{ prefix: TEMPLATE_RULES.colon.pattern }], TEMPLATES],
     [[{ prefix: "[{name}]: " }], TEMPLATES],
     [[{ prefix: " [{name}] " }], TEMPLATES],
+    // Case counts, as it does when the rule reads a prompt.
+    [[{ prefix: "from {name}: " }], TEMPLATES],
+    [[{ prefix: "FROM {name}: " }], TEMPLATES],
+    [[{ pattern: TEMPLATE_RULES.colon.pattern.replace("[a-z]", "[A-Z]") }], TEMPLATES],
   ];
   for (const [senders, left] of cases) {
     const { v } = await sendersPane(senders);
