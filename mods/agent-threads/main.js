@@ -4089,12 +4089,19 @@ export default class Threads extends View {
     if (this.rowSeen?.sig !== sig) this.rowSeen = { sig, at: now };
     const still = now - this.rowSeen.at >= PAIR_STILL_MS;
     if (this.rowLand) { this.rowLandStep(n, rp, cx); return; }
-    if (ent?.k > 0) { if (still) this.rowTrack(ent, n, rp, cx); return; }
+    if (ent?.k > 0) { if (still) this.rowTrack(ent, n, rp, cx); else this.rowWake(PAIR_STILL_MS - (now - this.rowSeen.at), cx); return; }
     const plan = this.rowPlan;
     if (!plan) return;
     if (now - plan.at > 10000 || !n[plan.probe]) { this.rowPlan = null; return; }
     const placed = Math.abs(n[plan.probe] - plan.t) <= 2 && Object.entries(plan.held).every(([id, px]) => Math.abs((n[id] ?? -99) - px) <= 2);
     if (placed && still) this.rowBegin(plan, n, rp, cx);
+  }
+  // The Chat may not draw when only the panes past it move: a measure once the row is still,
+  // so the record follows before the next drag rather than on the 1 s poll.
+  rowWake(ms, cx) {
+    if (this.rowWoken || !cx?.timer) return;
+    this.rowWoken = true;
+    cx.timer.after(Math.max(0, ms) + 10, (cx) => { this.rowWoken = false; this.rowPoll(cx); });
   }
   // Measures 50 ms apart while a landing, a plan or a close is under way.
   rowTick(cx) {
@@ -4167,9 +4174,9 @@ export default class Threads extends View {
     if (g.final) for (const [id, px] of Object.entries(g.held)) if (panes().some((p) => p.pane === id)) run("layout.resize", { id, px });
     this.rowSave({ S: g.S }, cx);
   }
-  // The row on weights and still: what moved since (ui.js rowEvent). The outer edge trades the
-  // Chat's weight with the terminals' (S follows, k stays); a divider trades between its two
-  // panes (k stays); the window scales k. Anything else, or the panes changing: back to px.
+  // The row on weights and still: what moved since (ui.js rowEvent). Drags keep k, and the
+  // terminals' S gives up what the row's panes took; the window scales k. The panes changing,
+  // or the terminals left with nothing: back to px.
   rowTrack(ent, n, rp, cx) {
     const order = ["chat", "traj", "pin"].map((r) => rp.ids[r]).filter(Boolean);
     const same = order.length === Object.keys(ent.ids).length && order.every((id) => Object.values(ent.ids).includes(id));
@@ -4179,10 +4186,9 @@ export default class Threads extends View {
     const ev = rowEvent(was, now);
     if (ev.kind === "same") return;
     if (ev.kind === "stale") { this.rowPx(cx); return; }
-    // A divider leaves k and S as they were; only the widths change.
     let { k, S } = ent;
-    if (ev.kind === "edge") S -= (now[0] - was[0]) / k;
-    else if (ev.kind === "scale") k *= now[0] / was[0];
+    if (ev.kind === "drag") S -= ev.d / k;
+    else k *= now[0] / was[0];
     if (!(S > 0)) { this.rowPx(cx); return; }
     this.rowSave({ ...ent, k, S, n: Object.fromEntries(order.map((id, i) => [id, now[i]])) }, cx);
   }

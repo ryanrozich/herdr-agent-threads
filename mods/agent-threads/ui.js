@@ -2834,24 +2834,20 @@ export function pairEvent(was, now) {
 // column, in that order (the column splits off the Trajectory when it is open). The Chat
 // drives it. All widths are Herdr px.
 // What moved between two measures of the row's panes, left to right (the Chat first):
-// "same"; "edge" (the Chat alone: the terminals' divider beside it, which trades weight with
-// the terminal); "divider" at i (panes i and i + 1 with their sum held, the others as they
-// were); "scale" (every pane by one factor: the window); "stale" (anything else, more than
-// one change between measures, or a pane past the Chat changing alone). { kind, i }.
+// "same"; "scale" (two or more panes by one factor: the window); otherwise "drag", any mix of
+// the outer edge and the dividers since the last measure. Herdr keeps the sum of two weights
+// on a drag, so k holds and the terminals change by what the row's panes changed in all: d.
+// "stale" when the lists differ. { kind, d }.
 export function rowEvent(was, now) {
   if (was.length !== now.length) return { kind: "stale" };
   const d = now.map((x, i) => x - was[i]);
-  const moved = d.map((x) => Math.abs(x) > 1);
-  const n = moved.filter(Boolean).length;
-  if (!n) return { kind: "same" };
-  if (n === 1 && moved[0]) return { kind: "edge" };
-  if (n === 2) {
-    const i = moved.indexOf(true);
-    if (moved[i + 1] && Math.abs(d[i] + d[i + 1]) <= 2) return { kind: "divider", i };
-  }
+  const moved = d.filter((x) => Math.abs(x) > 1).length;
+  if (!moved) return { kind: "same" };
   const f = now[0] / was[0];
-  if (now.every((x, i) => Math.abs(x / was[i] - f) <= 0.01)) return { kind: "scale" };
-  return { kind: "stale" };
+  if (moved > 1 && now.every((x, i) => Math.abs(x / was[i] - f) <= 0.01)) return { kind: "scale" };
+  const sum = d.reduce((x, y) => x + y, 0);
+  // Two panes trading width round apart by a px each.
+  return { kind: "drag", d: Math.abs(sum) <= 2 ? 0 : sum };
 }
 // A pane of the row closed, with the row on weights: Herdr gives its weight to the pane before
 // it, which grows by the closed pane's width while the rest stay. The weights that put each
