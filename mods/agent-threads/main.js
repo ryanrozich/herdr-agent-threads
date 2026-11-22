@@ -3840,14 +3840,15 @@ export default class Threads extends View {
     // probe the column's width follows its trial weight, so the px from before the first is
     // the one kept.
     setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...(ent ?? {}), probe: ent?.probe > 0 ? ent.probe : p } });
-    run("layout.resize", { id: main.pane, px: m });
-    // No terminal beside them: the two share the row in the ratio of their widths.
+    // No terminal beside them: the two share the row in the ratio of their widths, one ask
+    // each.
     if (!others.length) {
       this.pairing = { m, p, S: 0, tried: [], final: { wc: m, wp: p }, asked: Date.now() };
       run("layout.resize", { id: main.pane, weight: m });
       run("layout.resize", { id: me.pane, weight: p });
       return;
     }
+    run("layout.resize", { id: main.pane, px: m });
     // The probe's widths are not the owner's (shareWidth).
     setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
     const S = ent?.S > 0 ? ent.S : 0.5;

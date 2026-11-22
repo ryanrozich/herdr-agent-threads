@@ -17792,6 +17792,26 @@ test("the column's opening keeps the terminal's 200 px when the row's room is kn
   expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380 });
 });
 
+test("with no terminal in the row the pair goes on weights in the ratio of their widths: one ask to each pane, the Chat at its width", async () => {
+  const t = await pairPanes();
+  try {
+    // The terminal gone from the tab and the row: the Chat and the column share it all.
+    state.panes = state.panes.filter((p) => p.pane !== "p1");
+    t.row.order = t.row.order.filter((id) => id !== "p1");
+    delete t.row.size.p1;
+    t.row.total = 722 + 380;
+    log = [];
+    t.row.seen = 0;
+    untilProbe(t);
+    const asks = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+    expect(asks).toEqual([{ id: "p2", weight: 722 }, { id: "p3", weight: 380 }]);
+    t.run(3000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    expect(t.row.widths()).toEqual({ p2: 722, p3: 380 });
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+  } finally { t.restore(); }
+});
+
 test("with a second terminal in the tab the pair is made from two measures of the column, the Chat still at its width", async () => {
   const t = await pairPanes();
   try {
