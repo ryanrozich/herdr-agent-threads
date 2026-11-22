@@ -1,10 +1,11 @@
 // agent-threads: turns from extractor events. Plain JavaScript with no Herdr imports, so
 // the tests run it under bun or node.
 //
-// One row per prompt a person (or another session, or a schedule) gave the agent.
-// Task notifications and auto-continuations start model turns of their own, but they are
-// folded into the row above: their tokens and tool calls count, their text does not
-// replace the row's final reply.
+// One row per prompt a person (or another session, or a schedule) gave the agent, and one
+// per task notification that wakes the agent after a row has ended (its sender is
+// "task-notification"). Auto-continuations, and task notifications that land while a row
+// is still open, are folded into the row above: their tokens and tool calls count, their
+// text does not replace the row's final reply.
 //
 // A slash command line (/usage, /clear, a skill) waits as s.pendingCmd. Local commands
 // never start a model turn, so they never become rows; a skill or custom command does,
@@ -275,6 +276,9 @@ function newTurn(s, e) {
     latest: "", // the final text of the last background update that said something
     latestAt: null, // when that text began: the time of its first part
     latestParts: [],
+    // Each background update that said something keeps its final text here, in order
+    // (turn.updates, made with the first one), so a later update never drops an earlier one,
+    // and when that text began beside it (turn.updatesAt, as latestAt).
     // Pasted images: media type and paste number ([Image #N]) each, and what image.sh finds
     // them by: the prompt line's uuid (Claude Code), turn id and ordinal (Codex), or the
     // message id (OpenCode) or entry id (Pi). src is the temp file a Pi paste names.
@@ -455,7 +459,10 @@ function applyOne(s, e) {
         s.pendingCmd = e;
         return;
       }
-      if (OWN_ROW.has(e.o) || !cur) {
+      // A task notification that wakes the agent once the row above has ended starts a row of
+      // its own: what the agent says then is a reply for the person, so it shows in the Chat
+      // (the owner, 21 Nov). One that lands while a row is open still counts on that row.
+      if (OWN_ROW.has(e.o) || !cur || (e.o === "task-notification" && !s.open.length)) {
         clockStart(s, openRow(s, e), e);
       } else if (s.open.length) {
         // A notification while the row is open: Claude still owes this row its reply. One
@@ -465,6 +472,7 @@ function applyOne(s, e) {
       } else {
         cur.followups++;
         cur.latestParts = [];
+        s.updateAt = null;
         s.seg = "follow";
         s.followActive = true;
         // This wake-up's own clock and tool count, apart from the prompt's.
@@ -497,6 +505,11 @@ function applyOne(s, e) {
         if (!cur.latestParts.length) cur.latestAt = ms(e.ts);
         cur.latestParts.push(e.t);
         cur.latest = cur.latestParts.join("\n\n").trim();
+        // This wake-up's place in turn.updates, taken by its first text: its text after its
+        // last call replaces what it said before, as latest does.
+        if (s.updateAt?.turn !== cur) s.updateAt = { turn: cur, i: (cur.updates ??= []).push("") - 1 };
+        cur.updates[s.updateAt.i] = cur.latest;
+        (cur.updatesAt ??= [])[s.updateAt.i] = cur.latestAt;
         const w = s.keepWakes ? cur.wakes?.at(-1) : null;
         if (w) { if (!w.after.length) w.afterAt = ms(e.ts); w.after.push(e.t); }
       }
@@ -650,6 +663,7 @@ export function rewindTail(s) {
   s.seg = null;
   s.pendingCmd = null;
   s.followActive = false;
+  s.updateAt = null;
   s.version++;
 }
 
@@ -680,6 +694,13 @@ export function replaced(s, c) {
 
 export function reply(turn) {
   return turn.after.join("\n\n").trim();
+}
+
+// What every background update after the reply said, in order, one paragraph each: the
+// text under LATEST UPDATE. The last of turn.updates is always latest, so it is the earlier
+// ones, then latest.
+export function updatesText(turn) {
+  return [...(turn.updates?.slice(0, -1) ?? []), turn.latest ?? ""].filter(Boolean).join("\n\n").trim();
 }
 
 export function running(turn, isLast) {

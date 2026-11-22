@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, replaced, reply, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, replaced, reply, updatesText, stats, segments, shortModel, fmtDuration, fmtTokens, fmtTime, cachePct, fmtPct, cacheLine, commandParts, senderOf, matches, sessionStats } from "../mods/agent-threads/core/turns.js";
 
 const root = join(import.meta.dir, "..");
 const extractor = join(root, "mods/agent-threads/core/extract.sh");
@@ -32,11 +32,12 @@ test("assembles turns from the fixture", () => {
   expect(s.turns.map((t) => t.prompt.split("\n")[0])).toEqual([
     "What does the auth mock warning in the test output mean?",
     "Fix the flaky login test so it stops timing out in CI",
+    "",
     "Run the full e2e suite and summarise the failures",
     "Why does CI fail here? Log below:",
     "Add a retry note to the README",
   ]);
-  const [plain, fix, e2e, long, readme] = s.turns;
+  const [plain, fix, note, e2e, long, readme] = s.turns;
   expect(plain.tools).toBe(0);
   expect(reply(plain)).toStartWith("It fires when a test skips logout");
   expect(fix.tools).toBe(3);
@@ -48,8 +49,11 @@ test("assembles turns from the fixture", () => {
   expect(reply(fix)).toStartWith("The test raced the redirect.");
   expect(reply(fix)).not.toContain("Let me look");
   expect(reply(fix)).not.toContain("background build");
-  expect(fix.followups).toBe(1);
-  expect(fix.durationMs).toBe(105000);
+  // The task notification after the turn is a row of its own, with its reply and its time.
+  expect(fix.followups).toBe(0);
+  expect(fix.durationMs).toBe(102000);
+  expect(note).toMatchObject({ sender: { kind: "task-notification" }, agent: true, done: true, durationMs: 3000 });
+  expect(reply(note)).toBe("The background build finished cleanly.");
   expect(e2e.interrupted).toBe(true);
   expect(reply(e2e)).toBe("");
   expect(long.compactions).toBe(0);
@@ -83,7 +87,7 @@ test("a cut-off last line is left for the next read", () => {
   appendFileSync(file, text.slice(cut));
   read(file, 1 << 20, s);
   expect(s.offset).toBe(Buffer.byteLength(text));
-  expect(s.turns.length).toBe(5);
+  expect(s.turns.length).toBe(6);
 });
 
 test("running turn stays open until turn_duration", () => {
@@ -189,14 +193,37 @@ test("only an interrupt line marks a turn interrupted", () => {
   expect(s.turns[1].interrupted).toBe(true);
 });
 
-test("a notification turn after a closed row is followActive until its turn_duration", () => {
+test("an auto-continuation after a closed row is followActive until its turn_duration", () => {
   const s = newSession("s", "f");
   apply(s, { k: "p", o: "human", t: "a" });
   apply(s, { k: "d", ms: 1 });
-  apply(s, { k: "p", o: "task-notification", t: null });
+  apply(s, { k: "p", o: "auto-continuation", t: null });
   expect(s.followActive).toBe(true);
   apply(s, { k: "d", ms: 1 });
   expect(s.followActive).toBe(false);
+});
+
+test("a task notification after a closed row is a row of its own with its reply; one while a row is open counts on it", () => {
+  const s = newSession("s", "f");
+  apply(s, { k: "p", o: "human", t: "a" });
+  apply(s, { k: "u", n: "Bash" });
+  // While the row works: a background update of that row.
+  apply(s, { k: "p", o: "task-notification", t: null });
+  apply(s, { k: "t", t: "the reply" });
+  apply(s, { k: "d", ms: 1 });
+  expect(s.turns.length).toBe(1);
+  expect(s.turns[0].followups).toBe(1);
+  // Once it has ended: a row, open while the agent works and done at its reply.
+  apply(s, { k: "p", o: "task-notification", t: null });
+  expect(s.turns.length).toBe(2);
+  expect(s.turns[1]).toMatchObject({ prompt: "", sender: { kind: "task-notification" }, agent: true, done: false });
+  expect(s.followActive).toBe(false);
+  apply(s, { k: "t", t: "the build passed" });
+  apply(s, { k: "s" });
+  expect(s.turns[1].done).toBe(true);
+  expect(reply(s.turns[1])).toBe("the build passed");
+  expect(s.turns[0]).toMatchObject({ followups: 1, latest: "" });
+  expect(reply(s.turns[0])).toBe("the reply");
 });
 
 test("usage of a message split over block lines counts once", () => {
@@ -449,7 +476,7 @@ test("--agents, --commands, --latest and --skill fixtures round trip with sender
   expect(fix.followups).toBe(1);
   expect(reply(fix)).toBe("Fixed both: the guard now rejects 0 and negative quantities.");
   expect(fix.latest).toBe("Added a test for the zero-quantity case.");
-  // the task notification after turn_duration said something new; the reply is unchanged
+  // the auto-continuation after turn_duration said something new; the reply is unchanged
   const exp = s.turns[14];
   expect(reply(exp)).toBe("Started the export; I will report when it finishes.");
   expect(exp.latest).toBe("The export finished: 1,204 rows, no errors. The file is out/export.csv.");
@@ -471,8 +498,8 @@ test("background update text resets at each tool call and each new update", () =
   const s = newSession("s", "f");
   const ev = [
     { k: "p", o: "human", t: "go" }, { k: "t", t: "done" }, { k: "d", ms: 1 },
-    { k: "p", o: "task-notification" }, { k: "t", t: "checking" }, { k: "u", n: "Read" }, { k: "t", t: "first update" }, { k: "d", ms: 1 },
-    { k: "p", o: "task-notification" }, { k: "u", n: "Read" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "t", t: "checking" }, { k: "u", n: "Read" }, { k: "t", t: "first update" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "u", n: "Read" }, { k: "d", ms: 1 },
   ];
   for (const e of ev) apply(s, e);
   expect(reply(s.turns[0])).toBe("done");
@@ -485,18 +512,57 @@ test("the latest background update keeps when its first text came, beside the te
   const at = (m) => `2026-11-01T09:${String(m).padStart(2, "0")}:00.000Z`;
   const ev = [
     { k: "p", o: "human", t: "go", ts: at(0) }, { k: "t", t: "done", ts: at(1) }, { k: "d", ms: 1 },
-    { k: "p", o: "task-notification", ts: at(5) }, { k: "t", t: "checking", ts: at(6) }, { k: "u", n: "Read", ts: at(7) },
+    { k: "p", o: "auto-continuation", ts: at(5) }, { k: "t", t: "checking", ts: at(6) }, { k: "u", n: "Read", ts: at(7) },
     { k: "t", t: "first update", ts: at(8) }, { k: "t", t: "and more", ts: at(9) }, { k: "d", ms: 1 },
   ];
   for (const e of ev) apply(s, e);
   expect(s.turns[0].latest).toBe("first update\n\nand more");
   expect(s.turns[0].latestAt).toBe(Date.parse(at(8)));
   // A later wake-up with no text of its own leaves the update and its time as they were.
-  for (const e of [{ k: "p", o: "task-notification", ts: at(20) }, { k: "u", n: "Read", ts: at(21) }, { k: "d", ms: 1 }]) apply(s, e);
+  for (const e of [{ k: "p", o: "auto-continuation", ts: at(20) }, { k: "u", n: "Read", ts: at(21) }, { k: "d", ms: 1 }]) apply(s, e);
   expect(s.turns[0].latestAt).toBe(Date.parse(at(8)));
   // One that says something moves both.
-  for (const e of [{ k: "p", o: "task-notification", ts: at(30) }, { k: "t", t: "second", ts: at(31) }, { k: "d", ms: 1 }]) apply(s, e);
+  for (const e of [{ k: "p", o: "auto-continuation", ts: at(30) }, { k: "t", t: "second", ts: at(31) }, { k: "d", ms: 1 }]) apply(s, e);
   expect([s.turns[0].latest, s.turns[0].latestAt]).toEqual(["second", Date.parse(at(31))]);
+});
+
+test("every background update keeps its own final text, in order; a silent one adds none", () => {
+  const s = newSession("s", "f");
+  const ev = [
+    { k: "p", o: "human", t: "go" }, { k: "t", t: "done" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "t", t: "checking" }, { k: "u", n: "Read" }, { k: "t", t: "the build passed" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "u", n: "Read" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "t", t: "the deploy is out" }, { k: "s" },
+  ];
+  for (const e of ev) apply(s, e);
+  const [turn] = s.turns;
+  expect(reply(turn)).toBe("done");
+  expect(turn.followups).toBe(3);
+  expect(turn.updates).toEqual(["the build passed", "the deploy is out"]);
+  expect(turn.latest).toBe("the deploy is out");
+  expect(updatesText(turn)).toBe("the build passed\n\nthe deploy is out");
+  // A turn with no background update has none.
+  const t = newSession("t", "f");
+  for (const e of ev.slice(0, 3)) apply(t, e);
+  expect(t.turns[0].updates).toBeUndefined();
+  expect(updatesText(t.turns[0])).toBe("");
+});
+
+// A task notification while an auto-continuation's wake-up is still going, after the row has
+// ended: the notice opens a row of its own, and what the agent says from then on is its reply.
+test("a task notification during a running auto-continuation opens its own row; the text after it is that row's", () => {
+  const s = newSession("s", "f");
+  for (const e of [
+    { k: "p", o: "human", t: "go" }, { k: "t", t: "done" }, { k: "d", ms: 1 },
+    { k: "p", o: "auto-continuation" }, { k: "t", t: "checking" }, { k: "u", n: "Read" },
+  ]) apply(s, e);
+  expect(s.followActive).toBe(true);
+  for (const e of [{ k: "p", o: "task-notification", t: null }, { k: "t", t: "the build passed" }, { k: "d", ms: 1 }]) apply(s, e);
+  expect(s.turns).toHaveLength(2);
+  expect(s.turns[0]).toMatchObject({ followups: 1, latest: "checking", updates: ["checking"] });
+  expect(reply(s.turns[0])).toBe("done");
+  expect(s.turns[1]).toMatchObject({ prompt: "", sender: { kind: "task-notification" }, done: true });
+  expect(reply(s.turns[1])).toBe("the build passed");
 });
 
 test("a command line from another sender is that sender's turn, not the person's (F3)", () => {

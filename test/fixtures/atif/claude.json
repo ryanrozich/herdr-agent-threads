@@ -135,47 +135,72 @@
     "turn": 2,
     "turn_id": "1793524384|1ww5af2|1",
     "is_sidechain": false,
-    "end_ts": "2026-11-01T09:13:56.000Z"
+    "end_ts": "2026-11-01T09:13:32.000Z",
+    "duration_ms": 102000
+   },
+   "metrics": {
+    "prompt_tokens": 238630,
+    "completion_tokens": 710,
+    "cached_tokens": 229000,
+    "extra": {
+     "cache_creation_input_tokens": 9600,
+     "scope": "turn",
+     "model_messages": 5
+    }
    }
   },
   {
    "step_id": 6,
+   "timestamp": "2026-11-01T09:13:52.000Z",
+   "source": "user",
+   "message": "",
+   "extra": {
+    "turn": 3,
+    "turn_id": "1793524432|ztntfp|1",
+    "is_sidechain": false,
+    "sender": {
+     "kind": "task-notification"
+    }
+   }
+  },
+  {
+   "step_id": 7,
    "timestamp": "2026-11-01T09:13:56.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
    "reasoning_effort": "high",
    "message": "The background build finished cleanly.",
    "extra": {
-    "turn": 2,
-    "turn_id": "1793524384|1ww5af2|1",
+    "turn": 3,
+    "turn_id": "1793524432|ztntfp|1",
     "is_sidechain": false,
-    "kind": "background_update",
-    "duration_ms": 105000
+    "end_ts": "2026-11-01T09:13:56.000Z",
+    "duration_ms": 3000
    },
    "metrics": {
-    "prompt_tokens": 282436,
-    "completion_tokens": 730,
-    "cached_tokens": 271000,
+    "prompt_tokens": 43806,
+    "completion_tokens": 20,
+    "cached_tokens": 42000,
     "extra": {
-     "cache_creation_input_tokens": 11400,
+     "cache_creation_input_tokens": 1800,
      "scope": "turn",
-     "model_messages": 6
+     "model_messages": 1
     }
    }
   },
   {
-   "step_id": 7,
+   "step_id": 8,
    "timestamp": "2026-11-01T09:14:26.000Z",
    "source": "user",
    "message": "Run the full e2e suite and summarise the failures",
    "extra": {
-    "turn": 3,
+    "turn": 4,
     "turn_id": "1793524466|1fsoikl|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 8,
+   "step_id": 9,
    "timestamp": "2026-11-01T09:14:30.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
@@ -204,7 +229,7 @@
     ]
    },
    "extra": {
-    "turn": 3,
+    "turn": 4,
     "turn_id": "1793524466|1fsoikl|1",
     "is_sidechain": false,
     "interrupted": true,
@@ -222,18 +247,18 @@
    }
   },
   {
-   "step_id": 9,
+   "step_id": 10,
    "timestamp": "2026-11-01T09:15:53.000Z",
    "source": "user",
    "message": "Why does CI fail here? Log below:\n\nTimeoutError: waitForURL 30000ms\n    at step0 (tests/login.spec.ts:40:5)\n    at step1 (tests/login.spec.ts:41:5)\n    at step2 (tests/login.spec.ts:42:5)\n    at step3 (tests/login.spec.ts:43:5)\n    at step4 (tests/login.spec.ts:44:5)\n    at step5 (tests/login.spec.ts:45:5)\n    at step6 (tests/login.spec.ts:46:5)\n    at step7 (tests/login.spec.ts:47:5)\n    at step8 (tests/login.spec.ts:48:5)\n    at step9 (tests/login.spec.ts:49:5)\n    at step10 (tests/login.spec.ts:50:5)\n    at step11 (tests/login.spec.ts:51:5)\n    at step12 (tests/login.spec.ts:52:5)\n    at step13 (tests/login.spec.ts:53:5)\n    at step14 (tests/login.spec.ts:54:5)\n    at step15 (tests/login.spec.ts:55:5)\n    at step16 (tests/login.spec.ts:56:5)\n    at step17 (tests/login.spec.ts:57:5)\n    at step18 (tests/login.spec.ts:58:5)\n    at step19 (tests/login.spec.ts:59:5)\n    at step20 (tests/login.spec.ts:60:5)\n    at step21 (tests/login.spec.ts:61:5)\n    at step22 (tests/login.spec.ts:62:5)\n    at step23 (tests/login.spec.ts:63:5)\n    at step24 (tests/login.spec.ts:64:5)\n    at step25 (tests/login.spec.ts:65:5)\n    at step26 (tests/login.spec.ts:66:5)\n    at step27 (tests/login.spec.ts:67:5)\n    at step28 (tests/login.spec.ts:68:5)\n    at step29 (tests/login.spec.ts:69:5)\n    at step30 (tests/login.spec.ts:70:5)\n    at step31 (tests/login.spec.ts:71:5)\n    at step32 (tests/login.spec.ts:72:5)\n    at step33 (tests/login.spec.ts:73:5)\n    at step34 (tests/login.spec.ts:74:5)\n    at step35 (tests/login.spec.ts:75:5)\n    at step36 (tests/login.spec.ts:76:5)\n    at step37 (tests/login.spec.ts:77:5)\n    at step38 (tests/login.spec.ts:78:5)\n    at step39 (tests/login.spec.ts:79:5)",
    "extra": {
-    "turn": 4,
+    "turn": 5,
     "turn_id": "1793524553|9gc6gh|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 10,
+   "step_id": 11,
    "timestamp": "2026-11-01T09:15:57.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
@@ -278,20 +303,20 @@
     ]
    },
    "extra": {
-    "turn": 4,
+    "turn": 5,
     "turn_id": "1793524553|9gc6gh|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 11,
+   "step_id": 12,
    "timestamp": "2026-11-01T09:16:17.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
    "reasoning_effort": "high",
    "message": "The login spec waited on a URL that the new auth flow never visits.\n\nParagraph 1: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 2: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 3: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 4: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 5: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\nParagraph 6: the staging redirect adds a second hop, so the wait has to follow the final URL rather than the first one. This is placeholder prose to make the reply long.\n\n```ts\nexport async function waitForSession(page: Page) {\n  const step0 = await runStep(0, { retries: 2, timeoutMs: 15_000, label: \"step-0-with-a-long-label-that-scrolls\" })\n  const step1 = await runStep(1, { retries: 2, timeoutMs: 15_000, label: \"step-1-with-a-long-label-that-scrolls\" })\n  const step2 = await runStep(2, { retries: 2, timeoutMs: 15_000, label: \"step-2-with-a-long-label-that-scrolls\" })\n  const step3 = await runStep(3, { retries: 2, timeoutMs: 15_000, label: \"step-3-with-a-long-label-that-scrolls\" })\n  const step4 = await runStep(4, { retries: 2, timeoutMs: 15_000, label: \"step-4-with-a-long-label-that-scrolls\" })\n  const step5 = await runStep(5, { retries: 2, timeoutMs: 15_000, label: \"step-5-with-a-long-label-that-scrolls\" })\n  const step6 = await runStep(6, { retries: 2, timeoutMs: 15_000, label: \"step-6-with-a-long-label-that-scrolls\" })\n  const step7 = await runStep(7, { retries: 2, timeoutMs: 15_000, label: \"step-7-with-a-long-label-that-scrolls\" })\n  const step8 = await runStep(8, { retries: 2, timeoutMs: 15_000, label: \"step-8-with-a-long-label-that-scrolls\" })\n  const step9 = await runStep(9, { retries: 2, timeoutMs: 15_000, label: \"step-9-with-a-long-label-that-scrolls\" })\n  const step10 = await runStep(10, { retries: 2, timeoutMs: 15_000, label: \"step-10-with-a-long-label-that-scrolls\" })\n  const step11 = await runStep(11, { retries: 2, timeoutMs: 15_000, label: \"step-11-with-a-long-label-that-scrolls\" })\n  const step12 = await runStep(12, { retries: 2, timeoutMs: 15_000, label: \"step-12-with-a-long-label-that-scrolls\" })\n  const step13 = await runStep(13, { retries: 2, timeoutMs: 15_000, label: \"step-13-with-a-long-label-that-scrolls\" })\n  const step14 = await runStep(14, { retries: 2, timeoutMs: 15_000, label: \"step-14-with-a-long-label-that-scrolls\" })\n  const step15 = await runStep(15, { retries: 2, timeoutMs: 15_000, label: \"step-15-with-a-long-label-that-scrolls\" })\n  const step16 = await runStep(16, { retries: 2, timeoutMs: 15_000, label: \"step-16-with-a-long-label-that-scrolls\" })\n  const step17 = await runStep(17, { retries: 2, timeoutMs: 15_000, label: \"step-17-with-a-long-label-that-scrolls\" })\n  const step18 = await runStep(18, { retries: 2, timeoutMs: 15_000, label: \"step-18-with-a-long-label-that-scrolls\" })\n  const step19 = await runStep(19, { retries: 2, timeoutMs: 15_000, label: \"step-19-with-a-long-label-that-scrolls\" })\n  const step20 = await runStep(20, { retries: 2, timeoutMs: 15_000, label: \"step-20-with-a-long-label-that-scrolls\" })\n  const step21 = await runStep(21, { retries: 2, timeoutMs: 15_000, label: \"step-21-with-a-long-label-that-scrolls\" })\n  const step22 = await runStep(22, { retries: 2, timeoutMs: 15_000, label: \"step-22-with-a-long-label-that-scrolls\" })\n  const step23 = await runStep(23, { retries: 2, timeoutMs: 15_000, label: \"step-23-with-a-long-label-that-scrolls\" })\n}\n```\n\nThen I ran the suite 20 times locally with no failures.",
    "extra": {
-    "turn": 4,
+    "turn": 5,
     "turn_id": "1793524553|9gc6gh|1",
     "is_sidechain": false,
     "end_ts": "2026-11-01T09:16:17.000Z",
@@ -309,18 +334,18 @@
    }
   },
   {
-   "step_id": 12,
+   "step_id": 13,
    "timestamp": "2026-11-01T09:16:47.000Z",
    "source": "user",
    "message": "Add a retry note to the README",
    "extra": {
-    "turn": 5,
+    "turn": 6,
     "turn_id": "1793524607|16hagqb|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 13,
+   "step_id": 14,
    "timestamp": "2026-11-01T09:16:54.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
@@ -349,20 +374,20 @@
     ]
    },
    "extra": {
-    "turn": 5,
+    "turn": 6,
     "turn_id": "1793524607|16hagqb|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 14,
+   "step_id": 15,
    "timestamp": "2026-11-01T09:17:00.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
    "reasoning_effort": "high",
    "message": "Documented the retry flag under **Testing**.",
    "extra": {
-    "turn": 5,
+    "turn": 6,
     "turn_id": "1793524607|16hagqb|1",
     "is_sidechain": false,
     "end_ts": "2026-11-01T09:17:00.000Z",
@@ -383,18 +408,18 @@
    }
   },
   {
-   "step_id": 15,
+   "step_id": 16,
    "timestamp": "2026-11-01T09:17:30.000Z",
    "source": "user",
    "message": "Review the calendar code three ways",
    "extra": {
-    "turn": 6,
+    "turn": 7,
     "turn_id": "1793524650|5n8crn|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 16,
+   "step_id": 17,
    "timestamp": "2026-11-01T09:17:34.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
@@ -505,20 +530,20 @@
     ]
    },
    "extra": {
-    "turn": 6,
+    "turn": 7,
     "turn_id": "1793524650|5n8crn|1",
     "is_sidechain": false
    }
   },
   {
-   "step_id": 17,
+   "step_id": 18,
    "timestamp": "2026-11-01T09:19:04.000Z",
    "source": "agent",
    "model_name": "claude-opus-5-5",
    "reasoning_effort": "high",
    "message": "All three reviews are back: the range math and time zones are right, and two tests need a fixed clock.",
    "extra": {
-    "turn": 6,
+    "turn": 7,
     "turn_id": "1793524650|5n8crn|1",
     "is_sidechain": false,
     "end_ts": "2026-11-01T09:19:04.000Z",
@@ -541,7 +566,7 @@
   "total_prompt_tokens": 847114,
   "total_completion_tokens": 3390,
   "total_cached_tokens": 805000,
-  "total_steps": 17
+  "total_steps": 18
  },
  "extra": {
   "title": "login flake",

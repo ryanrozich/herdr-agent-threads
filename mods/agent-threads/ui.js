@@ -2160,8 +2160,14 @@ export function parseRemote(url) {
 
 const KIND_WORDS = {
   hc: "hc report", peer: "agent message", scheduled: "Scheduled", sdk: "SDK",
-  "task-notification": "Task notification", "auto-continuation": "Auto-continuation",
+  "task-notification": "Background task finished", "auto-continuation": "Auto-continuation",
 };
+// A turn a task notification started after the turn before it ended (core/turns.js): it has
+// no message, so one quiet line, "Background task finished", stands where its bubble would
+// be, closed, open, running or searched; the notice's own text is never shown.
+export function noticeTurn(turn) {
+  return turn?.sender?.kind === "task-notification" && !String(turn.prompt ?? "").trim();
+}
 // A typed prompt a sender rule matched says so ("matched by rule"), whatever kind the rule
 // gave it: the session has no sender for it, only the rule's reading of its text.
 export function kindWords(sender) {
@@ -2201,7 +2207,7 @@ export function senderLabel(sender, width) {
 // "Matched by a sender rule").
 export function senderIcon(sender) {
   if (sender?.rule != null && sender.kind !== "you") return "tag";
-  return { scheduled: "clock", sdk: "square-terminal" }[sender?.kind] ?? "bot";
+  return { scheduled: "clock", sdk: "square-terminal", "task-notification": "bell" }[sender?.kind] ?? "bot";
 }
 
 // Whether a turn is shown: the person's own turns always; another sender's when the

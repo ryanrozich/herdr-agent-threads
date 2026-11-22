@@ -68,7 +68,7 @@ import {
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
 } from "herdr";
 import {
-  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
+  newSession, apply, rewindTail, newChunk, parseLine, nextChunk, replaced, reply, updatesText, stats, segments, threadMatches, remarkSenders, ruleSender, typedTurn, RULE_TEXT,
   fmtTokens, fmtDuration, fmtClock, fmtTime, fmtBytes, shortModel, fmtPct, cacheLine, cachePct, commandParts, fmtCount, turnSums, sumsStats,
   noteSkip, skipNote,
 } from "./core/turns.js";
@@ -76,7 +76,7 @@ import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, ca
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
   keyAction, ringKey, nextStop, keyInstaller, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget, ledgerKey, TRAJ_MAX,
-  rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, isShown, agentReplied, countLabel,
+  rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
@@ -2970,7 +2970,7 @@ export default class Threads extends View {
         const live = ti === liveTi;
         // The outline: one row per turn, under the same day bands, the same search and the
         // same agents toggle. It keeps the turn's key, so the selection carries over.
-        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(turn.prompt, q) }); continue; }
+        if (outline) { out.push({ kind: "line", key, turn, s, si, last, running: live, numW, text: outlineText(noticeTurn(turn) ? kindWords(turn.sender) : turn.prompt, q) }); continue; }
         this.turnRows({ kind: "turn", key, turn, s, si, last, live }, ti, out, status, cg);
         // A line skipped while this turn was the newest one read (noteSkip): one dim line after it.
         if (turn.skipped && !q) out.push({ kind: "note", key: `skip:${key}`, text: skipNote(turn.skipped) });
@@ -3144,6 +3144,8 @@ export default class Threads extends View {
   // the message under it: `full` holds "<turn key>:am"); null for every other turn. While a
   // search is on, the message is drawn whole, so its matches can be seen.
   foldState(item) {
+    // A task notification's turn has no message to show: its line always stands in for it.
+    if (noticeTurn(item.turn) && !item.live) return "folded";
     if (this.prefs.agentTurns || !item.turn?.agent || item.live || this.filterText()) return null;
     const s = this.sessions[item.si];
     if (!s || !agentReplied(item.turn, s.turns)) return null;
@@ -3158,8 +3160,23 @@ export default class Threads extends View {
     return ROW.PAD_T + ROW.META + ROW.GAP + (sh.thumbs ? thumbSize(this.width, this.prefs.textSize, this.chars()) + ROW.GAP : 0)
       + 2 * ROW.BUBBLE_PY + this.rt().line * sh.p + (sh.pMore ? ROW.MORE : 0) + ROW.GAP + ROW.META;
   }
+  // What a running task notification's turn leaves out of its row (workingRow): the bubble,
+  // the strip under it and the gap after them. Its sender line is its quiet line.
+  noticeCut(r) {
+    if (r.kind !== "wrow" || !noticeTurn(r.turn)) return 0;
+    const sh = r.shape;
+    return 2 * ROW.BUBBLE_PY + this.rt().line * sh.p + (sh.pMore ? ROW.MORE : 0) + ROW.GAP + ROW.META + ROW.GAP;
+  }
+  // A task notification's turn's one quiet line, where a bubble would be: the bell and
+  // "Background task finished" in the folded line's colours, with no chevron.
+  quietLine(t, turn) {
+    return h_flex().h(ROW.META).gap(5).items_center().text_size(11.5).min_w(0)
+      .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
+      .child(this.labelView(senderParts(turn.sender, this.width), t.muted, this.labelRoom(turn, replyWidth(this.width)), false));
+  }
   // The folded message's one line: the sender's icon, "helper-a · agent message" and a
-  // chevron, quiet; a press shows the message, or folds it again.
+  // chevron, quiet; a press shows the message, or folds it again. A task notification's
+  // turn has no chevron: it has no message to show.
   foldLine(t, r) {
     const { turn } = r;
     const tip = this.ruleTip(turn);
@@ -3167,7 +3184,7 @@ export default class Threads extends View {
       .when(Boolean(tip), (el) => el.id("th-rule").tooltip(tip))
       .child(svg(ICON(senderIcon(turn.sender))).size(12).flex_none().text_color(t.dim))
       .child(this.labelView(senderParts(turn.sender, this.width), t.muted, this.labelRoom(turn, replyWidth(this.width)), false))
-      .child(svg(ICON(r.fold === "shown" ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim));
+      .when(!noticeTurn(turn), (el) => el.child(svg(ICON(r.fold === "shown" ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim)));
     if (r.open) return h_flex().px(ROW.PAD_X).min_w(0).child(line);
     return this.rowFrame(t, false, false, false, [line], ROW.PAD_T, 0);
   }
@@ -3886,7 +3903,7 @@ export default class Threads extends View {
     const key = `${Math.round(this.width)}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredIn}|${turn.errors.length}`;
     if (turn.pinShapeKey === key) return turn.pinShapeMemo;
     const cmd = commandParts(turn);
-    const prompt = cmd ? `${cmd.name} ${cmd.args}`.trim() : pinPromptText(turn.prompt.slice(0, PREVIEW_CHARS));
+    const prompt = cmd ? `${cmd.name} ${cmd.args}`.trim() : pinPromptText(noticeTurn(turn) ? kindWords(turn.sender) : turn.prompt.slice(0, PREVIEW_CHARS));
     let reply = "";
     let tone = "reply";
     if (live) tone = "live";
@@ -3981,8 +3998,9 @@ export default class Threads extends View {
     });
     // A long reply ends in a quiet Collapse (Esc) row, with what the cap left out.
     if (!selecting && (text.length > LONG_REPLY || left)) out.push({ ...item, kind: "fold", key: `fold:${key}`, left });
-    // What the agent said in its last background update, when that is not the reply.
-    const late = (turn.latest ?? "").trim();
+    // What the agent said in its background updates, every one in order (updatesText), when
+    // that is not the reply.
+    const late = updatesText(turn);
     if (late && late !== text) {
       // With Shorten long messages off (the default) the update is Markdown from the start,
       // like the reply above it (the owner, 18 Nov: a flat preview was all there was, since
@@ -4705,7 +4723,7 @@ export default class Threads extends View {
     const keys = [...new Set([this.sel, ...this.open, ...this.screenTurns()])].filter(Boolean);
     const key = keys.find((k) => {
       const turn = /^\d+:\d+$/.test(k) ? this.findTurn(k) : null;
-      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, turn.latest ?? "") || inReply(clip, turn.prompt ?? ""));
+      return turn && (inReply(clip, this.replyText(turn)) || inReply(clip, updatesText(turn)) || inReply(clip, turn.prompt ?? ""));
     });
     return key ? { key, text: clip } : null;
   }
@@ -4987,7 +5005,7 @@ export default class Threads extends View {
     // A folded agent message's line: the message, or folded again (foldState).
     if (kind === "af") {
       const k = `${id}:am`;
-      if (this.full.has(k)) this.full.delete(k); else this.full.add(k);
+      if (this.full.has(k)) this.full.delete(k); else if (!noticeTurn(this.findTurn(id))) this.full.add(k);
       this.toList();
       this.sel = id;
       this.follow = false;
@@ -8722,7 +8740,7 @@ export default class Threads extends View {
       case "tail": return r.h;
       case "turn": return r.shape.height - this.splitCut(r) - this.foldCut(r);
       case "afold": return r.open ? ROW.META : ROW.PAD_T + ROW.META;
-      case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0);
+      case "wrow": return r.shape.height - (r.split ? ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) - ROW.GAP : 0) - this.noticeCut(r);
       case "wtop": return ROW.PAD_T + (r.turn.agent ? ROW.META + ROW.GAP : 0) + thumbSize(this.width, this.prefs.textSize, this.chars());
       case "wake": return WAKE_H;
       case "line": return outlineHeight(this.prefs.textSize);
@@ -8737,6 +8755,8 @@ export default class Threads extends View {
       case "working": {
         // The message is the open turn's YOU part (workYou): its measure, or its estimate.
         const g = this.workingGeom(r.turn, r.shape);
+        // A task notification's turn: its quiet line in place of the message and its strip.
+        if (noticeTurn(r.turn)) return ROW.PAD_T + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
         const y = this.workYou(r);
         return (r.split ? ROW.GAP : ROW.PAD_T) + (this.measured(y) ?? this.youHeight(y))
           + ROW.GAP + ROW.META + ROW.GAP + ROW.LINE + ROW.GAP + g.note * NOTE_LINE + ROW.PAD_B;
@@ -9602,6 +9622,8 @@ export default class Threads extends View {
     const sh = r.shape;
     const tokens = this.showTokens(stats(turn)) && stats(turn).tokens > 0 ? `${fmtTokens(stats(turn).tokens)}${this.narrow() ? "" : " tokens"}` : null;
     const bt = this.bubbleLook(t, turn.agent).theme;
+    // A task notification's turn: its quiet line, and no bubble (noticeCut).
+    if (noticeTurn(turn)) return this.rowFrame(t, sel, focusedPanel, true, [this.quietLine(t, turn), this.liveLine(t, turn), this.statsLine(t, [tokens, "no reply yet"].filter(Boolean).join(" · "))], ROW.PAD_T);
     return this.rowFrame(t, sel, focusedPanel, true, [
       ...(!r.split && turn.agent ? [this.senderLine(t, turn)] : []),
       this.youGroup(t, turn, key, sel, [this.bubble(t, turn, [this.promptBlock(bt, this.bubbleLook(t, turn.agent).under, turn, sh, false, key), ...(sh.pMore ? [this.moreLine(bt)] : [])], sh.bubbleW)]),
@@ -9631,9 +9653,9 @@ export default class Threads extends View {
   workingItem(t, r) {
     const { turn, key } = r;
     const g = this.workingGeom(turn, r.shape);
+    const notice = noticeTurn(turn);
     return this.rowFrame(t, true, this.h.is_focused(), true, [
-      this.partContent(t, this.workYou(r), false),
-      this.youStrip(t, turn, key, true),
+      ...(notice ? [this.quietLine(t, turn)] : [this.partContent(t, this.workYou(r), false), this.youStrip(t, turn, key, true)]),
       this.liveLine(t, turn, true),
       div().h(g.note * NOTE_LINE).overflow_hidden().text_size(12).line_height(`${NOTE_LINE}px`).text_color(t.dim).child(g.noteText),
     ], r.split ? ROW.GAP : ROW.PAD_T);

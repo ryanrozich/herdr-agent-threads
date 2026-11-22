@@ -13,7 +13,8 @@ import { problems } from "../atif-schema.js";
 // never written · R7 a call with no result keeps a marked observation entry · R8 no cost
 // fields · R9 a Codex web_search_call loses its id · R10 a lone Codex subagent rollout keeps
 // its own prompt as a step · R11 cache writes are kept per turn as
-// cache_creation_input_tokens, with no cache_write_input_tokens and no session total.
+// cache_creation_input_tokens, with no cache_write_input_tokens and no session total · R12 a
+// task notification after a finished turn is a turn of its own with an empty user message.
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
   { id: "claude: byte_faithful_property_across_inputs[0]", reason: "R3", kind: "by design", note: "An empty prompt makes no turn in Agent Threads." },
@@ -121,5 +122,11 @@ export const LEFT_OUT = [
   { id: "codex: mixed_context_calls_sum_each_calls_pricing_tier", reason: "Harbor mocks litellm's price table; Agent Threads has none and writes no cost." },
   { id: "codex: incomplete_rollout_does_not_replace_valid_root[0]", reason: "Harbor tests which rollout file it picks as root from a logs folder; Agent Threads exports one named rollout file." },
   { id: "codex: incomplete_rollout_does_not_replace_valid_root[1]", reason: "Harbor tests which rollout file it picks as root from a logs folder; Agent Threads exports one named rollout file." },
+];
+// Differences no ported Harbor item reaches: shapes our export writes that Harbor's converter
+// would most likely write another way. Each is checked by the test in claude.test.js named
+// after its id, and none counts in COUNTS (they are not Harbor's items).
+export const OUR_DIFFERENCES = [
+  { id: "ours: task_notification_after_a_finished_turn", reason: "R12", kind: "by design", note: "A task notification that wakes the agent after a turn has finished starts a turn of its own: a user step with message \"\" and extra.sender { kind: \"task-notification\" }, then the agent's steps. Agent Threads does not keep the notice's text (the <task-notification> block is the harness's, not a person's words, and the Chat shows only \"Background task finished\"); Harbor would most likely carry that text as the user message. A notice while a turn is open stays on that turn." },
 ];
 export const COUNTS = { items: { pass: 42, listed: 65, leftOut: 17, total: 124 }, functions: { claude: 52, codex: 30, total: 82 } };

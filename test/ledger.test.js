@@ -451,3 +451,18 @@ test("ledger rows: a row that says no result shows no duration, and its detail k
   // Nor does the row draw the launch's time as a bar.
   expect(rowTimes(r).bar).toBe(false);
 });
+
+// A task notification after a finished turn is a turn of its own with an empty message: its
+// first row says what the Chat's quiet line says, from the harness, then its steps and reply.
+test("ledger: a task notification's turn starts with a Background task finished row, never a blank one, then its steps and reply", () => {
+  const t = { ...turn(4, [[["Bash", "bun run build", 2000, 9000]]], { prompt: "", reply: "The build finished clean." }), agent: true, sender: { kind: "task-notification" } };
+  const { rows } = ledgerTurn(S, t, 0);
+  expect(rows.slice(1).map((r) => [r.lk, r.text])).toEqual([["agent", "Background task finished"], ["tool", "bun run build"], ["reply", "The build finished clean."]]);
+  expect(rows[1].sender).toBeNull();
+  const d = detailOf(rows[1]);
+  expect(d.fields).toContainEqual(["From", "the harness · a background task finished, nobody typed this"]);
+  expect(d.text).toBe("Background task finished");
+  // A teammate's message keeps its own words and name.
+  const peer = ledgerTurn(S, turn(5, [], { prompt: "Review the diff", who: "helper-a" }), 0).rows[1];
+  expect([peer.lk, peer.text, peer.sender]).toEqual(["agent", "Review the diff", "helper-a"]);
+});

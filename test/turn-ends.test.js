@@ -31,7 +31,10 @@ function transcript() {
     lines,
     user: (content, fields = {}, secs = 1) => add({ ...line({ type: "user", message: { role: "user", content }, ...fields }), timestamp: stamp(secs) }),
     prompt: (text, secs = 30) => t.user(text, { origin: { kind: "human" } }, secs),
+    // A task notification that wakes the agent: a row of its own once the row above ended.
     notify: (secs = 60) => t.user("<task-notification>a job finished</task-notification>", { origin: { kind: "task-notification" } }, secs),
+    // An auto-continuation: it folds into the row above as a background update.
+    wake: (secs = 60) => t.user("Continue from where you left off.", { origin: { kind: "auto-continuation" } }, secs),
     // The shape a skill or custom command has: the command line, then its text as a meta line
     // naming the command line as parent.
     skill: (name, secs = 30) => {
@@ -135,7 +138,7 @@ test("a local command typed during a background update takes no row", () => {
   t.prompt("First question");
   t.say("m1", "The reply.");
   t.hooks();
-  t.notify();
+  t.wake();
   t.tool("m2");
   t.local("usage");
   t.say("m3", "An update.");
@@ -166,7 +169,7 @@ test("with no turn_duration a finished reply closes the row, and later updates d
   t.hooks();
   const started = 21; // tool at +10, its result at +1, the reply at +10
   for (let i = 0; i < 40; i++) {
-    t.notify(3600);
+    t.wake(3600);
     t.tool(`n${i}`, "Bash", 2);
     t.say(`r${i}`, `Update ${i}.`, 2);
     t.hooks();
@@ -220,7 +223,9 @@ test("a tool call whose result never comes holds nothing open", () => {
   t.say("m4", "Next reply.");
   t.hooks();
   const s = read(t.file());
-  expect(prompts(s)).toEqual(["Watch the build", "Next question"]);
+  // The notification's turn is a row of its own (prompt "") between the two.
+  expect(prompts(s)).toEqual(["Watch the build", "", "Next question"]);
+  expect(reply(s.turns[1])).toBe("It passed.");
   expect(s.turns.every((x) => x.done)).toBe(true);
   expect(reply(s.turns[0])).toBe("Watching it in the background.");
   expect(s.turns[0].durationMs).toBeLessThan(10000);
@@ -448,8 +453,8 @@ test("a skill's turn that ended, then a background wake-up still running: done, 
   t.say("r1", "Here is the plan in three steps.", 4);
   t.hooks();
   t.duration(15000);
-  // A background task finishes: the agent wakes, runs two tools and has not ended yet.
-  t.notify(600);
+  // The agent wakes again by itself, runs two tools and has not ended yet.
+  t.wake(600);
   t.message("w0", [{ type: "text", text: "Checking the job's output." }], "tool_use", 2);
   t.tool("w1", "Bash", 5);
   t.tool("w2", "Bash", 5);

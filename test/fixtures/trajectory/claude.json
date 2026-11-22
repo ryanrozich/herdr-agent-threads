@@ -34,7 +34,7 @@
   "id": "1793524384|1ww5af2|1",
   "n": 2,
   "start": 1793524384000,
-  "end": 1793524436000,
+  "end": 1793524412000,
   "done": true,
   "groups": [
    {
@@ -105,18 +105,38 @@
       "kind": "message",
       "text": "The test raced the redirect. It now waits for the session response instead of sleeping 2 s:\n\n```ts\nawait page.waitForResponse(\n  (r) => r.url().endsWith('/session'),\n)\nexpect(await cookie()).toBeTruthy()\n```\n\nRan the suite 20 times locally with no failures. One unrelated warning remains in the auth mock.",
       "start": 1793524412000,
-      "end": 1793524436000
+      "end": 1793524412000
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "1793524432|ztntfp|1",
+  "n": 3,
+  "start": 1793524432000,
+  "end": 1793524436000,
+  "done": true,
+  "groups": [
+   {
+    "title": "Message",
+    "cells": [
+     {
+      "kind": "user",
+      "text": "",
+      "start": 1793524432000,
+      "end": null
      }
     ]
    },
    {
-    "title": "Update",
+    "title": "Step 1",
     "cells": [
      {
-      "kind": "context",
+      "kind": "message",
       "text": "The background build finished cleanly.",
       "start": 1793524436000,
-      "end": null
+      "end": 1793524436000
      }
     ]
    }
@@ -124,7 +144,7 @@
  },
  {
   "id": "1793524466|1fsoikl|1",
-  "n": 3,
+  "n": 4,
   "start": 1793524466000,
   "end": 1793524470000,
   "done": true,
@@ -163,7 +183,7 @@
  },
  {
   "id": "1793524553|9gc6gh|1",
-  "n": 4,
+  "n": 5,
   "start": 1793524553000,
   "end": 1793524577000,
   "done": true,
@@ -225,7 +245,7 @@
  },
  {
   "id": "1793524607|16hagqb|1",
-  "n": 5,
+  "n": 6,
   "start": 1793524607000,
   "end": 1793524620000,
   "done": true,
@@ -274,7 +294,7 @@
  },
  {
   "id": "1793524650|5n8crn|1",
-  "n": 6,
+  "n": 7,
   "start": 1793524650000,
   "end": 1793524744000,
   "done": true,
