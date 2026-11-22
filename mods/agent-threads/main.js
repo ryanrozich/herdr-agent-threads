@@ -3926,7 +3926,9 @@ export default class Threads extends View {
       return;
     }
     const w = g.tried.length > 2 ? null : line ? weightFor(line, g.p) : weightNear(null, g.tried[0], g.p);
-    if (!w) { this.pairing = null; run("layout.resize", { id: me.pane, px: g.p }); return; }
+    // Three weights unanswered: the column back at its kept px, the kept px cleared (pairGiveUp),
+    // so no record is left with a px the column no longer has.
+    if (!w) { this.pairing = null; this.pairGiveUp(g, m, cx); return; }
     g.w = w;
     g.at = this.paneW;
     g.asked = now;
