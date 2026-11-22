@@ -10,8 +10,9 @@
 // textSize (12 to 18): the px size of message and reply text (ui.js readType sets its line
 // height and line length). promptLines (1 to 10) and replyLines (1 to 12): lines of prompt and of reply preview in a
 // collapsed row. agentTurns: show turns another agent, a schedule or the SDK sent.
-// agentRail: agent messages the list shows get ticks on the turn rail (true, the default);
-// false leaves them off it (the running turn keeps its tick).
+// agentRail: agent messages the list shows get ticks on the turn rail (false, the default:
+// they stay off it and the running turn keeps its tick). Every save writes the key, so a
+// choice made in the panel survives a change of default.
 // bubbleColor and agentBubbleColor: the fill of the user's and of an agent's message
 // bubbles, a preset name (ui.js BUBBLES; "blue" is the user's default, plain before it, and
 // "amber" the agent's, plum before it; a file that holds plain or plum keeps it; "plain" is
@@ -52,7 +53,7 @@ import { TAKEN_LETTERS, bubbleValue, TEXT_SIZE, TEXT_RANGE, WIDTH_NAMES } from "
 import { MOD, PREVIOUS } from "./name.js";
 import { RULE_TEXT } from "./core/turns.js";
 
-export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true });
+export const DEFAULTS = Object.freeze({ textSize: TEXT_SIZE, promptLines: 4, replyLines: 6, agentTurns: false, agentRail: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true });
 export const RANGES = Object.freeze({ textSize: TEXT_RANGE, promptLines: [1, 10], replyLines: [1, 12] });
 export const FILE = "settings.json";
 // "look": 2 marks a file written since the chat look, whose defaults are 4 and 6 lines.

@@ -2470,7 +2470,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === false ? 0 : 1}`, this.selecting ?? "",
+      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === true ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -2749,8 +2749,8 @@ export default class Threads extends View {
     const numW = outlineNumW(maxN);
     const q = this.filterText();
     const agents = Boolean(this.prefs.agentTurns);
-    // agentRail off: agent messages get no tick (the running turn keeps its own).
-    const agentRail = this.prefs.agentRail !== false;
+    // agentRail off (the default): agent messages get no tick (the running turn keeps its own).
+    const agentRail = this.prefs.agentRail === true;
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
@@ -5094,7 +5094,7 @@ export default class Threads extends View {
       case "agents": this.setAgents(!this.prefs.agentTurns, cx); return true;
       // The settings card's switch: no toast, the card shows the change.
       case "agentsQuiet": this.setAgents(!this.prefs.agentTurns, cx, true); return true;
-      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail === false }, cx); return true;
+      case "agentRail": this.changePrefs({ agentRail: this.prefs.agentRail !== true }, cx); return true;
       case "agents:on": this.setAgents(true, cx); return true;
       case "agents:off": this.setAgents(false, cx); return true;
       case "settings": if (!this.settingsOpen) cardKeys.ask(cx, "open"); return this.setSettings(!this.settingsOpen);
@@ -6780,7 +6780,7 @@ export default class Threads extends View {
         const hidden = !P.agentTurns && this.sessions.length ? this.agentCountText(this.counts()).replace(", ", " · ") : "";
         return [sw("th-set-agents", "Show agent messages", Boolean(P.agentTurns), "agentsQuiet", hidden || null)];
       },
-      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail !== false, "agentRail")],
+      agentRail: () => [sw("th-set-agent-rail", "Agent messages on the rail", P.agentRail === true, "agentRail")],
       truncate: () => new CardParts([
         () => sw("th-set-truncate", "Shorten long messages", Boolean(P.truncate), "truncate"),
         () => (P.truncate ? this.cardCol(v_flex().pl(16).gap(4), 4, 0, [() => stepper("promptLines", "Prompt lines"), () => stepper("replyLines", "Reply lines")]) : null),

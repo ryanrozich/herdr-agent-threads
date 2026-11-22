@@ -6,7 +6,7 @@ const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
 const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
-const CHAT = { textSize: 14, agentRail: true, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
+const CHAT = { textSize: 14, agentRail: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
 
 test("defaults when there is no file, or it is empty", () => {
   expect(DEFAULTS).toEqual({ promptLines: 4, replyLines: 6, agentTurns: false, ...CHAT });
@@ -171,12 +171,17 @@ test("truncate is a boolean, false by default: long messages show in full", () =
   expect(DEFAULTS.truncate).toBe(false);
 });
 
-test("agentRail is a boolean, true by default: agent messages keep their rail ticks", () => {
-  expect(DEFAULTS.agentRail).toBe(true);
-  expect(parseSettings("{}").values.agentRail).toBe(true);
+test("agentRail is a boolean, false by default: a file with no key has no agent ticks, one that holds true keeps them", () => {
+  expect(DEFAULTS.agentRail).toBe(false);
+  expect(parseSettings("{}").values.agentRail).toBe(false);
+  expect(parseSettings('{"agentRail": true}').values.agentRail).toBe(true);
   expect(parseSettings('{"agentRail": false}').values.agentRail).toBe(false);
-  expect(parseSettings('{"agentRail": "no"}').values.agentRail).toBe(true);
+  expect(parseSettings('{"agentRail": "yes"}').values.agentRail).toBe(false);
+  // A save writes the key either way, so a choice survives the default.
+  expect(JSON.parse(settingsText({ ...DEFAULTS, agentRail: true }, null)).agentRail).toBe(true);
   expect(JSON.parse(settingsText({ ...DEFAULTS, agentRail: false }, null)).agentRail).toBe(false);
+  expect(JSON.parse(settingsText({ agentTurns: true }, "{}")).agentRail).toBe(false);
+  expect(JSON.parse(settingsText({ agentTurns: true }, '{"agentRail": true}')).agentRail).toBe(true);
 });
 
 test("alwaysShowTime is a boolean, false by default", () => {

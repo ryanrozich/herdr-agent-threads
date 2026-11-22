@@ -904,7 +904,7 @@ test("every place that draws an agent message can tell a rule-marked typed promp
     { k: "p", o: "peer", t: peer("The cart tests are green"), ts: at(4) }, { k: "t", t: "Thanks again." }, { k: "d", ms: 500, ts: at(5) },
   ]);
   v.applyPrefs(JSON.stringify(SENDERS));
-  v.prefs = { ...v.prefs, agentTurns: true };
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: true };
   draw(v, cx);
   const [you, typed, sent] = v.current().turns;
   expect([you, typed, sent].map((t) => senderOrigin(t.sender))).toEqual(["you", "rule", "sent"]);
@@ -1069,7 +1069,7 @@ test("on a Herdr whose elements have no border_dashed, the matched bubble keeps 
 test("the rail card has a second line for an agent message, matched or sent: its icon and label; none for the person's own", async () => {
   const { v, cx } = await twoKinds();
   v.applyPrefs(JSON.stringify(SENDERS));
-  v.prefs = { ...v.prefs, agentTurns: true };
+  v.prefs = { ...v.prefs, agentTurns: true, agentRail: true };
   v.width = 700;
   draw(v, cx);
   const entry = (n) => v.railTurns.find((x) => x.turn.n === n);
@@ -1103,7 +1103,7 @@ test("a sender rule that is not valid shows a note in the panel and is ignored",
   expect(v.turnKeys(v.rows())).toEqual(["0:1", "0:2", "0:3"]);
 });
 
-test("agentRail: on by default, agent messages have rail ticks; off, only the person's turns and the running one do", async () => {
+test("agentRail: off by default, only the person's turns and the running one have rail ticks; the switch puts agent messages on and writes true, then false", async () => {
   const { v, cx } = await scripted([
     { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
     // A teammate's message with a reply of its own: folded, so it is in the list.
@@ -1113,12 +1113,19 @@ test("agentRail: on by default, agent messages have rail ticks; off, only the pe
     { k: "p", o: "peer", t: peer("Checking the docs build"), ts: at(6) },
   ]);
   const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
-  v.prefs = { ...v.prefs, agentTurns: false };
-  expect(v.prefs.agentRail).toBe(true);
+  // A settings file with no agentRail key: the default, off.
+  v.applyPrefs(JSON.stringify({ agentTurns: false }));
+  expect(v.prefs.agentRail).toBe(false);
   draw(v, cx);
+  // The folded agent message stays in the list with no tick; the running one keeps its tick.
   expect(v.rows().some((r) => r.kind === "afold" && r.turnKey === "0:2")).toBe(true);
-  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
-  // The panel's switch, next to Agent messages.
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  // With agent messages shown whole, they stay off the rail too.
+  v.prefs = { ...v.prefs, agentTurns: true };
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // The panel's switch, next to Agent messages, shown off.
   v.settingsOpen = true;
   rec = [];
   v.render(cx);
@@ -1128,20 +1135,32 @@ test("agentRail: on by default, agent messages have rail ticks; off, only the pe
   expect(ids.indexOf("th-set-agent-rail")).toBe(ids.indexOf("th-set-agents") + 1);
   expect(kids).toContain("Agent messages on the rail");
   v.settingsOpen = false;
-  // Off: the folded agent message leaves the rail and stays in the list; the running one keeps its tick.
+  // On: the switch writes true, and the folded agent message gets its tick. The writes are
+  // what the next read finds, as on disk.
+  keepSettings = true;
+  settingsWrites.length = 0;
+  v.action("agentRail", cx);
+  expect(v.prefs.agentRail).toBe(true);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).agentRail).toBe(true);
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  // Off again: the switch writes false, not a missing key.
   v.action("agentRail", cx);
   expect(v.prefs.agentRail).toBe(false);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(JSON.parse(settingsWrites.at(-1)).agentRail).toBe(false);
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
-  expect(v.turnKeys(v.rows())).toContain("0:2");
-  // With agent messages shown whole, they stay off the rail too.
-  v.prefs = { ...v.prefs, agentTurns: true };
-  draw(v, cx);
-  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
-  // Back on from the file.
+  // A file that holds true keeps agent messages on the rail; one that holds false, off.
   v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: true }));
   draw(v, cx);
   expect(railKeys()).toEqual(["0:1", "0:2", "0:3", "0:4"]);
+  v.applyPrefs(JSON.stringify({ agentTurns: false, agentRail: false }));
+  draw(v, cx);
+  expect(railKeys()).toEqual(["0:1", "0:3", "0:4"]);
+  keepSettings = false;
+  delete recordFiles[v.prefsPath()];
 });
 
 test("a turn answered together with a later one: its line says so, and its note goes to that reply", async () => {
@@ -9418,15 +9437,15 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
 });
 const { DEFAULTS: DEFAULTS_FOR_TEST } = await import("../mods/agent-threads/settings.js");
 
-test("Reset also covers Agent messages on the rail: switched off alone, Reset is lit and turns it back on", async () => {
+test("Reset also covers Agent messages on the rail: switched on alone, Reset is lit and turns it back off", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.action("settings", cx);
   expect(v.prefsDiffer()).toBe(false);
   v.action("agentRail", cx);
-  expect(v.prefs.agentRail).toBe(false);
+  expect(v.prefs.agentRail).toBe(true);
   expect(v.prefsDiffer()).toBe(true);
   v.action("resetSettings", cx);
-  expect(v.prefs.agentRail).toBe(true);
+  expect(v.prefs.agentRail).toBe(false);
   expect(v.prefsDiffer()).toBe(false);
   await new Promise((r) => setTimeout(r, 20));
 });
