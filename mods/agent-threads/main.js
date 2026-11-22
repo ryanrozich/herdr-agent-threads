@@ -3836,8 +3836,10 @@ export default class Threads extends View {
     const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane);
     this.pairTries = (this.pairTries ?? 0) + 1;
     // The column's px is kept in the record while it is on a trial weight, so the Trajectory
-    // opening mid-probe puts it back at px from the Chat's pane (pairPx).
-    setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...(ent ?? {}), probe: p } });
+    // opening mid-probe puts it back at px from the Chat's pane (pairPx). After a dropped
+    // probe the column's width follows its trial weight, so the px from before the first is
+    // the one kept.
+    setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { ...(ent ?? {}), probe: ent?.probe > 0 ? ent.probe : p } });
     run("layout.resize", { id: main.pane, px: m });
     // No terminal beside them: the two share the row in the ratio of their widths.
     if (!others.length) {
@@ -3863,6 +3865,7 @@ export default class Threads extends View {
     // measure after 400 ms, below, and the third ends the probe.)
     if (blocked || Math.abs(m - g.m) > 2) {
       this.pairing = null;
+      if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m);
       return;
     }
     if (g.final) {
@@ -3872,7 +3875,7 @@ export default class Threads extends View {
       if (Math.abs(p - g.p) <= 2) {
         this.pairTries = 0;
         this.pairSave({ k: g.m / g.final.wc, m, p, S: g.S }, cx);
-      }
+      } else if ((this.pairTries ?? 0) >= 3) this.pairGiveUp(g, m);
       return;
     }
     if (Math.abs(this.paneW - g.at) <= 1 && now - g.asked < 400) return;
@@ -3897,6 +3900,18 @@ export default class Threads extends View {
     g.at = this.paneW;
     g.asked = now;
     run("layout.resize", { id: me.pane, weight: w });
+  }
+  // The third probe ended without a pair: the column back at its px, and the Chat at px where
+  // it is when it was given a weight, so no half-made pair is left on a trial weight. No more
+  // tries until the column opens again (pairTries is this pane's): a row that keeps moving
+  // under the probe is not probed every half second.
+  pairGiveUp(g, m) {
+    const me = this.me();
+    const main = this.mainPane();
+    const rec = shared(PAIR_KEY)?.[this.terminal];
+    if (me) run("layout.resize", { id: me.pane, px: rec?.probe > 0 ? rec.probe : g.p });
+    if (g.final && main) run("layout.resize", { id: main.pane, px: m });
+    if (rec?.probe) { const rest = { ...rec }; delete rest.probe; setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: rest }); }
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.

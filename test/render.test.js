@@ -17501,6 +17501,31 @@ test("the probe stops when the Chat moves under it (the column left on its trial
   } finally { u.restore(); }
 });
 
+test("three probes the Chat moves under end with the column back at its px and no fourth probe while the column stays open", async () => {
+  const t = await pairPanes();
+  try {
+    for (const px of [700, 680, 660]) {
+      untilProbe(t);
+      t.row.size.p2 = { px };
+      t.step(100);
+      expect(t.w.pairing).toBe(null);
+    }
+    t.row.apply();
+    // The cap: the column at the px it had, no record of a probe, and no trial weight left.
+    expect(t.w.pairTries).toBe(3);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    // Still for a long while: no fourth probe, nothing asked of either pane.
+    log = [];
+    t.row.seen = 0;
+    t.run(6000);
+    expect(t.w.pairing).toBe(null);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2).toEqual({ px: 660 });
+  } finally { t.restore(); }
+});
+
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
