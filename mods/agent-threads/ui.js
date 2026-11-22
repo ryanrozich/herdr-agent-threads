@@ -91,7 +91,7 @@ export function keySheet(quoteKey = "q", { outline = true } = {}) {
   const pin = (k) => quoteKey !== k;
   return [
     ["List", [
-      [["↑", "↓", "j", "k"], "Move between turns"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
+      [["↑", "↓", "j", "k"], "Move between the turns on the rail"], [["Home"], "First turn"], [["↵", "Space"], "Open or close a turn"],
       ...(outline ? [[["o"], "Outline: one row per turn"]] : []), [["/"], "Search"], quoteKey !== "n" ? [["n", "Shift n"], "Older or newer search match"] : [["Shift n"], "Newer search match"], [["g"], "Jump to a turn number"], [["End", "G"], "Newest turn"], [["[", "]"], "Previous or next day"],
       [["a"], "Show or hide agent messages"], [["Esc"], `Back out: search, Select view, settings, the open turn${outline ? ", the outline" : ""}`],
     ]],
