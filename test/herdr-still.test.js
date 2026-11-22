@@ -76,6 +76,9 @@ function runStep(curl, { sums = null, tar = null, env = {}, pre = null } = {}) {
   const bin = join(d, "bin");
   const co = join(d, "co");
   mkdirSync(bin);
+  // The step runs as Linux runs it: its "sh -c" and the "sh test/herdr-install.sh" inside it
+  // both under dash, where it exists. A Mac's own sh is bash, which passes what dash refuses.
+  if (SH !== "/bin/sh") symlinkSync(SH, join(bin, "sh"));
   mkdirSync(join(co, "test"), { recursive: true });
   writeFileSync(join(co, "test/herdr-install.sh"), install);
   stub(bin, "uname", 'case $1 in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac');
@@ -84,7 +87,7 @@ function runStep(curl, { sums = null, tar = null, env = {}, pre = null } = {}) {
   stub(bin, "sha256sum", sums ? `case $1 in *app*) echo "${sums.app}  $1" ;; *) echo "${sums.core}  $1" ;; esac` : 'shasum -a 256 "$1"');
   if (tar) stub(bin, "tar", tar);
   if (pre) pre(co, d);
-  const r = spawnSync("sh", ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2", ...Object.fromEntries(Object.entries(env).map(([k, x]) => [k, x.replace("__CO__", co).replace("__D__", d)])) } });
+  const r = spawnSync(SH, ["-c", step.run[2]], { cwd: co, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LIMIT: "2", ...Object.fromEntries(Object.entries(env).map(([k, x]) => [k, x.replace("__CO__", co).replace("__D__", d)])) } });
   const curlLog = existsSync(join(d, "curl.log")) ? readFileSync(join(d, "curl.log"), "utf8") : "";
   return { ...r, d, co, curlLog, marks: r.stderr.split("\n").filter((l) => l.startsWith(MARK)) };
 }
