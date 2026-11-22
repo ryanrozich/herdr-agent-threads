@@ -17716,6 +17716,43 @@ test("three probes whose final check finds the column moved end with both back a
   } finally { t.restore(); }
 });
 
+test("the column's probe writes the owner's width hold and the pair's record after the drawing pass, never inside it", async () => {
+  const t = await pairPanes();
+  try {
+    const keys = ["threads.pinWidth", "threads.pinPair"];
+    const inDraw = [];
+    const render = t.w.render.bind(t.w);
+    t.w.render = (cx) => {
+      const before = keys.map((k) => JSON.stringify(state.shared[k] ?? null));
+      const out = render(cx);
+      keys.forEach((k, i) => { if (JSON.stringify(state.shared[k] ?? null) !== before[i]) inDraw.push(k); });
+      return out;
+    };
+    // The probe from start to the pair, then three probes the Chat moves under (the cap).
+    t.run(4000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    expect(state.shared["threads.pinWidth"].hold).toBeGreaterThan(0);
+    const u = await pairPanes();
+    try {
+      const r2 = u.w.render.bind(u.w);
+      u.w.render = (cx) => {
+        const before = keys.map((k) => JSON.stringify(state.shared[k] ?? null));
+        const out = r2(cx);
+        keys.forEach((k, i) => { if (JSON.stringify(state.shared[k] ?? null) !== before[i]) inDraw.push(k); });
+        return out;
+      };
+      for (const px of [700, 680, 660]) {
+        untilProbe(u);
+        u.row.size.p2 = { px };
+        u.step(100);
+      }
+      u.run(1000);
+      expect(u.w.pairTries).toBe(3);
+    } finally { u.restore(); }
+    expect(inDraw).toEqual([]);
+  } finally { t.restore(); }
+});
+
 test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
   const t = await pairPanes();
   try {
