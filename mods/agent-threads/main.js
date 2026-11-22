@@ -259,6 +259,10 @@ const PAIR_KEY = "threads.pinPair";
 // terminals hold k S px); { S } otherwise, the terminals' weights kept for the next opening.
 // The Chat makes and keeps it; the Trajectory and the column read it for - and =.
 const ROW_KEY = "threads.row";
+// What a new divider takes from the weight panes' room when a pane splits (Herdr's frame gap
+// and its line, in design px, so the same at any zoom): about 8 px on the rig. The column's
+// opening beside the Trajectory counts it before keeping the terminals' 200 px.
+const SPLIT_GAP = 8;
 // Both widths still this long before the pair is made or its weights brought up to date.
 const PAIR_STILL_MS = 500;
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
@@ -3612,11 +3616,12 @@ export default class Threads extends View {
     const ent = this.rowNow();
     const n = ent?.k > 0 && ent.S > 0 ? this.rowWidths({ chat: me.pane, traj: traj.pane }) : null;
     if (!n) return { chat: null, col: px };
-    const T = ent.k * ent.S;
+    const T = ent.k * ent.S - SPLIT_GAP;
     const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane && p.pane !== traj.pane).length;
     const m = n[me.pane];
     const f = pinFit(m, px, T, TERM_KEEP * others);
-    return f ? { chat: f.chat === m ? null : f.chat, col: f.col, T, S: ent.S, m, traj: n[traj.pane] } : null;
+    // The Chat's give in whole px, rounded up so the terminals keep theirs.
+    return f ? { chat: f.chat === m ? null : Math.floor(f.chat), col: f.col, T, S: ent.S, m, traj: n[traj.pane] } : null;
   }
 
   // Before a split off this pane (the Pinned column, the Trajectory): this pane at a px width,
