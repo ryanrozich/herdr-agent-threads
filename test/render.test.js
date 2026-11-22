@@ -17380,29 +17380,44 @@ test("the pair's weights follow a window resize (both scale), and two changes be
   } finally { t.restore(); }
 });
 
-test("the column closing with the pair on weights: the Chat goes back to its width in one weight, no frame wide here, and stays there", async () => {
-  const t = await pairPanes();
-  try {
-    t.run(4000);
-    const m = t.row.widths().p2;
-    // Herdr closes the column: its room goes to the weights left, the Chat's among them.
-    state.panes = state.panes.filter((p) => p.pane !== "p3");
-    t.row.close("p3");
-    t.w = null;
-    const n = t.frames.length;
-    log = [];
-    t.row.seen = 0;
-    t.run(1500);
-    // One weight to the Chat, which lands it.
-    expect(log.filter(([, n2, a]) => n2 === "layout.resize" && a.id === "p2").map((x) => Object.keys(x[2]).sort().join())).toEqual(["id,weight"]);
-    // Herdr draws the Chat wide until the ask lands, between these frames; each frame here
-    // is after it.
-    const wide = t.frames.slice(n).filter((f) => f.p2 > m + 1);
-    expect(wide.length).toBe(0);
-    expect(t.row.size.p2.weight).toBeGreaterThan(0);
-    expect(Math.abs(t.row.widths().p2 - m)).toBeLessThanOrEqual(1);
-    expect(state.shared["threads.pinPair"]?.t4).toBeUndefined();
-  } finally { t.restore(); }
+test("the column closing with the pair on weights: the Chat goes back to its width in one weight when the terminals' weights are known, within the probe's error and then exact when they were measured", async () => {
+  for (const exact of [true, false]) {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      const m = t.row.widths().p2;
+      const pair = state.shared["threads.pinPair"].t4;
+      // The probe measured the terminal's weight from two widths in whole px: near 0.5, not
+      // on it. Exact, as from a known row, the one weight lands the Chat.
+      expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.05);
+      if (exact) state.shared["threads.pinPair"] = { t4: { ...pair, S: t.row.size.p1.weight } };
+      // Herdr closes the column: its room goes to the weights left, the Chat's among them.
+      state.panes = state.panes.filter((p) => p.pane !== "p3");
+      t.row.close("p3");
+      t.w = null;
+      const n = t.frames.length;
+      log = [];
+      t.row.seen = 0;
+      t.run(1500);
+      const asks = log.filter(([, n2, a]) => n2 === "layout.resize" && a.id === "p2").map((x) => Object.keys(x[2]).sort().join());
+      // Herdr draws the Chat wide until the ask lands, between these frames; each frame here
+      // is after it.
+      const off = t.frames.slice(n).filter((f) => Math.abs(f.p2 - m) > 1);
+      if (exact) {
+        expect(asks).toEqual(["id,weight"]);
+        expect(off.length).toBe(0);
+      } else {
+        // Within 2% in the first frame, then one more weight from that measure, and exact.
+        expect(asks).toEqual(["id,weight", "id,weight"]);
+        expect(off.length).toBeLessThanOrEqual(1);
+        for (const f of off) expect(Math.abs(f.p2 - m)).toBeLessThanOrEqual(0.02 * m);
+      }
+      expect(t.row.size.p2.weight).toBeGreaterThan(0);
+      expect(Math.abs(t.row.widths().p2 - m)).toBeLessThanOrEqual(1);
+      expect(t.frames.slice(-5).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+      expect(state.shared["threads.pinPair"]?.t4).toBeUndefined();
+    } finally { t.restore(); }
+  }
 });
 
 test("the Trajectory opened with the column open puts the pair back to px for its life; closed, the pair goes back on weights", async () => {
@@ -17471,7 +17486,8 @@ test("the column's opening keeps the terminal's 200 px when the row's room is kn
   // the pane: the terminal has 722.
   v.weightNow = 1;
   v.weighLine = { a: 1 / 1444, b: 1 / 1444 };
-  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380 });
+  // With the room the weights share (R) and the terminals' weights (S) for the pair.
+  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380, R: 1444, S: 1 });
   // The terminal at 522: 380 of it would leave 142, so the Chat gives 58.
   v.weighLine = { a: 1 / 1244, b: 0.7230 / 1244 };
   const fit = v.pinKeep(v.me(), 380);
@@ -17573,7 +17589,9 @@ test("a terminal at px beside the pair is never resized: its width holds through
     expect(t.row.size.p1).toEqual({ px: 704 });
     expect(t.row.size.p2.weight).toBeGreaterThan(0);
     expect(t.row.size.p3.weight).toBeGreaterThan(0);
-    expect(state.shared["threads.pinPair"].t4.S).toBe(0);
+    // The column landed at its width on the first weight: one measure does not tell the
+    // terminals' weights, so none is kept (a close then sizes the Chat in px).
+    expect(state.shared["threads.pinPair"].t4.S).toBe(null);
     for (const dx of [-100, 100]) {
       const was = t.row.widths();
       t.row.drag("p2", dx);
@@ -17587,6 +17605,18 @@ test("a terminal at px beside the pair is never resized: its width holds through
     t.v.key(keyEv("="), t.cx);
     t.run(1000);
     expect(Math.abs(t.row.widths().p3 - (was.p3 + 40))).toBeLessThanOrEqual(1);
+    expect(t.row.widths().p1).toBe(704);
+    // The column closed: the Chat back to its width in px, the terminal untouched. The
+    // weight after it finds the Chat alone on a weight (the same width at two weights), so
+    // the Chat stays at px.
+    const m = t.row.widths().p2;
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    t.row.close("p3");
+    t.w = null;
+    t.run(3000);
+    expect(Math.abs(t.row.widths().p2 - m)).toBeLessThanOrEqual(1);
+    expect(t.row.size.p2).toEqual({ px: m });
+    expect(t.frames.slice(-5).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
     expect(t.row.widths().p1).toBe(704);
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
   } finally { t.restore(); }

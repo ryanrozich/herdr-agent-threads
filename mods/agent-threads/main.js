@@ -6811,6 +6811,16 @@ export default class Threads extends View {
     if (Math.abs(this.paneW - g.at) <= 1 && Date.now() - g.asked < 400) return;
     const n = this.paneW + PANE_FRAME;
     g.tried.push([g.w, n]);
+    // The same width at two weights, not the one asked: no other pane in the row is on a
+    // weight (a terminal at px), so this one takes all the room at any weight. Back to the
+    // width it had, in px, and no weight.
+    const [q1, q2] = g.tried.slice(-2);
+    if (g.tried.length > 1 && Math.abs(q1[1] - q2[1]) <= 1 && Math.abs(q1[0] - q2[0]) > 1e-4 && Math.abs(n - g.n0) > 2) {
+      this.weighing = null;
+      this.weightNow = null;
+      run("layout.resize", { id: g.pane, px: g.n0 });
+      return;
+    }
     if (g.tried.length > 1) this.weighLine = weightLine(...g.tried.slice(-2)) ?? this.weighLine;
     const w = Math.abs(n - g.n0) <= 2 || g.tried.length > 2 ? null
       : g.tried.length === 1 ? weightNear(this.weighLine, g.tried[0], g.n0)
