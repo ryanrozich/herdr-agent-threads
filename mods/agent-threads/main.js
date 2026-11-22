@@ -165,6 +165,11 @@ const WIDTH_HOLD_MS = 300;
 const WIDTHS_KEPT = 3;
 // Rows left unsized at the end of a build slice that are sized in it anyway (buildStep).
 const SIZE_REST = 64;
+// The hold (WIDTH_HOLD_MS) is for a conversation whose last full re-wrap, at a column width
+// not kept, took more than this much of the pane's own draw time; before one has finished,
+// for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
+const HOLD_WORK_MS = 150;
+const HOLD_TURNS = 500;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -5905,6 +5910,14 @@ export default class Threads extends View {
     let out;
     try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
     this.renderOpen = false;
+    const rw = this.rewrap;
+    if (rw) {
+      rw.ms += now() - this.renderAt;
+      if (!this.rowJob && !(this.shapeLeft > 0) && !this.staleRows?.length && !(this.probeLeft > 0)) {
+        if (rw.full) this.rewrapMs = rw.ms;
+        this.rewrap = null;
+      }
+    }
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
     this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
     return out;
@@ -6040,10 +6053,19 @@ export default class Threads extends View {
     // The pane resized less than WIDTH_HOLD_MS ago: the column keeps its width, centred in a
     // wider pane and cut off on the right in a narrower one, until it is still (frame asks
     // for a draw then). The first width the pane measures is taken at once.
-    if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < WIDTH_HOLD_MS) { this.widthHeld = true; return; }
+    if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < WIDTH_HOLD_MS && this.rewrapCostly()) { this.widthHeld = true; return; }
+    const first = !this.colFit;
     this.width = w;
     this.colFit = true;
     this.widthHeld = false;
+    // The re-wrap's draw time is counted (render) until nothing is left to build, shape or
+    // measure. A full one: no layout kept for this width.
+    if (!first) this.rewrap = { ms: 0, full: !this.keptBases?.has(this.sigBase()) };
+  }
+  rewrapCostly() {
+    if (this.rewrap && this.rewrap.ms > HOLD_WORK_MS) return true;
+    if (this.rewrapMs != null) return this.rewrapMs > HOLD_WORK_MS;
+    return this.sessions.reduce((n, x) => n + x.turns.length, 0) > HOLD_TURNS;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
@@ -8380,8 +8402,17 @@ export default class Threads extends View {
   }
   measPut(key, sig, h) {
     const was = this.meas.get(key);
-    const old = was ? [{ sig: was.sig, h: was.h }, ...(was.old ?? [])].filter((x) => x.sig !== sig).slice(0, WIDTHS_KEPT - 1) : [];
+    const all = was ? [{ sig: was.sig, h: was.h }, ...(was.old ?? [])].filter((x) => x.sig !== sig) : [];
+    const old = all.slice(0, WIDTHS_KEPT - 1);
     this.meas.set(key, old.length ? { sig, h, old } : { sig, h });
+    // A layout that lost a measure: rows the probe found measured there are looked at again
+    // (probeDue's stamp).
+    for (const x of all.slice(WIDTHS_KEPT - 1)) {
+      const d = (this.measDrops ??= new Map());
+      if (d.size >= 64) { d.clear(); this.dropEpoch = (this.dropEpoch ?? 0) + 1; }
+      const b = x.sig.split("|", 5).join("|");
+      d.set(b, (d.get(b) ?? 0) + 1);
+    }
   }
 
   // A probe entry reported its size: keep it, and update only that part's list size.
@@ -8442,30 +8473,40 @@ export default class Threads extends View {
     // Nothing was due and nothing it depends on changed: every part was measured, or tried.
     const qm = this.probeQuiet;
     if (qm && qm.ver === (this.probeVer ?? 0) && qm.base === base && qm.mv === (this.measVer ?? 0) && qm.broken === (this.mdBroken?.size ?? 0)) { this.probeLeft = 0; return want; }
+    // Rows being built for a new layout: the ones shown now are about to go. The walk waits
+    // for the new ones (a draw that builds rows has no time for it as well).
+    if (this.rowJob && this.baseRows?.length) { this.probeLeft = 1; return want; }
     const rows = this.baseRows ?? [];
     const n = rows.length;
+    // A closed turn's reply block found measured in this layout, pane width and rail, with no
+    // measure dropped since, is passed over at once (stamped below): a column width seen
+    // before is not walked again, part by part. 2,000 turns took 150 to 190 ms of frames.
+    const stamp = `${base}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.measEpoch ?? 0}|${this.dropEpoch ?? 0}|${this.measDrops?.get(base) ?? 0}`;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
     // Within the clean radius of the top row nothing was due, and while the rows, their
     // layout and the top stay, a new measure only settles parts: the walk starts there.
     // Measures and tries cleared (probeEpoch) start it from the top again.
-    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}`;
+    // A measure dropped for this layout (stamp) starts it again too.
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}|${stamp}`;
     const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
     const visit = (r) => {
+      if (r.probeOk === stamp && r.kind === "turn") return 0;
       const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
         : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
-      if (!part) return;
+      if (!part) return 1;
       const sig = this.partSig(part, base);
-      if (this.measOf(part.key, sig) > 0) return;
+      if (this.measOf(part.key, sig) > 0) { if (r.kind === "turn") r.probeOk = stamp; return 1; }
       const k = `${part.key}|${sig}`;
-      if ((this.probeTries.get(k) ?? 0) >= 3) return;
+      if ((this.probeTries.get(k) ?? 0) >= 3) return 1;
       want.push([part, sig, k]);
+      return 1;
     };
     let d = d0;
     let clean = d0;
     let seen = 0;
     for (; d < n && seen < PROBE_WALK; d++) {
-      if (top + d < n) { visit(rows[top + d]); seen++; }
-      if (d > 0 && top - d >= 0) { visit(rows[top - d]); seen++; }
+      if (top + d < n) seen += visit(rows[top + d]);
+      if (d > 0 && top - d >= 0) seen += visit(rows[top - d]);
       if (!want.length) clean = d + 1;
       if (want.length >= PROBE_MAX) break;
     }

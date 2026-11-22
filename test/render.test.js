@@ -6765,6 +6765,8 @@ test("a long session's rows are built over several frames, the old rows shown ti
 test("a width that changes while the pane is resized keeps the column until the pane has been still for 300 ms, then the turns re-wrap", async () => {
   const { v, cx } = await longSession(60);
   v.debug = false;
+  // Its last full re-wrap was slow (HOLD_WORK_MS): the column is held.
+  v.rewrapMs = 400;
   const size = (w) => {
     rec = [];
     v.render(cx);
@@ -6797,6 +6799,120 @@ test("a width that changes while the pane is resized keeps the column until the 
   expect(v.widthHeld).toBe(false);
   settleRows(v, cx);
   expect(v.rowsKey).not.toBe(key);
+});
+
+test("the hold is for a conversation whose last full re-wrap took over 150 ms, or, before one has finished, one of over 500 turns", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+    draw(v, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  size(540);
+  settleRows(v, cx);
+  // 60 turns and no re-wrap timed yet: the width is taken at once.
+  expect(v.rewrapMs ?? null).toBe(null);
+  size(500);
+  expect(v.width).toBeCloseTo(col(500), 6);
+  expect(v.widthHeld).toBe(false);
+  // The re-wrap at 500, a width not kept, is timed until nothing is left to do.
+  expect(v.rewrap?.full).toBe(true);
+  // Until the probe has nothing left (it tries each part three times here, with no sizes).
+  const done = () => { settleRows(v, cx); for (let i = 0; i < 100 && v.rewrap; i++) draw(v, cx); };
+  done();
+  expect(v.rewrap).toBe(null);
+  expect(v.rewrapMs).toBeGreaterThan(0);
+  expect(v.rewrapMs).toBeLessThan(150);
+  // A width kept (540) is not a full re-wrap: the last full one's time stays.
+  v.rewrapMs = 12;
+  size(540);
+  expect(v.rewrap?.full).toBe(false);
+  done();
+  expect(v.rewrap).toBe(null);
+  expect(v.rewrapMs).toBe(12);
+  // Slow last time: held.
+  v.rewrapMs = 151;
+  size(460);
+  expect(v.widthHeld).toBe(true);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  v.rewrapMs = 150;
+  size(450);
+  expect(v.widthHeld).toBe(false);
+  expect(v.width).toBeCloseTo(col(450), 6);
+  // A re-wrap still going that has taken over 150 ms already: held.
+  v.rewrap = { ms: 151, full: true };
+  size(430);
+  expect(v.widthHeld).toBe(true);
+  // None timed yet: by the turns, over 500.
+  v.rewrap = null;
+  v.rewrapMs = null;
+  const saved = v.sessions;
+  try {
+    v.sessions = [{ turns: { length: 300 } }, { turns: { length: 201 } }];
+    expect(v.rewrapCostly()).toBe(true);
+    v.sessions = [{ turns: { length: 300 } }, { turns: { length: 200 } }];
+    expect(v.rewrapCostly()).toBe(false);
+  } finally { v.sessions = saved; }
+});
+
+test("a column width seen before is not walked again by the probe, and the walk waits while rows are built", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  const measureAll = () => {
+    for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+    settleRows(v, cx);
+  };
+  at(545);
+  measureAll();
+  for (let i = 0; i < 20 && v.probeLeft !== 0; i++) v.probeDue();
+  at(480);
+  measureAll();
+  let sigs = 0;
+  const partSig = v.partSig.bind(v);
+  v.partSig = (...a) => { sigs++; return partSig(...a); };
+  v.width = 545;
+  // While the rows for 545 are built over several frames, the walk waits for them.
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  performance.now = () => (fake += 2);
+  try {
+    draw(v, cx);
+    if (v.rowJob) {
+      sigs = 0;
+      expect(v.probeDue()).toEqual([]);
+      expect(v.probeLeft).toBe(1);
+      expect(sigs).toBe(0);
+    }
+  } finally { performance.now = realPerf; }
+  settleRows(v, cx);
+  expect(v.rowJob).toBe(null);
+  expect(v.baseRows.length).toBeGreaterThan(300);
+  sigs = 0;
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  // One call passes over every closed turn, measured here before (more rows than one
+  // frame's walk, PROBE_WALK, looks at).
+  expect(v.probeDue()).toEqual([]);
+  expect(v.probeLeft).toBe(0);
+  expect(sigs).toBeLessThan(10);
+  // A measure dropped for this layout (a fourth width measured): looked at again.
+  const turnRow = v.baseRows.find((r) => r.kind === "turn" && r.shape?.md != null);
+  const part = v.cmdFor(turnRow);
+  const sig545 = v.partSig(part);
+  for (const w of [400, 380, 360]) { const s = sig545.replace(/^545\|/, `${w}|`); v.probed(part.key, s, { width: 300, height: 40 * v.zoom() }, cx); }
+  expect(v.measOf(part.key, sig545)).toBe(null);
+  sigs = 0;
+  // The walk found every row clean before; the drop starts it again (its key holds the stamp).
+  expect(v.probeWalk.clean).toBeGreaterThanOrEqual(v.baseRows.length);
+  const due = v.probeDue();
+  expect(due.map(([r]) => r.key)).toContain(part.key);
+  expect(sigs).toBeGreaterThan(0);
 });
 
 test("a column width among the last three is laid out from what was kept: no reshape, no probe, no row heights", async () => {
