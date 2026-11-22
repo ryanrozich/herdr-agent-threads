@@ -5874,6 +5874,30 @@ test("scenario: a pane between 573 and 703 px shows the narrowest column, centre
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
 });
 
+test("scenario: a drag that crosses 704 px keeps the 70 character column until the pane is still", async () => {
+  const { v, cx } = await colPane(650);
+  // A re-wrap that took long last time: the column holds through a drag.
+  v.rewrapMs = 151;
+  const before = [v.width, v.prose()];
+  for (const w of [690, 720, 760]) {
+    v.paneW = w - 2;
+    v.sizeAt = Date.now();
+    draw(v, cx);
+    // Past 704 the pane wants 90 characters; the column waits.
+    expect(v.widthHeld).toBe(w >= 704);
+    expect(v.paneStep()).toBe(w >= 704 ? 90 : 70);
+    expect(v.chars()).toBe(70);
+    expect(lineChars(v)).toBe(70);
+    expect([v.width, v.prose()]).toEqual(before);
+  }
+  // Still for WIDTH_HOLD_MS: the step the pane wants.
+  v.sizeAt = Date.now() - 1000;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(false);
+  expect(v.chars()).toBe(90);
+  expect(lineChars(v)).toBe(90);
+});
+
 test("scenario: a pane widened from 650 to 750 px shows the 90 character column", async () => {
   const { v, at } = await colPane(650);
   at(750);
