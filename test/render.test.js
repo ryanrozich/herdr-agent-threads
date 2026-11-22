@@ -18081,6 +18081,19 @@ test("the Trajectory closed and opened again within 350 ms ends all on weights o
   }
 });
 
+test("a row record a closed Chat pane left behind does not stop the next Trajectory opening from landing on weights", async () => {
+  const t = await threeRow(722);
+  try {
+    state.shared["threads.row"] = { t4: { k: 400, S: 0.5, ids: { chat: "p9", traj: "p8" }, n: { p9: 700, p8: 482 } } };
+    t.run(1000);
+    expect(rowRec()).toEqual({ S: 0.5 });
+    await t.openTraj();
+    t.run(4000);
+    expect(rowRec().ids).toEqual({ chat: "p2", traj: "p4" });
+    expect(allWeights(t, ["p1", "p2", "p4"])).toBe(true);
+  } finally { t.restore(); }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });

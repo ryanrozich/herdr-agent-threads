@@ -4101,6 +4101,10 @@ export default class Threads extends View {
     if (this.pinnedPane || this.trajPane || !this.terminal) return;
     this.rowCloseStep(cx);
     this.rowFixStep(cx);
+    // A record its Chat's pane left when it closed: none of it holds (the pane open now has
+    // its own row to make).
+    const kept = this.rowNow();
+    if (kept?.k > 0 && !panes().some((p) => p.pane === kept.ids?.chat)) this.rowSave({ S: kept.S }, cx);
     const rp = this.rowPanes();
     // The Trajectory gone during a landing: the landing given up, the new pane and any held
     // pane back at px (rowQuit), as for any other end of a landing.
