@@ -4,7 +4,7 @@ import { test, expect, mock } from "bun:test";
 
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
-const { DEFAULTS, RANGES, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
+const { DEFAULTS, RANGES, LOOK, behindLook, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
 const CHAT = { textSize: 14, agentRail: false, bubbleColor: "blue", agentBubbleColor: "amber", width: "comfortable", readingWidth: true, viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
 
@@ -36,9 +36,9 @@ test("invalid JSON keeps the defaults with a one-line note", () => {
 
 test("the file text keeps unknown keys and clamps what it writes", () => {
   const t = settingsText({ promptLines: 14 }, '{"replyLines": 5, "future": "x"}');
-  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...CHAT, look: 3 });
+  expect(JSON.parse(t)).toEqual({ replyLines: 5, future: "x", promptLines: 10, agentTurns: false, ...CHAT, look: 4 });
   expect(t.endsWith("\n")).toBe(true);
-  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...CHAT, look: 3 });
+  expect(JSON.parse(settingsText({ agentTurns: true }, "not json"))).toEqual({ promptLines: 4, replyLines: 6, agentTurns: true, ...CHAT, look: 4 });
 });
 
 test("the only write goes to data/agent-threads/settings.json with the expected snapshot", async () => {
@@ -49,7 +49,7 @@ test("the only write goes to data/agent-threads/settings.json with the expected 
     ["/apphome/data/agent-threads/settings.json", null],
     ["/apphome/data/agent-threads/settings.json", '{"promptLines":4}'],
   ]);
-  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, ...CHAT, look: 3 });
+  expect(JSON.parse(writes[1].text)).toEqual({ promptLines: 4, replyLines: 2, agentTurns: false, ...CHAT, look: 4 });
 });
 
 test("a save never replaces a file that does not parse (F5)", async () => {
@@ -95,7 +95,7 @@ test("a file from before the chat look holding the old defaults reads as the new
   expect(parseSettings('{"promptLines": 2, "replyLines": 3, "look": 2}').values).toMatchObject({ promptLines: 2, replyLines: 3 });
   // Choosing 2 and 3 from the panel writes the mark with them, so they hold.
   const t = settingsText({ promptLines: 2, replyLines: 3 }, '{"promptLines": 4, "replyLines": 3}');
-  expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 3 });
+  expect(JSON.parse(t)).toMatchObject({ promptLines: 2, replyLines: 3, look: 4 });
   expect(parseSettings(t).values).toMatchObject({ promptLines: 2, replyLines: 3 });
 });
 
@@ -117,7 +117,7 @@ test("the quiet look: slate in a file from before it was the old default and rea
   expect(v({ bubbleColor: "slate", look: 3 }).bubbleColor).toBe("slate");
   // Choosing slate writes the new mark with it, so it holds.
   const t = settingsText({ bubbleColor: "slate" }, '{"bubbleColor": "plain", "look": 3}');
-  expect(JSON.parse(t)).toMatchObject({ bubbleColor: "slate", look: 3 });
+  expect(JSON.parse(t)).toMatchObject({ bubbleColor: "slate", look: 4 });
   expect(parseSettings(t).values.bubbleColor).toBe("slate");
   // The agent's bubble keeps its default.
   expect(v({}).agentBubbleColor).toBe("amber");
@@ -183,6 +183,48 @@ test("agentRail is a boolean, false by default: a file with no key has no agent 
   expect(JSON.parse(settingsText({ agentTurns: true }, "{}")).agentRail).toBe(false);
   expect(JSON.parse(settingsText({ agentTurns: true }, '{"agentRail": true}')).agentRail).toBe(true);
 });
+
+test("look 4: agentRail true in a file from an earlier build reads as off, once; a file with the mark, or with no mark at all, keeps its value", () => {
+  const v = (o) => parseSettings(JSON.stringify(o)).values.agentRail;
+  expect(LOOK).toBe(4);
+  // Every build that wrote agentRail wrote look 3, and before this default it wrote true.
+  expect(v({ agentRail: true, look: 3 })).toBe(false);
+  expect(v({ agentRail: true, look: 2 })).toBe(false);
+  expect(v({ agentRail: true, look: "3" })).toBe(false);
+  expect(v({ agentRail: true, look: "x" })).toBe(false);
+  expect(v({ agentRail: false, look: 3 })).toBe(false);
+  expect(v({ look: 3 })).toBe(false);
+  // Marked: the person's choice, made since.
+  expect(v({ agentRail: true, look: 4 })).toBe(true);
+  expect(v({ agentRail: true, look: 5 })).toBe(true);
+  expect(v({ agentRail: false, look: 4 })).toBe(false);
+  // No mark: written by hand, kept.
+  expect(v({ agentRail: true })).toBe(true);
+  // Only agentRail is stepped: the file's other values read as they were.
+  expect(parseSettings(JSON.stringify({ agentRail: true, agentTurns: true, railSide: "left", look: 3 })).values).toMatchObject({ agentRail: false, agentTurns: true, railSide: "left" });
+  // Which files a load writes again with the mark: a settings object with an older mark.
+  expect(behindLook('{"agentRail": true, "look": 3}')).toBe(true);
+  expect(behindLook('{"look": 2}')).toBe(true);
+  expect(behindLook('{"look": "x"}')).toBe(true);
+  expect(behindLook('{"agentRail": true, "look": 4}')).toBe(false);
+  expect(behindLook('{"look": 5}')).toBe(false);
+  expect(behindLook('{"agentRail": true}')).toBe(false);
+  expect(behindLook("{}")).toBe(false);
+  expect(behindLook(null)).toBe(false);
+  expect(behindLook("")).toBe(false);
+  expect(behindLook("{ half an edit")).toBe(false);
+  expect(behindLook("[3]")).toBe(false);
+  expect(behindLook("null")).toBe(false);
+  // The write that marks it: off, look 4, and the keys this build does not know kept.
+  const t = JSON.parse(settingsText(parseSettings('{"agentRail": true, "look": 3, "future": 1}').values, '{"agentRail": true, "look": 3, "future": 1}'));
+  expect(t).toMatchObject({ agentRail: false, look: 4, future: 1 });
+  expect(behindLook(JSON.stringify(t))).toBe(false);
+  // Turned on after that: written true with the mark, and read back true.
+  const on = settingsText({ ...parseSettings(JSON.stringify(t)).values, agentRail: true }, JSON.stringify(t));
+  expect(JSON.parse(on)).toMatchObject({ agentRail: true, look: 4 });
+  expect(parseSettings(on).values.agentRail).toBe(true);
+});
+
 
 test("alwaysShowTime is a boolean, false by default", () => {
   const v = (j) => parseSettings(JSON.stringify(j)).values.alwaysShowTime;

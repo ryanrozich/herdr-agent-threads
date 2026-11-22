@@ -108,7 +108,7 @@ The page ends with Reset to defaults, which puts every control on the card back 
 | `promptLines` | 4 | 1 to 10 lines of prompt in a collapsed row, with `truncate` on |
 | `replyLines` | 6 | 1 to 12 lines of reply in a collapsed row, with `truncate` on |
 | `agentTurns` | false | true shows agent messages |
-| `agentRail` | false | true gives agent messages ticks on the turn rail too; false keeps them off it, so its ticks are your own turns (the running turn keeps its tick); Settings, Agent messages on the rail |
+| `agentRail` | false | true gives agent messages ticks on the turn rail too; false keeps them off it, so its ticks are your own turns (the running turn keeps its tick); Settings, Agent messages on the rail. The update that made it false turns it off once in a file saved by an earlier build; after that the file keeps your choice |
 | `width` | `"comfortable"` | how long a reading line may be: `comfortable` (70 characters), `wide` (90) or `full` (no limit); one value for every pane |
 | `readingWidth` | true | true keeps Threads at the width's column; false leaves a wider pane as it is |
 | `viewerReply` | true | true shows the prompt and reply beside the image in the image viewer; `i` in the viewer changes it |

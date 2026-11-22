@@ -4,7 +4,7 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## Unreleased
 
-- "Agent messages on the rail" (`agentRail`) is now off by default, so the turn rail shows your own turns and the running one. A settings file that never held the key now shows fewer ticks. A file that holds `true` keeps agent messages on the rail, and the switch under Settings, Agent messages, turns them back on.
+- Agent messages are off the rail after this update: the turn rail shows your own turns and the running one. To get them back, turn on "Agent messages on the rail" in Settings, under Agent messages. That choice is kept from then on.
 - `↑` and `↓` (and `k` and `j`) follow the rail: they move between the turns that have a tick. With "Agent messages on the rail" off they pass over agent messages; with it on they stop at them, as before. A click still selects an agent message.
 - A Codex subagent rollout exported by itself now starts at its own history boundary.
 

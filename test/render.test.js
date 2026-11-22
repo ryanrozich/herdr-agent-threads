@@ -1184,6 +1184,92 @@ test("agentRail: off by default, only the person's turns and the running one hav
   delete recordFiles[v.prefsPath()];
 });
 
+test("a settings file from a build before agentRail's new default: the first load turns it off and marks the file (look 4), once; the switch's choice after that is kept", async () => {
+  const { v, cx } = await scripted([
+    { k: "p", o: "human", t: "Rename the cart helper", ts: at(0) }, { k: "t", t: "Renamed." }, { k: "d", ms: 1000, ts: at(1) },
+    { k: "p", o: "peer", t: peer("Tests are green on helper-a"), ts: at(2) }, { k: "t", t: "Good." }, { k: "d", ms: 800, ts: at(3) },
+    { k: "p", o: "human", t: "Add the line", ts: at(4) }, { k: "t", t: "Added." }, { k: "d", ms: 600, ts: at(5) },
+  ]);
+  const path = v.prefsPath();
+  const railKeys = () => (v.railTurns ?? []).map((x) => x.key);
+  const file = () => JSON.parse(recordFiles[path]);
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  // A pane opening: what it reads is the file on disk.
+  const load = async () => { v.prefsLoaded = false; v.prefsRaw = undefined; v.readPrefs(cx); await settle(); };
+  keepSettings = true;
+  settingsWrites.length = 0;
+  try {
+    // What an earlier build saved: agentRail true (its default), its mark 3, a key it kept.
+    recordFiles[path] = `${JSON.stringify({ agentTurns: false, agentRail: true, railSide: "left", future: "x", look: 3 }, null, 2)}\n`;
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:3"]);
+    // Written once, off, with the mark; the person's other values and unknown keys kept.
+    expect(settingsWrites.length).toBe(1);
+    expect(file()).toMatchObject({ agentRail: false, railSide: "left", future: "x", look: 4 });
+    // The next load finds the mark: no write, nothing changed.
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefs.agentRail).toBe(false);
+    // Turned on: written true, and a reload keeps it.
+    v.action("agentRail", cx);
+    await settle();
+    expect(file()).toMatchObject({ agentRail: true, look: 4 });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    draw(v, cx);
+    expect(railKeys()).toEqual(["0:1", "0:2", "0:3"]);
+    // A later save of another setting keeps it on.
+    const writes = settingsWrites.length;
+    v.action("truncate", cx);
+    await settle();
+    expect(settingsWrites.length).toBe(writes + 1);
+    expect(file()).toMatchObject({ agentRail: true, truncate: true, look: 4 });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    // A file already marked is left alone: read as it holds, not written.
+    recordFiles[path] = JSON.stringify({ agentRail: true, look: 4 });
+    settingsWrites.length = 0;
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    expect(settingsWrites.length).toBe(0);
+    // A file with no agentRail key (an earlier build's, or written by hand): off.
+    recordFiles[path] = JSON.stringify({ agentTurns: false, look: 3 });
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    expect(file()).toMatchObject({ agentRail: false, look: 4 });
+    recordFiles[path] = JSON.stringify({ agentTurns: false });
+    settingsWrites.length = 0;
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    // A file written by hand, with no mark, holding true: kept, and not written.
+    recordFiles[path] = JSON.stringify({ agentRail: true });
+    await load();
+    expect(v.prefs.agentRail).toBe(true);
+    expect(settingsWrites.length).toBe(0);
+    // No file at all: off, and nothing written.
+    delete recordFiles[path];
+    await load();
+    expect(v.prefs.agentRail).toBe(false);
+    expect(settingsWrites.length).toBe(0);
+    // A write that does not land (the file still holds the old text when read again) is
+    // not tried again on that text, so the pane does not write in a loop.
+    keepSettings = false;
+    recordFiles[path] = JSON.stringify({ agentRail: true, look: 3 });
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    v.readPrefs(cx);
+    await settle();
+    await load();
+    expect(settingsWrites.length).toBe(1);
+    expect(v.prefs.agentRail).toBe(false);
+  } finally {
+    keepSettings = false;
+    delete recordFiles[path];
+  }
+});
+
 test("up and down follow the rail: with Agent messages on the rail off they pass over agent messages, on they stop at them; the running one is a stop", async () => {
   const { keyAction } = await import("../mods/agent-threads/ui.js");
   const { v, cx } = await scripted([
