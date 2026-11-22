@@ -17883,6 +17883,27 @@ test("a second Threads pane in the tab puts the row back to px where it is, and 
   } finally { t.restore(); }
 });
 
+test("a second Threads pane for the same terminal takes itself for the Chat: the row goes back to px at the record's widths, never at the second pane's own", async () => {
+  const t = await threeOpen("traj");
+  try {
+    const was = t.row.widths();
+    state.panes.push({ pane: "p9", tab: "A", terminal: null, mod: "agent-threads" });
+    const x = new Threads();
+    const c = makeCx();
+    x.init(state.props, c);
+    await settle(x);
+    x.debug = false;
+    // It finds the terminal's Threads pane (p2) as its own, at its own width under the terminal.
+    expect(x.me()?.pane).toBe("p2");
+    x.paneW = 184;
+    x.sizeAt = t.now();
+    x.poll(c);
+    c.flush(0);
+    t.run(2000);
+    for (const id of ["p2", "p4", "p3"]) expect(t.row.size[id]).toEqual({ px: was[id] });
+  } finally { t.restore(); }
+});
+
 test("w with the row on weights puts it back to px for the Trajectory's life", async () => {
   const t = await threeOpen("traj");
   try {
