@@ -485,3 +485,24 @@ test("compact rows below 200 px: the turn's number and the duration where it fit
   const head = { kind: "trh", n: 291, ts: null, total: 8000 };
   expect([compactRow(head, 100).num, compactRow(head, 100).dur]).toEqual(["#291", durText(8000)]);
 });
+
+test("compact tooltips carry what the compact row drops: a heading's calls, failures, tokens and total; a step's subagent state and tokens and its status now", () => {
+  const head = { kind: "trh", n: 12, ts: null, total: 8000, calls: 3, fails: 1, partial: false, tokens: 12400, timed: true };
+  const p = headParts(head, Infinity);
+  expect(compactRow(head, 100).tip).toBe(["#12", p.calls, p.failed, p.tokens, p.total].join(" · "));
+  expect(compactRow(head, 100).tip).toContain("3 calls");
+  expect(compactRow(head, 100).tip).toContain("1 failed");
+  expect(compactRow(head, 100).tip).toContain("tok");
+  // A running turn says so.
+  expect(compactRow({ ...head, going: true }, 100).tip.endsWith("running")).toBe(true);
+  const step = { kind: "tr", turn: { n: 12 }, lk: "tool", tool: "Task", text: "review", start: 12000, dur: 3400, status: null, sub: { state: "completed", tokens: 5200 } };
+  const tip = compactRow(step, 100).tip;
+  expect(tip).toContain("completed");
+  expect(tip).toContain("5.2k tok");
+  // The status as the row has it now: running, then failed (the subagent state gives way, as in
+  // the full row).
+  expect(compactRow({ ...step, status: "running" }, 100).tip.endsWith("running")).toBe(true);
+  const failed = compactRow({ ...step, status: "failed", failed: true }, 60).tip;
+  expect(failed.endsWith("failed")).toBe(true);
+  expect(failed).not.toContain("completed");
+});
