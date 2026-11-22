@@ -10205,37 +10205,51 @@ test("listOffset: a scroll lands as Herdr lands it, the list's ends hold it, and
   // Five rows of 100 px in a list 250 px tall: tops 0 to 400, the end at 500.
   const pre = [0, 100, 200, 300, 400, 500];
   const H = 250;
-  expect(listOffset(pre, 150, H, null, -1, -1)).toBe(150);
+  expect(listOffset(pre, 150, H, null, -1)).toBe(150);
   // The end: its bottom at the bottom edge.
-  expect(listOffset(pre, 0, H, { end: true }, -1, -1)).toBe(250);
+  expect(listOffset(pre, 0, H, { end: true }, -1)).toBe(250);
+  // scroll_to_bottom is the near edge for the last row: with a last row taller than the list
+  // and its top above the top edge, Herdr puts its top there, short of the end.
+  expect(listOffset([0, 100, 700], 0, H, { end: true }, -1)).toBe(450);
+  expect(listOffset([0, 100, 700], 300, H, { end: true }, -1)).toBe(100);
   // To the near edge: row 3 below the view goes to the bottom edge, row 1 above it to the top
   // edge, row 2 on screen stays where it is.
-  expect(listOffset(pre, 0, H, { i: 3, how: "top" }, -1, -1)).toBe(150);
-  expect(listOffset(pre, 180, H, { i: 1, how: "top" }, -1, -1)).toBe(100);
-  expect(listOffset(pre, 150, H, { i: 2, how: "top" }, -1, -1)).toBe(150);
+  expect(listOffset(pre, 0, H, { i: 3, how: "top" }, -1)).toBe(150);
+  expect(listOffset(pre, 180, H, { i: 1, how: "top" }, -1)).toBe(100);
+  expect(listOffset(pre, 150, H, { i: 2, how: "top" }, -1)).toBe(150);
   // Row 2's middle at the list's middle.
-  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, -1, -1)).toBe(125);
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, -1)).toBe(125);
   // A row the list does not have asks nothing.
-  expect(listOffset(pre, 150, H, { i: 5, how: "top" }, -1, -1)).toBe(150);
-  expect(listOffset(pre, 150, H, { i: -1, how: "top" }, -1, -1)).toBe(150);
+  expect(listOffset(pre, 150, H, { i: 5, how: "top" }, -1)).toBe(150);
+  expect(listOffset(pre, 150, H, { i: -1, how: "top" }, -1)).toBe(150);
   // Held to the list: not above its start, not past its end, 0 in a list the pane holds.
-  expect(listOffset(pre, -40, H, null, -1, -1)).toBe(0);
-  expect(listOffset(pre, 400, H, null, -1, -1)).toBe(250);
-  expect(listOffset([0, 100, 200], 50, H, null, -1, -1)).toBe(0);
-  // The pane thought 150, but rows 2 to 4 are drawn: the offset is between 200 and 250.
-  expect(listOffset(pre, 150, H, null, 2, 5)).toBe(200);
-  expect(listOffset(pre, 290, H, null, 2, 5)).toBe(250);
-  expect(listOffset(pre, 230, H, null, 2, 5)).toBe(230);
-  // Rows 1 and 2 drawn: the last one's top above the bottom edge, the next one's at or
-  // below it, so between 100 and 150.
-  expect(listOffset(pre, 20, H, null, 1, 4)).toBe(100);
-  expect(listOffset(pre, 199, H, null, 1, 4)).toBe(150);
-  // In a list 50 px tall, rows 1 and 2 drawn: row 2's top above the bottom edge puts the
-  // offset past 150.
-  expect(listOffset(pre, 120, 50, null, 1, 3)).toBe(150);
-  // Rows the list could not draw for any offset leave it as it was.
-  expect(listOffset(pre, 150, H, null, 1, 3)).toBe(150);
-  expect(listOffset(pre, 150, H, null, 3, 9)).toBe(150);
+  expect(listOffset(pre, -40, H, null, -1)).toBe(0);
+  expect(listOffset(pre, 400, H, null, -1)).toBe(250);
+  expect(listOffset([0, 100, 200], 50, H, null, -1)).toBe(0);
+  // The pane thought 150, but row 2 is the first drawn: its top is at or above the top edge
+  // and its bottom below it.
+  expect(listOffset(pre, 150, H, null, 2)).toBe(200);
+  expect(listOffset(pre, 240, H, null, 2)).toBe(240);
+  expect(listOffset(pre, 20, H, null, 1)).toBe(100);
+  expect(listOffset(pre, 210, H, null, 1)).toBe(199.5);
+  // Ten rows: Herdr draws to two rows past the first whose bottom is past the bottom edge. At
+  // 120 that is row 3 (bottom 400 past 370), so rows 1 to 4: row 3's bottom is past the edge
+  // and row 2's is not, which puts the offset at 50 or more and under 150, and row 1's top
+  // makes it 100 or more and under 200: 100 to 149.5, half a px inside the strict bounds.
+  const ten = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+  expect(listOffset(ten, 120, H, null, 1, 5)).toBe(120);
+  expect(listOffset(ten, 180, H, null, 1, 5)).toBe(149.5);
+  expect(listOffset(ten, 90, H, null, 1, 5)).toBe(100);
+  expect(listOffset(ten, 40, H, null, 0, 5)).toBe(50);
+  // Drawn to the list's end says nothing of the bottom edge; rows that cannot be drawn
+  // together leave the first row's bound alone.
+  expect(listOffset(ten, 730, H, null, 7, 10)).toBe(730);
+  expect(listOffset(ten, 300, H, null, 1, 9)).toBe(199.5);
+  // After a scroll: the scroll first, then the first row drawn.
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, 1)).toBe(125);
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, 2)).toBe(200);
+  // No such row: nothing to go by.
+  expect(listOffset(pre, 150, H, null, 5)).toBe(150);
 });
 
 test("placeAt: the row at the top edge, the last whose top is at or above it, and the share of it above the edge", async () => {
@@ -16634,20 +16648,23 @@ function simList(v) {
     let off = sim.off;
     const a = sim.ask;
     sim.ask = null;
-    if (a?.end) off = pre[n] - v.listH;
-    else if (a) {
-      const top = pre[a.i];
-      const bot = pre[a.i + 1];
+    // As gpui-component's virtual_list.rs: scroll_to_bottom is the near edge for the last row.
+    const ai = a?.end ? n - 1 : a?.i;
+    if (a && ai >= 0 && ai < n) {
+      const top = pre[ai];
+      const bot = pre[ai + 1];
       if (a.how === "center") off = (top + bot - v.listH) / 2;
       else if (top < off) off = top;
       else if (bot > off + v.listH) off = bot - v.listH;
     }
     off = Math.max(0, Math.min(off, room(s)));
     sim.off = off;
-    let start = 0;
-    while (start < n - 1 && pre[start + 1] <= off) start++;
-    let end = start + 1;
-    while (end < n && pre[end] < off + v.listH) end++;
+    // The rows drawn: from the first whose bottom is past the top edge, to two past the first
+    // whose bottom is past the bottom edge, or to the end.
+    const past = (edge) => { let k = 0; while (k < n && pre[k + 1] <= edge) k++; return k; };
+    const start = Math.min(past(off), n - 1);
+    const pe = past(off + v.listH);
+    const end = Math.max(start + 1, pe === n ? n : Math.min(pe + 2, n));
     sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
     return { start, end };
   };

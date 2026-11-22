@@ -2502,30 +2502,39 @@ export function landExact(slots, i, want) {
 // The line on screen is kept across a re-wrap (main.js takeAnchor and holdPlace) from the
 // list's scroll offset, which Herdr's v_virtual_list keeps in px and gives no read of. pre
 // is the rows' tops (pre[i]) and the list's end (pre[n]), in the layout's heights.
-// listOffset: the offset after a layout, from the one before (off). ask is the pane's scroll
-// since the last layout, which Herdr applies at that layout: { end } is scroll_to_bottom,
-// { i, how: "center" } puts row i's middle at the list's middle, any other how brings row i
-// to the near edge (its top to the top edge when it is above, its bottom to the bottom edge
-// when it is below). Then the offset is held to the list, and to what the rows drawn,
-// [start, end), allow: the first one's top at or above the top edge and the next one's
-// below it, the last one's top above the bottom edge and the next one's at or below it.
-// That puts right a scroll the pane did not see.
+// listOffset: the offset after a layout, from the one before (off), as Herdr works it out
+// (gpui-component's virtual_list.rs). ask is the pane's scroll since the last layout, which
+// Herdr applies at that layout, before it picks the rows to draw: { i, how: "center" } puts
+// row i's middle at the list's middle, any other how brings row i to the near edge (its top
+// to the top edge when it is above, its bottom to the bottom edge when it is below), and
+// { end } is scroll_to_bottom, which is the near edge for the last row. Then the offset is
+// held to the list, and to the rows drawn, [start, end): Herdr draws from the first row whose
+// bottom is past the top edge to two rows past the first whose bottom is past the bottom
+// edge, or to the list's end. So start's top is at or above the top edge and its bottom below
+// it, and when end is short of the list's end, row end-2 is the first whose bottom is past
+// the bottom edge. That puts right a scroll the pane did not see.
 export function listOffset(pre, off, H, ask, start, end) {
   const n = pre.length - 1;
   let o = off;
-  if (ask?.end) o = pre[n] - H;
-  else if (ask && ask.i >= 0 && ask.i < n) {
-    const top = pre[ask.i];
-    const bot = pre[ask.i + 1];
+  const i = ask?.end ? n - 1 : ask?.i;
+  if (ask && i >= 0 && i < n) {
+    const top = pre[i];
+    const bot = pre[i + 1];
     if (ask.how === "center") o = (top + bot - H) / 2;
     else if (top < o) o = top;
     else if (bot > o + H) o = bot - H;
   }
   o = Math.max(0, Math.min(o, pre[n] - H));
-  if (end > start && start >= 0 && end <= n) {
-    const lo = Math.max(pre[start], pre[end - 1] - H);
-    const hi = Math.min(pre[start + 1], pre[end] - H);
-    if (lo <= hi) o = Math.max(lo, Math.min(o, hi));
+  // A bound that is strict (a bottom past an edge) keeps half a px inside it.
+  if (start >= 0 && start < n) {
+    let lo = pre[start];
+    let hi = Math.max(lo, pre[start + 1] - 0.5);
+    if (end > start + 1 && end < n) {
+      lo = Math.max(lo, pre[end - 2] - H);
+      hi = Math.min(hi, pre[end - 1] - H - 0.5);
+    }
+    if (lo > hi) { lo = pre[start]; hi = Math.max(lo, pre[start + 1] - 0.5); }
+    o = Math.max(lo, Math.min(o, hi));
   }
   return o;
 }
