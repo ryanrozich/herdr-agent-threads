@@ -15360,6 +15360,56 @@ test("the Trajectory below 200 px: one line a row (a step's mark, its turn's num
   expect(v.tsel).not.toBe(from);
 });
 
+test("the compact heading with calls failed: a red dot on its icon and the count in its tooltip; f and Shift f still go through the failures", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  v.width = 98;
+  v.paneW = 98;
+  const s = v.current();
+  const groups = s.turns.flatMap((x) => x.steps.filter((st) => st.k === "group"));
+  const build = (fail) => {
+    for (const g of groups) for (const info of g.info) info.f = false;
+    if (fail) groups.at(-1).info[0].f = true;
+    v.ledgerMemo = null;
+    v.ledgerJob = null;
+    v.turnLedger = new WeakMap();
+    let c = frame(v, cx);
+    for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); c = frame(v, cx); }
+    return c;
+  };
+  let c = build(false);
+  expect(v.ledger().totals.failed).toBe(0);
+  expect(hasId(c, "th-traj-icon-fails")).toBe(false);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory");
+  c = build(true);
+  expect(v.ledger().totals.failed).toBe(1);
+  expect(hasId(c, "th-traj-icon-fails")).toBe(true);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory · 1 failed");
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toMatch(/^tr:/);
+  c = frame(v, cx);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory · 1 of 1");
+  const at = v.tsel;
+  v.key(keyEv("end"), cx);
+  expect(v.tsel).not.toBe(at);
+  v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(at);
+});
+
+test("a running turn's total in the compact band is drawn in the working colour", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const t = { working: "#00aa00", muted: "#777777", blocked: "#aa0000", dim: "#555555", raised: "#333333", foreground: "#ffffff", hover: "#444444" };
+  const ink = (going) => {
+    rec = [];
+    v.ledgerCompact(t, { kind: "trh", key: "h1", n: 1, going, total: 5000, line: null }, false, {}, { mode: "line", num: "#1", dur: "5s", tip: "#1" });
+    const c = rec;
+    rec = null;
+    const i = c.findIndex((e) => e[0] === "child" && e[1] === "5s");
+    return c.slice(0, i).filter((e) => e[0] === "text_color").at(-1)[1];
+  };
+  expect([ink(true), ink(false)]).toEqual([t.working, t.muted]);
+});
+
 test("the compact switch goes through the size handler by the rounded Herdr px: 199 to 200 and back by 1 px, 64 to 63, and a 200 px pane at zoom 1.25 that reads 199.99", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.enterTraj();

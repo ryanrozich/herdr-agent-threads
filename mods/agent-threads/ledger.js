@@ -135,6 +135,9 @@ export function trajCompact(width) {
 }
 // What a compact row shows at a pane's px: { mode, num, dur, tip }, num and dur null where they
 // are not drawn. null at COMPACT_W and up. inner is the width inside the frame, for what fits.
+// The tooltip has all the full row shows: a heading's time, calls, failures, tokens and total
+// (headParts at any width); a step's label, subagent state and tokens, time, duration and its
+// status as it is now.
 export function compactRow(r, width, inner = width) {
   const mode = trajCompact(width);
   if (!mode || !r) return null;
@@ -143,9 +146,15 @@ export function compactRow(r, width, inner = width) {
   const num = n != null ? `#${n}` : "";
   const t = rowTimes(r);
   const dur = head ? (r.total != null ? durText(r.total) : "") : t.dur;
-  const label = head ? "" : r.tool ? `${r.tool} ${r.text ?? ""}`.trim() : r.sender ? `${r.sender} · ${r.text ?? ""}` : (r.text ?? "");
-  const when = head ? (r.ts ? fmtTime(r.ts) : "") : t.start;
-  const tip = [num, label, when, dur, r.status].filter(Boolean).join(" · ");
+  let tip;
+  if (head) {
+    const p = headParts(r, Infinity);
+    tip = [num, r.ts ? fmtTime(r.ts) : "", p.calls, p.failed, p.tokens, p.total].filter(Boolean).join(" · ");
+  } else {
+    const label = r.tool ? `${r.tool} ${r.text ?? ""}`.trim() : r.sender ? `${r.sender} · ${r.text ?? ""}` : (r.text ?? "");
+    const sub = r.sub?.state && !r.failed ? [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null] : [];
+    tip = [num, label, ...sub, t.start, dur, r.status].filter(Boolean).join(" · ");
+  }
   if (mode === "icon") return { mode, num: null, dur: null, tip };
   const room = inner - 2 * COMPACT_PAD - (head ? 0 : 16 + COMPACT_PAD) - num.length * COMPACT_CH;
   return { mode, num, dur: dur && room >= COMPACT_PAD + dur.length * COMPACT_CH ? dur : null, tip };

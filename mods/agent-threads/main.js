@@ -11564,10 +11564,13 @@ export default class Threads extends View {
   trajHeading(t, L, shown, i) {
     const fails = this.failCount(L, shown, i);
     const arrow = (id, icon, tip, name) => this.iconButton(t, id, icon, tip, (_e, cx) => { this.ledgerAction(name, cx); cx.notify(); });
-    // Below 200 px, the icon alone (ledger.js trajCompact); the keys still work.
+    // Below 200 px, the icon alone (ledger.js trajCompact), with a red dot at its corner when
+    // calls failed, and the count in its tooltip; f and Shift f still go through them.
     if (trajCompact(this.trajPx())) {
       return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(COMPACT_PAD).items_center().justify_center().border_b(1).border_color(t.border)
-        .child(div().id("th-traj-icon").flex_none().tooltip("Trajectory").child(svg(ICON("list")).size(14).text_color(t.muted)));
+        .child(div().id("th-traj-icon").flex_none().relative().tooltip(fails ? `Trajectory · ${fails}` : "Trajectory")
+          .child(svg(ICON("list")).size(14).text_color(t.muted))
+          .when(Boolean(fails), (el) => el.child(div().id("th-traj-icon-fails").absolute().top(-2).right(-3).size(6).rounded(3).bg(t.blocked))));
     }
     return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(10).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg(ICON("list")).size(14).flex_none().text_color(t.muted))
@@ -11686,7 +11689,7 @@ export default class Threads extends View {
       .when(c.num != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5).text_color(head ? t.muted : t.dim).child(c.num)))
       .when(c.mode === "line", (el) => el.child(div().flex_1()))
       .when(c.dur != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5)
-        .text_color(r.failed ? t.blocked : t.muted).text_right().child(c.dur)));
+        .text_color(r.failed ? t.blocked : head && r.going ? t.working : t.muted).text_right().child(c.dur)));
     const box = div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer().tooltip(c.tip || " ")
       .when(on || head, (el) => el.bg(on ? t.raised : alpha(t.foreground, 0.035))).hover((s) => s.bg(t.hover))
       .child(row);
