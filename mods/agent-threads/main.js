@@ -7123,11 +7123,13 @@ export default class Threads extends View {
     const { note } = this.cardKit(t);
     const isNew = e.at == null;
     const label = (text) => this.ruleLabel(t, text);
-    // Built as each field draws, so Reference takes its place after Finds.
+    // Built as each field draws, so Reference takes its place after Finds. The hint's text
+    // may shrink and wrap (min_w(0)), so in a narrow card it wraps inside the card, with
+    // Reference after it or on the line under it.
     const hints = {
       description: () => note("It shows under the name in the list."),
       pattern: () => h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
-        .child(div().flex_none().child("A JavaScript regular expression. Capitals count."))
+        .child(div().min_w(0).child("A JavaScript regular expression. Capitals count."))
         .child(this.referenceLink(t)),
       url: () => note("An address that starts with https://. $1 puts in what the first ( ) found; {repo} is this session's repository."),
     };
@@ -7359,13 +7361,14 @@ export default class Threads extends View {
     const label = (text) => this.ruleLabel(t, text);
     // A function: an element is used once, and both hints below hold this line.
     const firstLine = () => note(`Read against the first ${RULE_TEXT} characters of a prompt's first line.`);
-    // Built as each field draws, so Reference takes its place after Pattern.
+    // Built as each field draws, so Reference takes its place after Pattern. The pattern
+    // hint's text wraps inside the card, as Finds' does on Link rules.
     const hints = {
       name: () => note("It shows in the list, and in the tooltip on a message it matched."),
       prefix: () => v_flex().gap(2).child(note("{name} is the sender's name. It ends at the text you put after it, or at a space.")).child(firstLine()),
       pattern: () => v_flex().gap(2)
         .child(h_flex().flex_wrap().gap(4).text_size(12).text_color(t.muted)
-          .child(div().flex_none().child("A JavaScript regular expression with a group named sender. Capitals count."))
+          .child(div().min_w(0).child("A JavaScript regular expression with a group named sender. Capitals count."))
           .child(this.referenceLink(t)))
         .child(firstLine()),
       example: () => note("A prompt this rule should match. Type any prompt here to try the rule."),
