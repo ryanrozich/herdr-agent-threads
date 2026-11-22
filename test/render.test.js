@@ -16849,11 +16849,12 @@ test("the place is kept across a column step with the Trajectory open beside the
   }
 });
 
-test("while the probe still measures, the place holds: a scroll lets it go at once, and 2 s at most", async () => {
+test("while the probe still measures, the place holds as long as that takes, past 2 s and 10 s: a scroll lets it go at once, in the same millisecond too", async () => {
   const { v, cx } = await wrapSession(400);
   v.debug = false;
   v.listH = 600;
   const sim = simList(v);
+  const real = Date.now;
   try {
     openAt(v, cx, sim, 650);
     sim.wheel(sim.off / 2);
@@ -16863,35 +16864,168 @@ test("while the probe still measures, the place holds: a scroll lets it go at on
     v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
     // The probe still has rows above the place to measure in every frame.
     v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
-    // The place holds until a frame past 2 s lets it go.
+    // The clock stopped: the place is taken, held and the wheel comes in the same millisecond.
+    const t0 = real();
+    Date.now = () => t0;
     stillAt(v, 750);
     settleRows(v, cx);
     expect(v.anchor?.key).toBe(sim.last().key);
-    const real = Date.now;
-    const t0 = real();
-    try {
-      Date.now = () => t0 + 1900;
+    const key0 = sim.last().key;
+    for (const s of [1.9, 2.1, 10.5, 60]) {
+      Date.now = () => t0 + s * 1000;
       draw(v, cx);
       expect(Boolean(v.anchor)).toBe(true);
-      Date.now = () => t0 + 2100;
-      draw(v, cx);
-    } finally { Date.now = real; }
-    expect(whys).toEqual(["time"]);
-    expect(v.anchor).toBe(null);
+      expect(sim.last().key).toBe(key0);
+    }
+    expect(whys).toEqual([]);
     // A wheel while held lets it go in the next frame, at the place the wheel took it to.
-    stillAt(v, 650);
-    settleRows(v, cx);
-    expect(Boolean(v.anchor)).toBe(true);
+    Date.now = () => t0 + 60000;
     sim.wheel(40);
     const key = sim.last().key;
     draw(v, cx);
-    expect(whys).toEqual(["time", "scroll"]);
+    expect(whys).toEqual(["scroll"]);
     expect(v.anchor).toBe(null);
     draw(v, cx);
     expect(sim.last().key).toBe(key);
-    v.letGo = go;
+    // A reader at the end is kept at the end past 10 s, the end asked in every frame.
+    Date.now = real;
     delete v.probeDue;
+    v.letGo = go;
+    v.jumpLatest();
+    settleList(v, cx, sim);
+    expect(sim.last().end).toBe(true);
+    v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+    const t1 = real();
+    Date.now = () => t1;
+    stillAt(v, 650);
+    settleRows(v, cx);
+    expect(v.anchor?.end).toBe(true);
+    for (const s of [2.1, 10.5, 30]) {
+      Date.now = () => t1 + s * 1000;
+      const asks = sim.asks;
+      draw(v, cx);
+      expect(sim.asks).toBeGreaterThan(asks);
+      expect(v.anchor?.end).toBe(true);
+      expect(sim.last().end).toBe(true);
+    }
+  } finally { Date.now = real; delete v.probeDue; listWindow = null; }
+});
+
+test("a jump while a place is held lets it go and goes where it goes: End, a jump key, a rail click", async () => {
+  for (const jump of ["end", "home", "rail"]) {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      probeFrame(v, cx);
+      const whys = [];
+      const go = v.letGo;
+      v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+      v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+      stillAt(v, 750);
+      settleRows(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      const keys = v.turnKeys(v.rows());
+      if (jump === "end") v.jumpLatest();
+      else if (jump === "home") v.key(keyEv("home"), cx);
+      else v.railJump(keys[3], cx);
+      draw(v, cx);
+      expect(whys).toEqual(["jump"]);
+      expect(v.anchor).toBe(null);
+      delete v.probeDue;
+      v.letGo = go;
+      settleList(v, cx, sim);
+      if (jump === "end") expect(sim.last().end).toBe(true);
+      else if (jump === "home") expect(sim.off).toBe(0);
+      else {
+        const f = sim.last();
+        const pre = [0];
+        for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+        const i = f.keys.indexOf(keys[3]);
+        expect(i).toBeGreaterThanOrEqual(0);
+        // The turn on screen, not the place held before.
+        expect(pre[i] >= f.off - 1 && pre[i] < f.off + v.listH).toBe(true);
+      }
+    } finally { listWindow = null; }
+  }
+});
+
+test("a held place whose row is gone (its reply parted anew) falls back to its turn's first row, at the top edge from its top", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    const A = v.anchor;
+    expect(A?.turn).toBeTruthy();
+    // The row's key is not among the new rows any more.
+    A.key = `${A.key}:gone`;
+    A.pre = null;
+    v.fitKey = null;
+    probeFrame(v, cx);
+    // The hold goes on, on a row of the new rows, from its top.
+    expect(v.anchor).toBe(A);
+    expect(A.key.endsWith(":gone")).toBe(false);
+    expect(v.rows().some((r) => r.key === A.key)).toBe(true);
+    expect(A.share).toBe(0);
+    const frames = settleList(v, cx, sim);
+    expect(v.anchor).toBe(null);
+    // Let go: the turn's first row at the top edge.
+    expect(sim.last().key).toBe(A.key);
+    expect(Math.abs(sim.last().into)).toBeLessThan(1);
+    expect(frames.length).toBeGreaterThan(0);
   } finally { listWindow = null; }
+});
+
+test("a column step crossed mid-chat at zoom 0.9 keeps the row at the top edge at the same share, both ways: the wheel is taken in the list's px", async () => {
+  herdrSettings = { font_family: "Mono", zoom: 0.9 };
+  try {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      sim.wheel(37);
+      probeFrame(v, cx);
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+      crossStep(v, cx, sim, 650, 750);
+    } finally { listWindow = null; }
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+test("the sessions starting over drop a held place: a pick, and a session read again from the top", async () => {
+  for (const how of ["pick", "restart"]) {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      probeFrame(v, cx);
+      v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+      stillAt(v, 750);
+      settleRows(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      v.anchorDue = true;
+      if (how === "pick") v.pick({ path: v.current().file }, cx);
+      else v.restart(v.current(), true);
+      expect(v.anchor).toBe(null);
+      expect(v.anchorDue).toBe(false);
+      delete v.probeDue;
+    } finally { listWindow = null; }
+  }
 });
 
 test("a scroll the pane did not see: the rows drawn bound the offset it works out, and the row at the top edge is kept across a step", async () => {

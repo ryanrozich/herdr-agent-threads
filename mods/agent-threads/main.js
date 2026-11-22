@@ -168,10 +168,6 @@ const FRAME_AIM_MS = 30;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
-// A place held across a re-wrap (holdPlace) is let go after this at the latest; a reader kept
-// at the end is held there for up to END_HOLD_MS while the probe measures the rows above.
-const ANCHOR_HOLD_MS = 2000;
-const END_HOLD_MS = 10000;
 // While a place is held, the probe measures this many rows below the top row with the rows
 // above it, and the rest of the rows below once it is let go.
 const PROBE_NEAR = 24;
@@ -2479,6 +2475,7 @@ export default class Threads extends View {
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
   restart(s, fresh = false) {
+    this.dropAnchor();
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
@@ -4250,14 +4247,15 @@ export default class Threads extends View {
     const rows = this.rowsMemo;
     const slots = this.slotsMemo;
     if (!rows?.length || !slots?.length || !(this.listH > 0) || rows[0].kind === "spacer") return null;
-    const at = Date.now();
-    if (this.follow && this.bottomShown && this.view !== "pinned" && !this.outlined()) return { end: true, at };
+    // The reader's wheel count when the place is taken: a wheel after it lets the place go.
+    const wheels = this.wheelN ?? 0;
+    if (this.follow && this.bottomShown && this.view !== "pinned" && !this.outlined()) return { end: true, wheels };
     if (this.landLift > 0 || this.anchorLift) return null;
     const off = this.listOff ?? 0;
     const p = placeAt(this.slotPre(slots), off);
     const held = new Map();
     for (let i = 0; i < p.i; i++) held.set(rows[i].key, slots[i]);
-    return { key: rows[p.i].key, turn: rowTurnKey(rows[p.i]), share: p.share, off, held, at };
+    return { key: rows[p.i].key, turn: rowTurnKey(rows[p.i]), share: p.share, off, held, wheels };
   }
   // While a place is held: the rows above the anchor keep the heights the list had for them,
   // so the measures the probe brings in over the next frames move nothing on screen. The list
@@ -4288,18 +4286,26 @@ export default class Threads extends View {
       slots[i] = h;
     }
   }
+  // The sessions start over (a pick, a session read again from the top): row keys are a
+  // session's index and a turn's number, so a held place could match a turn in the new rows.
+  dropAnchor() {
+    if (this.anchor || this.anchorDue) this.fitKey = null;
+    this.anchor = null;
+    this.anchorDue = false;
+  }
   // Why a held place is let go now (letGo), or null:
   // - a jump, which puts the view somewhere new;
-  // - the person's scroll;
-  // - ANCHOR_HOLD_MS (END_HOLD_MS at the end) since the rows came in;
+  // - the person's scroll (a wheel event since the place was taken);
   // - the rows built and shaped, and the probe with nothing left above the anchor (the whole
   //   list, at the end).
+  // Nothing else: no time limit. The probe ends, since each part is drawn in it for three
+  // frames at most (probeDue), and while it goes on the place is held and costs a fraction of
+  // a ms a frame. Let go any sooner, the measures still to come above the place would move it.
   holdDone() {
     const A = this.anchor;
     if (!A) return null;
     if (this.scrollTo || (this.toBottom && !A.end)) return "jump";
-    if ((this.wheelAt ?? 0) > A.at) return "scroll";
-    if (Date.now() - A.at >= (A.end ? END_HOLD_MS : ANCHOR_HOLD_MS)) return "time";
+    if ((this.wheelN ?? 0) > A.wheels) return "scroll";
     // The probe's word is for this place only from a walk made while it was held.
     if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || this.probeFor !== A) return null;
     return this.probeLeft === 0 || (!A.end && this.probeAbove) ? "settled" : null;
@@ -4373,7 +4379,7 @@ export default class Threads extends View {
     // The list has moved by it (trackOff): delta is in the window's px, the offset in the
     // list's, which Herdr scales by zoom.
     this.listOff = (this.listOff ?? 0) - dy / this.zoom();
-    this.wheelAt = Date.now();
+    this.wheelN = (this.wheelN ?? 0) + 1;
     if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
@@ -5787,6 +5793,7 @@ export default class Threads extends View {
     this.pinned = c.path;
     this.pinnedVia = "picked";
     this.choosing = false;
+    this.dropAnchor();
     this.sessions = [];
     this.senderHits = null;
     this.open.clear();
