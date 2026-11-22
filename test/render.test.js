@@ -18216,6 +18216,20 @@ test("rowBegin's width hold and a close's pair record are written with no timer 
   } finally { t.restore(); }
 });
 
+test("a close on weights that widens the Trajectory for a moment (the closed pane's weight, then the divider's room) leaves its kept width as it was, so the next opening comes at that width", async () => {
+  for (const order of [["p3"], ["p3", "p4"]]) {
+    const t = await threeOpen("traj");
+    try {
+      // The owner's width for the Trajectory, as its pane keeps it once settled.
+      const kept = t.row.widths().p4;
+      state.shared["threads.trajWidth"] = { px: kept };
+      for (const id of order) { t.close(id); if (id === "p3") t.inst.p2.x.autoPinned?.(t.cx); t.step(50); }
+      t.run(4000);
+      expect([order.join(","), state.shared["threads.trajWidth"].px]).toEqual([order.join(","), kept]);
+    } finally { t.restore(); }
+  }
+});
+
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
     const t = await threeOpen("traj", 722, { gap: 8 });
