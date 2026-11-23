@@ -3899,10 +3899,11 @@ export default class Threads extends View {
     const f = pinFit(m, px, R - m, TERM_KEEP * others);
     return f ? { chat: f.chat === m ? null : f.chat, col: f.col, R, S } : null;
   }
-  // Whether the pair may go on weights on this Herdr (ui.js weightHerdr), read when the pane
-  // starts and again whenever the version read differs from the last. A version not listed
-  // (or none) keeps the pair at px, with one line in the debug log for each version seen; a
-  // pair already on weights, or a probe under way, goes back to px where it is.
+  // Whether the pair and the row may go on weights on this Herdr (ui.js weightHerdr), read
+  // when the pane starts and again whenever the version read differs from the last. A version
+  // not listed (or none) keeps them at px, with one line in the debug log for each version
+  // seen; a pair or a row already on weights, or a probe or landing under way, goes back to
+  // px where it is.
   weightsGate(cx) {
     let v = null;
     try { v = updates().app.version; } catch { v = null; }
@@ -3911,7 +3912,13 @@ export default class Threads extends View {
     this.herdrSeen = v;
     this.weightsOk = weightHerdr(v);
     if (this.weightsOk) return;
-    console.log(`agent-threads: Herdr ${JSON.stringify(v)} is not one whose drag is checked to keep weight units: the Pinned pair stays at px`);
+    console.log(`agent-threads: Herdr ${JSON.stringify(v)} is not one whose drag is checked to keep weight units: the Pinned pair and the row stay at px`);
+    if (!this.pinnedPane && !this.trajPane) {
+      this.rowCloseDue = null;
+      this.rowCloseFix = null;
+      this.rowPx(cx, `Herdr ${JSON.stringify(v)} is not one whose drag keeps weight units`);
+      return;
+    }
     if (!this.pinnedPane) return;
     const main = this.mainPane();
     const w = shared(WIDTH_KEY) ?? {};
@@ -4154,7 +4161,7 @@ export default class Threads extends View {
     this.rowFalls = [...(this.rowFalls ?? []).slice(-19), { at: Date.now(), why }];
   }
   rowPoll(cx) {
-    if (this.pinnedPane || this.trajPane || !this.terminal) return;
+    if (this.pinnedPane || this.trajPane || !this.terminal || !this.weightsOk) return;
     this.rowCloseStep(cx);
     this.rowFixStep(cx);
     // A record its Chat's pane left when it closed: none of it holds (the pane open now has

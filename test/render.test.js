@@ -18528,6 +18528,70 @@ test("= in the Chat, then the window resized before the row is still: the Trajec
     expect([Math.abs(t.row.widths().p2 - now.p2) <= 2, t.row.widths().p2, now.p2, Math.round(722 * f)]).toEqual([true, t.row.widths().p2, now.p2, Math.round(722 * f)]);
   } finally { t.restore(); }
 }, 30000);
+// The version gate (ui.js weightHerdr) for the row: on a version it does not list, the row
+// with the Trajectory open never goes on weights. The Trajectory's split still takes its room
+// by the fixed ROOM_WEIGHT (1000), as before the row: no record is in it, and it is measured.
+const rowWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "layout.resize" && (a.id === "p3" || a.id === "p4") && a.weight != null && a.weight !== 1000);
+for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "0.1.17.1"]]) {
+  test(`on ${name} the row with the Trajectory open stays at px through both openings, a drag, a key and a close, and asks no weight for the Trajectory or the column`, async () => {
+    await withHerdr(version, async (said) => {
+      log = [];
+      const t = await threeOpen("traj");
+      try {
+        const w = t.row.widths();
+        expect([t.row.size.p2.px, t.row.size.p4.px, t.row.size.p3.px]).toEqual([w.p2, w.p4, w.p3]);
+        t.row.drag("p4", -40); t.run(2000);
+        rowKey(t, "p2", "=");
+        t.close("p3"); t.inst.p2.x.autoPinned?.(t.cx); t.run(3000);
+        expect(rowWeightAsks()).toEqual([]);
+        expect(rowRec()?.k ?? null).toBe(null);
+        expect(said.mock.calls.some((c) => String(c[0]).includes(`Herdr ${JSON.stringify(version)}`))).toBe(true);
+        expect(Object.values(t.row.widths()).every((px) => px >= 150)).toBe(true);
+      } finally { t.restore(); }
+    });
+  }, 30000);
+}
+test("the Herdr version changing under the row on weights puts every pane back to px where it is, counted as a fall back with the version, and the row stays at px", async () => {
+  await withHerdr("0.1.17", async () => {
+    const t = await threeOpen("traj");
+    try {
+      expect(rowRec().k).toBeGreaterThan(0);
+      const was = t.row.widths();
+      herdrVersion = "0.1.18";
+      t.run(2000);
+      const now = t.row.widths();
+      expect(allPx(t, ["p2", "p4", "p3"])).toBe(true);
+      expect(["p2", "p4", "p3"].every((id) => Math.abs(now[id] - was[id]) <= 1)).toBe(true);
+      expect(rowRec()?.k ?? null).toBe(null);
+      expect(t.v.rowFalls?.map((f) => f.why)).toEqual(['Herdr "0.1.18" is not one whose drag keeps weight units']);
+      const from = log.length;
+      rowKey(t, "p2", "=");
+      t.run(3000);
+      expect(log.slice(from).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.weight != null && a.id !== "p2")).toBe(false);
+    } finally { t.restore(); }
+  });
+}, 30000);
+for (const [name, after] of [
+  ["a key", (t) => rowKey(t, "p2", "-")],
+  ["a close", (t) => { t.close("p4"); t.run(3000); }],
+  ["a window resize", (t) => { t.row.total = Math.round(t.row.total * 1.2); t.run(2000); }],
+  ["y", (t) => { t.close("p4"); t.run(2000); t.inst.p2.x.key(keyEv("y"), t.cx); t.row.apply(); t.run(2000); }],
+]) {
+  test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the row with the Trajectory open stays at px, no weight for the Trajectory or the column, no pane collapses`, async () => {
+    await withHerdr("0.1.18", async () => {
+      log = [];
+      const t = await threeOpen("traj");
+      try {
+        t.row.drag1365("p1", 80); t.run(1500);
+        t.row.drag1365("p2", -40); t.run(1500);
+        after(t);
+        expect(rowWeightAsks()).toEqual([]);
+        expect(rowRec()?.k ?? null).toBe(null);
+        expect([Object.values(t.row.widths()).every((px) => px >= 150), t.row.widths()]).toEqual([true, t.row.widths()]);
+      } finally { t.restore(); }
+    });
+  }, 30000);
+}
 const tenCycles = async (opens, closes, together = false, opts = {}) => {
   const t = await threeRow(722);
   try {
@@ -18734,7 +18798,7 @@ for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version th
         expect([t.row.size.p2.px > 0, t.row.size.p3.px > 0]).toEqual([true, true]);
         expect(pairWeightAsks()).toEqual([]);
         expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
-        const lines = said.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("the Pinned pair stays at px"));
+        const lines = said.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("stay at px"));
         expect(lines.length).toBeGreaterThan(0);
         expect(new Set(lines).size).toBe(1);
         expect(lines[0]).toContain(JSON.stringify(version === null ? null : version));
