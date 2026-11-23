@@ -15541,6 +15541,28 @@ test("the compact switch goes through the size handler by the rounded Herdr px: 
   } finally { herdrSettings = { font_family: "Mono" }; }
 });
 
+test("the compact heading's icon goes through the size handler: 76 to 75 px inside the frame and back, by 1 px each way", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  try {
+    for (const z of [1, 1.25]) {
+      herdrSettings = { font_family: "Mono", zoom: z };
+      v.paneW = null;
+      v.width = 400;
+      let c = frame(v, cx);
+      const size = (inner) => { handlerAfterId(c, "threads-root", "on_size_change")({ width: inner * z, height: 800 * z }, cx); c = frame(v, cx); return c; };
+      const icon = () => hasId(c, "th-traj-icon");
+      size(77);
+      size(76);
+      expect([z, 76, icon()]).toEqual([z, 76, true]);
+      size(75);
+      expect([z, 75, icon()]).toEqual([z, 75, false]);
+      size(76);
+      expect([z, "76 again", icon()]).toEqual([z, "76 again", true]);
+    }
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
 test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
   const { file } = runningFixture();
   const { v, cx } = await pane(file);

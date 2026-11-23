@@ -11539,8 +11539,9 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const pw = size.width / this.zoom();
         this.measuredWidth = size.width;
-        // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact).
-        const form = (x) => trajCompact(Math.round(x) + PANE_FRAME);
+        // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact), or
+        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way.
+        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}`;
         const cross = this.paneW != null && form(pw) !== form(this.paneW);
         if (!this.forcedWidth && (cross || Math.abs(pw - (this.paneW ?? -9)) > 1)) { this.paneW = pw; this.shareWidth(); cx.notify(); }
       })
