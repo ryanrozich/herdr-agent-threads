@@ -2,10 +2,14 @@
 // token_count after each response; when a response reports no usage it writes the last count
 // again, the same running total and the same last usage, and a first count can have info null.
 // The rollouts in test/fixtures/codex are written by hand in those shapes, with made-up text:
-//   usage-repeated.jsonl         a count of 123 in and 7 out, then the same count again
+//   usage-repeated.jsonl         two responses of 123 in and 7 out each (running totals 130
+//                                and 260), then the second count again
 //   usage-null-then-known.jsonl  a count with info null, then 123 in and 7 out
-// The reader keys a count by its running total (extract-codex.jq) and keeps one usage per key
-// (turns.js), so a repeat replaces rather than adds.
+// The reader keys a count by its running total (extract-codex.jq), reads its tokens from the
+// last usage, and keeps one usage per key (turns.js), so a repeat replaces rather than adds.
+// In usage-repeated.jsonl the two responses have the same last usage and different running
+// totals, so keying by the last usage would count one response, and reading the running total
+// would count 369 in.
 import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -38,27 +42,31 @@ const exportOf = (file) => JSON.parse(execFileSync("bun", [join(core, "atif.js")
 // The token figure in the status line at the Chat pane's foot, in a pane wide enough for all of it.
 const footTokens = (s) => statusGroups({ turns: s.turns.length, hidden: 0, ...sessionStats(s.turns) }, 2000).find((g) => g.key === "tokens")?.text;
 
-for (const [name, shape] of [["usage-repeated.jsonl", "a count repeated after a response that reports none"], ["usage-null-then-known.jsonl", "a count with info null before a known one"]]) {
+for (const [name, shape, responses] of [
+  ["usage-repeated.jsonl", "two responses, then a count repeated after a response that reports none", 2],
+  ["usage-null-then-known.jsonl", "a count with info null before a known one", 1],
+]) {
   const file = join(fixtures, name);
+  const input = 123 * responses, output = 7 * responses;
 
-  test(`codex usage, ${shape}: the export has one agent step with 123 in and 7 out, and final_metrics the same`, () => {
+  test(`codex usage, ${shape}: the export has one agent step with ${input} in and ${output} out, and final_metrics the same`, () => {
     const t = exportOf(file);
     expect(problems(t)).toEqual([]);
     const counted = t.steps.filter((st) => st.metrics);
     expect(counted).toHaveLength(1);
     expect(counted[0].source).toBe("agent");
-    expect(counted[0].metrics).toEqual({ prompt_tokens: 123, completion_tokens: 7, cached_tokens: 0, extra: { cache_creation_input_tokens: 0, scope: "turn", model_messages: 1 } });
-    expect(t.final_metrics).toEqual({ total_prompt_tokens: 123, total_completion_tokens: 7, total_cached_tokens: 0, total_steps: t.steps.length });
+    expect(counted[0].metrics).toEqual({ prompt_tokens: input, completion_tokens: output, cached_tokens: 0, extra: { cache_creation_input_tokens: 0, scope: "turn", model_messages: responses } });
+    expect(t.final_metrics).toEqual({ total_prompt_tokens: input, total_completion_tokens: output, total_cached_tokens: 0, total_steps: t.steps.length });
   });
 
-  test(`codex usage, ${shape}: the reader's turn total and the Chat foot count 123 in and 7 out once`, () => {
+  test(`codex usage, ${shape}: the reader's turn total and the Chat foot count each response's 123 in and 7 out once`, () => {
     const s = read(file);
     expect(s.offset).toBe(s.size);
     expect(s.turns).toHaveLength(1);
-    expect(Object.keys(s.turns[0].usage)).toHaveLength(1);
-    expect(stats(s.turns[0])).toMatchObject({ input: 123, output: 7, cacheRead: 0, cacheWrite: 0, tokens: 130 });
-    expect(sessionStats(s.turns)).toMatchObject({ tokens: 130, context: 123 });
-    expect(footTokens(s)).toBe("130 tokens · 0% cache hit");
+    expect(Object.keys(s.turns[0].usage)).toHaveLength(responses);
+    expect(stats(s.turns[0])).toMatchObject({ input, output, cacheRead: 0, cacheWrite: 0, tokens: input + output });
+    expect(sessionStats(s.turns)).toMatchObject({ tokens: input + output, context: 123 });
+    expect(footTokens(s)).toBe(`${input + output} tokens · 0% cache hit`);
   });
 }
 

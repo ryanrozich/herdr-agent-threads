@@ -1,6 +1,6 @@
 // Adapted from harbor-framework/harbor, tests/unit/agents/installed/test_claude_code_trajectory.py
 // and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0),
-// with tests/unit/agents/installed/test_opencode.py and test_opencode_v2.py at the same commit.
+// with tests/unit/agents/installed/test_opencode.py, test_opencode_v2.py and test_pi.py at the same commit.
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Ported cases are named in the case tables.
 // Changed from Harbor's original: only the item ids are Harbor's; the differences, reasons and omissions are ours.
 import { expect } from "bun:test";
@@ -19,7 +19,9 @@ import { problems } from "../atif-schema.js";
 // R13 OpenCode reasoning is not read · R14 a failed call says so in
 // extra.tool_result_is_error, with its error text as content, not in extra.error · R15
 // OpenCode call arguments are not read · R16 one agent name, opencode, for both OpenCode
-// versions.
+// versions · R17 a Pi session is named by its file, and its model is the reply's own, with
+// no run version · R18 Pi's compaction, branch_summary and custom_message entries are not
+// steps · R19 a Pi file is read in file order, a branch left behind included.
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
   { id: "claude: byte_faithful_property_across_inputs[0]", reason: "R3", kind: "by design", note: "An empty prompt makes no turn in Agent Threads." },
@@ -113,6 +115,10 @@ export const EXPECTED_DIFFERENCES = [
   { id: "opencode-v2: trajectory_keeps_tool_observations_and_native_usage", reason: "R16", kind: "by design", note: "The call, its result and the token totals match; the agent is named opencode for both OpenCode versions, not opencode-v2." },
   { id: "opencode-v2: trajectory_retains_a_final_turn_without_step_finish", reason: "R16", kind: "by design", note: "The steps match; the agent is named opencode for both OpenCode versions, not opencode-v2." },
   { id: "opencode-v2: unfinished_tool_does_not_get_a_fabricated_observation", reason: "R7", kind: "by design", note: "Agent Threads retains a marked observation for a call that has no result." },
+  { id: "pi: partial_session_is_written_as_atif", reason: "R17", kind: "by design", note: "The call and its result match, and the result also says it did not fail and when it ended. The session_id is the file's name (session), not the header's id, and the model is the reply's own (deepseek-v4-flash) with version unknown, not Harbor's run settings. The compaction is counted in extra.compactions, not a step (R18); Pi's thinking and the tool result's and compaction's tokens are not read; no llm_call_count (R6) and no cost (R8)." },
+  { id: "pi: preserves_model_visible_custom_messages_in_order", reason: "R18", kind: "not handled", note: "The custom_message entry is not a step; the prompt and the reply match." },
+  { id: "pi: preserves_ordered_image_content", reason: "R5a", kind: "by design", note: "Agent Threads writes no files and keeps text: the prompt is its text and the result its text part, with no image parts." },
+  { id: "pi: uses_only_active_branch_and_preserves_branch_summary", reason: "R19", kind: "not handled", note: "The abandoned branch's call and result stay, in file order, and the branch_summary is not a step (R18). Its usages give no totalTokens, so no tokens are counted." },
   { id: "codex: web_search_calls_preserve_native_ids_and_get_unique_fallbacks", reason: "R9", kind: "not handled", note: "Agent Threads gives each web_search_call a generated id and no observation; Harbor keeps native ids and results." },
 ];
 
@@ -140,7 +146,9 @@ export function checkCase(item, trajectory, control) {
 // OpenCode the inventory is the trajectory items of test_opencode.py (TestOpenCodeMillisToIso,
 // TestOpenCodeParseStdout, TestOpenCodeConvertEvents, TestOpenCodePopulateContextPostRun) and of
 // test_opencode_v2.py (the seven functions from test_trajectory_retains_a_final_turn_without_step_finish
-// on); the left-out ones test Harbor's stdout reader, time helper and run() plumbing.
+// on); the left-out ones test Harbor's stdout reader, time helper and run() plumbing. For Pi it
+// is the items of test_pi.py's TestPiPopulateContext and TestPiTrajectory; the left-out ones
+// fill Harbor's run context from pi.txt, or mark copied steps from Harbor's resume() record.
 export const LEFT_OUT = [
   { id: "claude: user_message_byte_faithful_property_hypothesis", reason: "Harbor's Hypothesis property test needs Python's generator; the fixed corpus test in claude.test.js covers the same inputs." },
   { id: "claude: repeated_trajectory_conversions_do_not_leak_state", reason: "Harbor reuses one agent object across conversions to prove no state leaks; Agent Threads runs a fresh command-line process per export, so leaked state cannot carry over." },
@@ -173,6 +181,15 @@ export const LEFT_OUT = [
   { id: "opencode-v2: failed_tool_does_not_turn_a_recovered_run_into_a_provider_failure", reason: "Harbor runs its agent's run() with mocked execution and reads the trajectory.json it writes; the export's part, a failed call's text and the reply after it, is covered by failed_tool_is_an_observation_with_error_metadata." },
   { id: "opencode-v2: context_does_not_invent_zero_usage_for_missing_metrics", reason: "Harbor fills its run context and writes trajectory.json; Agent Threads prints the export and fills no context." },
   { id: "opencode-v2: stdout_skips_non_object_json", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "pi: resume_counts_only_new_usage_and_marks_copied_steps", reason: "Harbor marks the steps a resumed run copied from its own run record (the session's length before resume()); an export has no run record, so nothing is copied context." },
+  { id: "pi: resumed_tool_usage_is_not_merged_into_copied_step", reason: "Harbor marks the steps a resumed run copied from its own run record (_session_usage_start); an export has no run record, so nothing is copied context." },
+  { id: "pi: parses_token_usage", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: includes_tool_result_model_usage", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: missing_output_file", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: ignores_non_assistant_messages", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: handles_malformed_jsonl", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: zero_cost_returns_none", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
+  { id: "pi: handles_null_nested_fields", reason: "Harbor fills its run context from `pi --mode json` output (pi.txt); Agent Threads reads the session file and fills no context." },
 ];
 // Differences no ported Harbor item reaches: shapes our export writes that Harbor's converter
 // would most likely write another way. Each is checked by the test in claude.test.js named
@@ -180,4 +197,4 @@ export const LEFT_OUT = [
 export const OUR_DIFFERENCES = [
   { id: "ours: task_notification_after_a_finished_turn", reason: "R12", kind: "by design", note: "A task notification that wakes the agent after a turn has finished starts a turn of its own: a user step with message \"\" and extra.sender { kind: \"task-notification\" }, then the agent's steps. Agent Threads does not keep the notice's text (the <task-notification> block is the harness's, not a person's words, and the Chat shows only \"Background task finished\"); Harbor would most likely carry that text as the user message. A notice while a turn is open stays on that turn." },
 ];
-export const COUNTS = { items: { pass: 48, listed: 93, leftOut: 31, total: 172 }, functions: { claude: 52, codex: 30, opencode: 24, "opencode-v2": 7, total: 113 } };
+export const COUNTS = { items: { pass: 50, listed: 97, leftOut: 40, total: 187 }, functions: { claude: 52, codex: 30, opencode: 24, "opencode-v2": 7, pi: 15, total: 128 } };
