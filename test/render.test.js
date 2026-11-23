@@ -2908,6 +2908,9 @@ test("S1: before the first chunk the header says Reading… with no percentage, 
   const { v, cx } = await paneWith(busy(), (cx) => { cx.sleepHook = never; }, 0);
   await until(() => v.current(), "a session");
   expect(v.headerText()).toBe("Reading…");
+  // The first draw arms the opening, which paints the background alone in its quiet time.
+  v.render(cx);
+  v.opening.at -= 1000;
   rec = [];
   v.render(cx);
   const widths = rec.filter(([n]) => n === "w").map(([, x]) => x);
@@ -19942,4 +19945,253 @@ test("a terminal at px beside the pair is never resized: its width holds through
     expect(t.row.widths().p1).toBe(704);
     expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
   } finally { t.restore(); }
+});
+
+// ---- the opening (TRD-94): the pane's first session opens at its end, still ----
+// A pane armed by a draw before its session is read, whose read stops (each step waits) while
+// hold() says so. step(f) lets it go on until f() holds, then stops it again.
+async function openingPane(file, holdAt = () => true) {
+  let hold = holdAt;
+  const waiting = [];
+  const { v, cx } = await paneWith(file, (cx) => {
+    cx.sleepHook = () => (hold(v) ? new Promise((r) => waiting.push(r)) : new Promise((r) => setTimeout(r, 0)));
+  }, 0);
+  await until(() => v.current() && v.reading, "the read");
+  draw(v, cx);
+  const go = (f) => { hold = f; for (const r of waiting.splice(0)) r(); };
+  return { v, cx, go, waiting };
+}
+// The text a draw gave its elements.
+const drawnText = (calls) => calls.filter(([n, x]) => n === "child" && typeof x === "string").map(([, x]) => x);
+// A transcript whose first turn has its end in the second chunk: tool results of 100 KB each
+// fill the first 2 MiB, then the reply and the turn's end. Made-up words only.
+function endInChunk2() {
+  const at = (s) => new Date(Date.UTC(2026, 10, 2, 9, 0, s)).toISOString();
+  const lines = [{ type: "user", uuid: "u1", timestamp: at(0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "Read every cart module and sum the totals" } }];
+  for (let i = 0; i < 30; i++) {
+    lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(1 + i), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `cart/part${i}.ts` } }] } });
+    lines.push({ type: "user", uuid: `r${i}`, timestamp: at(1 + i), sessionId: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `const kaz${i} = "${"zo".repeat(50000)}";` }] } });
+  }
+  lines.push({ type: "assistant", uuid: "z", timestamp: at(40), sessionId: "s", message: { id: "mz", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "The totals agree." }], usage: { input_tokens: 5, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } } });
+  lines.push({ type: "system", subtype: "turn_duration", durationMs: 40000, uuid: "d", timestamp: at(40), sessionId: "s" });
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "o.jsonl");
+  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  return file;
+}
+// Frames until the opening has shown the list (as Herdr draws: timers due, then a draw).
+function openFrames(v, cx, n = 300) {
+  const frames = [];
+  for (let k = 0; k < n && v.openActive(); k++) { cx.flush(16); frames.push(frame(v, cx)); v.report(); }
+  return frames;
+}
+
+test("the opening: while the session is read there are no rows and no scrolling, only the loading state; a turn whose end is in a later chunk is never running", async () => {
+  const { v, cx, go } = await openingPane(endInChunk2(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.current().offset > 0 && v.opening?.peek, "the first chunk");
+  const s = v.current();
+  expect(s.loaded).toBeFalsy();
+  // The first chunk ends inside the turn: it has no end yet, and it is not the running turn.
+  expect(s.turns.length).toBe(1);
+  expect(s.turns[0].done).toBe(false);
+  expect(v.isLive(s, 0, 0)).toBe(false);
+  // Nor does the loading state say the agent is working: that waits for the whole read.
+  expect(v.openInfo(s).working).toBe(false);
+  // Within the quiet time, the background alone (the header says Reading…); then the loading
+  // state. No list either way.
+  lastList = null;
+  const painted = v.opening.painted;
+  v.opening.painted = false;
+  v.opening.at = Date.now();
+  expect(drawnText(frame(v, cx)).filter((x) => !/^Reading…/.test(x))).toEqual([]);
+  v.opening.painted = painted;
+  v.opening.at -= 1000;
+  const said = drawnText(frame(v, cx));
+  expect(lastList).toBeNull();
+  expect(said).toContain("Reading this session");
+  expect(said.join("|")).not.toMatch(/No reply yet|Working|Running/);
+  // A wheel, a key and a press change nothing while it reads.
+  const sel = v.sel;
+  v.listWheel({ delta: { y: 120 } });
+  v.key(keyEv("k"), cx);
+  v.click("0:1", cx);
+  expect([v.sel, v.follow]).toEqual([sel, true]);
+  go(() => false);
+  await settle(v);
+  openFrames(v, cx);
+  expect(v.openActive()).toBe(false);
+  expect(s.turns[0].done).toBe(true);
+  expect(v.isLive(s, 0, 0)).toBe(false);
+});
+
+test("the opening: the list shows at its end, still, with every row shaped (no empty bubbles), and the end held while parts above are measured", async () => {
+  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, go } = await openingPane(busy());
+    v.opening.at -= 1000;
+    draw(v, cx);
+    expect(v.opening.painted).toBe(true);
+    go(() => false);
+    await settle(v);
+    let bottoms = 0;
+    const asked = [];
+    v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+    const frames = [];
+    while (v.openActive() && frames.length < 300) {
+      cx.flush(16);
+      const b0 = bottoms;
+      frames.push(frame(v, cx));
+      asked.push(bottoms > b0);
+      v.report();
+    }
+    expect(v.openActive()).toBe(false);
+    // The end is asked for in every frame drawn hidden, and in the one that shows the list.
+    expect(asked.every(Boolean)).toBe(true);
+    // Every frame before was the list hidden under the loading state.
+    for (const f of frames.slice(0, -1)) expect(drawnText(f)).toContain("Reading this session");
+    // Shown: built, shaped, at the end, with no blank shape anywhere in the list.
+    expect(v.rowJob).toBeNull();
+    expect(v.rowsMemo.some((r) => r.shape?.blank)).toBe(false);
+    expect(v.bottomShown).toBe(true);
+    expect(v.partsWaiting(v.rowsMemo, ...v.viewRange)).toBe(false);
+    // Each condition alone holds it back: a part in view unmeasured, the end off screen, or a
+    // draw that did not have every row.
+    const rows = v.rowsMemo;
+    expect(v.openReady(rows)).toBe(true);
+    const pw = v.partsWaiting;
+    v.partsWaiting = () => true;
+    expect(v.openReady(rows)).toBe(false);
+    v.partsWaiting = pw;
+    v.bottomShown = false;
+    expect(v.openReady(rows)).toBe(false);
+    v.bottomShown = true;
+    const lr = v.lastRange;
+    v.lastRange = `${String(lr).split("/")[0]}/${rows.length - 1}`;
+    expect(v.openReady(rows)).toBe(false);
+    v.lastRange = lr;
+    // Parts above the end are still to measure: each frame asks for the end in that frame.
+    expect(v.probeLeft).toBeGreaterThan(0);
+    expect(v.openHold).toBe(true);
+    bottoms = 0;
+    for (let k = 0; k < 3; k++) draw(v, cx);
+    expect(bottoms).toBe(3);
+    expect(v.follow).toBe(true);
+    // The frame that finds nothing left still asks: its slots carry the last measures.
+    v.probeDue = () => { v.probeLeft = 0; return []; };
+    bottoms = 0;
+    draw(v, cx);
+    expect(bottoms).toBe(1);
+    expect(v.openHold).toBe(false);
+  } finally { listWindow = null; }
+});
+
+test("the opening: a scroll up while parts above wait takes the place on screen and keeps it through the next wheels, until they are measured", async () => {
+  listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, cx, go } = await openingPane(busy());
+    v.opening.at -= 1000;
+    draw(v, cx);
+    go(() => false);
+    await settle(v);
+    openFrames(v, cx);
+    expect(v.openHold).toBe(true);
+    v.listH = 600;
+    v.listWheel({ delta: { y: 120 } });
+    expect(v.follow).toBe(false);
+    expect(v.anchor?.open).toBe(true);
+    expect(v.openHold).toBe(false);
+    draw(v, cx);
+    const a = v.anchor;
+    v.listWheel({ delta: { y: 60 } });
+    draw(v, cx);
+    // Taken again at the new place, not let go by the wheel.
+    expect(v.anchor?.open).toBe(true);
+    expect(v.anchor).not.toBe(a);
+    expect(v.holdDone()).not.toBe("scroll");
+    // A wheel past the one it was taken at does not let it go either (an ordinary anchor goes).
+    v.wheelN = v.anchor.wheels + 2;
+    expect(v.holdDone()).not.toBe("scroll");
+    v.anchor.open = false;
+    expect(v.holdDone()).toBe("scroll");
+  } finally { listWindow = null; }
+});
+
+test("the opening: a list ready within the quiet time is shown at once, and the loading state never paints", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3"));
+  go(() => false);
+  await settle(v);
+  expect(Date.now() - v.opening.at).toBeLessThan(300);
+  // Drawn hidden under the background alone until what it shows is measured, then shown.
+  const said = openFrames(v, cx).flatMap(drawnText);
+  expect(v.openActive()).toBe(false);
+  expect(v.opening.painted).toBe(false);
+  expect(said).not.toContain("Reading this session");
+  expect(v.turnKeys(v.rows()).length).toBeGreaterThan(0);
+});
+
+test("the opening: the loading state's tokens are the status line's, and the newest prompt from the file's end is the newest one typed", async () => {
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.newest, "the newest prompt");
+  const s = v.current();
+  expect(s.loaded).toBeFalsy();
+  const early = v.opening.newest;
+  // The bar never goes back.
+  v.openInfo(s);
+  const pct = v.opening.pct;
+  const off = s.offset;
+  s.offset = 1;
+  expect(v.openInfo(s).pct).toBe(pct);
+  s.offset = off;
+  go(() => false);
+  await settle(v);
+  const { newestPrompt } = await import("../mods/agent-threads/ui.js");
+  expect(early).toEqual(newestPrompt(s.turns));
+  const info = v.openInfo(s);
+  expect(info.tokens).toBe(v.statusStats().tokens);
+  expect(info.tokens).toBeGreaterThan(0);
+  // The status line's own words for them, at a width that has room for its tokens.
+  const tokens = statusGroupsForTest(v.statusStats(), 2000).find((g) => g.key === "tokens")?.text ?? "";
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  expect(tokens.startsWith(openLines(info)[6].match(/· ([^·]+ tokens)/)[1])).toBe(true);
+});
+
+test("the opening: a session whose last turn runs says Working now once read, by the running turn's own test", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3", "--open"));
+  go(() => false);
+  await settle(v);
+  draw(v, cx);
+  const s = v.current();
+  const last = s.turns.length - 1;
+  expect(v.isLive(s, 0, last)).toBe(true);
+  expect(v.openInfo(s).working).toBe(true);
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  expect(openLines(v.openInfo(s))[4]).toMatch(/ · Working now$/);
+});
+
+test("the opening: with nothing left to measure, the frame that shows the list and the one after still ask for the end (their slots carry the last measures)", async () => {
+  const { v, cx, go } = await openingPane(fixture("--extra", "3"));
+  go(() => false);
+  await settle(v);
+  v.probeDue = () => { v.probeLeft = 0; return []; };
+  v.partsWaiting = () => false;
+  let bottoms = 0;
+  v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
+  const asked = [];
+  // Frames until one is drawn with the list already shown.
+  for (let was = true, k = 0; was && k < 300; k++) {
+    cx.flush(16);
+    const b0 = bottoms;
+    was = v.openActive();
+    frame(v, cx);
+    asked.push([was, bottoms > b0]);
+    v.report();
+  }
+  expect(v.openActive()).toBe(false);
+  // Every frame up to and including the one that showed it, then the next one.
+  expect(asked.length).toBeGreaterThanOrEqual(2);
+  expect(asked.every(([, b]) => b)).toBe(true);
+  expect(asked.at(-1)[0]).toBe(false);
+  expect(v.openHold).toBe(false);
 });

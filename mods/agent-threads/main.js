@@ -82,6 +82,7 @@ import {
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
+import { openLines, newestPrompt, figRuns } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
@@ -134,6 +135,11 @@ const IMG_DIR = `data/${MOD}/images`;
 // percentage moves, and each call's parse and apply run in slices (read()).
 const CHUNK = 2 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
+// The opening (openGate): a pane whose list is ready within OPEN_QUIET_MS of its first draw
+// goes straight to it, and paints nothing before; a longer one shows the loading state
+// (openView). OPEN_PEEK: the bytes at the file's end read once for the newest prompt.
+const OPEN_QUIET_MS = 300;
+const OPEN_PEEK = 2 * 1024 * 1024;
 const COUNT_MS = 6; // a sender rule's count in the editor, a draw at most (senderMatches)
 // Reshaping collapsed rows (shape) in one draw: a change of Reply lines, Prompt lines, text
 // size, the width or the search reshapes every row, and in a long session that ran past
@@ -1038,6 +1044,11 @@ export default class Threads extends View {
     this.pinAgain = null; // the turn a return just showed from its head, for a second press
     this.topKey = null; // the list item at the top of the pane
     this.bottomShown = true; // the list's last item is on screen
+    // The opening (openGate): its state while the pane's first session is read and its last
+    // screenful measured, and the session list a list was last shown for.
+    this.opening = null;
+    this.shownList = null;
+    this.bornAt = Date.now();
     // A turn or reply came in: "pending" until the next draw of the list says whether the end
     // is on screen (then false) or not (then true, the latest button's dot).
     this.unseen = false;
@@ -1527,7 +1538,9 @@ export default class Threads extends View {
   // kit has no call that keeps a hover from reaching what lies under a layer, so each part
   // under it asks: the rail, its ticks and their cards, the list's presses, pointer and
   // wheel, and the rows' hover fills, reveals and info cards.
-  covered() { return Boolean(this.settingsOpen || this.keysOpen); }
+  covered() { return Boolean(this.settingsOpen || this.keysOpen || this.openActive()); }
+  // The opening is under way: the list is not shown, or is drawn hidden under the loading state.
+  openActive() { return Boolean(this.opening && !this.opening.done); }
   // A card or sheet opening drops the rail's hover, so no tick card waits under it to come
   // back when it closes.
   quietRail() {
@@ -2456,6 +2469,7 @@ export default class Threads extends View {
             s.partial = false;
             chunk = nextChunk(s, c.used, chunk, CHUNK);
             if (!s.loaded) cx.notify();
+            if (!s.loaded && this.opening && !this.opening.peek && this.opening.list === this.sessions) this.openPeek(s, cx);
             // Let the panel draw the new percentage before the next chunk.
             beat();
             await cx.sleep(0);
@@ -2950,8 +2964,10 @@ export default class Threads extends View {
   // Whether turn ti of session si is the live newest turn (Working or Needs you): only one
   // still owed its reply. A done turn the agent woke up for again (a background task's
   // notification) keeps its reply, with an Updating line under it (waking).
+  // The newest turn with no end yet, once its session is read to the end: until then the last
+  // turn read may have its end in a later chunk, and it was drawn as running for days.
   isLive(s, si, ti, _status) {
-    return si === this.sessions.length - 1 && ti === s.turns.length - 1 && !s.turns[ti].done;
+    return Boolean(s.loaded) && si === this.sessions.length - 1 && ti === s.turns.length - 1 && !s.turns[ti].done;
   }
   waking(s, si, ti, status) {
     return si === this.sessions.length - 1 && ti === s.turns.length - 1 && s.turns[ti].done && s.followActive && status === "working";
@@ -5119,7 +5135,7 @@ export default class Threads extends View {
     const A = this.anchor;
     if (!A) return null;
     if (this.scrollTo || (this.toBottom && !A.end)) return "jump";
-    if ((this.wheelN ?? 0) > A.wheels) return "scroll";
+    if (!A.open && (this.wheelN ?? 0) > A.wheels) return "scroll";
     // The probe's word is for this place only from a walk made while it was held.
     if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || this.probeFor !== A) return null;
     return this.probeLeft === 0 || (!A.end && this.probeAbove) ? "settled" : null;
@@ -5187,7 +5203,7 @@ export default class Threads extends View {
   // list keeps the event to itself.
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
-    if (!dy) return;
+    if (!dy || this.openActive()) return;
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
     // The list has moved by it (trackOff): delta is in the window's px, the offset in the
@@ -5198,6 +5214,16 @@ export default class Threads extends View {
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
+    // Just after the opening, parts above the end are still measured: a scroll up takes the
+    // place on screen (takeAnchor), so measures above it move nothing, and takes it again at
+    // each wheel while parts wait (the rows above the new top keep the heights they had).
+    if (this.probeLeft > 0 && (this.openHold || this.anchor?.open) && !this.follow) {
+      this.openHold = false;
+      this.anchor = null;
+      const a = this.takeAnchor();
+      if (a) { a.open = true; this.anchor = a; }
+      this.fitKey = null;
+    }
   }
   // The person's latest scroll, by direction (dy > 0 is up); the other direction is forgotten.
   scrolledBy(dy, now) {
@@ -5996,6 +6022,8 @@ export default class Threads extends View {
   }
 
   click(key, cx) {
+    // The list drawn hidden under the loading state takes no press.
+    if (this.openActive()) return;
     const [kind, ...rest] = key.split(":");
     const id = rest.join(":");
     // While the Turn card is open, a press anywhere closes it and does nothing else: the card
@@ -6304,6 +6332,9 @@ export default class Threads extends View {
       return;
     }
     const name = keyAction(e, this.filtering, this.quoteKey);
+    // While the opening shows the loading state, the list's keys wait: only the settings card,
+    // the keys sheet and Esc act.
+    if (this.openActive() && name && !["settings", "keys", "escape", "focus"].includes(name)) return;
     // While the Select view's or a code block's editor has the keyboard, its keys are its
     // own (moving the turn selection would leave the text being selected).
     // Esc, s and the quote key still act, and pin keys, which those read-only editors have
@@ -9016,6 +9047,8 @@ export default class Threads extends View {
     if (r.kind === "pending" && !s) return noTurns();
     if (s && !s.loaded && s.error && s.turns.length === 0)
       return this.empty(t, "alert", "Couldn't read this session", s.error, null, [this.retryButton(t), ...this.closeButtons(t)]);
+    const gate = this.openGate(t, s, cx);
+    if (gate) return gate;
     if (s && !s.loaded && s.turns.length === 0)
       return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
@@ -9025,6 +9058,7 @@ export default class Threads extends View {
     // The first rows of a session still being built, in slices over several frames (buildStep):
     // no row yet, and no empty state either, which would say there is nothing while the turns
     // are still on their way.
+    if (s && this.rowJob && !this.baseRows?.length && this.openActive()) return this.openCover(t, s, cx);
     if (s && this.rowJob && !this.baseRows?.length) return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && !this.filterText() && !this.turnKeys(rows).length && this.counts().hiddenAll > 0) {
       const n = this.counts().hiddenAll;
@@ -9056,7 +9090,15 @@ export default class Threads extends View {
     // A scroll to a place waits 2 s at most: while renders keep being stopped the rows never
     // settle. The end is held to in every frame while they do (below).
     const bottomHeld = this.toBottom && !this.scrollTo;
-    if ((this.toBottom || this.scrollTo) && unsettled && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
+    // The opening's end is held in this frame while parts above it are still measured (each
+    // measure moves the end down, and a scroll a frame later showed it slip and Jump to latest
+    // flash), and in every frame the list is drawn hidden under the loading state, the one that
+    // shows it among them. The frame in which nothing is left to measure still holds it: its
+    // slots carry the last measures, which came in after the frame before was laid out (the
+    // rig showed a 79 px slip there, and a 15 px one on a short session's first frame shown).
+    const partsDue = bottomHeld && (this.openActive() || this.openHold);
+    if (this.openHold && !(this.probeLeft > 0)) this.openHold = false;
+    if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);
       // To the end in this frame, every frame while they settle: rows reshaped above the view
@@ -9168,7 +9210,7 @@ export default class Threads extends View {
     // nothing while a band is at the top), so the list does not move when the day appears.
     // The floating top shows a pill over the list instead, only while scrolling (floatTop).
     const strip = !this.floating() && this.hasDayStrip(rows);
-    return v_flex().id("threads-body").flex_1().min_h(0).relative()
+    const body = v_flex().id("threads-body").flex_1().min_h(0).relative()
       .on_mouse_move((e, cx) => {
         if (this.covered()) return;
         const x = e.local_position?.x;
@@ -9207,6 +9249,189 @@ export default class Threads extends View {
         .when(this.railShown(), (el) => el.child(this.railView(t))))
       .when(Boolean(s && !s.loaded && !s.error), (el) => el.child(this.progress(t, s)))
       .when(due.length > 0, (el) => el.child(this.probe(t, due)));
+    return this.openActive() ? this.openOver(t, s, body, rows, cx) : body;
+  }
+
+  // ---- the opening ----
+  // A pane's first session opens at its end, still. While it is read there are no rows and no
+  // scrolling: the loading state fills the pane (openView). Once read, built and shaped, the
+  // list is drawn hidden under it at its end until every part on screen is measured, and then
+  // shown. Above it, parts are measured out of view with the end held (render: partsDue); a
+  // scroll up meanwhile takes the place on screen (listWheel). A pane whose list is ready
+  // within OPEN_QUIET_MS goes straight to it and paints nothing before. Armed only by a draw
+  // while the pane's first session is unread: a session that comes after a list was shown
+  // (/clear, a new session) opens as it always did.
+  openGate(t, s, cx) {
+    if (!s) return null;
+    let o = this.opening;
+    if (!o || o.list !== this.sessions) {
+      this.opening = o = null;
+      if (s.loaded || this.shownList === this.sessions) { this.shownList = this.sessions; return null; }
+      o = this.opening = { list: this.sessions, at: Date.now(), painted: false, done: false, pct: null, peek: false, v: null, stats: null, newest: null, mtime: null };
+    }
+    if (o.done) return null;
+    // A read that failed shows its error, as before.
+    if (s.error) { this.openFinish(); return null; }
+    if (s.loaded) return null;
+    return this.openCover(t, s, cx);
+  }
+  // The whole pane, before a list can be drawn: its background alone within the quiet time,
+  // then the loading state.
+  openCover(t, s, cx) {
+    const o = this.opening;
+    if (!o.painted && Date.now() - o.at < OPEN_QUIET_MS) { this.openTick(cx); return v_flex().flex_1().min_h(0).bg(t.background); }
+    o.painted = true;
+    return this.openView(t, s);
+  }
+  // A frame when the quiet time ends, so the loading state paints even if nothing else draws.
+  openTick(cx) {
+    const o = this.opening;
+    if (o.tick) return;
+    o.tick = true;
+    cx.timer.after(Math.max(0, OPEN_QUIET_MS - (Date.now() - o.at)) + 10, (cx) => { o.tick = false; cx.notify(); });
+  }
+  // The list, built and shaped, drawn at its end under the loading state until what it shows is
+  // measured (openReady); then shown in the same frame, nothing on screen left to move.
+  openOver(t, s, body, rows, cx) {
+    const o = this.opening;
+    if (this.openReady(rows)) { this.openFinish(); return body; }
+    this.follow = true;
+    if (!this.bottomShown) this.toBottom = true;
+    if (!o.next) { o.next = true; cx.timer.after(16, (cx) => { o.next = false; cx.notify(); }); }
+    const quiet = !o.painted && Date.now() - o.at < OPEN_QUIET_MS;
+    if (!quiet) o.painted = true;
+    return v_flex().id("th-open").flex_1().min_h(0).relative()
+      .child(body.opacity(0))
+      .child(v_flex().absolute().top(0).left(0).right(0).bottom(0).bg(t.background).when(!quiet, (el) => el.child(this.openView(t, s))));
+  }
+  // Ready to show: every row built and shaped, and the list last drawn with them at its end
+  // with every part in view measured (or tried three times, as the probe gives up). A short
+  // session waits for the same, under the background alone (the rig showed its first rows
+  // move twice in 25 ms when they were shown as soon as they were built).
+  openReady(rows) {
+    if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || !rows.length) return false;
+    const n = Number(String(this.lastRange ?? "").split("/")[1]);
+    if (n !== rows.length || !this.bottomShown || !this.viewRange) return false;
+    return !this.partsWaiting(rows, this.viewRange[0], this.viewRange[1]);
+  }
+  // Whether a part in rows a..b is still to be measured, by the probe's own test (probeDue).
+  partsWaiting(rows, a, b) {
+    const base = this.sigBase();
+    for (let i = Math.max(0, a); i < b && i < rows.length; i++) {
+      const r = rows[i];
+      const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
+        : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
+      if (!part) continue;
+      const sig = this.partSig(part, base);
+      if (this.measOf(part.key, sig) > 0) continue;
+      if ((this.probeTries?.get(`${part.key}|${sig}`) ?? 0) >= 3) continue;
+      return true;
+    }
+    return false;
+  }
+  openFinish() {
+    const o = this.opening;
+    o.done = true;
+    o.shownAt = Date.now();
+    this.shownList = this.sessions;
+    // The end is held while parts above it wait, and in the next frame (render: partsDue).
+    this.openHold = true;
+    this.follow = true;
+    this.toBottom = true;
+  }
+  // Once the first chunk is in: the file's last write (one stat) and, from a short read of its
+  // end, the newest prompt a person typed. A file read in one chunk has its end already;
+  // OpenCode's database and Cursor's transcripts are not read by bytes from the end.
+  openPeek(s, cx) {
+    const o = this.opening;
+    o.peek = true;
+    const h = harnessOfFile(s.file);
+    if (h === "opencode") return;
+    listMtimes([s.file]).then((m) => { if (this.opening === o && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
+    if (h === "cursor" || !(s.size > CHUNK)) return;
+    const from = Math.max(0, s.size - OPEN_PEEK);
+    cx.spawn(async (cx) => {
+      try {
+        const t0 = now();
+        const r = await exec("sh", readArgs(s.file, from, OPEN_PEEK));
+        o.peekMs = now() - t0;
+        if (this.opening !== o || o.done || r.code !== 0) return;
+        const c = newChunk();
+        for (const l of r.stdout.split("\n")) parseLine(c, l);
+        const tail = newSession(s.id, s.file);
+        tail.senders = s.senders;
+        for (const e of c.events) apply(tail, e);
+        o.newest = newestPrompt(tail.turns);
+        cx.notify();
+      } catch {
+        // No preview: the line stays empty.
+      }
+    });
+  }
+  // What the loading state shows now (ui.js openLines). The counts are summed again only when
+  // the session changed, as the status line's are (statusStats, whose tokens these are).
+  openInfo(s) {
+    const o = this.opening;
+    const pct = this.readPct(s) ?? (s.loaded ? 100 : null);
+    // The bar never goes back (a chunk read again at a smaller size, a rewind).
+    if (pct != null) o.pct = Math.max(o.pct ?? 0, pct);
+    const v = `${s.version}|${s.turns.length}|${s.loaded ? 1 : 0}|${this.pinVer}`;
+    if (o.v !== v || !o.stats) {
+      o.v = v;
+      const st = this.statusStats();
+      let prompts = 0;
+      for (const t of s.turns) if (t.sender?.kind === "you" && !t.cmd) prompts++;
+      let model = null;
+      for (let i = s.turns.length - 1; i >= 0 && !model; i--) model = s.turns[i].model ?? null;
+      o.stats = { tools: st.tools, tokens: st.tokens, prompts, model, pins: this.pinStore.sessions[this.sessionKey(s)]?.pins?.length ?? 0 };
+    }
+    const h = harnessOfFile(s.file);
+    const read = s.offset > 0 || s.loaded;
+    const si = this.sessions.indexOf(s);
+    return {
+      offset: s.offset, size: s.size, pct: o.pct, units: h === "opencode" ? "turns" : "bytes", turns: s.turns.length, loaded: Boolean(s.loaded),
+      agent: h === "claude" ? "Claude Code" : this.agent().name, model: o.stats.model, start: s.turns[0]?.ts ?? null, active: o.mtime,
+      working: Boolean(s.loaded && s.turns.length && this.isLive(s, si, s.turns.length - 1)),
+      prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, pins: o.stats.pins,
+      newest: (s.loaded ? newestPrompt(s.turns) : null) ?? o.newest, now: Date.now(),
+    };
+  }
+  // The loading state, at the list's column: what is read and found so far, then what is known
+  // of the session. Every line keeps its row from the first paint (ui.js openLines), and each
+  // digit takes a cell of one width, so nothing moves as figures arrive and grow.
+  openView(t, s) {
+    const L = openLines(this.openInfo(s));
+    const pct = this.opening.pct;
+    const figs = (text, size) => {
+      const cw = Math.ceil(size * 0.62);
+      return figRuns(text).map(([x, f]) => (f
+        ? h_flex().flex_none().children([...x].map((ch) => (/\d/.test(ch) ? div().flex_none().w(cw).flex().justify_center().child(ch) : div().flex_none().child(ch))))
+        : div().flex_none().whitespace_nowrap().child(x)));
+    };
+    const line = (text, h, size, color, mt) => h_flex().h(h).mt(mt).flex_none().w_full().min_w(0).overflow_hidden().items_center()
+      .text_size(size).text_color(color).children(figs(text, size));
+    const w = Math.min(this.width, this.pw());
+    // Two lines of the newest prompt at 12.5 px, cut at a word with "…".
+    const room = Math.max(20, Math.floor(((w - 2 * ROW.PAD_X) / 6.6) * 2) - 2);
+    let said = L[8];
+    if (said.length > room) said = `${said.slice(0, room).replace(/\s+\S*$/, "")} …`;
+    const mk = mark(this.agent().key, 14);
+    return v_flex().id("th-opening").flex_1().min_h(0).w_full().bg(t.background).items_center()
+      // Clear of the floating top, as the list's first row is (TOP_BAND).
+      .child(v_flex().w(w).px(ROW.PAD_X).pt(18 + (this.floating() ? TOP_BAND : 0)).flex_none()
+        .child(div().h(22).flex_none().text_size(14).font_semibold().text_color(t.foreground).child(L[0]))
+        .child(line(L[1], 18, 12.5, t.muted, 4))
+        .child(div().h(3).mt(6).flex_none().w_full().rounded(2).bg(t.border).overflow_hidden()
+          .child(pct != null ? div().h_full().w(`${pct}%`).bg(t.accent) : div().h_full().w("30%").bg(t.accent).loop("opacity", { from: 0.3, to: 1, period: 1100 })))
+        .child(line(L[2], 18, 12.5, t.foreground, 8))
+        .child(h_flex().h(18).mt(18).flex_none().gap(6).items_center().min_w(0)
+          .when(Boolean(mk), (el) => el.child(mk))
+          .child(h_flex().flex_1().min_w(0).overflow_hidden().text_size(12).text_color(t.muted).children(figs(L[3], 12))))
+        .child(line(L[4], 18, 12, t.muted, 4))
+        .child(line(L[5], 18, 12, t.muted, 4))
+        .child(line(L[6], 18, 12, t.muted, 4))
+        .child(line(L[7], 16, 11.5, t.dim, 18))
+        .child(div().h(38).mt(4).flex_none().w_full().overflow_hidden().text_size(12.5).line_height("19px").text_color(t.foreground).child(said || " ")));
   }
 
   progress(t, s) {
