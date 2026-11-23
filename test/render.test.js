@@ -20174,3 +20174,119 @@ test("TRD-24: a right Trajectory pane finding itself under a stale bottom entry 
   expect(v.trajBottomId()).toBe(null);
   expect(v.trajRightOpen()?.pane).toBe("p5");
 });
+
+// ---- the Trajectory's docks (TRD-24, part 2: the bottom dock's layout) ----
+// A Trajectory pane along the bottom (props().dock "bottom"), w px wide and h tall.
+async function bottomPane(w, h = 400, dock = "bottom") {
+  await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  const props = state.props;
+  state.props = { ...props, view: "trajectory", ...(dock === "bottom" ? { dock } : {}) };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  b.width = w;
+  b.paneW = w;
+  b.rootH = h;
+  return { b, cb };
+}
+const detailCalls = (c) => afterId(c, "th-traj-detail") ?? [];
+
+test("TRD-24: the bottom dock from 700 px: the detail open at the list's right, at least 360 px, taking what the list leaves past 1,100 px; the list's columns go by the list's width", async () => {
+  for (const [w, detailW, listW, start, bar] of [[1700, 600, 1100, true, true], [1460, 360, 1100, true, true], [1100, 360, 740, true, true], [800, 360, 440, true, false], [700, 360, 340, false, false]]) {
+    const { b, cb } = await bottomPane(w);
+    const c = frame(b, cb);
+    expect(hasId(c, "th-traj-detail")).toBe(true);
+    const d = detailCalls(c);
+    expect(d).toContainEqual(["w", detailW]);
+    expect(d.some(([n]) => n === "border_l")).toBe(true);
+    expect(d.some(([n]) => n === "border_t")).toBe(false);
+    const rep = b.trajReport();
+    expect(rep.layout).toEqual({ side: "right", detailW, listW });
+    expect(rep.cols).toEqual({ start, bar, filters: true, detailRight: true });
+    expect(rep.detail).not.toBe(null);
+    // The rows draw the start column (40 px) and the bar (BAR_W, 64 px) as the list's width says.
+    const steps = b.ledgerRows().filter((r) => r.kind === "tr").length;
+    const cells = (px) => c.filter(([n, x]) => n === "w" && x === px).length;
+    expect(steps).toBeGreaterThan(0);
+    expect([cells(40) >= steps, cells(64) >= steps]).toEqual([start, bar]);
+    expect([cells(40) === 0, cells(64) === 0]).toEqual([!start, !bar]);
+    // Enter closes it, and the list takes the whole width; Enter again brings it back.
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(false);
+    expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+    expect(b.trajReport().layout).toEqual({ side: "right", detailW, listW: w });
+    b.key(keyEv("enter"), cb);
+    expect(b.detailOpen()).toBe(true);
+  }
+});
+
+test("TRD-24: the bottom dock under 700 px: no detail, and Enter, Space, a click on the selected row and Esc do nothing there; the hints leave the detail out", async () => {
+  const { b, cb } = await bottomPane(650);
+  const c = frame(b, cb);
+  expect(hasId(c, "th-traj-detail")).toBe(false);
+  expect(b.trajReport().layout).toEqual({ side: "none", detailW: null, listW: 650 });
+  expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: false });
+  expect(b.trajReport().detail).toBe(null);
+  // Even after the person had opened it at a wider width.
+  b.tdetail = true;
+  expect(b.detailOpen()).toBe(false);
+  expect(hasId(frame(b, cb), "th-traj-detail")).toBe(false);
+  let stopped = 0;
+  cb.stop_propagation = () => { stopped++; };
+  for (const k of ["enter", "space", "escape"]) b.key(keyEv(k), cb);
+  expect(stopped).toBe(0);
+  expect(b.ledgerAction("ldetail", cb)).toBe(false);
+  const shown = b.ledgerRows();
+  const sel = shown[b.ledgerSel(shown)].key;
+  b.ledgerClick(sel);
+  expect([b.detailOpen(), b.tsel]).toEqual([false, sel]);
+  expect(b.footerHints().map(([k]) => k)).not.toContain("↵");
+  // Back at 700 px it is open again, as the person left it.
+  b.width = 700;
+  b.paneW = 700;
+  expect(b.detailOpen()).toBe(true);
+  expect(b.footerHints().map(([k]) => k)).toContain("↵");
+});
+
+test("TRD-24: the right dock keeps its own layout at every width: the detail 300 px at the right from 900 px, under the list and closed below, the columns by the pane's width", async () => {
+  for (const [w, side] of [[1700, "right"], [960, "right"], [800, "under"], [650, "under"]]) {
+    const { b, cb } = await bottomPane(w, 400, "right");
+    expect(b.trajDock).toBe("right");
+    if (side === "right") {
+      const d = detailCalls(frame(b, cb));
+      expect(d).toContainEqual(["w", 300]);
+      expect(d.some(([n]) => n === "border_l")).toBe(true);
+    } else {
+      expect(b.detailOpen()).toBe(false);
+      b.key(keyEv("enter"), cb);
+      const d = detailCalls(frame(b, cb));
+      expect(d.some(([n]) => n === "border_t")).toBe(true);
+    }
+    expect(b.trajReport().layout.side).toBe(side);
+    expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: side === "right" });
+  }
+});
+
+test("TRD-24: the list box measures its height, and the report says how many rows it keeps, with room left for a timeline above it", async () => {
+  const { b, cb } = await bottomPane(1100, 270);
+  const c = frame(b, cb);
+  expect(b.trajReport().rowsLeft).toBe(null);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  expect(b.trajReport().rowsLeft).toBe(5);
+  // A change under a px is not a new height.
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 130.6 }, cb);
+  expect(b.trajReport().listH).toBe(130);
+  handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 740, height: 260 }, cb);
+  expect(b.trajReport().rowsLeft).toBe(10);
+  // Herdr's zoom: the handler hears zoomed px, the rows are design px.
+  herdrSettings = { font_family: "Mono", zoom: 2 };
+  try {
+    handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1480, height: 200 }, cb);
+    expect([b.trajReport().listH, b.trajReport().rowsLeft]).toEqual([100, 4]);
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});

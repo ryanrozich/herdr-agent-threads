@@ -169,6 +169,39 @@ export function ledgerCols(width) {
   return { start: w >= 420, bar: w >= 500, filters: w >= FILTER_MIN, detailRight: w >= WIDE_MIN };
 }
 
+// The pane's layout by its dock (TRD-24). On the right (and in the Chat's own pane) the detail
+// sits at the ledger's right, DETAIL_W wide, from WIDE_MIN, and under it narrower; the columns go
+// by the pane's width (ledgerCols). Along the bottom (TRD-87, picks 3 and 4) the detail sits at
+// the list's right from DOCK_SIDE_MIN, DOCK_DETAIL_MIN wide at least and taking whatever the
+// list leaves past DOCK_LIST_MAX; under DOCK_SIDE_MIN there is none, since under the list it
+// would leave no rows at the dock's least height. There the list's start and bar columns go by
+// the list's own width, and the filter bar, across the whole pane, by the pane's.
+// open: whether the detail is shown, so the list has the width the detail leaves it.
+// { side: "right" | "under" | "none", detailW (at the right; null otherwise), listW, cols }.
+export const DETAIL_W = 300;
+export const DOCK_SIDE_MIN = 700;
+export const DOCK_LIST_MAX = 1100;
+export const DOCK_DETAIL_MIN = 360;
+export function trajLayout(width, dock = "right", open = true) {
+  const w = Number.isFinite(width) ? width : 0;
+  const pane = ledgerCols(w);
+  if (dock !== "bottom") {
+    const side = pane.detailRight ? "right" : "under";
+    return { side, detailW: side === "right" ? DETAIL_W : null, listW: side === "right" && open ? w - DETAIL_W : w, cols: pane };
+  }
+  const side = w >= DOCK_SIDE_MIN ? "right" : "none";
+  const detailW = side === "right" ? Math.max(DOCK_DETAIL_MIN, w - DOCK_LIST_MAX) : null;
+  const listW = side === "right" && open ? w - detailW : w;
+  const list = ledgerCols(listW);
+  return { side, detailW, listW, cols: { start: list.start, bar: list.bar, filters: pane.filters, detailRight: side === "right" } };
+}
+// The whole LEDGER_ROW rows a list of this height keeps, less a timeline's height above it
+// (TRD-23 shows the timeline only where enough rows are left). null when not measured yet.
+export function rowsLeft(listH, timelineH = 0) {
+  if (!Number.isFinite(listH)) return null;
+  return Math.max(0, Math.floor((listH - timelineH) / LEDGER_ROW));
+}
+
 // The first line of a text, flattened from Markdown, at most 200 characters.
 function firstLine(text) {
   const line = String(text ?? "").slice(0, 4000).split("\n").find((l) => l.trim()) ?? "";
