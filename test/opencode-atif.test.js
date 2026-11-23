@@ -200,6 +200,10 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
       run("call_000018", { exit: -1 }, "killed"),
       { id: "call_000019", tool: "read", status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
       { id: "call_000020", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 3 }, start: 500, end: 600 },
+      { id: "call_000044", tool: "", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 0 }, start: 500, end: 600 },
+      { id: "call_000045", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", start: 500, end: 600 },
+      { id: "call_000046", tool: undefined, status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
+      { id: "call_000047", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: null }, start: 500, end: 600 },
     ]);
     expect(got.call_000011.r.content).toBe("gadget");
     expect(got.call_000011.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: false });
@@ -217,8 +221,15 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
     expect(got.call_000016.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000019.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
-    // A call with no tool name is not the shell either.
-    expect(got.call_000020.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    // A call with no tool name and an exit code in its metadata may be the shell or not: an
+    // unknown tool, so an unknown outcome, and the flag is left out, whatever the code.
+    expect(got.call_000020.r.extra).toEqual({ result_ts: at(600) });
+    expect(got.call_000044.r.extra).toEqual({ result_ts: at(600) });
+    // With no exit code (none, or null) it is read by its status alone, as any tool that is not
+    // the shell is.
+    expect(got.call_000045.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000047.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000046.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
   });
 
   test(`opencode ${version}: a completed shell call with no exit code and no end time that counts keeps its output and is not marked as having no result`, () => {
