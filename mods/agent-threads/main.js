@@ -542,11 +542,13 @@ function launch() {
 // shared("threads.byTerminal"): terminal -> its Threads pane, so the launcher focuses an
 // open one instead of splitting again, and a pane knows its own id. The Pinned and the
 // Trajectory panes are kept in their own maps (PIN_MAP_KEY, TRAJ_MAP_KEY).
-// extra: more of the entry, a Trajectory pane's dock ({ dock: "bottom" }, trajBottomId).
+// extra: the rest of the entry, as the pane itself gives it ({ dock: "bottom" } for a bottom
+// Trajectory, {} for any other; trajBottomId). With none (the Chat settling its split) an
+// entry that already names this pane keeps the rest, so a dock the pane wrote first stands.
 function remember(terminal, pane, key = MAP_KEY, extra = null) {
   const map = { ...(shared(key) ?? {}) };
   for (const [k, v] of Object.entries(map)) if (!panes().some((p) => p.pane === v.pane)) delete map[k];
-  map[terminal] = { pane, ...(extra ?? {}) };
+  map[terminal] = extra ? { pane, ...extra } : map[terminal]?.pane === pane ? map[terminal] : { pane };
   setShared(key, map);
 }
 
@@ -2608,7 +2610,7 @@ export default class Threads extends View {
     // A bottom Trajectory pane says so in its entry, so the Chat leaves it out of its row.
     const dock = this.trajPane && this.trajDock === "bottom" ? "bottom" : null;
     const was = shared(key)?.[this.terminal];
-    if (was?.pane !== mine || (was?.dock ?? null) !== dock) cx.timer.after(0, () => remember(this.terminal, mine, key, dock ? { dock } : null));
+    if (was?.pane !== mine || (was?.dock ?? null) !== dock) cx.timer.after(0, () => remember(this.terminal, mine, key, dock ? { dock } : {}));
   }
 
   // Live data changed: a new turn or status in the terminal means look again.

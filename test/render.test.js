@@ -20100,3 +20100,57 @@ test("TRD-24: a Trajectory settings note stays when a link or sender rule change
   v.useRules("links", [], cx);
   expect(v.prefsNotes).toEqual([]);
 });
+
+test("TRD-24: a bottom Trajectory pane's dock holds in its map entry whichever writes first, the pane finding itself or the Chat settling its split", async () => {
+  delete recordFiles[PINS];
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.width = 700;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  const props = state.props;
+  // The Chat splits; the new pane comes up with a bottom dock in its props (part 3's split).
+  const open = () => {
+    delete state.shared["threads.trajByTerminal"];
+    state.panes = state.panes.filter((p) => p.pane !== "p5");
+    v.splitAsk = null;
+    v.key(keyEv("y"), cx);
+    expect(v.splitAsk?.map).toBe("threads.trajByTerminal");
+    state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+    state.props = { ...props, view: "trajectory", dock: "bottom" };
+    const b = new Threads();
+    const cb = makeCx();
+    b.init(state.props, cb);
+    state.props = props;
+    return { b, cb };
+  };
+  const bottom = { t4: { pane: "p5", dock: "bottom" } };
+  // The Chat first: its entry names the pane with no dock, and the pane's first look adds it.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // The pane first: the Chat's write after its split keeps the dock the pane gave.
+  {
+    const { b, cb } = open();
+    await settle(b);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    v.settleSplit(cx);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    b.poll(cb);
+    cb.flush(0);
+    expect(state.shared["threads.trajByTerminal"]).toEqual(bottom);
+    expect(v.trajBottomId()).toBe("p5");
+  }
+  // An entry for another pane, still open, is not this pane's: the Chat's write replaces it whole.
+  open();
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p1", dock: "bottom" } };
+  v.settleSplit(cx);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+});
