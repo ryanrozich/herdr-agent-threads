@@ -7,7 +7,7 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 - Agent messages are off the rail after this update: the turn rail shows your own turns and the running one. To get them back, turn on "Agent messages on the rail" in Settings, under Agent messages. That choice is kept from then on.
 - `↑` and `↓` (and `k` and `j`) follow the rail: they move between the turns that have a tick. With "Agent messages on the rail" off they pass over agent messages; with it on they stop at them, as before. A click still selects an agent message.
 - A Codex subagent rollout exported by itself now starts at its own history boundary.
-- On the Sender rules page, a press or Tab into a field of the open rule folds the two type rows that Change shows, so the fields go back to where they were, and Tab goes on from the field you pressed into. Before, a press aimed at the rule's text after Change could land in Name and leave the text as it was.
+- On the Link rules and Sender rules pages, a press or Tab into a field of the open rule folds the type rows that Change shows, so the fields go back to where they were, and Tab goes on from the field you pressed into. Before, a press aimed at the rule's text after Change could land in Name and leave the text as it was.
 - The column now steps with the pane: 70, 90 or 120 characters a line by the pane's width. The Width setting, `Shift w` and Keep the pane at this width are gone. A resize inside a step breaks no lines anew; in a long chat, a drag past a step waits until the pane has been still for 1.2 s before the lines break anew.
 
 ### The Trajectory

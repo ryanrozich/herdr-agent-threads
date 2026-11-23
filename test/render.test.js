@@ -15163,6 +15163,56 @@ test("TRD-100: on Link rules too, Tab steps from a field a press gave the keyboa
   } finally { done(v); }
 });
 
+test("TRD-100: on a kept link rule with its Change rows open, a press in a field folds the rows and takes a shown ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, true, "th-rule-type-custom"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-ticket");
+    v.ruleInputs.pattern.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-pattern", "rule-pattern"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    // Tab goes on from the field pressed into.
+    const s = stopsOf(v);
+    pressKey(v, cx, "tab");
+    expect(v.cardRing).toBe(s[s.indexOf("th-rule-f-pattern") + 1]);
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-edit-btn-2", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing]).toEqual([true, null]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-name"]);
+    // A sender field's focus does nothing to an open link rule.
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.ruleEdit.typeOpen).toBe(true);
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the quote key field a press gave the keyboard, not from the ring on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    const s = stopsOf(v);
+    const at = s.indexOf("th-set-quote");
+    expect(at).toBeGreaterThan(2);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[1], "quote"]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[at + 1], null]);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect(v.cardRing).toBe(s[at - 1]);
+  } finally { done(v); }
+});
+
 test("TRD-100: the keyboard alone on a kept copy: Change, its type rows, Tab into Name folds them, Tab to Starts with, a key, Enter keeps it", async () => {
   const { v, cx } = await keptCopyPicker();
   try {

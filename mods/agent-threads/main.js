@@ -1755,16 +1755,19 @@ export default class Threads extends View {
     } else e.typeOpen = false;
     this.ringMove(this.editorFirst(e) === "th-rule-type-change" ? "th-rule-type-change" : `th-rule-type-${k}`);
   }
-  // A field of the open sender rule took the keyboard, by a press or by Tab (tag: its
-  // fieldFocused name). The type rows Change opened fold back, as a key in Starts with folds
-  // them, so the fields are where they were before Change; and a ring shown moves onto the
-  // field, so Tab goes on from there. With no ring shown, none comes (TRD-100).
+  // A field of the open rule took the keyboard, by a press or by Tab (tag: its fieldFocused
+  // name, on either page). The type rows Change opened fold back, as a key in Starts with or
+  // Finds folds them, so the fields are where they were before Change; and a ring shown moves
+  // onto the field, so Tab goes on from there. With no ring shown, none comes (TRD-100). A new
+  // link rule's rows, shown while its fields are untouched, stay.
   ruleFieldTook(tag) {
     const e = this.ruleEdit;
-    const head = fieldTag("senders");
-    if (e?.kind !== "senders" || !tag?.startsWith(head)) return;
+    if (!e) return;
+    const head = fieldTag(e.kind);
+    const k = tag?.startsWith(head) ? tag.slice(head.length) : null;
+    if (!this.fieldsOf(e.kind).some(([f]) => f === k)) return;
     e.typeOpen = false;
-    if (this.cardRing) this.cardRing = `th-rule-f-${tag.slice(head.length)}`;
+    if (this.cardRing) this.cardRing = `th-rule-f-${k}`;
   }
   // A sender rule's type pressed: its field shows, with the text it had, and on a kept rule
   // the two rows fold back to one line.
