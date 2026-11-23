@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -253,8 +253,21 @@ const TRAJ_W_KEY = "threads.trajWidth";
 // with no new pair before hold. The column's pane makes and keeps it (pairPoll); either pane
 // puts the pair back to px (pairPx).
 const PAIR_KEY = "threads.pinPair";
+// The row on weights while the Trajectory is open (rowPoll), by terminal: { k, S, ids, n }
+// once the Chat, the Trajectory and the Pinned column when open are on weights (ids: their
+// panes as { chat, traj, pin }, n their widths by pane, k and S as for the pair, so the
+// terminals hold k S px); { S } otherwise, the terminals' weights kept for the next opening.
+// The Chat makes and keeps it; the Trajectory and the column read it for - and =.
+const ROW_KEY = "threads.row";
+// What a new divider takes from the weight panes' room when a pane splits (Herdr's frame gap
+// and its line, in design px, so the same at any zoom): about 8 px on the rig. The column's
+// opening beside the Trajectory counts it before keeping the terminals' 200 px.
+const SPLIT_GAP = 8;
 // Both widths still this long before the pair is made or its weights brought up to date.
 const PAIR_STILL_MS = 500;
+// How long a close waits for the pane that takes the closed one's weight to measure wider
+// before it asks its weights anyway (rowCloseStep).
+const ROW_CLOSE_WAIT_MS = 400;
 const DAY_STRIP = 32; // the Pinned view's strip above the list that shows the day while scrolling
 // The floating top: the band the state and the icons sit in over the top of the list, and the
 // gap the list leaves above its first row so nothing starts under them.
@@ -1092,6 +1105,8 @@ export default class Threads extends View {
       pins: { list: this.pinnedAll().map((p) => ({ n: p.turn?.n ?? null, stored: p.pin.n, state: p.state, anchor: p.pin.anchor ?? null, text: p.pin.text })), top: this.topKey, view: this.view, pinnedPane: this.pinnedPane, rootH: Math.round(this.rootH), listH: Math.round(this.listH), visit: this.pinVisit, error: this.pinsError, undo: this.pinUndo.length },
       renders: this.renders ?? 0, me: this.myPane ?? null, props: Object.keys(props() ?? {}),
       traj: this.trajReport(),
+      // Each fall back to px of the row with the Trajectory open (rowFell), and its reason.
+      rowFalls: { n: this.rowFallN ?? 0, last: this.rowFalls ?? [] },
       landed: this.landed ? { key: this.landed.key, j: this.landed.j, y: this.landed.y, lift: this.landed.lift ?? 0 } : null,
       outline: this.outlined(), outlineBack: this.outlineBack ? { sel: this.outlineBack.sel ?? null, top: this.outlineBack.top ?? null } : null,
       header: this.headerText(), state: this.agentStateNow()?.word ?? null, unseen: this.unseen, bottomShown: this.bottomShown, pill: this.pillShown(), follow: Boolean(this.follow), range: this.lastRange ?? null, keysOpen: this.keysOpen,
@@ -2593,13 +2608,15 @@ export default class Threads extends View {
     this.findSelf(cx);
     this.fitOnOpen();
     this.settleSplit(cx);
-    this.trajGiveBack();
+    this.rowLandGone(cx);
+    this.trajGiveBack(cx);
     this.weighSoon();
     this.weighStep();
     this.autoPinned(cx);
     this.pairCloseStep();
     this.weightsGate(cx);
     this.pairPoll(cx);
+    this.rowPoll(cx);
     if (this.syncSel()) this.selMoved = true;
     this.lookRepo(cx);
     this.ruleRepoCheck();
@@ -3565,7 +3582,15 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    const fit = this.pinKeep(me, pinColumn(this.pw(), this.keptPinWidth()));
+    // With the Trajectory open the column splits off it, so the row is the Chat, the
+    // Trajectory, then the column, whichever opened first.
+    const traj = this.trajPaneOpen();
+    // A close's weights under way: the panes it left to px at their targets first, before the
+    // fit reads the widths the close is passing through. With no record left the column's
+    // opening has no room to land with: the row stays at px.
+    const back = this.splitAsk ? null : this.rowCancelClose(cx, "the column opened during a close");
+    const want = pinColumn(this.pw(), this.keptPinWidth());
+    const fit = traj ? this.rowPinFit(me, traj, want) : this.pinKeep(me, want);
     const px = fit?.col ?? null;
     if (!me || !px) {
       if (auto) return false;
@@ -3575,16 +3600,44 @@ export default class Threads extends View {
       return true;
     }
     if (this.splitAsk) return true;
-    this.pinPx(me, fit.chat);
+    // The row on weights goes to px where it is (the split takes its room from the terminals).
+    if (fit.T != null) this.rowPx(cx, null);
+    // With the Trajectory open, the px the Chat gives so the terminals keep their 200 px come
+    // back to it when the column closes (autoPinned, with the Chat's width from before).
+    const was = back ?? this.chatAt(Math.round(this.pw()) + PANE_FRAME);
+    this.pinChatBack = traj && fit.chat != null && fit.chat < was ? { px: was } : null;
+    // The Chat's px: the fit's, else the close's target (its measure may be the close's), else
+    // the width a close last sent it back to when it is within 3 px of that (chatAt).
+    this.pinPx(me, fit.chat ?? back ?? (this.chatHome ? this.chatAt(Math.round(this.pw()) + PANE_FRAME) : null));
     // The row as this pane knew it: the column's first weight lands at its width (pairBegin).
-    if (fit.R > 0) {
+    if (fit.R > 0 && !traj) {
       const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { S: fit.S, R: fit.R } });
       if (cx?.timer) cx.timer.after(0, put);
       else put();
     }
-    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000 };
-    run("pane.split", { pane: me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
+    // With the row's room known, the column goes on weights with the others once it holds its
+    // px (rowPlan, from settleSplit).
+    const row = fit.T != null ? { T: fit.T, S: fit.S, m: fit.m, chat: fit.chat ?? fit.m, traj: fit.traj, trajPane: traj.pane } : null;
+    this.splitAsk = { before: panes().map((p) => p.pane), px, back: auto ? me.pane : null, until: Date.now() + 4000, row };
+    run("pane.split", { pane: traj ? traj.pane : me.pane, direction: "right", mod: MOD, props: { ...(props() ?? {}), view: "pinned" } });
     return true;
+  }
+  // The column's opening with the Trajectory open. With the row on weights the terminals hold
+  // k S px, so the column keeps their 200 px each as pinKeep does (ui.js pinFit: the terminals
+  // give, then the Chat, then the column; the Trajectory keeps its width). With the row at px
+  // its room is not known: the width as asked, as before. { chat, col, T, S, m, traj }, or null
+  // with no room.
+  rowPinFit(me, traj, px) {
+    if (!me || !px) return null;
+    const ent = this.rowNow();
+    const n = ent?.k > 0 && ent.S > 0 ? this.rowWidths({ chat: me.pane, traj: traj.pane }) : null;
+    if (!n) return { chat: null, col: px };
+    const T = ent.k * ent.S - SPLIT_GAP;
+    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane && p.pane !== traj.pane).length;
+    const m = n[me.pane];
+    const f = pinFit(m, px, T, TERM_KEEP * others);
+    // The Chat's give in whole px, rounded up so the terminals keep theirs.
+    return f ? { chat: f.chat === m ? null : Math.floor(f.chat), col: f.col, T, S: ent.S, m, traj: n[traj.pane] } : null;
   }
 
   // Before a split off this pane (the Pinned column, the Trajectory): this pane at a px width,
@@ -3622,6 +3675,11 @@ export default class Threads extends View {
       remember(this.terminal, made.pane, a.map ?? PIN_MAP_KEY);
       run("layout.resize", { id: made.pane, px: a.px });
       if (a.back) run("pane.focus", { pane: a.back });
+      // Split off the Trajectory with the row's room known: the column onto a weight once it
+      // holds its px, the Chat and the Trajectory held where they are. Its weights share the
+      // terminals' room and its own: T, and what the Chat gave.
+      const me = this.me();
+      if (a.row && me) this.rowPlan = { probe: made.pane, t: a.px, S: a.row.S, Rr: a.row.T + (a.row.m - a.row.chat), held: { [me.pane]: a.row.chat, [a.row.trajPane]: a.row.traj }, at: Date.now() };
     } else if (Date.now() > a.until) { this.splitAsk = null; this.toWeight(); }
   }
 
@@ -3668,9 +3726,18 @@ export default class Threads extends View {
       return;
     }
     run("layout.resize", { id: a.made, px: fit.traj });
-    if (fit.chat < a.chat && me) {
-      run("layout.resize", { id: me.pane, px: fit.chat });
-      this.trajChatBack = { px: a.chat, pane: a.made };
+    if (fit.chat < a.chat && me) run("layout.resize", { id: me.pane, px: fit.chat });
+    // The Chat's width from before the Trajectory, whether it gave the Trajectory room or only
+    // the px its landing may take: the width it goes back to when the Trajectory closes.
+    if (me) this.trajChatBack = { px: this.chatAt(a.chat), pane: a.made };
+    // The row onto weights once the Trajectory holds its width (rowPoll). The room probe is the
+    // first point of the line that lands it: at ROOM_WEIGHT it measured nearly all the room the
+    // weights share, and the Chat's narrowing adds to that room what it gave.
+    const pin = this.pinnedPaneOpen();
+    const pw = pin ? shared(WIDTH_KEY)?.[pin.pane] : null;
+    if (me && (!pin || Number.isFinite(pw))) {
+      const held = { [me.pane]: fit.chat, ...(pin ? { [pin.pane]: Math.round(pw) + PANE_FRAME } : {}) };
+      this.rowPlan = { probe: a.made, t: fit.traj, seed: [ROOM_WEIGHT, a.seen.w + PANE_FRAME + (a.chat - fit.chat)], held, at: Date.now() };
     }
   }
   // What the row's other panes keep beside the Trajectory: TERM_KEEP each. Herdr does not say
@@ -3693,14 +3760,37 @@ export default class Threads extends View {
   // unless w fitted the Chat since (fitToReading). Either
   // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
   // settles): it is at a px only while the Trajectory is open.
-  trajGiveBack() {
+  trajGiveBack(cx) {
     const open = Boolean(this.trajPaneOpen());
     const closed = this.trajWasOpen && !open;
     this.trajWasOpen = open;
     const back = this.trajChatBack;
-    if (back && !panes().some((p) => p.pane === back.pane)) {
-      this.trajChatBack = null;
-      if (this.me()) { this.sizeTo(back.px); return; }
+    // Its pane gone, the width back is used once, by whichever way the close goes below (back).
+    const gone = back && !panes().some((p) => p.pane === back.pane);
+    if (gone) this.trajChatBack = null;
+    const side = !this.pinnedPane && !this.trajPane;
+    // The column's give was against the row with the Trajectory: gone with it.
+    if (closed) this.pinChatBack = null;
+    // The column's close still under way: both side panes closed together (rowCloseBoth).
+    const closing = closed && side ? this.rowClosing() : null;
+    if (closing && this.me()) {
+      const px = gone ? back.px : closing.targets[this.me().pane];
+      this.rowCloseBoth(px, cx);
+      return;
+    }
+    // The row on weights: the Chat gets the Trajectory's weight (Herdr gives a closed pane's to
+    // the pane before it), and rowClose asks the weights that keep each pane left, the Chat at
+    // the width it had before the split narrowed it.
+    const ent = this.rowNow();
+    if (closed && side && ent?.k > 0 && ent.ids?.traj && this.me()) {
+      const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.traj).map((id) => [id, ent.n[id]]));
+      if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = this.chatHome = back.px;
+      if (this.rowClose(ent.ids.traj, targets, cx)) return;
+    }
+    if (gone) {
+      // Within 1 px of it already: only the weight below.
+      const at = this.paneW != null ? Math.round(this.paneW) + PANE_FRAME : null;
+      if (this.me() && !(at != null && Math.abs(at - back.px) <= 1)) { this.sizeTo(back.px); return; }
     }
     if (closed) this.weighAt = Date.now() + 500;
   }
@@ -3718,6 +3808,14 @@ export default class Threads extends View {
     if (!wKey) return;
     const now = Date.now();
     this.firstSizeAt ??= now;
+    // The column closed beside the Trajectory: with the row on weights the Trajectory takes its
+    // weight for a moment, then the close's weights and the divider's room move it again. Those
+    // widths are the close's, not the owner's. colId: the column last seen beside it (trajFrame).
+    if (this.trajPane) {
+      const col = this.pinnedPaneOpen();
+      if (col) this.colId = col.pane;
+      else if (this.colId && !panes().some((p) => p.pane === this.colId)) { this.colId = null; this.holdTrajWidth(3000); }
+    }
     const kept = shared(wKey) ?? {};
     if (now - this.firstSizeAt < 1500 || now < (kept.hold ?? 0)) return;
     const px = Math.round(this.paneW) + PANE_FRAME;
@@ -3732,26 +3830,44 @@ export default class Threads extends View {
     return Number.isFinite(px) && px > 0 ? px : null;
   }
 
-  // - and =, in the column or in Threads while the column is open: the column 40 px
-  // narrower or wider, and Threads the other way, so the terminal stays put (ui.js
-  // columnResize says why a drag on the divider cannot do this). The Trajectory pane steps
-  // the same way: in it, or in the Chat while it is open and the Pinned column is not. At
-  // its limit it says nothing (no notice on a key in the Trajectory).
+  // - and =: a pane 40 px narrower or wider against the pane on its left, the other way, so
+  // the terminal stays put (ui.js columnResize says why a drag on a px divider cannot do
+  // this). In the Chat, its right neighbour steps: the Trajectory when it is open, else the
+  // Pinned column. In the Trajectory, the Trajectory against the Chat; in the column, the
+  // column against the Trajectory when that is open (down to TRAJ_MIN), else the Chat. At the
+  // Trajectory's limit it says nothing (no notice on a key in the Trajectory).
   resizeColumn(d, cx) {
-    const traj = this.trajPane || (!this.pinnedPane && !this.pinnedPaneOpen() && Boolean(this.trajPaneOpen()));
-    const side = this.pinnedPane || this.trajPane;
-    const col = side ? this.me() : traj ? this.trajPaneOpen() : this.pinnedPaneOpen();
-    const main = side ? this.mainPane() : this.me();
+    const trajOpen = this.trajPane ? this.me() : this.trajPaneOpen();
+    let col;
+    let main;
+    let traj = false;
+    let mainMin;
+    if (this.trajPane) { col = this.me(); main = this.mainPane(); traj = true; }
+    else if (this.pinnedPane) { col = this.me(); main = trajOpen ?? this.mainPane(); if (trajOpen) mainMin = TRAJ_MIN; }
+    else if (trajOpen) { col = trajOpen; main = this.me(); traj = true; }
+    else { col = this.pinnedPaneOpen(); main = this.me(); }
     if (!col || !main) return false;
     const w = shared(WIDTH_KEY) ?? {};
     // Herdr's px size for a pane is its measured width plus the pane's 1 px frame each side.
-    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640);
-    if (!next && traj) return true;
+    const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640, mainMin);
+    // At the Trajectory's limit, or a key that would take it further under its floor: nothing,
+    // and no notice.
+    if (!next && (traj || mainMin === TRAJ_MIN)) return true;
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
-    // The pair on weights: weight moves from one to the other with their sum held, so the
-    // terminals keep theirs (k, the px a unit of weight gets, is the same for both).
-    const pair = traj ? null : shared(PAIR_KEY)?.[this.terminal];
-    if (pair?.k > 0 && !this.trajPaneOpen()) {
+    // The pair, or the row with the Trajectory open, on weights: weight moves from one to the
+    // other with their sum held, so the terminals keep theirs (k, the px a unit of weight
+    // gets, is the same for all). The Chat's pane follows it as a divider (rowTrack).
+    const row = trajOpen ? this.rowNow() : null;
+    const onRow = row?.k > 0 && Object.values(row.ids ?? {}).includes(col.pane) && Object.values(row.ids ?? {}).includes(main.pane);
+    const pair = trajOpen ? null : shared(PAIR_KEY)?.[this.terminal];
+    if (onRow) {
+      run("layout.resize", { id: col.pane, weight: Number((next.column / row.k).toPrecision(5)) });
+      run("layout.resize", { id: main.pane, weight: Number((next.main / row.k).toPrecision(5)) });
+      // Where every pane of the row should land, from the last key's still to come if there is
+      // one: the Chat checks it (rowCheck).
+      const base = row.want?.n ?? row.n;
+      this.rowSave({ ...row, want: { n: { ...base, [col.pane]: next.column, [main.pane]: next.main }, at: Date.now() } }, cx);
+    } else if (pair?.k > 0) {
       run("layout.resize", { id: col.pane, weight: Number((next.column / pair.k).toPrecision(5)) });
       run("layout.resize", { id: main.pane, weight: Number((next.main / pair.k).toPrecision(5)) });
     } else {
@@ -3783,10 +3899,11 @@ export default class Threads extends View {
     const f = pinFit(m, px, R - m, TERM_KEEP * others);
     return f ? { chat: f.chat === m ? null : f.chat, col: f.col, R, S } : null;
   }
-  // Whether the pair may go on weights on this Herdr (ui.js weightHerdr), read when the pane
-  // starts and again whenever the version read differs from the last. A version not listed
-  // (or none) keeps the pair at px, with one line in the debug log for each version seen; a
-  // pair already on weights, or a probe under way, goes back to px where it is.
+  // Whether the pair and the row may go on weights on this Herdr (ui.js weightHerdr), read
+  // when the pane starts and again whenever the version read differs from the last. A version
+  // not listed (or none) keeps them at px, with one line in the debug log for each version
+  // seen; a pair or a row already on weights, or a probe or landing under way, goes back to
+  // px where it is.
   weightsGate(cx) {
     let v = null;
     try { v = updates().app.version; } catch { v = null; }
@@ -3795,7 +3912,13 @@ export default class Threads extends View {
     this.herdrSeen = v;
     this.weightsOk = weightHerdr(v);
     if (this.weightsOk) return;
-    console.log(`agent-threads: Herdr ${JSON.stringify(v)} is not one whose drag is checked to keep weight units: the Pinned pair stays at px`);
+    console.log(`agent-threads: Herdr ${JSON.stringify(v)} is not one whose drag is checked to keep weight units: the Pinned pair and the row stay at px`);
+    if (!this.pinnedPane && !this.trajPane) {
+      this.rowCloseDue = null;
+      this.rowCloseFix = null;
+      this.rowPx(cx, `Herdr ${JSON.stringify(v)} is not one whose drag keeps weight units`);
+      return;
+    }
     if (!this.pinnedPane) return;
     const main = this.mainPane();
     const w = shared(WIDTH_KEY) ?? {};
@@ -3875,8 +3998,12 @@ export default class Threads extends View {
       return;
     }
     run("layout.resize", { id: main.pane, px: m });
-    // The probe's widths are not the owner's (shareWidth).
-    setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
+    // The probe's widths are not the owner's (shareWidth). After the drawing pass, as the
+    // record's writes (poll runs in render).
+    const hold = Date.now() + 4000;
+    const put = () => setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold });
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
     const S = ent?.S > 0 ? ent.S : 0.5;
     const d = ent?.R > 0 ? ent.R - m - p : 0;
     this.pairing = { m, p, S: ent?.S > 0 ? ent.S : null, tried: [], w: Number(((S * p) / (d > 0 ? d : m)).toPrecision(5)), asked: Date.now(), at: this.paneW };
@@ -3922,7 +4049,9 @@ export default class Threads extends View {
       return;
     }
     const w = g.tried.length > 2 ? null : line ? weightFor(line, g.p) : weightNear(null, g.tried[0], g.p);
-    if (!w) { this.pairing = null; run("layout.resize", { id: me.pane, px: g.p }); return; }
+    // Three weights unanswered: the column back at its kept px, the kept px cleared (pairGiveUp),
+    // so no record is left with a px the column no longer has.
+    if (!w) { this.pairing = null; this.pairGiveUp(g, m, cx); return; }
     g.w = w;
     g.at = this.paneW;
     g.asked = now;
@@ -3939,6 +4068,407 @@ export default class Threads extends View {
     if (me) run("layout.resize", { id: me.pane, px: rec?.probe > 0 ? rec.probe : g.p });
     if (g.final && main) run("layout.resize", { id: main.pane, px: m });
     this.pairPatch((r) => { const rest = { ...r }; delete rest.probe; return rest; }, cx);
+  }
+  // ---- the row on weights while the Trajectory is open (TRD-75, part 4) -------------------
+  // In the Chat's pane. The row is the terminals, the Chat, the Trajectory and the Pinned
+  // column, in that order, whichever opened first (the column splits off the Trajectory). Each
+  // opening fits its pane at px as before; once it holds its width and the row is still, the
+  // new pane goes onto a weight found from measures (rowLandStep), the others held at px, and
+  // then the held panes onto weights at the same px a unit, k, in one tick (exact: a pane that
+  // turns from px to weight px / k leaves every width as it was). From then on each divider
+  // and the outer edge are drags between weight panes, which Herdr makes with their sum held.
+  // ROW_KEY keeps { k, S, ids, n }: px a unit, the terminals' weights, the panes, and their
+  // widths when last still (a pane's weight is its width over k).
+  rowPanes() {
+    if (this.pinnedPane || this.trajPane) return null;
+    const me = this.me();
+    const traj = this.trajPaneOpen();
+    if (!me || !traj) return null;
+    const pin = this.pinnedPaneOpen();
+    return { me, traj, pin, ids: { chat: me.pane, traj: traj.pane, ...(pin ? { pin: pin.pane } : {}) } };
+  }
+  // Each pane's Herdr px: the Chat's own width, the others' as they share it. null while one
+  // has not measured.
+  rowWidths(ids) {
+    const w = shared(WIDTH_KEY) ?? {};
+    const me = this.me()?.pane;
+    const out = {};
+    for (const id of Object.values(ids)) {
+      const x = id === me ? this.paneW : w[id];
+      if (!Number.isFinite(x)) return null;
+      out[id] = Math.round(x) + PANE_FRAME;
+    }
+    return out;
+  }
+  // The terminals' weights as last known, for a first guess: the row's, the pair's, this
+  // pane's own line, else about one terminal at Herdr's 0.5.
+  rowGuessS() {
+    const S = this.rowNow()?.S ?? shared(PAIR_KEY)?.[this.terminal]?.S ?? (this.weighLine ? this.weighLine.b / this.weighLine.a : null);
+    return S > 0 ? S : 0.5;
+  }
+  // Another Threads pane in the tab: its own px resizes would read as drags here. The row stays
+  // at px for as long as it is there.
+  rowCrowded(rp) {
+    const mine = new Set(Object.values(rp.ids));
+    return panes().some((p) => p.tab === rp.me.tab && p.mod === MOD && !mine.has(p.pane));
+  }
+  rowNow() {
+    return this.rowPending !== undefined ? this.rowPending : shared(ROW_KEY)?.[this.terminal] ?? null;
+  }
+  // Kept here at once, written after the drawing pass (poll runs in render).
+  rowSave(v, cx) {
+    this.rowPending = v;
+    const put = () => {
+      const map = { ...(shared(ROW_KEY) ?? {}) };
+      if (v) map[this.terminal] = v;
+      else delete map[this.terminal];
+      setShared(ROW_KEY, map);
+      this.rowPending = undefined;
+    };
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
+  }
+  // A pane of a landing closed: the landing given up (rowQuit), the new pane and any held pane
+  // back at px. The one place a close ends a landing: it runs before the closes are handled
+  // (trajGiveBack, autoPinned), so the widths they send are the last each pane gets.
+  rowLandGone(cx) {
+    const g = this.rowLand;
+    if (g && !this.pinnedPane && !this.trajPane && Object.values(g.ids).some((id) => !panes().some((p) => p.pane === id))) this.rowQuit(cx, "a pane closed during its landing");
+  }
+  // The Chat's width moved by a drag or a key (ev null): the widths it would go back to when a
+  // side pane closes (trajChatBack, pinChatBack) are the owner's choice no more, and dropped.
+  // The window (a scale) scales them.
+  chatMoved(ev, d) {
+    if (ev?.kind === "scale") {
+      for (const b of [this.trajChatBack, this.pinChatBack]) if (b) b.px = Math.round(b.px * ev.f);
+      if (this.chatHome) this.chatHome = Math.round(this.chatHome * ev.f);
+      return;
+    }
+    if (Math.abs(d) > 2) { this.trajChatBack = null; this.pinChatBack = null; this.chatHome = null; }
+  }
+  // The Chat's width as a side pane opens, for the width it goes back to: the last width a close
+  // sent it back to when it is within 3 px of that (the weigh loop and the fix stop within 2 px,
+  // and each cycle would otherwise add its miss to the next), else its width now.
+  chatAt(px) {
+    return this.chatHome && Math.abs(px - this.chatHome) <= 3 ? this.chatHome : px;
+  }
+  // Each fall back to px, with its reason, for the debug report (rowFalls). The column's
+  // opening, and the Trajectory's opening during a close, go to px on purpose and land on
+  // weights again: no reason, not counted.
+  rowFell(why) {
+    if (!why) return;
+    this.rowFallN = (this.rowFallN ?? 0) + 1;
+    this.rowFalls = [...(this.rowFalls ?? []).slice(-19), { at: Date.now(), why }];
+  }
+  rowPoll(cx) {
+    if (this.pinnedPane || this.trajPane || !this.terminal || !this.weightsOk) return;
+    this.rowCloseStep(cx);
+    this.rowFixStep(cx);
+    // A record its Chat's pane left when it closed: none of it holds (the pane open now has
+    // its own row to make).
+    const kept = this.rowNow();
+    if (kept?.k > 0 && !panes().some((p) => p.pane === kept.ids?.chat)) this.rowSave({ S: kept.S }, cx);
+    const rp = this.rowPanes();
+    if (!rp) { this.rowPlan = null; return; }
+    this.rowTick(cx);
+    if (rp.me.zoomed || rp.traj.zoomed || rp.pin?.zoomed || this.splitAsk || this.rowCloseDue || this.rowCloseFix) return;
+    const ent = this.rowNow();
+    // The other may take this pane for its own (me() by the terminal's map) and measure its own
+    // width as the Chat's: the record's widths, not a measure.
+    if (this.rowCrowded(rp)) { if (ent?.k > 0 || this.rowLand) this.rowPx(cx, "a second Threads pane", true); this.rowPlan = null; return; }
+    const n = this.rowWidths(rp.ids);
+    if (!n) return;
+    const now = Date.now();
+    const sig = Object.values(rp.ids).map((id) => n[id]).join(",");
+    if (this.rowSeen?.sig !== sig) this.rowSeen = { sig, at: now };
+    const still = now - this.rowSeen.at >= PAIR_STILL_MS;
+    if (this.rowLand) { this.rowLandStep(n, rp, cx); return; }
+    if (ent?.k > 0) {
+      if (!still) { this.rowWake(PAIR_STILL_MS - (now - this.rowSeen.at), cx); return; }
+      const from = ent.want ? this.rowCheck(ent, n, rp, cx) : ent;
+      if (from) this.rowTrack(from, n, rp, cx);
+      return;
+    }
+    const plan = this.rowPlan;
+    if (!plan) return;
+    if (now - plan.at > 10000 || !n[plan.probe]) { this.rowPlan = null; return; }
+    const placed = Math.abs(n[plan.probe] - plan.t) <= 2 && Object.entries(plan.held).every(([id, px]) => Math.abs((n[id] ?? -99) - px) <= 2);
+    if (placed && still) this.rowBegin(plan, n, rp, cx);
+  }
+  // The Chat may not draw when only the panes past it move: a measure once the row is still,
+  // so the record follows before the next drag rather than on the 1 s poll.
+  rowWake(ms, cx) {
+    if (this.rowWoken || !cx?.timer) return;
+    this.rowWoken = true;
+    cx.timer.after(Math.max(0, ms) + 10, (cx) => { this.rowWoken = false; this.rowPoll(cx); });
+  }
+  // Measures 50 ms apart while a landing, a plan or a close is under way.
+  rowTick(cx) {
+    if (this.rowTimer || !cx?.timer || !(this.rowLand || this.rowPlan || this.rowCloseDue || this.rowCloseFix)) return;
+    this.rowTimer = true;
+    cx.timer.after(50, (cx) => { this.rowTimer = false; this.rowPoll(cx); });
+  }
+  // The new pane's first weight: the line through the room the weights share (Rr) and the
+  // terminals' weights (S) puts it at t with S t / (Rr - t). The Trajectory's room probe
+  // measured Rr at ROOM_WEIGHT; the column's opening knew it from the row (rowPinFit).
+  rowBegin(plan, n, rp, cx) {
+    this.rowPlan = null;
+    const S = plan.S > 0 ? plan.S : this.rowGuessS();
+    const Rr = plan.Rr ?? (plan.seed ? plan.seed[1] * (1 + S / ROOM_WEIGHT) : null);
+    if (!(Rr > plan.t)) return;
+    const w = Number(((S * plan.t) / (Rr - plan.t)).toPrecision(5));
+    this.rowLand = { probe: plan.probe, t: plan.t, seed: plan.seed ?? null, S, held: plan.held, ids: rp.ids, tried: [], w, asked: Date.now(), at: n[plan.probe] };
+    // The probe's widths are not the owner's (shareWidth). After the drawing pass, or at once
+    // with no timer (tests), as rowSave.
+    const hold = () => {
+      if (plan.probe === rp.ids.traj) this.holdTrajWidth(4000);
+      else setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 4000 });
+    };
+    if (cx?.timer) cx.timer.after(0, hold);
+    else hold();
+    run("layout.resize", { id: plan.probe, weight: w });
+  }
+  // Each new width (or 400 ms with none) is a measure. The second weight comes from the line
+  // through the room probe's point and the first (the Trajectory), or from the first with the
+  // row's S (the column); the third from the last two. Within 2 px it has landed: the held
+  // panes go onto px / k, and once the row is still again it is saved. Three misses, a held
+  // pane moving, or the panes changing: back to px.
+  rowLandStep(n, rp, cx) {
+    const g = this.rowLand;
+    const now = Date.now();
+    const same = Object.keys(g.ids).length === Object.keys(rp.ids).length && Object.entries(g.ids).every(([r, id]) => rp.ids[r] === id);
+    if (!same || Object.entries(g.held).some(([id, px]) => Math.abs((n[id] ?? -99) - px) > 2)) { this.rowQuit(cx, same ? "a held pane moved during a landing" : "the panes changed during a landing"); return; }
+    const m = n[g.probe];
+    if (g.final) {
+      if (now - this.rowSeen.at < PAIR_STILL_MS && now - g.final.at < 1500) return;
+      if (Math.abs(m - g.t) > 2) { this.rowQuit(cx, "the landing moved after its last weight"); return; }
+      this.rowLand = null;
+      const ids = g.ids;
+      this.weightNow = null;
+      this.rowSave({ k: g.final.k, S: g.S, ids, n: Object.fromEntries(Object.values(ids).map((id) => [id, n[id]])) }, cx);
+      return;
+    }
+    if (Math.abs(m - g.at) <= 1 && now - g.asked < 400) return;
+    g.tried.push([g.w, m]);
+    if (Math.abs(m - g.t) <= 2) {
+      const k = m / g.w;
+      for (const [id, px] of Object.entries(g.held)) run("layout.resize", { id, weight: Number((px / k).toPrecision(5)) });
+      g.final = { k, at: now };
+      return;
+    }
+    if (g.tried.length >= 3) { this.rowQuit(cx, "three misses landing"); return; }
+    const line = g.seed && g.tried.length === 1 ? rowSolve(g.seed, g.tried[0])?.line : g.tried.length > 1 ? weightLine(...g.tried.slice(-2)) : null;
+    if (line) g.S = line.b / line.a;
+    const next = line ? weightFor(line, g.t) : weightNear({ a: 1, b: g.S }, g.tried[0], g.t);
+    if (!next) { this.rowQuit(cx, "no weight lands the pane"); return; }
+    g.w = next;
+    g.at = m;
+    g.asked = now;
+    run("layout.resize", { id: g.probe, weight: next });
+  }
+  // The landing given up: the new pane back at its px, and any held pane given a weight back
+  // at its px. The row stays at px for this opening.
+  rowQuit(cx, why) {
+    const g = this.rowLand;
+    this.rowLand = null;
+    if (!g) return;
+    this.rowFell(why);
+    if (panes().some((p) => p.pane === g.probe)) run("layout.resize", { id: g.probe, px: g.t });
+    if (g.final) for (const [id, px] of Object.entries(g.held)) if (panes().some((p) => p.pane === id)) run("layout.resize", { id, px });
+    this.rowSave({ S: g.S }, cx);
+  }
+  // The row on weights and still: what moved since (ui.js rowEvent). Drags keep k, and the
+  // terminals' S gives up what the row's panes took; the window scales k. What the measures
+  // cannot prove (mixed), the panes changing, or the terminals left with nothing: back to px
+  // where the panes are, which is exact, and no weight is worked out from this record again.
+  rowTrack(ent, n, rp, cx) {
+    const order = ["chat", "traj", "pin"].map((r) => rp.ids[r]).filter(Boolean);
+    const same = order.length === Object.keys(ent.ids).length && order.every((id) => Object.values(ent.ids).includes(id));
+    if (!same) { this.rowPx(cx, "the row's panes changed"); return; }
+    const { want, ...rec } = ent;
+    const was = order.map((id) => rec.n[id]);
+    const now = order.map((id) => n[id]);
+    const ev = rowEvent(was, now);
+    if (ev.kind === "same") { if (want) this.rowSave(rec, cx); return; }
+    if (ev.kind === "stale" || ev.kind === "mixed") { this.rowPx(cx, `a change the record cannot follow (${ev.kind})`); return; }
+    let { k, S } = rec;
+    if (ev.kind === "drag") S -= ev.d / k;
+    else k *= ev.f;
+    this.chatMoved(ev, now[0] - was[0]);
+    if (!(S > 0)) { this.rowPx(cx, "the terminals left with no weight"); return; }
+    this.rowSave({ ...rec, k, S, n: Object.fromEntries(order.map((id, i) => [id, now[i]])) }, cx);
+  }
+  // Weights a key worked out from the record (want: where each pane of the row should land),
+  // checked once the row is still: every pane within 2 px, or every pane the same factor off
+  // (the window resized after the key: tracked from the key's widths). Otherwise the record was
+  // wrong (a change under the rounding, ui.js rowEvent) and the row goes to px at those widths,
+  // which is exact. The record to track from, or null.
+  rowCheck(ent, n, rp, cx) {
+    const { want } = ent;
+    // A key that moved the Chat: the widths it would go back to are dropped (chatMoved).
+    this.chatMoved(null, (want.n[rp.ids.chat] ?? ent.n[rp.ids.chat]) - ent.n[rp.ids.chat]);
+    if (Object.entries(want.n).every(([id, px]) => Math.abs((n[id] ?? -99) - px) <= 2)) return ent;
+    const order = ["chat", "traj", "pin"].map((r) => rp.ids[r]).filter((id) => id && want.n[id] > 0);
+    if (rowEvent(order.map((id) => want.n[id]), order.map((id) => n[id])).kind === "scale") return { ...ent, want: undefined, n: { ...ent.n, ...want.n } };
+    this.rowPxAt(want.n, ent.S, cx, "a key's widths missed by more than 2 px");
+    return null;
+  }
+  // The row's panes to px at the given widths (those still open), and no record but the
+  // terminals' S, which only seeds the next landing's first weight.
+  rowPxAt(targets, S, cx, why) {
+    this.rowFell(why);
+    this.rowLand = null;
+    this.rowPlan = null;
+    for (const [id, px] of Object.entries(targets)) if (px > 0 && panes().some((p) => p.pane === id)) run("layout.resize", { id, px });
+    this.rowSave({ S: S ?? null }, cx);
+  }
+  // Every pane of the row back to px where it is: for w, a second Threads pane, a change it
+  // cannot follow, or the column's opening. The row's S is kept for the next landing.
+  rowPx(cx, why, kept = false) {
+    const ent = this.rowNow();
+    const g = this.rowLand;
+    this.rowLand = null;
+    this.rowPlan = null;
+    if (!(ent?.k > 0) && !g) return;
+    this.rowFell(why);
+    const ids = Object.values(ent?.ids ?? g.ids);
+    const w = shared(WIDTH_KEY) ?? {};
+    const me = this.me()?.pane;
+    for (const id of ids) {
+      if (!panes().some((p) => p.pane === id)) continue;
+      const x = id === me ? this.paneW : w[id];
+      const px = kept && ent?.n?.[id] > 0 ? ent.n[id] : Number.isFinite(x) ? Math.round(x) + PANE_FRAME : ent?.n?.[id];
+      if (px > 0) run("layout.resize", { id, px });
+    }
+    this.rowSave({ S: ent?.S ?? g?.S ?? null }, cx);
+  }
+  // A pane of the row closed with the row on weights: Herdr gives its weight to the pane before
+  // it. Once that pane measures wider (400 ms at most), the weights that keep each pane left at
+  // its target (ui.js closeWeights), and the record that follows: the row's, the pair's (the
+  // Chat and the column left), or the Chat's own weight line (the Chat alone).
+  rowClose(closed, targets, cx) {
+    const ent = this.rowNow();
+    const r = ent?.k > 0 ? closeWeights({ k: ent.k, S: ent.S, n: ent.n, closed, targets }) : null;
+    if (!r) return false;
+    const receiver = closed === ent.ids.pin ? ent.ids.traj : ent.ids.chat;
+    this.rowLand = null;
+    this.rowPlan = null;
+    this.rowCloseDue = { r, ent, closed, targets, receiver, n0: ent.n[receiver], until: Date.now() + ROW_CLOSE_WAIT_MS };
+    this.weighAt = null;
+    this.rowTick(cx);
+    return true;
+  }
+  // A close's weights still under way. Its targets (the panes it left, the Chat at its width
+  // from before the Trajectory when that was the pane closed), or null.
+  rowClosing() {
+    const c = this.rowCloseDue ?? this.rowCloseFix;
+    return c ? { targets: c.targets, S: c.ent?.S ?? c.S ?? null } : null;
+  }
+  // A second side pane closed before the first close's weights are done (two presses of
+  // Herdr's close key do this): those weights are for a pane that is gone. The Chat, alone now,
+  // goes to px (px: its width from before the side panes) and onto a weight from there
+  // (sizeTo), as before the row was on weights.
+  rowCloseBoth(px, cx) {
+    const c = this.rowClosing();
+    this.rowCloseDue = null;
+    this.rowCloseFix = null;
+    this.rowLand = null;
+    this.rowPlan = null;
+    this.trajChatBack = null;
+    this.weighAt = null;
+    this.rowSave({ S: c?.S ?? null }, cx);
+    if (px > 0 && this.me()) this.sizeTo(px);
+  }
+  // A side pane opening while a close's weights are under way: the panes left go to px at
+  // their targets, so the opening starts from px and ends all px or all on weights. The Chat's
+  // target, or null. why: the reason when the row stays at px (the column's opening); the
+  // Trajectory's lands the row on weights again, so none.
+  rowCancelClose(cx, why = null) {
+    const c = this.rowClosing();
+    if (!c) return null;
+    this.rowCloseDue = null;
+    this.rowCloseFix = null;
+    this.rowPxAt(c.targets, c.S, cx, why);
+    return c.targets[this.me()?.pane] ?? null;
+  }
+  rowCloseStep(cx) {
+    const c = this.rowCloseDue;
+    if (!c) return;
+    const me = this.me();
+    const x = c.receiver === me?.pane ? this.paneW : shared(WIDTH_KEY)?.[c.receiver];
+    const grew = Number.isFinite(x) && Math.round(x) + PANE_FRAME > c.n0 + 2;
+    if (!grew && Date.now() < c.until) { this.rowTick(cx); return; }
+    this.rowCloseDue = null;
+    const { ent, r, closed, targets } = c;
+    if (!grew) { this.rowSave({ S: ent.S }, cx); return; }
+    for (const [id, w] of Object.entries(r.w)) if (panes().some((p) => p.pane === id)) run("layout.resize", { id, weight: w });
+    const ids = Object.fromEntries(Object.entries(ent.ids).filter(([, id]) => id !== closed));
+    this.rowSave({ S: ent.S }, cx);
+    if (ids.traj || ids.pin) {
+      this.rowCloseFix = { ids, w: r.w, S: ent.S, targets, asked: Date.now(), seen: null };
+      this.rowTick(cx);
+      return;
+    }
+    // The Chat alone: on its weight with the terminals, R the room they share (with the closed
+    // divider's SPLIT_GAP, which Herdr gives back), and the weigh loop's correction from there.
+    // Without the gap every close landed the Chat about 2 px wide, within the loop's 2 px, and
+    // the next opening kept that as its width: 2 px more each cycle.
+    if (!me) return;
+    const t = targets[ids.chat];
+    const R = r.k * ent.S + t + SPLIT_GAP;
+    this.weighLine = { a: 1 / R, b: ent.S / R };
+    this.weighing = { pane: me.pane, n0: t, tried: [], w: Number(((ent.S * t) / (R - t)).toPrecision(5)) };
+    this.askWeight();
+  }
+  // After a close's weights: Herdr gives the room the closed pane's divider took back to the
+  // weight panes too, so each pane left lands a few px wide (about 8 on the rig). Once they are
+  // still, the room they share measured (each pane is k w px) and the weights that put them at
+  // their targets with the terminals taking the rest, in one ask; then the record: the row's
+  // (the Chat and the Trajectory left) or the pair's (the Chat and the column), which tracks
+  // them from there.
+  rowFixStep(cx) {
+    const f = this.rowCloseFix;
+    if (!f) return;
+    const now = Date.now();
+    const ids = Object.values(f.ids);
+    const n = ids.every((id) => panes().some((p) => p.pane === id)) ? this.rowWidths(f.ids) : null;
+    if (!n) { this.rowCloseFix = null; return; }
+    const sig = ids.map((id) => n[id]).join(",");
+    if (f.seen?.sig !== sig) f.seen = { sig, at: now };
+    if ((now - f.seen.at < 150 || now - f.asked < 150) && now - f.asked < 1500) { this.rowTick(cx); return; }
+    this.rowCloseFix = null;
+    const off = ids.some((id) => Math.abs(n[id] - f.targets[id]) > 2);
+    // The fix asked unless every pane is within 1 px: a 2 px miss kept would be the next close's
+    // width, and each cycle would add to it.
+    const near = ids.every((id) => Math.abs(n[id] - f.targets[id]) <= 1);
+    // The fix's weights asked: where they landed is the check. Off by more than 2 px, the
+    // record they came from was wrong: px at the targets, which is exact, and no record.
+    if (f.check) {
+      if (off) { this.rowPxAt(f.targets, f.S, cx, "a close's fix missed by more than 2 px"); return; }
+      this.rowFixSave(f, f.check.k, n, cx);
+      return;
+    }
+    const sw = ids.reduce((s, id) => s + f.w[id], 0);
+    const R = (ids.reduce((s, id) => s + n[id], 0) / sw) * (f.S + sw);
+    const T = ids.reduce((s, id) => s + f.targets[id], 0);
+    const k = (R - T) / f.S;
+    // No room left for the terminals: the record cannot be right. px at the targets.
+    if (!(k > 0)) { this.rowPxAt(f.targets, f.S, cx, "a close left the terminals no room"); return; }
+    if (near) { this.rowFixSave(f, k, n, cx); return; }
+    for (const id of ids) run("layout.resize", { id, weight: Number((f.targets[id] / k).toPrecision(5)) });
+    this.rowCloseFix = { ...f, check: { k }, asked: now, seen: null };
+    this.rowTick(cx);
+  }
+  // The record a close leaves once its panes hold their widths: the row's (the Chat and the
+  // Trajectory) or the pair's (the Chat and the column). After the drawing pass, or at once
+  // with no timer (tests).
+  rowFixSave(f, k, n, cx) {
+    const at = Object.fromEntries(Object.values(f.ids).map((id) => [id, n[id]]));
+    if (f.ids.traj) { this.rowSave({ k, S: f.S, ids: f.ids, n: at }, cx); return; }
+    const v = { k, m: at[f.ids.chat], p: at[f.ids.pin], S: f.S };
+    const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: v });
+    if (cx?.timer) cx.timer.after(0, put);
+    else put();
   }
   // The pair on weights and both widths still: what moved since, and k to match (ui.js
   // pairEvent). More than one change between measures: the pair is made again from px.
@@ -3982,9 +4512,15 @@ export default class Threads extends View {
     this.weighing = { pane: me.pane, n0: Math.round(pair.m), tried: [], w: wc };
     this.askWeight();
   }
-  // This terminal's record changed by fn, after the drawing pass (poll runs in render).
+  // This terminal's record changed by fn, after the drawing pass (poll runs in render). Not
+  // once this column's pane is gone: its close may have deleted the record in the same tick,
+  // and a kept px left behind would be the next column's.
   pairPatch(fn, cx) {
-    const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: fn(shared(PAIR_KEY)?.[this.terminal] ?? {}) });
+    const mine = this.me()?.pane;
+    const put = () => {
+      if (!mine || !panes().some((p) => p.pane === mine)) return;
+      setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: fn(shared(PAIR_KEY)?.[this.terminal] ?? {}) });
+    };
     if (cx?.timer) cx.timer.after(0, put);
     else put();
   }
@@ -4015,9 +4551,19 @@ export default class Threads extends View {
     if (this.pinColOpen && !open && !this.splitAsk) {
       this.pinColClosed = true;
       this.weighAt = Date.now() + 500;
-      // The pair was on weights: Herdr gives the column's weight to the Chat (pairClose).
+      // The pair was on weights: Herdr gives the column's weight to the Chat (pairClose). With
+      // the Trajectory open, to the Trajectory before it (rowClose).
       const pair = shared(PAIR_KEY)?.[this.terminal];
-      if (pair?.k > 0 && pair.m > 0) { this.weighAt = null; this.pairClose(pair); }
+      const ent = this.rowNow();
+      const closing = this.rowClosing();
+      const back = this.pinChatBack;
+      this.pinChatBack = null;
+      if (closing) this.rowCloseBoth(closing.targets[this.me()?.pane], cx);
+      else if (ent?.k > 0 && ent.ids?.pin) {
+        const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.pin).map((id) => [id, ent.n[id]]));
+        if (back && ent.ids.chat) targets[ent.ids.chat] = this.chatHome = back.px;
+        if (this.rowClose(ent.ids.pin, targets, cx)) this.weighAt = null;
+      } else if (pair?.k > 0 && pair.m > 0) { this.weighAt = null; this.pairClose(pair); }
       if (pair) cx?.timer?.after(0, () => { const map = { ...(shared(PAIR_KEY) ?? {}) }; delete map[this.terminal]; setShared(PAIR_KEY, map); });
     }
     this.pinColOpen = open;
@@ -6911,9 +7457,11 @@ export default class Threads extends View {
   fitToReading(cx) {
     const main = this.pinnedPane ? this.mainPane() : this.me();
     if (!main) return false;
+    // w sets the Chat's px: the row on weights goes to px for the Trajectory's life.
+    this.rowPx(cx, "w");
     const px = this.readingPx();
     if (this.pinnedPane) run("layout.resize", { id: main.pane, px });
-    else { this.trajChatBack = null; this.sizeTo(px); }
+    else { this.trajChatBack = null; this.pinChatBack = null; this.chatHome = null; this.sizeTo(px); }
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
     if (col) {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
@@ -10665,8 +11213,11 @@ export default class Threads extends View {
     // The kept width, or TRAJ_COL, held to what the Chat can give (its 240 px floor). The
     // Chat at that px first, and both stay at px while the Trajectory is open (pinPx). An open
     // Pinned column goes back to px too: the Trajectory's room probe needs both at px.
+    // A close's weights under way: the panes it left to px at their targets first, the Chat
+    // at its own.
+    const back = this.rowCancelClose(null);
     this.pairPx(5000);
-    const chat = this.pinPx(me);
+    const chat = this.pinPx(me, back);
     const px = trajColumn(chat, this.keptTrajWidth() ?? TRAJ_COL);
     this.splitAsk = { before: panes().map((p) => p.pane), px, chat, back: null, map: TRAJ_MAP_KEY, until: Date.now() + 4000 };
     // The widths the new pane passes through on its way (settleTraj) are not the owner's.
@@ -10954,6 +11505,8 @@ export default class Threads extends View {
   // detail (under the ledger, or at its right from 900 px), the key hints and the status line.
   trajFrame(cx) {
     const t = theme();
+    // The column beside the Trajectory's pane, kept for its close (shareWidth).
+    if (this.trajPane) { const col = this.pinnedPaneOpen(); if (col) this.colId = col.pane; }
     const w = this.pw();
     const cols = ledgerCols(w);
     const L = this.ledger();

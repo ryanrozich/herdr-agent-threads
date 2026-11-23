@@ -141,7 +141,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["Tab", "Shift Tab"], "Next or previous control, then ↵ or Space to press it"], [["Esc", ","], "Close it"],
     ]],
     ["View", [
-      [["w"], "Fit the pane to its column"], [["-", "="], "Pinned column or Trajectory pane narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit the pane to its column"], [["-", "="], "The pane to the right narrower or wider: the Trajectory if open, else the Pinned column"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }
@@ -2753,13 +2753,16 @@ export function pinRowShape({ prompt, reply, width }) {
 // From the column's width c and Threads' m: the two new widths, or null when there is no
 // room (the column 200 to max px, 640 for the Pinned column, Threads at least PIN_MAIN_MIN).
 // The Trajectory pane steps the same way with no upper limit of its own (TRAJ_MAX): it has a
-// layout from 900 px, past the Pinned column's 640.
+// layout from 900 px, past the Pinned column's 640. mainMin: the other pane's floor, Threads'
+// PIN_MAIN_MIN, or TRAJ_MIN when the column steps against the Trajectory beside it.
 export const PIN_STEP = 40;
 export const TRAJ_MAX = Infinity;
-export function columnResize(c, m, d, max = 640) {
+export function columnResize(c, m, d, max = 640, mainMin = PIN_MAIN_MIN) {
   if (!(c > 0) || !(m > 0)) return null;
   let dd = Math.max(200, Math.min(max, Math.round(c + d))) - Math.round(c);
-  if (Math.round(m) - dd < PIN_MAIN_MIN) dd = Math.round(m) - PIN_MAIN_MIN;
+  if (Math.round(m) - dd < mainMin) dd = Math.round(m) - mainMin;
+  // The other's floor never takes this one under its own.
+  if (Math.round(c) + dd < 200) dd = 200 - Math.round(c);
   if (d > 0 ? dd <= 0 : dd >= 0) return null;
   return { column: Math.round(c) + dd, main: Math.round(m) - dd };
 }
@@ -2828,6 +2831,60 @@ export function pairEvent(was, now) {
   if (Math.abs(now.m / was.m - now.p / was.p) <= 0.01) return "scale";
   return "stale";
 }
+// ---- the row on weights with the Trajectory open (TRD-75, part 4) ----
+// With the Trajectory open, the row is the terminals, the Chat, the Trajectory and the Pinned
+// column, in that order (the column splits off the Trajectory when it is open). The Chat
+// drives it. All widths are Herdr px.
+// What moved between two measures of the row's panes, left to right (the Chat first), and
+// only what the measures prove (the mod cannot read a weight):
+// - "same": nothing past a px of rounding;
+// - "drag", d 0: the panes' widths add up as before, within 2 px: any mix of drags between the
+//   row's own panes, which Herdr makes with each pair's weights summed as before, so k and
+//   the terminals' weights hold;
+// - "scale", f: every pane by one factor, each within 1.5 px: the window (k by f);
+// - "drag", d: the Chat alone moved: the outer edge, the terminals taking what it gave;
+// - "mixed": anything else (the window and a drag together, the edge and a divider), which
+//   the record cannot follow: the row goes back to px where it is (main.js rowTrack);
+// - "stale" when the lists differ.
+// A change under the rounding can read as the wrong one of these (a 2 px window change as the
+// edge, three drags as the window); a key or close's weights are checked against where they
+// should land, and a miss puts the row at px there (main.js rowCheck).
+export function rowEvent(was, now) {
+  if (was.length !== now.length) return { kind: "stale" };
+  const d = now.map((x, i) => x - was[i]);
+  const moved = d.map((x) => Math.abs(x) > 1);
+  const count = moved.filter(Boolean).length;
+  if (!count) return { kind: "same" };
+  const sum = d.reduce((x, y) => x + y, 0);
+  if (Math.abs(sum) <= 2) return { kind: "drag", d: 0 };
+  const f = now.reduce((x, y) => x + y, 0) / was.reduce((x, y) => x + y, 0);
+  if (now.every((x, i) => Math.abs(x - was[i] * f) <= 1.5)) return { kind: "scale", f };
+  if (count === 1 && moved[0]) return { kind: "drag", d: sum };
+  return { kind: "mixed" };
+}
+// A pane of the row closed, with the row on weights: Herdr gives its weight to the pane before
+// it, which grows by the closed pane's width while the rest stay. The weights that put each
+// pane left at its target width (targets: id to px) with the terminals taking the closed
+// pane's room and whatever the others give up: the terminals then hold k S + n_closed +
+// the sum of (n - target), so a unit of weight is that over S. n: id to px before the close
+// (the closed pane's among them). null without the terminals' weights.
+export function closeWeights({ k, S, n, closed, targets }) {
+  if (!(k > 0) || !(S > 0) || !(n[closed] > 0)) return null;
+  let room = k * S + n[closed];
+  for (const [id, t] of Object.entries(targets)) room += (n[id] ?? t) - t;
+  if (!(room > 0)) return null;
+  const k2 = room / S;
+  return { k: k2, w: Object.fromEntries(Object.entries(targets).map(([id, t]) => [id, w5(t / k2)])) };
+}
+// The room the weight panes share (Rr) and the terminals' weights (S) from two measures of one
+// pane at two weights, with the panes at px the same at both: the line 1/px = a + b/w (weightLine).
+// The room probe gives the first, at ROOM_WEIGHT, so it is nearly Rr; a weight near the pane's
+// width gives the second, so S comes out to about 0.3% from whole px. null when they make no line.
+export function rowSolve(p1, p2) {
+  const line = weightLine(p1, p2);
+  return line ? { Rr: 1 / line.a, S: line.b / line.a, line } : null;
+}
+
 // The column closed with the pair on weights: Herdr gives a closed pane's weight to the pane
 // before it, so the Chat takes the column's room. The weight that keeps it at m beside the
 // other weight panes (weights S): the row was k px a unit over S + wc + wp, so those panes and
