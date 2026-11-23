@@ -39,7 +39,7 @@ function v1() {
   msg("msg_000001", { role: "user" }, 0);
   part("msg_000001", { type: "text", text: "Count the widgets" });
   assistant("msg_000002", "msg_000001", 100, 2900, { finish: "tool-calls" });
-  part("msg_000002", { type: "tool", tool: "bash", callID: "call_000001", state: { status: "completed", input: { command: "wc -l widgets.txt" }, output: "widgets: 3", title: "wc", time: { start: T0 + 100, end: T0 + 2100 } } });
+  part("msg_000002", { type: "tool", tool: "bash", callID: "call_000001", state: { status: "completed", input: { command: "wc -l widgets.txt" }, output: "widgets: 3", metadata: { exit: 0 }, title: "wc", time: { start: T0 + 100, end: T0 + 2100 } } });
   part("msg_000002", { type: "tool", tool: "read", callID: "call_000002", state: { status: "error", input: { filePath: "gadget.txt" }, error: "File not found: gadget.txt", time: { start: T0 + 2200, end: T0 + 2250 } } });
   assistant("msg_000003", "msg_000001", 3000, 3500, { finish: "stop" });
   part("msg_000003", { type: "text", text: "Three widgets, and no gadget file." });
@@ -75,7 +75,7 @@ function v2() {
   });
   row("msg_000001", "user", 0, { text: "Count the widgets", files: [], agents: [] });
   assistant("msg_000002", 100, 2900, [
-    call("call_000001", "shell", { command: "wc -l widgets.txt" }, { status: "completed", content: [text("widgets: 3")] }, 100, 2100),
+    call("call_000001", "shell", { command: "wc -l widgets.txt" }, { status: "completed", content: [text("widgets: 3")], metadata: { exit: 0 } }, 100, 2100),
     call("call_000002", "read", { filePath: "gadget.txt" }, { status: "error", error: { type: "unknown", message: "File not found: gadget.txt" } }, 2200, 2250),
   ], { finish: "tool-calls" });
   assistant("msg_000003", 3000, 3500, [text("Three widgets, and no gadget file.")], { finish: "stop" });
@@ -137,6 +137,112 @@ test("opencode: a result whose call has no end time still says whether it failed
   expect(got.call_000004.r.content).toBe("no such widget");
   expect(got.call_000004.r.extra).toEqual({ tool_result_is_error: true });
 });
+
+// One finished turn whose reply makes these calls, in a 1.x or a 2.x database. A call:
+// { id, tool, status, input, output, error, metadata, start, end }; start and end are written
+// as given (a number is milliseconds after T0), and a field left undefined is not written.
+// 1.x keeps a call as a part (state.output, state.error as text, state.time); 2.x as an item
+// of the reply's content (state.content, state.error.message, the item's time).
+function oneTurn(version, calls) {
+  const dir = mkdtempSync(join(tmpdir(), `threads-ocatif-${version[0]}-`));
+  const path = join(dir, "opencode.db");
+  const db = new Database(path);
+  const ms = (t) => (typeof t === "number" ? T0 + t : t);
+  const def = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+  if (version === "1.x") {
+    db.run("create table session (id text primary key, parent_id text, directory text, title text, time_created integer, time_updated integer, time_archived integer)");
+    db.run("create table message (id text primary key, session_id text, time_created integer, data text)");
+    db.run("create table part (id text primary key, message_id text, session_id text, data text)");
+    db.run("insert into session values (?, null, '/home/dev/plinth', 'Widget count', ?, ?, null)", [SID, T0, T0 + 9000]);
+    let n = 0;
+    const msg = (id, data, t) => db.run("insert into message values (?, ?, ?, ?)", [id, SID, T0 + t, JSON.stringify(data)]);
+    const part = (mid, data) => db.run("insert into part values (?, ?, ?, ?)", [`prt_${String(++n).padStart(6, "0")}`, mid, SID, JSON.stringify(data)]);
+    msg("msg_000001", { role: "user" }, 0);
+    part("msg_000001", { type: "text", text: "Count the widgets" });
+    msg("msg_000002", { role: "assistant", parentID: "msg_000001", agent: "build", modelID: "glm-5.3-flash-free", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, total: 2, cache: { read: 0, write: 0 } }, time: { created: T0 + 100, completed: T0 + 9000 } }, 100);
+    for (const c of calls) part("msg_000002", { type: "tool", tool: c.tool, callID: c.id, state: def({ status: c.status, input: c.input ?? {}, output: c.output, error: c.error, metadata: c.metadata, time: def({ start: ms(c.start), end: ms(c.end) }) }) });
+    part("msg_000002", { type: "text", text: "Done." });
+  } else {
+    db.run(`create table session_v2 (id text primary key, project_id text, parent_id text, directory text, title text,
+      time_created integer, time_updated integer, time_archived integer, time_busy integer, time_idle integer)`);
+    db.run("create table session_message (id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text)");
+    db.run("create table session_part (message_id text, session_id text, ordinal integer, type text, data text)");
+    db.run("insert into session_v2 values (?, 'prj', null, '/home/dev/plinth', 'Widget count', ?, ?, null, ?, null)", [SID, T0, T0 + 9000, T0]);
+    const row = (id, type, seq, t, data) => db.run("insert into session_message values (?, ?, ?, ?, ?, ?, ?)", [id, SID, type, seq, T0 + t, T0 + t, JSON.stringify({ time: { created: T0 + t }, ...data })]);
+    row("msg_000001", "user", 1, 0, { text: "Count the widgets", files: [], agents: [] });
+    const item = (c) => ({ type: "tool", id: c.id, name: c.tool,
+      state: def({ status: c.status, input: c.input ?? {}, content: c.output === undefined ? undefined : [{ type: "text", text: c.output }], error: c.error === undefined ? undefined : { type: "unknown", message: c.error }, metadata: c.metadata }),
+      time: def({ created: ms(c.start), completed: ms(c.end) }) });
+    row("msg_000002", "assistant", 2, 100, {
+      time: { created: T0 + 100, completed: T0 + 9000 }, agent: "build", model: { id: "glm-5.3-flash-free", providerID: "opencode", variant: "default" },
+      content: [...calls.map(item), { type: "text", text: "Done." }], finish: "stop", cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    });
+    row("msg_000003", "idle", 3, 9001, { outcome: "succeeded" });
+  }
+  db.close();
+  return resultsOf(exportOf(`${path}#${SID}`, "opencode"));
+}
+
+// The shell tool is "bash" in 1.x and "shell" in 2.x. Either way a command that exits non-zero
+// is a completed call with its exit code in state.metadata.exit; status error means the tool
+// itself failed to run.
+for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
+  test(`opencode ${version}: a shell call that exits non-zero is failed, exit 0 is not, and one with no exit code recorded says neither`, () => {
+    const run = (id, metadata, output) => ({ id, tool: shell, status: "completed", input: { command: "cat gadget.txt" }, output, metadata, start: 200, end: 400 });
+    const got = oneTurn(version, [
+      run("call_000011", { exit: 0, truncated: false }, "gadget"),
+      run("call_000012", { exit: 1, truncated: false }, "No such file"),
+      run("call_000013", { truncated: false }, "stopped"),
+      run("call_000014", { exit: null, truncated: false }, "timed out"),
+      run("call_000015", { exit: 7 }, ""),
+      { id: "call_000016", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", start: 500, end: 600 },
+      { id: "call_000017", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 2 }, start: 500, end: 600 },
+    ]);
+    expect(got.call_000011.r.content).toBe("gadget");
+    expect(got.call_000011.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: false });
+    expect(got.call_000012.r.content).toBe("No such file");
+    expect(got.call_000012.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: true });
+    // No exit code: unknown, so the flag is left out, and the call still has its result.
+    expect(got.call_000013.r.content).toBe("stopped");
+    expect(got.call_000013.r.extra).toEqual({ result_ts: at(400) });
+    expect(got.call_000014.r.extra).toEqual({ result_ts: at(400) });
+    expect(got.call_000015.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: true });
+    // A tool with no exit code at all is not failed; one that records an exit code is read by it.
+    expect(got.call_000016.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
+  });
+
+  test(`opencode ${version}: an end time of 0, one that is not a number, or one before the call's start gives no result_ts`, () => {
+    const call = (id, start, end) => ({ id, tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", start, end });
+    const got = oneTurn(version, [
+      call("call_000021", 200, 300),
+      call("call_000022", 200, -T0),
+      call("call_000023", 200, "soon"),
+      call("call_000024", 200, 150),
+      call("call_000025", undefined, 300),
+      call("call_000026", "early", 300),
+    ]);
+    expect(got.call_000021.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: false });
+    // The outcome stays; only the time is left out, and the call is not marked as having no result.
+    for (const id of ["call_000022", "call_000023", "call_000024"]) {
+      expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "widgets", { tool_result_is_error: false }]);
+    }
+    // With no start, or a start that is not a number, an end of its own still counts.
+    expect(got.call_000025.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: false });
+    expect(got.call_000026.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: false });
+  });
+
+  test(`opencode ${version}: a completed call keeps only its output, never error text, and a failed one keeps its error`, () => {
+    const got = oneTurn(version, [
+      { id: "call_000031", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, error: "stray error text", start: 200, end: 300 },
+      { id: "call_000032", tool: "read", status: "error", input: { filePath: "gadget.txt" }, error: "File not found: gadget.txt", start: 200, end: 300 },
+    ]);
+    expect(got.call_000031.r.content).toBe("");
+    expect(got.call_000031.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: false });
+    expect(got.call_000032.r.content).toBe("File not found: gadget.txt");
+    expect(got.call_000032.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: true });
+  });
+}
 
 // The other agents: each result's outcome and time in the command line's export are the
 // reader's, from its result events (Claude Code, Codex), or left out where the reader has none
