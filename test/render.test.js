@@ -18110,6 +18110,24 @@ test("the column closed and opened again within 350 ms with the Trajectory open:
   }
 }, 30000);
 
+test("the column closed and opened again within 350 ms with the Trajectory open, after a drag of the Chat: the Chat at the width the close was taking it to, its dragged width", async () => {
+  for (const gap of [50, 200, 350]) {
+    const t = await threeOpen("traj");
+    try {
+      t.row.drag("p1", 50);
+      t.run(1500);
+      const was = t.row.widths();
+      t.close("p3");
+      t.inst.p2.x.autoPinned?.(t.cx);
+      t.run(gap, 50);
+      await t.openCol();
+      t.run(6000);
+      const now = t.row.widths();
+      expect([gap, Math.abs(now.p2 - was.p2) <= 1, now.p2, was.p2]).toEqual([gap, true, now.p2, was.p2]);
+    } finally { t.restore(); }
+  }
+}, 30000);
+
 test("a row record a closed Chat pane left behind does not stop the next Trajectory opening from landing on weights", async () => {
   const t = await threeRow(722);
   try {
@@ -18436,6 +18454,80 @@ test("a close's fix that lands a pane 2 px off asks once more", async () => {
 
 // Ten cycles do not add up: the Chat ends each within 2 px of where the first left it, and the
 // first within 2 px of its width before the side panes (722).
+test("the column closed with the Trajectory open, after the Trajectory closed and opened again beside it: the Chat keeps its width beside the Trajectory, since what it gave the column's opening came back on the first close", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openTraj(); t.run(4000);
+    await t.openCol(); t.run(4000);
+    // The column's opening took 3 px from the Chat so the terminal keeps 200 px.
+    expect(t.row.widths().p2).toBe(719);
+    t.close("p4"); t.run(3000);
+    expect(t.row.widths().p2).toBe(722);
+    await t.openTraj(); t.run(4000);
+    const before = t.row.widths();
+    t.close("p3"); t.inst.p2.x.autoPinned?.(t.cx); t.run(4000);
+    const w = t.row.widths();
+    expect([Math.abs(w.p2 - before.p2) <= 1, w.p4]).toEqual([true, before.p4]);
+  } finally { t.restore(); }
+}, 30000);
+test("the Chat dragged 100 px with the Trajectory open: the Trajectory's close leaves the Chat at its dragged width, not its width from before the Trajectory", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openTraj(); t.run(4000);
+    t.row.drag("p2", -100); t.run(1500);
+    const dragged = t.row.widths().p2;
+    expect(dragged).toBeLessThan(640);
+    t.close("p4"); t.run(4000);
+    expect(Math.abs(t.row.widths().p2 - dragged) <= 2).toBe(true);
+  } finally { t.restore(); }
+}, 30000);
+test("the window resized with the Trajectory open: the Trajectory's close sends the Chat its width from before the Trajectory, scaled by the window", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    const was = t.row.widths().p2;
+    await t.openTraj(); t.run(4000);
+    const w0 = t.row.widths();
+    t.row.total = Math.round(t.row.total * 1.3); t.run(1500);
+    const w1 = t.row.widths();
+    const f = w1.p2 / w0.p2;
+    expect(f).toBeGreaterThan(1.2);
+    t.close("p4"); t.run(4000);
+    expect([Math.abs(t.row.widths().p2 - Math.round(was * f)) <= 3, t.row.widths().p2, Math.round(was * f)]).toEqual([true, t.row.widths().p2, Math.round(was * f)]);
+  } finally { t.restore(); }
+}, 30000);
+test("= in the Chat with the Trajectory open: the Trajectory's close leaves the Chat at the width the key gave it, not its width from before the Trajectory", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openTraj(); t.run(4000);
+    const w0 = t.row.widths();
+    rowKey(t, "p2", "=");
+    const keyed = t.row.widths().p2;
+    expect(keyed).toBeLessThan(w0.p2 - 20);
+    t.close("p4"); t.run(4000);
+    expect([Math.abs(t.row.widths().p2 - keyed) <= 2, t.row.widths().p2, keyed]).toEqual([true, t.row.widths().p2, keyed]);
+  } finally { t.restore(); }
+}, 30000);
+test("= in the Chat, then the window resized before the row is still: the Trajectory's close leaves the Chat at the key's width scaled by the window, not its width from before the Trajectory", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openTraj(); t.run(4000);
+    const was = t.row.widths();
+    t.inst.p2.x.key(keyEv("="), t.inst.p2.c);
+    t.step(100);
+    t.row.total = Math.round(t.row.total * 1.2);
+    t.run(3000);
+    const now = t.row.widths();
+    expect(t.v.rowFallN ?? 0).toBe(0);
+    t.close("p4"); t.run(4000);
+    const f = (now.p2 + now.p4) / (was.p2 + was.p4);
+    expect([Math.abs(t.row.widths().p2 - now.p2) <= 2, t.row.widths().p2, now.p2, Math.round(722 * f)]).toEqual([true, t.row.widths().p2, now.p2, Math.round(722 * f)]);
+  } finally { t.restore(); }
+}, 30000);
 const tenCycles = async (opens, closes, together = false, opts = {}) => {
   const t = await threeRow(722);
   try {
