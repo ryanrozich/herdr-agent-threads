@@ -221,10 +221,12 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
       call("call_000024", 200, 150),
       call("call_000025", undefined, 300),
       call("call_000026", "early", 300),
+      call("call_000027", undefined, -T0),
     ]);
     expect(got.call_000021.r.extra).toEqual({ result_ts: at(300), tool_result_is_error: false });
     // The outcome stays; only the time is left out, and the call is not marked as having no result.
-    for (const id of ["call_000022", "call_000023", "call_000024"]) {
+    // An end of 0 is left out even with no start to compare it with (call_000027).
+    for (const id of ["call_000022", "call_000023", "call_000024", "call_000027"]) {
       expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "widgets", { tool_result_is_error: false }]);
     }
     // With no start, or a start that is not a number, an end of its own still counts.
