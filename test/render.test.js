@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -15435,6 +15435,31 @@ test("the Trajectory in the Chat's own pane below 200 px keeps its way back: the
   v.trajPane = true;
   c = frame(v, cx);
   expect([hasId(c, "th-traj-chat"), hasId(c, "th-settings"), hasId(c, "th-traj-icon")]).toEqual([false, false, true]);
+});
+
+test("the compact heading in the Chat's own pane keeps both buttons inside the pane: the list icon gives way whenever it and the buttons do not fit", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  // What the heading's parts take across, inside the frame: its padding each side, the list icon
+  // (14 px) when drawn, the settings and Chat buttons (24 px each), and a 2 px gap between parts
+  // (the icon is followed by a spacer, so drawn it adds two gaps).
+  const need = (c) => 2 * COMPACT_PAD_T + (hasId(c, "th-traj-icon") ? 14 + 2 * 2 : 0) + 24 + 2 + 24;
+  // Herdr px 64, 70 and 77 (the width inside the frame 2 px less): the line form, both buttons
+  // inside the pane, so no icon.
+  for (const px of [64, 70, 77]) {
+    v.width = px - 2;
+    v.paneW = px - 2;
+    const c = frame(v, cx);
+    expect([px, v.trajPx(), hasId(c, "th-settings"), hasId(c, "th-traj-chat")]).toEqual([px, px, true, true]);
+    expect([px, need(c) <= px - 2]).toEqual([px, true]);
+  }
+  // From 78 px the icon fits beside them and is drawn.
+  for (const px of [78, 100, 198]) {
+    v.width = px - 2;
+    v.paneW = px - 2;
+    const c = frame(v, cx);
+    expect([px, hasId(c, "th-traj-icon"), need(c) <= px - 2]).toEqual([px, true, true]);
+  }
 });
 
 test("what the compact rows draw: every row box 24 px, a turn's band over its activity line, the selected step raised, and a step's status in its tooltip", async () => {
