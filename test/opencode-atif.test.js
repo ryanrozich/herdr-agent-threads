@@ -197,6 +197,8 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
       run("call_000015", { exit: 7 }, ""),
       { id: "call_000016", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", start: 500, end: 600 },
       { id: "call_000017", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 2 }, start: 500, end: 600 },
+      run("call_000018", { exit: -1 }, "killed"),
+      { id: "call_000019", tool: "read", status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
     ]);
     expect(got.call_000011.r.content).toBe("gadget");
     expect(got.call_000011.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: false });
@@ -207,9 +209,21 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
     expect(got.call_000013.r.extra).toEqual({ result_ts: at(400) });
     expect(got.call_000014.r.extra).toEqual({ result_ts: at(400) });
     expect(got.call_000015.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: true });
-    // A tool with no exit code at all is not failed; one that records an exit code is read by it.
+    // A negative exit code is not 0, so the call failed.
+    expect(got.call_000018.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: true });
+    // Only the shell tool's exit code counts: a tool that is not the shell is read by its
+    // status alone, whatever exit code its metadata holds.
     expect(got.call_000016.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
-    expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
+    expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000019.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
+  });
+
+  test(`opencode ${version}: a completed shell call with no exit code and no end time that counts keeps its output and is not marked as having no result`, () => {
+    const run = (id, end) => ({ id, tool: shell, status: "completed", input: { command: "cat gadget.txt" }, output: "gadget", metadata: { truncated: false }, start: 200, end });
+    const got = oneTurn(version, [run("call_000041", undefined), run("call_000042", 100), run("call_000043", "soon")]);
+    for (const id of ["call_000041", "call_000042", "call_000043"]) {
+      expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "gadget", undefined]);
+    }
   });
 
   test(`opencode ${version}: an end time of 0, one that is not a number, or one before the call's start gives no result_ts`, () => {
