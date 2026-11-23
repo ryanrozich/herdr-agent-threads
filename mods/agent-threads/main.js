@@ -4140,7 +4140,7 @@ export default class Threads extends View {
     if (Math.abs(d) > 2) { this.trajChatBack = null; this.pinChatBack = null; this.chatHome = null; }
   }
   // The Chat's width as a side pane opens, for the width it goes back to: the last width a close
-  // sent it back to when it is within 2 px of that (the weigh loop and the fix stop within 2 px,
+  // sent it back to when it is within 3 px of that (the weigh loop and the fix stop within 2 px,
   // and each cycle would otherwise add its miss to the next), else its width now.
   chatAt(px) {
     return this.chatHome && Math.abs(px - this.chatHome) <= 3 ? this.chatHome : px;
@@ -4298,7 +4298,8 @@ export default class Threads extends View {
   // which is exact. The record to track from, or null.
   rowCheck(ent, n, rp, cx) {
     const { want } = ent;
-    if (Math.abs((want.n[rp.ids.chat] ?? ent.n[rp.ids.chat]) - ent.n[rp.ids.chat]) > 2) this.chatMoved(null, 1);
+    // A key that moved the Chat: the widths it would go back to are dropped (chatMoved).
+    this.chatMoved(null, (want.n[rp.ids.chat] ?? ent.n[rp.ids.chat]) - ent.n[rp.ids.chat]);
     if (Object.entries(want.n).every(([id, px]) => Math.abs((n[id] ?? -99) - px) <= 2)) return ent;
     const order = ["chat", "traj", "pin"].map((r) => rp.ids[r]).filter((id) => id && want.n[id] > 0);
     if (rowEvent(order.map((id) => want.n[id]), order.map((id) => n[id])).kind === "scale") return { ...ent, want: undefined, n: { ...ent.n, ...want.n } };
