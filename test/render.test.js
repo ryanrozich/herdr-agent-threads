@@ -20688,24 +20688,26 @@ test("S1b: with 16 MiB calls (a longer session) the read's longest synchronous s
 // characters long (20 ms at 1 µs a character); the rest stay short. Then every row is reshaped
 // over frames (a new prompt length, as a text size or width change asks), and each frame's
 // reshapes are logged in order.
-async function shapingRun(trueRate, rate) {
+async function shapingRun(trueRate, rate, budget = 12) {
   const { v, cx } = await pane(fixture("--extra", "40"));
   const turns = v.current().turns;
-  turns.forEach((t, i) => { if (i % 2 === 0) t.prompt = `${"kaz vel orin tam ".repeat(1250)}${i}`; });
+  turns.forEach((t, i) => { t.prompt = i % 2 === 0 ? `${"kaz vel orin tam ".repeat(1250)}${i}` : `${t.prompt} again`; });
   const real = globalThis.performance.now;
   let clk = 1e6;
   globalThis.performance.now = () => clk;
   const frames = [];
+  const shaped = [];
   const reshape = v.reshape.bind(v);
   v.reshape = (turn, live, q, P, why, text) => {
     const cost = (turn.prompt.length + (text?.length ?? 0)) * trueRate;
     frames.at(-1)?.push(cost);
+    shaped.push(turns.indexOf(turn));
     const out = reshape(turn, live, q, P, why, text);
     clk += cost;
     return out;
   };
   try {
-    v.shapeBudget = 12;
+    v.shapeBudget = budget;
     v.shapeRate = rate;
     v.current().version++;
     v.rowsKey = null;
@@ -20717,36 +20719,46 @@ async function shapingRun(trueRate, rate) {
       if (!v.rowJob && !(v.shapeLeft > 0) && !v.staleRows?.length && !v.reshapeDue) break;
     }
   } finally { globalThis.performance.now = real; v.shapeBudget = null; }
-  return { v, frames: frames.filter((f) => f.length), turns };
+  return { v, frames: frames.filter((f) => f.length), turns, shaped: shaped.sort((a, b) => a - b) };
 }
 // What a frame shaped past its budget: its whole cost, past the larger of the budget and its
 // first turn's cost (one turn alone may cost more than a frame's budget).
 const over = (f) => f.reduce((a, b) => a + b, 0) - Math.max(12, f[0]);
 
 test("shaping: a draw never shapes past its budget, except for its one first turn, and every row is reshaped", async () => {
-  const { v, frames, turns } = await shapingRun(1e-3, 1e-3);
+  const { v, frames, shaped } = await shapingRun(1e-3, 1e-3);
   expect(v.shapeLeft ?? 0).toBe(0);
   expect(v.staleRows?.length ?? 0).toBe(0);
   for (const f of frames) expect(over(f)).toBeLessThanOrEqual(1e-9);
-  // A 20 ms turn has a frame to itself: at least one frame for each.
-  expect(frames.length).toBeGreaterThanOrEqual(Math.ceil(turns.length / 2));
+  // The same turns as with no budget at all, each once; a 20 ms turn has a draw to itself,
+  // and the short ones share one.
+  const free = await shapingRun(1e-3, 1e-3, Infinity);
+  expect(shaped).toEqual(free.shaped);
+  expect(free.frames.length).toBe(1);
+  const long = frames.flat().filter((c) => c > 12).length;
+  expect(long).toBeGreaterThan(10);
+  expect(frames.length).toBeGreaterThanOrEqual(long);
   expect(frames.some((f) => f.length > 1)).toBe(true);
 });
 
 test("shaping: a turn far dearer than estimated runs past the budget once, then the rate it taught holds the others back", async () => {
-  const { v, frames } = await shapingRun(1e-3, 1e-5);
+  const { v, frames, shaped } = await shapingRun(1e-3, 1e-5);
+  expect(shaped).toEqual((await shapingRun(1e-3, 1e-3, Infinity)).shaped);
   expect(v.shapeLeft ?? 0).toBe(0);
   expect(frames.filter((f) => over(f) > 1e-9).length).toBeLessThanOrEqual(1);
   expect(v.shapeRate).toBeGreaterThanOrEqual(1e-3 * 0.9 ** 40);
 });
 
 test("shaping: a rate far too high holds every turn but the first of each draw, falls back, and shaping still finishes", async () => {
-  const { v, frames, turns } = await shapingRun(1e-5, 1);
+  const { v, frames, shaped } = await shapingRun(1e-5, 1);
+  expect(shaped).toEqual((await shapingRun(1e-5, 1e-5, Infinity)).shaped);
   expect(v.shapeLeft ?? 0).toBe(0);
   expect(v.staleRows?.length ?? 0).toBe(0);
   for (const f of frames) expect(over(f)).toBeLessThanOrEqual(1e-9);
-  // One turn a draw at first, more once the rate has fallen back.
+  // One turn a draw: the worst a wrong rate costs is a draw for each turn, never a stall.
+  // Each long turn it times lowers the rate by a tenth, so draws start to take two.
   expect(frames[0].length).toBe(1);
-  expect(frames.length).toBeLessThanOrEqual(turns.length);
-  expect(frames.at(-1).length).toBeGreaterThan(1);
+  expect(frames.length).toBeLessThanOrEqual(shaped.length);
+  expect(v.shapeRate).toBeLessThan(1);
+  expect(frames.some((f) => f.length > 1)).toBe(true);
 });
