@@ -15194,6 +15194,31 @@ test("TRD-100: on a kept link rule with its Change rows open, a press in a field
   } finally { done(v); }
 });
 
+test("TRD-100: on a new rule, not kept yet, a press in Name leaves its type rows open, on Sender rules and on Link rules", async () => {
+  let { v, cx } = await sendersPane();
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at]).toEqual(["senders", null]);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-sender-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-prefix");
+    expect(idsIn(c)).toContain("th-sender-type-pattern");
+    expect(idsIn(c)).not.toContain("th-sender-type-change");
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-add", "on_click")({}, cx);
+    expect([v.ruleEdit.kind, v.ruleEdit.at, v.ruleEdit.touched]).toEqual(["links", null, false]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect(v.fieldFocused).toBe("rule-name");
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-custom");
+    expect(idsIn(c)).toContain("th-rule-type-ticket");
+    expect(idsIn(c)).not.toContain("th-rule-type-change");
+  } finally { done(v); }
+});
+
 test("TRD-100: Tab steps from the quote key field a press gave the keyboard, not from the ring on another control", async () => {
   const { v, cx } = await rulesPane();
   try {
