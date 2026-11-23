@@ -20470,3 +20470,47 @@ test("the opening: the first session's stat and peek that come back after anothe
   expect([v.opening.mtime, v.opening.newest]).toEqual([null, null]);
   go(() => false);
 });
+
+test("a later session still being read, with no loading state over it, shows no running turn before a later chunk has the turn's end", async () => {
+  let second = null;
+  const { v, cx, go } = await openingPane(busy(), (v) => second != null && v.current() === second && second.offset > 0);
+  v.opening.at -= 1000;
+  go((v) => second != null && v.current() === second && second.offset > 0);
+  await settle(v);
+  openFrames(v, cx);
+  expect(v.openActive()).toBe(false);
+  // A new session (a /clear) whose first turn ends in its second chunk, held after the first.
+  v.adopt({ kind: "found", id: "made-up-second", file: endInChunk2(), live: true }, cx);
+  second = v.current();
+  await until(() => second.offset > 0, "the second session's first chunk");
+  expect([Boolean(second.loaded), second.turns.length, second.turns[0].done]).toEqual([false, 1, false]);
+  expect(v.isLive(second, 1, 0)).toBe(false);
+  // Not the running turn: no live row, and no working card.
+  const rows = v.rows();
+  expect(rows.filter((r) => r.live || r.running).map((r) => r.kind)).toEqual([]);
+  expect(drawnText(frame(v, cx)).join("|")).not.toMatch(/No reply yet|Working/);
+  go(() => false);
+  await settle(v);
+  expect(second.turns[0].done).toBe(true);
+}, 30000);
+
+test("the agent message counts follow a session's read ending: a running agent turn counted hidden while read is shown once it is", async () => {
+  const { v } = await pane(fixture("--extra", "2"));
+  const s = v.current();
+  v.prefs = { ...v.prefs, agentTurns: false };
+  // The newest turn an agent message, still running, as a read leaves it before its end.
+  const t = s.turns[s.turns.length - 1];
+  t.agent = true;
+  t.sender = { kind: "agent", name: "made-up-bot" };
+  t.done = false;
+  s.loaded = false;
+  const before = v.counts();
+  // The read ends: loaded, and nothing else about the turns changes.
+  s.loaded = true;
+  expect(v.isLive(s, v.sessions.length - 1, s.turns.length - 1)).toBe(true);
+  const after = v.counts();
+  v.countsKey = null;
+  const fresh = v.counts();
+  expect(after).toEqual(fresh);
+  expect(fresh).not.toEqual(before);
+});

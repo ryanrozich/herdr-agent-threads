@@ -3018,8 +3018,9 @@ export default class Threads extends View {
       if (!first && s.reason && s.turns.length === 0 && s.loaded) out.push({ kind: "note", key: `empty:${si}`, text: "No turns in this session yet" });
       // A line skipped before the first turn (noteSkip).
       if (!first && s.skippedHead && !outline && !q) out.push({ kind: "note", key: `skip:${si}:head`, text: skipNote(s.skippedHead) });
-      // The live newest turn (isLive), found once for the session.
-      const liveTi = si === lastSi && s.turns.length && !s.turns[s.turns.length - 1].done ? s.turns.length - 1 : -1;
+      // The live newest turn (isLive), found once for the session: none while the session is
+      // still read, as a later chunk may hold the turn's end (a later session has no opening).
+      const liveTi = s.turns.length && this.isLive(s, si, s.turns.length - 1) ? s.turns.length - 1 : -1;
       const shown = (turn, ti) => isShown(turn, { agentTurns: agents, live: ti === liveTi, turns: s.turns });
       // Day dividers when the session spans more than one day; counts are of shown turns.
       const days = new Map();
@@ -4601,7 +4602,9 @@ export default class Threads extends View {
   // the status or the setting change. cur: the newest session; all: every session.
   counts() {
     const status = this.status();
-    const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}`).join(",")}|${status}|${this.prefs.agentTurns ? 1 : 0}`;
+    // A session's read ending can make its newest turn live (isLive), so loaded is in the key,
+    // as it is in rows() and pinnedAll().
+    const key = `${this.sessions.map((s) => `${s.version}.${s.turns.length}.${s.loaded ? 1 : 0}`).join(",")}|${status}|${this.prefs.agentTurns ? 1 : 0}`;
     if (this.countsKey === key) return this.countsMemo;
     const agents = Boolean(this.prefs.agentTurns);
     // folded: agent turns shown for their reply, their message one line (foldState).
