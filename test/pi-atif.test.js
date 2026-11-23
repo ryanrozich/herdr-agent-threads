@@ -103,6 +103,37 @@ test("pi: a result with no isError keeps its output and end time, leaves the fla
   expect(Object.hasOwn(got.call_000013.r, "extra")).toBe(false);
 });
 
+test("pi: an isError that is not true or false (the string \"true\", 1, 0, \"false\", null) leaves the flag out, in calls.sh and in the export", () => {
+  const odd = [["call_000051", "true"], ["call_000052", 1], ["call_000053", 0], ["call_000054", "false"], ["call_000055", null]];
+  const file = session([
+    user("Count the widgets", 1),
+    said(odd.map(([id]) => call(id, "bash", { command: "wc -l widgets.txt" })), "toolUse", 2),
+    ...odd.map(([id, isError], i) => result(id, "bash", "3 widgets.txt", isError, 3 + i)),
+    said([text("Three.")], "stop", 9),
+  ]);
+  const ids = odd.map(([id]) => id);
+  const outs = execFileSync("sh", [join(core, "calls.sh"), file, "pi", ...ids], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.k === "out");
+  expect(outs.map((x) => [x.id, x.err])).toEqual(ids.map((id) => [id, null]));
+  const got = resultsOf(exportOf(file));
+  for (const [id] of odd) expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "3 widgets.txt", { result_ts: at(3 + ids.indexOf(id)) }]);
+});
+
+test("pi: a call with two results takes the last one's text and time, and its outcome when it has an isError; one with none keeps the earlier outcome", () => {
+  const file = session([
+    user("Count the widgets", 1),
+    said([call("call_000061", "bash", { command: "wc -l widgets.txt" }), call("call_000062", "bash", { command: "wc -l widgets.txt" })], "toolUse", 2),
+    result("call_000061", "bash", "first", true, 3),
+    result("call_000061", "bash", "second", false, 4),
+    result("call_000062", "bash", "first", true, 5),
+    result("call_000062", "bash", "second", undefined, 6),
+    said([text("Three.")], "stop", 7),
+  ]);
+  const got = resultsOf(exportOf(file));
+  expect([got.call_000061.r.content, got.call_000061.r.extra]).toEqual(["second", { result_ts: at(4), tool_result_is_error: false }]);
+  expect([got.call_000062.r.content, got.call_000062.r.extra]).toEqual(["second", { result_ts: at(6), tool_result_is_error: true }]);
+});
+
 test("pi: an end time of 0, one that is not a time, one missing, or one before the call's start gives no result_ts, and the outcome stays; one at the start counts", () => {
   const file = session([
     user("Count the widgets", 1),

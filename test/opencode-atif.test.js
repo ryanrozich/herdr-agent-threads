@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
@@ -200,6 +200,10 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
       run("call_000018", { exit: -1 }, "killed"),
       { id: "call_000019", tool: "read", status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
       { id: "call_000020", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 3 }, start: 500, end: 600 },
+      { id: "call_000044", tool: "", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 0 }, start: 500, end: 600 },
+      { id: "call_000045", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", start: 500, end: 600 },
+      { id: "call_000046", tool: undefined, status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
+      { id: "call_000047", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: null }, start: 500, end: 600 },
     ]);
     expect(got.call_000011.r.content).toBe("gadget");
     expect(got.call_000011.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: false });
@@ -217,8 +221,15 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
     expect(got.call_000016.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000019.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
-    // A call with no tool name is not the shell either.
-    expect(got.call_000020.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    // A call with no tool name and an exit code in its metadata may be the shell or not: an
+    // unknown tool, so an unknown outcome, and the flag is left out, whatever the code.
+    expect(got.call_000020.r.extra).toEqual({ result_ts: at(600) });
+    expect(got.call_000044.r.extra).toEqual({ result_ts: at(600) });
+    // With no exit code (none, or null) it is read by its status alone, as any tool that is not
+    // the shell is.
+    expect(got.call_000045.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000047.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
+    expect(got.call_000046.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
   });
 
   test(`opencode ${version}: a completed shell call with no exit code and no end time that counts keeps its output and is not marked as having no result`, () => {
@@ -264,14 +275,20 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
 }
 
 // The other agents: each result's outcome and time in the command line's export are the
-// reader's, from its result events (Claude Code, Codex), or left out where the reader has none
-// (Antigravity), whatever calls.sh says. Cursor's export reads no calls.sh at all. Pi's export,
-// like OpenCode's, takes them from calls.sh (test/pi-atif.test.js).
+// reader's, from its result events (Claude Code, Codex), whatever calls.sh says. Cursor's export
+// reads no calls.sh at all. Pi's and Antigravity's exports, like OpenCode's, take them from
+// calls.sh (test/pi-atif.test.js, test/antigravity-atif.test.js).
 test("the other agents' exported outcomes and result times are their readers', not calls.sh's", () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-ocatif4-"));
   const claude = join(dir, "claude.jsonl");
   execFileSync("bun", [join(root, "test/make-fixture.js"), claude, "00000000-0000-4000-8000-000000000042", "/Users/dev/acme-web"]);
-  const [codex, , , cursor, agy] = execFileSync("bun", [join(root, "test/make-agents.js"), dir, "/Users/dev/acme-web", "2026-11-01T09:00:00Z"], { encoding: "utf8" }).trim().split("\n");
+  const [codex, , , cursor] = execFileSync("bun", [join(root, "test/make-agents.js"), dir, "/Users/dev/acme-web", "2026-11-01T09:00:00Z"], { encoding: "utf8" }).trim().split("\n");
+  // A Claude Code call that never got a result, for the no_result path.
+  const open = join(dir, "open.jsonl");
+  writeFileSync(open, `${[
+    { type: "user", timestamp: "2026-11-01T09:00:00.000Z", message: { role: "user", content: "Run the tests" } },
+    { type: "assistant", timestamp: "2026-11-01T09:00:01.000Z", message: { id: "msg_000001", role: "assistant", content: [{ type: "tool_use", id: "toolu_000001", name: "Bash", input: { command: "bun test" } }] } },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
   const read = (file, harness) => {
     const s = newSession("s", file);
     s.keepWakes = true;
@@ -288,7 +305,7 @@ test("the other agents' exported outcomes and result times are their readers', n
   };
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : undefined);
   let failedSeen = 0, openSeen = 0;
-  for (const [file, harness] of [[claude, "claude"], [codex, "codex"], [cursor, "cursor"], [agy, "antigravity"]]) {
+  for (const [file, harness] of [[claude, "claude"], [open, "claude"], [codex, "codex"], [cursor, "cursor"]]) {
     const cells = new Map(trajectories(read(file, harness)).flatMap((tr) => tr.groups.flatMap((g) => g.cells.filter((c) => c.call).map((c) => [c.call, c.result]))));
     const results = exportOf(file, harness).steps.flatMap((st) => st.observation?.results ?? []);
     expect(results.length).toBe(cells.size);
