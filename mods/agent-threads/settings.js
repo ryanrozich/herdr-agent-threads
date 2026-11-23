@@ -48,7 +48,8 @@
 // trajectory: the Trajectory's own settings, an object, read by parseTrajectory (TRD-24):
 // "dock", where y opens it ("right", the default, or "bottom"), and "height", the bottom
 // dock's px height as the owner last dragged it (a whole number from TRAJ_MIN_H, none until
-// then). Nothing writes it yet: a save keeps the object as written, like any key it does not
+// then). A null value is unset, with no note, as a null quoteKey, links or senders is.
+// Nothing writes it yet: a save keeps the object as written, like any key it does not
 // know. The chat's keys above are not the Trajectory's.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
@@ -570,12 +571,12 @@ export function parseTrajectory(t) {
   if (typeof t !== "object" || Array.isArray(t)) return { dock: "right", height: null, notes: ["trajectory is not an object; using its defaults"] };
   let dock = "right";
   if (TRAJ_DOCKS.includes(t.dock)) dock = t.dock;
-  else if (t.dock !== undefined) notes.push(`trajectory.dock ${JSON.stringify(t.dock)} is not "right" or "bottom"; using "right"`);
+  else if (t.dock != null) notes.push(`trajectory.dock ${JSON.stringify(t.dock)} is not "right" or "bottom"; using "right"`);
   let height = null;
   if (typeof t.height === "number" && Number.isFinite(t.height) && t.height > 0) {
     height = Math.round(t.height);
     if (height < TRAJ_MIN_H) { notes.push(`trajectory.height ${height} is under ${TRAJ_MIN_H} px; using ${TRAJ_MIN_H}`); height = TRAJ_MIN_H; }
-  } else if (t.height !== undefined && t.height !== null) notes.push(`trajectory.height ${JSON.stringify(t.height)} is not a px height; using the default`);
+  } else if (t.height != null) notes.push(`trajectory.height ${JSON.stringify(t.height)} is not a px height; using the default`);
   return { dock, height, notes };
 }
 

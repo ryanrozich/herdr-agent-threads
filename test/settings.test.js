@@ -265,7 +265,8 @@ test("the trajectory object: where y docks it and the bottom height, read with d
   expect(parseExtras('{"trajectory": {"dock": "bottom", "height": 412}}').trajectory).toEqual({ dock: "bottom", height: 412 });
   expect(parseExtras('{"trajectory": {"dock": "bottom", "height": 412}}').notes).toEqual([]);
   expect(parseExtras('{"trajectory": {"dock": "right"}}').trajectory).toEqual({ dock: "right", height: null });
-  // A height is whole px, never under 270; a null height is none, with no note.
+  // A height is whole px, never under 270. A null value is unset, with no note, as a null
+  // trajectory, quoteKey, links or senders is: a null height is none, a null dock the default.
   expect(parseTrajectory({ height: 300.6 })).toEqual({ dock: "right", height: 301, notes: [] });
   expect(parseTrajectory({ height: null })).toEqual({ dock: "right", height: null, notes: [] });
   expect(parseTrajectory({ height: 270 })).toEqual({ dock: "right", height: 270, notes: [] });
@@ -275,7 +276,9 @@ test("the trajectory object: where y docks it and the bottom height, read with d
     expect(r.height).toBeNull();
     expect(r.notes).toEqual([`trajectory.height ${JSON.stringify(h)} is not a px height; using the default`]);
   }
-  for (const d of ["left", "Bottom", 1, null]) {
+  expect(parseTrajectory({ dock: null, height: 400 })).toEqual({ dock: "right", height: 400, notes: [] });
+  expect(parseTrajectory({ dock: null, height: null })).toEqual({ dock: "right", height: null, notes: [] });
+  for (const d of ["left", "Bottom", 1, false]) {
     const r = parseTrajectory({ dock: d, height: 400 });
     expect([r.dock, r.height]).toEqual(["right", 400]);
     expect(r.notes).toEqual([`trajectory.dock ${JSON.stringify(d)} is not "right" or "bottom"; using "right"`]);
