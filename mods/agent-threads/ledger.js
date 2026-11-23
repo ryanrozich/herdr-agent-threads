@@ -127,6 +127,10 @@ export const WIDE_MIN = 900;
 export const COMPACT_W = 200;
 export const ICON_W = 64;
 export const COMPACT_PAD = 4;
+// In the Chat's own pane the compact heading holds the list icon (14 px) and a spacer, then the
+// settings and Chat buttons (24 px each), 2 px apart, inside its padding: 76 px inside the frame.
+// Narrower, the icon gives way so both buttons stay inside the pane.
+export const HEAD_ICON_MIN = 2 * COMPACT_PAD + 14 + 2 + 2 + 24 + 2 + 24;
 // A mono character at 11.5 px, for what fits.
 const COMPACT_CH = 6.9;
 export function trajCompact(width) {

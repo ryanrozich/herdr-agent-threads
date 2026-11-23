@@ -86,7 +86,7 @@ import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pi
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
 import {
-  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD,
+  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
   trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
   BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT,
 } from "./ledger.js";
@@ -11567,7 +11567,8 @@ export default class Threads extends View {
     // Below 200 px, the icon alone (ledger.js trajCompact), with a red dot at its corner when
     // calls failed, and the count in its tooltip; f and Shift f still go through them.
     // In the Chat's own pane (y in a Chat under 480 px) its way back stays: the settings and the
-    // Chat buttons as icons after it, the list icon given up under 64 px for them.
+    // Chat buttons as icons after it, the list icon given up for them when the three do not fit
+    // (HEAD_ICON_MIN inside the frame).
     const form = trajCompact(this.trajPx());
     if (form) {
       const inChat = this.traj && !this.trajPane;
@@ -11577,8 +11578,8 @@ export default class Threads extends View {
       const head = h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(COMPACT_PAD).gap(2).items_center().border_b(1).border_color(t.border);
       if (!inChat) return head.justify_center().child(icon());
       return head
-        .when(form === "line", (el) => el.child(icon()).child(div().flex_1()))
-        .when(form !== "line", (el) => el.justify_center())
+        .when(form === "line" && this.pw() >= HEAD_ICON_MIN, (el) => el.child(icon()).child(div().flex_1()))
+        .when(form !== "line" || this.pw() < HEAD_ICON_MIN, (el) => el.justify_center())
         .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
         .child(this.iconButton(t, "th-traj-chat", "messages", "Back to the Chat (y)", (_e, cx) => { this.leaveTraj(); cx.notify(); }));
     }
