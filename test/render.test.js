@@ -116,6 +116,8 @@ mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
     if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
+    // A test's stand-in for the extractor: its answer, or null to run it.
+    if (extractHook && String(args?.[0] ?? "").endsWith("core/extract.sh")) { const r = await extractHook(args); if (r) return r; }
     stamp("out");
     try { return execReal(cmd, args); } finally { stamp("in"); }
   },
@@ -123,6 +125,7 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
+let extractHook = null;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there). With
 // keepSettings set, a write is also what the next read finds, as on disk.
 const settingsWrites = [];
@@ -17305,6 +17308,20 @@ test("the opening: the list shows at its end, still, with every row shaped (no e
     v.lastRange = `${String(lr).split("/")[0]}/${rows.length - 1}`;
     expect(v.openReady(rows)).toBe(false);
     v.lastRange = lr;
+    // A rows build still going, a row left with an old shape, a row left to reshape.
+    const job = v.rowJob;
+    v.rowJob = { made: "up" };
+    expect(v.openReady(rows)).toBe(false);
+    v.rowJob = job;
+    const stale = v.staleRows;
+    v.staleRows = [rows.length - 1];
+    expect(v.openReady(rows)).toBe(false);
+    v.staleRows = stale;
+    const left = v.shapeLeft;
+    v.shapeLeft = 1;
+    expect(v.openReady(rows)).toBe(false);
+    v.shapeLeft = left;
+    expect(v.openReady(rows)).toBe(true);
     // Parts above the end are still to measure: each frame asks for the end in that frame.
     expect(v.probeLeft).toBeGreaterThan(0);
     expect(v.openHold).toBe(true);
@@ -17338,7 +17355,11 @@ test("the opening: a scroll up while parts above wait takes the place on screen 
     expect(v.openHold).toBe(false);
     draw(v, cx);
     const a = v.anchor;
+    // A place still to take for a new column width (rows: anchorDue) is dropped with the old
+    // one (dropAnchor): the wheel's own place is the one held.
+    v.anchorDue = true;
     v.listWheel({ delta: { y: 60 } });
+    expect(v.anchorDue).toBe(false);
     draw(v, cx);
     // Taken again at the new place, not let go by the wheel.
     expect(v.anchor?.open).toBe(true);
@@ -17429,4 +17450,159 @@ test("the opening: with nothing left to measure, the frame that shows the list a
   expect(asked.every(([, b]) => b)).toBe(true);
   expect(asked.at(-1)[0]).toBe(false);
   expect(v.openHold).toBe(false);
+});
+
+// The opening ends with any state other than its own once the session is read, failed or gone:
+// the status row is the session's again, the agent's state shows, and the list's keys act.
+function openEnded(v, cx, text) {
+  for (let k = 0; k < 60; k++) { cx.flush(16); const f = frame(v, cx); v.report(); if (k === 59) expect(drawnText(f)).toContain(text); }
+  expect(v.openActive()).toBe(false);
+  expect(v.headerText()).not.toBe("Reading…");
+  expect(v.headerText()).not.toBe("");
+  v.filtering = false;
+  v.key(keyEv("/"), cx);
+  expect(v.filtering).toBe(true);
+  v.filtering = false;
+}
+
+test("the opening ends when every turn read is hidden (No user messages yet): Done shows, and keys act", async () => {
+  const file = fixture("--only", "0", "--agents");
+  const { v, cx, go } = await openingPane(file, (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.current().offset > 0, "the first chunk");
+  expect(v.openActive()).toBe(true);
+  // Only agent turns with no reply, and agent messages off: every turn is hidden.
+  const s = v.current();
+  s.turns = s.turns.filter((t) => t.agent);
+  for (const t of s.turns) t.after = [];
+  s.version++;
+  go(() => false);
+  await settle(v);
+  expect(v.prefs.agentTurns).toBe(false);
+  openEnded(v, cx, "No user messages yet");
+  expect(v.counts().hiddenAll).toBeGreaterThan(0);
+  expect(v.agentStateNow()).not.toBeNull();
+});
+
+test("the opening ends when the session is read with no turns (No turns yet: a new session's first line only)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "threads-open-"));
+  const file = join(dir, "e.jsonl");
+  writeFileSync(file, `${JSON.stringify({ type: "summary", summary: "Made-up cart work", leafUuid: "u0" })}\n`);
+  const { v, cx, go } = await openingPane(file);
+  expect(v.openActive()).toBe(true);
+  go(() => false);
+  await settle(v);
+  expect(v.current().turns.length).toBe(0);
+  openEnded(v, cx, "No turns yet");
+  expect(v.headerText()).toBe("0 turns");
+});
+
+test("the opening ends when the read fails before any turn (Couldn't read this session, with Retry)", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  extractHook = async () => { await gate; return { code: 3, stdout: "", stderr: "made-up failure" }; };
+  try {
+    const { v, cx } = await openingPane(busy());
+    expect(v.openActive()).toBe(true);
+    release();
+    await until(() => v.current()?.error && !v.reading, "the failed read");
+    openEnded(v, cx, "Couldn't read this session");
+    expect(v.headerText()).toBe("Read failed");
+  } finally { extractHook = null; }
+});
+
+test("the opening ends when the sessions are dropped and resolving finds none", async () => {
+  const { v, cx, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  expect(v.openActive()).toBe(true);
+  // What a pick leaves (pick: the sessions dropped), then a resolution that found nothing.
+  v.resolveGen = (v.resolveGen ?? 0) + 1;
+  v.sessions = [];
+  v.res = { kind: "none", tried: [], choices: [] };
+  go(() => false);
+  for (let k = 0; k < 10; k++) { cx.flush(16); frame(v, cx); v.report(); }
+  expect(v.headerText()).toBe("No session");
+  expect(v.openActive()).toBe(false);
+  expect(v.headerText()).not.toBe("Reading…");
+  v.filtering = false;
+  v.key(keyEv("/"), cx);
+  expect(v.filtering).toBe(true);
+});
+
+test("the opening: a frame when the quiet time ends paints the loading state, with nothing else asking for one (openTick)", async () => {
+  const { v, cx } = await openingPane(busy());
+  const o = v.opening;
+  expect(o.painted).toBe(false);
+  expect(Date.now() - o.at).toBeLessThan(300);
+  // One timer for the end of the quiet time, and nothing else drawing meanwhile.
+  const tick = cx.timers.filter((x) => x.ms >= 250 && x.ms <= 320);
+  expect(tick.length).toBe(1);
+  let notified = 0;
+  cx.notifyHook = () => { notified++; };
+  o.at -= 400;
+  cx.timers = cx.timers.filter((x) => x !== tick[0]);
+  tick[0].fn(cx);
+  expect(notified).toBe(1);
+  cx.notifyHook = null;
+  expect(drawnText(frame(v, cx))).toContain("Reading this session");
+  expect(o.painted).toBe(true);
+});
+
+test("the opening: a read started over part way never shows less than was shown (MB with the bar, turns, prompts, tool calls, tokens)", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  const s = v.current();
+  // busy() has no tool counts in its status figures: 7 before, as a session with tools would.
+  const stats = v.statusStats.bind(v);
+  v.statusStats = () => ({ ...stats(), tools: 7 });
+  const was = v.openInfo(s);
+  const shown = openLines(was);
+  expect(was.turns).toBeGreaterThan(3);
+  expect(was.prompts).toBeGreaterThan(0);
+  expect(was.tools).toBeGreaterThan(0);
+  expect(was.tokens).toBeGreaterThan(0);
+  // As a stall's recovery or a replaced file does: the session from the top again.
+  v.restart(s);
+  s.offset = 1;
+  s.version++;
+  v.statusStats = () => ({ ...stats(), tools: 0 });
+  const now = v.openInfo(s);
+  for (const k of ["offset", "size", "pct", "turns", "prompts", "tools", "tokens"]) expect(now[k]).toBe(was[k]);
+  expect(openLines(now).slice(1, 3)).toEqual(shown.slice(1, 3));
+  expect(openLines(now)[6]).toBe(shown[6]);
+  go(() => false);
+});
+
+test("the opening: last active is the file's last write at the first chunk, and again once the read ends", async () => {
+  // A copy of the shared busy fixture, whose time is changed below.
+  const file = join(mkdtempSync(join(tmpdir(), "threads-open-")), "b.jsonl");
+  writeFileSync(file, readFileSync(busy()));
+  const { v, go } = await openingPane(file, (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.mtime, "the first stat");
+  const first = v.opening.mtime;
+  // A write while it is read (as a live session's), with the size the same.
+  const later = new Date(first + 90 * 60000);
+  utimesSync(file, later, later);
+  go(() => false);
+  await settle(v);
+  await until(() => v.opening.mtime !== first, "the stat at the end");
+  expect(Math.abs(v.opening.mtime - later.getTime())).toBeLessThan(2000);
+});
+
+test("the opening: read, with its first rows still being built, keeps the loading state (no other state ends it)", async () => {
+  const { v, cx, go } = await openingPane(busy());
+  v.opening.at -= 1000;
+  go(() => false);
+  await settle(v);
+  expect(v.openActive()).toBe(true);
+  // As the first slice of a rows build leaves it: a job going on and no row yet.
+  const rows = v.rows;
+  v.rows = () => { v.rowJob = { made: "up" }; v.baseRows = []; return []; };
+  try {
+    const said = drawnText(frame(v, cx));
+    expect(said).toContain("Reading this session");
+    expect(v.openActive()).toBe(true);
+  } finally { v.rows = rows; v.rowJob = null; v.baseRows = null; }
 });
