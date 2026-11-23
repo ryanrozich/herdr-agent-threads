@@ -20604,3 +20604,63 @@ test("a read whose 16 MiB call the extractor had to cut (dense text) asks for ha
     expect(v.current().turns.length).toBe(140);
   } finally { extractCalls = null; }
 });
+
+test("shaping: a turn whose expected cost would take the draw past its shaping time waits for the next draw, unless it is the draw's first", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const t = v.current().turns.at(-1);
+  // A pasted prompt of 20,000 characters, at 1 µs a character: 20 ms expected.
+  t.prompt = "kaz vel orin tam ".repeat(1250);
+  v.shapeBudget = 12;
+  v.shapeRate = 1e-3;
+  const again = () => { v.sendersVer = (v.sendersVer ?? 0) + 1; v.shapeStale = false; };
+  try {
+    // 5 ms spent: 5 + 20 is past 12, so it keeps the shape it had and is left for the next draw.
+    again();
+    const before = t.shapeMemo;
+    v.shapeSpent = 5;
+    v.shapeLeft = 0;
+    expect(v.shape(t)).toBe(before);
+    expect([v.shapeLeft, v.shapeStale]).toEqual([1, true]);
+    // The draw's first turn is shaped whatever it is expected to cost.
+    again();
+    v.shapeSpent = 0;
+    v.shapeLeft = 0;
+    const sh = v.shape(t);
+    expect(v.shapeStale).toBe(false);
+    expect(v.shapeLeft).toBe(0);
+    expect(sh).not.toBe(before);
+    // Shaping it taught the rate: here far under 1 µs a character, so it fell by a tenth.
+    expect(v.shapeRate).toBeLessThan(1e-3);
+    expect(v.shapeRate).toBeGreaterThanOrEqual(0.9e-3 - 1e-12);
+    // A short turn still fits: its cost is its length at the same rate.
+    const short = v.current().turns[0];
+    again();
+    v.shapeSpent = 5;
+    v.shape(short);
+    expect(v.shapeStale).toBe(false);
+    // Nothing learned yet: no turn is held back for its cost.
+    again();
+    v.shapeRate = undefined;
+    v.shapeSpent = 5;
+    v.shape(t);
+    expect(v.shapeStale).toBe(false);
+  } finally { v.shapeBudget = null; v.shapeRate = undefined; }
+});
+
+test("shaping: the rate is learned from long turns, rising at once and falling back by a tenth a turn", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  // What the pane's own first draw taught it, forgotten.
+  v.shapeRate = undefined;
+  const long = { prompt: "x".repeat(16000) };
+  const short = { prompt: "x".repeat(3000) };
+  expect(v.shapeCost(long, "")).toBe(0);
+  v.shapeLearn(short, "", 30);
+  expect(v.shapeRate ?? 0).toBe(0);
+  v.shapeLearn(long, "", 32);
+  expect(v.shapeRate).toBeCloseTo(0.002, 9);
+  expect(v.shapeCost(long, "y".repeat(4000))).toBeCloseTo(40, 6);
+  v.shapeLearn(long, "", 1.6);
+  expect(v.shapeRate).toBeCloseTo(0.0018, 9);
+  v.shapeLearn(long, "", 48);
+  expect(v.shapeRate).toBeCloseTo(0.003, 9);
+});

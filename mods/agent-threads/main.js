@@ -156,6 +156,8 @@ const SHAPE_MS = 12;
 // Rows reshaped first, from the one at the top of the pane down, so what is on screen
 // changes in the first frame.
 const SHAPE_FIRST = 40;
+// Turns at least this long (prompt and reply, in characters) teach the shaping rate (shapeLearn).
+const SHAPE_LEARN = 4000;
 // The hidden probe (probe) draws at most this many parts in one frame, nearest the top of
 // the pane first. Opening the work of a turn with hundreds of steps put every interim text
 // in one draw, and it ran past Herdr's time ("This view could not be re-rendered",
@@ -4682,16 +4684,31 @@ export default class Threads extends View {
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
-    // messages are turned on, a blank one-line row), and the next frame reshapes it.
-    if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    // messages are turned on, a blank one-line row), and the next frame reshapes it. A turn
+    // whose shaping would take the draw past its time (shapeCost) waits too, unless it is the
+    // draw's first: one turn with a pasted 200 KB prompt took 20 to 40 ms on the rig, and on
+    // top of the draw's 12 ms it ran past Herdr's time.
+    const spent = this.shapeSpent ?? 0;
+    const cost = this.shapeCost(turn, text);
+    if (spent > this.shapeMax() || (spent > 0 && spent + cost > this.shapeMax())) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
+    this.shapeLearn(turn, text, now() - t0);
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     turn.shapeFast = fast;
     this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // What shaping a turn is expected to cost, in ms: its length at the rate learned from long
+  // turns shaped before (shapeLearn); 0 until one has been.
+  shapeCost(turn, text) { return (turn.prompt.length + text.length) * (this.shapeRate ?? 0); }
+  // The rate from each long turn shaped: it rises at once and falls back by a tenth a turn,
+  // so one slow turn is not forgotten by the next fast one.
+  shapeLearn(turn, text, ms) {
+    const n = turn.prompt.length + text.length;
+    if (n >= SHAPE_LEARN) this.shapeRate = Math.max(ms / n, (this.shapeRate ?? 0) * 0.9);
   }
   // A turn's shape kept under its look, for the last WIDTHS_KEPT looks it was shaped at, the
   // last used last: a drag back to a width seen before reshapes nothing. A turn that changed
