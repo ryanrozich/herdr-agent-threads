@@ -79,7 +79,7 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinUnpinHit, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
   REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr, rowEvent, closeWeights, rowSolve,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
@@ -2079,7 +2079,7 @@ export default class Threads extends View {
   sessionKey(s) { return `${harnessOfFile(s.file)}:${s.id}`; }
 
   // The pins of every session in the pane, oldest turn first: { pin, s, si, turn, key, state }.
-  // Their place in this order is their number (1 to 5) and digit key.
+  // Their place in this order is their number (1 to 7) and digit key.
   pinnedAll() {
     // No terminal status in the key: whether a pin's turn is live does not depend on it
     // (isLive), and reading it here, once per row drawn, read Herdr's panes thousands of
@@ -2115,7 +2115,7 @@ export default class Threads extends View {
   pinnedList() { return this.pinnedAll().slice(0, PIN_LIMIT); }
   isPinned(key) { this.pinnedAll(); return this.pinKeys.has(key); }
   isPinnedTurn(turn) { this.pinnedAll(); return this.pinTurns.has(turn); }
-  // A pinned turn's number (1 to 5, its place in the Pinned view and its digit key), or null.
+  // A pinned turn's number (1 to 7, its place in the Pinned view and its digit key), or null.
   pinNumber(turn) { const i = this.pinnedList().findIndex((p) => p.turn === turn); return i < 0 ? null : i + 1; }
 
   togglePin(key, cx) {
@@ -3522,13 +3522,14 @@ export default class Threads extends View {
     return false;
   }
 
-  // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 5). A closed
+  // The Pinned view: the pinned turns oldest first (the order of the keys 1 to 7). A closed
   // pin is a compact row (pinRow: its digit, number, time, two lines of the prompt and one of
-  // the reply), so five fit in the column; an open one is the card, as in the list. A row
+  // the reply, and its unpin control), so seven fit in the column; an open one is the card,
+  // as in the list. A row
   // shows only its time, so a day header goes above the first pin of each day.
   pinnedRows(status) {
     const L = this.pinnedList();
-    if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 5 bring you back to each." }];
+    if (!L.length) return [{ kind: "note", key: "pins:none", text: "No pins yet. Select a turn in the list and press p to pin it. Pins stay with this session, and 1 to 7 bring you back to each." }];
     const out = [];
     const now = Date.now();
     let day = null;
@@ -6061,6 +6062,13 @@ export default class Threads extends View {
     // stays, and its field gives up the keys.
     this.toList();
     if (/^\d+$/.test(kind)) {
+      // A closed pin's unpin control (pinRow), told apart by position: the pin goes, and the
+      // turn is neither selected nor opened. The notice offers undo (unpin).
+      if (this.view === "pinned" && !this.open.has(key) && pinUnpinHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width)) {
+        const p = this.pinnedList().find((x) => x.key === key);
+        this.pressX = null;
+        if (p) { this.unpin(p, cx); return cx.notify(); }
+      }
       if (this.outlined()) { this.leaveOutline(key); return cx.notify(); }
       // The selected running card whose message is taller than YOU_MAX: Show all and Show
       // less (ya:, which the open turn shares), as a press on an open turn's bubble does.
@@ -7512,14 +7520,14 @@ export default class Threads extends View {
   // the turn count keeps its room beside "Pinned 2". The list has no pin button: p and the
   // pin on an open turn's top line pin, so the session's title keeps that room. A Pinned
   // view (the Pinned pane, or Pinned in this pane) keeps its pin button, as Unpin for the
-  // selected pin: every row there is a pin, and a closed one has no pin of its own to click.
+  // selected pin: every row there is a pin (a closed one also has its own unpin control).
   headerButtons() {
     const c = this.counts();
     const pins = this.pinnedList().length;
     const pinned = Boolean(this.sel && this.isPinned(this.sel));
     const n = this.sel ? this.findTurn(this.sel)?.n : null;
     const pinBtn = ["th-pin", "pin", n ? `${pinned ? "Unpin" : "Pin"} #${n} (p)` : "Pin the selected turn (p)", "pin", pinned, null, null];
-    // The Pinned pane: its pin button gives way under 300 px too, so "1 of 5" keeps its room
+    // The Pinned pane: its pin button gives way under 300 px too, so "1 of 7" keeps its room
     // beside the heading.
     if (this.pinnedPane) return [...(this.narrow() ? [] : [pinBtn]), ["th-pinned", null, "Back to Threads, all turns (v)", "pinned", false, null, "All turns"]];
     const narrow = this.narrow();
@@ -7681,7 +7689,7 @@ export default class Threads extends View {
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
     if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null ? ` ${this.readPct(s)}%` : ""}`;
-    // The Pinned view: "3 of 5", after the Pinned heading (pinnedHeading).
+    // The Pinned view: "3 of 7", after the Pinned heading (pinnedHeading).
     if (this.view === "pinned") return `${this.pinnedList().length} of ${PIN_LIMIT}`;
     const c = this.counts();
     // "98 turns · 43 hidden": the newest session's shown turns, then the agent messages
@@ -10523,12 +10531,22 @@ export default class Threads extends View {
     const ac = this.agentColor(t);
     const line = (text, h, size, c) => h_flex().h(h).min_w(0).items_center().overflow_hidden()
       .child(div().flex_1().min_w(0).truncate().text_size(size).text_color(c).child(text));
+    // The unpin control (pinUnpinHit) as the heading's buttons draw (iconButton), with no
+    // colour of its own at rest: the row is clear, so the control is too, and the row's hover
+    // gives it dim (Herdr restyles only the hovered element). The selected pin shows it.
+    const tip = `Unpin #${turn.n}${sel && this.quoteKey !== "p" ? " (p)" : ""}`;
+    const unpin = () => div().id(`th-unpin-${r.pinNo}`).flex_none().size(P.UNPIN).flex().items_center().justify_center().rounded(5).cursor_pointer()
+      .when(sel, (el) => el.text_color(t.dim))
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(tip)
+      .child(svg(ICON("pin-off")).size(14));
     return h_flex().w_full().relative().px(P.PAD_X).pt(P.PAD_T).pb(P.PAD_B).gap(P.GAP_X).items_start().min_w(0)
       .when(sel, (el) => el.bg(t.selected))
-      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!sel, (el) => el.text_color(CLEAR))
+      .when(!sel && !this.covered(), (el) => el.hover((s) => s.bg(t.hover).text_color(t.dim)))
       .child(div().flex_none().size(P.BADGE).mt(-2).rounded(6).flex().items_center().justify_center()
         .bg(alpha(t.accent, sel ? 0.28 : 0.16)).text_size(12).font_semibold().text_color(t.accent).child(String(r.pinNo)))
-      .child(v_flex().flex_1().min_w(0).gap(P.GAP)
+      .child(v_flex().flex_1().min_w(0).gap(P.GAP).pr(P.UNPIN_ROOM)
         .child(h_flex().h(P.META).gap(5).items_center().min_w(0).text_size(11.5).text_color(t.dim)
           .when(Boolean(st), (el) => el.child(this.liveIcon(st, 12)))
           .when(!st && (turn.interrupted || this.failed(turn)), (el) => el.child(this.statusIcon(t, turn)))
@@ -10545,7 +10563,8 @@ export default class Threads extends View {
           .children(sh.prompt.map((l) => line(l, P.LINE, P.SIZE, turn.agent ? t.muted : t.foreground))))
         .child(st
           ? line([this.agentName(turn), st.label, clock].filter(Boolean).join(" · "), P.REPLY, P.REPLY_SIZE, st.color)
-          : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)));
+          : line(sh.reply, P.REPLY, P.REPLY_SIZE, color)))
+      .child(h_flex().absolute().top(0).bottom(0).right(P.UNPIN_R).items_center().child(unpin()));
   }
 
   // An outline row: "#12  8:43 AM  First line of the prompt  📌 2", one line at the reading

@@ -14,7 +14,7 @@ const KEYS = {
 // Pin keys give way to the quote key, so a quote key of p or u keeps working. The person who
 // chose it pins with the pin on an open turn's top line, and unpins with that pin or the
 // Pinned view's header button (the list's header has no pin button).
-const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5" };
+const PIN_KEYS = { p: "pin", u: "undoUnpin", 1: "go:1", 2: "go:2", 3: "go:3", 4: "go:4", 5: "go:5", 6: "go:6", 7: "go:7" };
 // Under a search, n steps to the next match back in time (older) and Shift n to the newer
 // one, as n and N do in less and vim. n gives way to a quote key of n, as the pin keys do,
 // so a quote key someone chose keeps working.
@@ -129,7 +129,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["→", "←"], "Open or close the turn's work, a level at a time"], [["i"], "Show or hide the turn's numbers"], [["t"], "Focus the terminal"],
     ]],
     ["Pins", [
-      ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-5"], "Return to that pin"],
+      ...(pin("p") ? [[["p"], "Pin or unpin the selected turn"]] : []), [["1-7"], "Return to that pin"],
       ...(pin("u") ? [[["u"], "Undo the last unpin"]] : []), [["v"], "Open or go to the Pinned column"],
     ]],
     ["Image viewer", [
@@ -2692,15 +2692,25 @@ export function boxHit(layout, x, names) {
   return null;
 }
 
-// A pin in the Pinned column and the narrow Pinned view is a compact row, so five fit in a
+// A pin in the Pinned column and the narrow Pinned view is a compact row, so seven fit in a
 // 240 to 400 px column at a 1150 px window: its digit in an accent badge on the left, then
 // the turn's number and time, two lines of the prompt and one of the reply. Every line has
 // a fixed height and is cut with an ellipsis where it runs long, so the drawn row is the
-// stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px.
+// stated height. The prompt is 13 px (PROMPT_CHAR wide), the reply 12.5 px. At its right
+// edge, centred, the unpin control: a 24 px button UNPIN_R in from the edge, over room the
+// text always leaves it (UNPIN_ROOM past PAD_X, 4 px short of the button), so the text never
+// moves when it shows.
 export const PIN_ROW = Object.freeze({
   PAD_X: 12, PAD_T: 8, PAD_B: 9, BADGE: 20, GAP_X: 10, META: 16, GAP: 3, LINE: 19, REPLY: 18,
-  SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2,
+  SIZE: 13, REPLY_SIZE: 12.5, PROMPT_LINES: 2, UNPIN: 24, UNPIN_R: 6, UNPIN_ROOM: 22,
 });
+// Whether a press at x (in the row's px, w wide) is on a compact pin's unpin control. A list
+// item takes one click handler, so the control is told apart by position: its column, 2 px
+// either side of the button, the row's whole height (nothing else is drawn there).
+export function pinUnpinHit(x, w) {
+  if (x == null || !(w > 0)) return false;
+  return x >= w - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN - 2 && x <= w;
+}
 export function pinRowHeight(p) {
   return PIN_ROW.PAD_T + PIN_ROW.META + PIN_ROW.GAP + Math.max(1, Math.min(PIN_ROW.PROMPT_LINES, p)) * PIN_ROW.LINE
     + PIN_ROW.GAP + PIN_ROW.REPLY + PIN_ROW.PAD_B;
@@ -2738,7 +2748,7 @@ export function pinPromptText(prompt) {
 }
 // { prompt: 1 or 2 lines, reply: one line, height } for a compact row width px wide.
 export function pinRowShape({ prompt, reply, width }) {
-  const tw = Math.max(60, width - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X);
+  const tw = Math.max(60, width - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X - PIN_ROW.UNPIN_ROOM);
   const k = PIN_ROW.SIZE / 13;
   const p = rowLines(prompt || "(empty prompt)", PIN_ROW.PROMPT_LINES, tw / (ROW.PROMPT_CHAR * k));
   const r = rowLines(reply || " ", 1, tw / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13)));

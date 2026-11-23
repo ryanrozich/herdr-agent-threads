@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, PIN_ROW, pinRowShape, pinPromptText, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
@@ -4362,22 +4362,175 @@ test("p pins the selected turn, teaches the return key, and saves; p again unpin
   draw(v, cx);
 });
 
-test("a sixth pin is refused in the design's words, and undo cannot pass the limit", async () => {
-  const { v, cx, keys } = await pinPane("--extra", "8");
+test("seven pins are kept and listed, 1 to 7 return to them in order; an eighth is refused, and undo cannot pass the limit", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "10");
   const k = keys();
+  // Five, then two more.
   for (let i = 0; i < 5; i++) { v.sel = k[i]; v.action("pin", cx); }
-  v.sel = k[5];
+  for (const i of [5, 6]) { v.sel = k[i]; v.action("pin", cx); }
+  expect(toastText(v)).toMatch(/press 7 to come back$/);
+  expect(v.pinnedList().map((p) => p.key)).toEqual(k.slice(0, 7));
+  expect(allPins(await saved()).length).toBe(7);
+  // Listed: seven compact rows in the Pinned view, numbered 1 to 7.
+  v.width = 400;
+  v.key(keyEv("v"), cx);
+  expect(v.rows().filter((r) => r.kind === "turn").map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  expect(v.headerText()).toBe("7 of 7");
+  v.key(keyEv("v"), cx);
+  // The digits, in order.
+  for (let d = 1; d <= 7; d++) {
+    v.sel = k.at(-1);
+    v.key(keyEv(String(d)), cx);
+    expect(v.sel).toBe(k[d - 1]);
+    if (v.open.has(k[d - 1])) v.toggle(k[d - 1], cx);
+  }
+  // An eighth is refused, in words that say seven.
+  v.sel = k[7];
   v.action("pin", cx);
-  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
-  expect(v.pinnedList().length).toBe(5);
+  expect(toastText(v)).toBe("Pins are full (7). Unpin one first.");
+  expect(v.pinnedList().length).toBe(7);
+  expect(v.isPinned(k[7])).toBe(false);
   v.sel = k[0];
   v.action("pin", cx);
-  v.sel = k[6];
+  v.sel = k[8];
   v.action("pin", cx);
   v.action("undoUnpin", cx);
-  expect(toastText(v)).toBe("Pins are full (5). Unpin one first.");
-  expect(v.pinnedList().length).toBe(5);
+  expect(toastText(v)).toBe("Pins are full (7). Unpin one first.");
+  expect(v.pinnedList().length).toBe(7);
   draw(v, cx);
+});
+
+test("pins saved before seven load unchanged: the same pins, in the same order, and the file is not written again", async () => {
+  const first = await pinPane("--extra", "6");
+  const k = first.keys();
+  for (const i of [4, 0, 2, 5, 1]) { first.v.sel = k[i]; first.v.action("pin", first.cx); }
+  await saved();
+  const text = recordFiles[PINS];
+  const ids = allPins(JSON.parse(text)).map((p) => p.id);
+  expect(ids.length).toBe(5);
+  // A new pane on the same session reads that file.
+  const { v } = await pane(fixture("--extra", "6"));
+  await new Promise((r) => setTimeout(r, 40));
+  expect(v.pinnedList().map((p) => p.pin.id).sort()).toEqual([...ids].sort());
+  expect(v.pinnedList().map((p) => p.key)).toEqual([0, 1, 2, 4, 5].map((i) => k[i]));
+  expect(recordFiles[PINS]).toBe(text);
+});
+
+// The Pinned view with three pins, in this pane (under 480 px), the pointer at x on the press.
+async function threePins(x) {
+  const { v, cx, k } = await pinsShown(["--extra", "6"], [1, 3, 5]);
+  const press = (key, at = x) => { v.pressX = at; v.bodyW = v.width; v.click(key, cx); };
+  return { v, cx, k, press, keyOf: (i) => compactPins(v)[i].key };
+}
+
+test("the Pinned column: a click on a pin's unpin control unpins it and it leaves the list; the turn is not opened or selected, and u puts it back", async () => {
+  const { v, cx, press, keyOf } = await threePins(390);
+  const [a, b, c] = [0, 1, 2].map(keyOf);
+  v.sel = a;
+  const n = v.findTurn(b).n;
+  press(b);
+  expect(v.isPinned(b)).toBe(false);
+  expect(compactPins(v).map((r) => r.key)).toEqual([a, c]);
+  expect(v.sel).toBe(a);
+  expect(v.open.has(b)).toBe(false);
+  expect(v.openWait ?? null).toBe(null);
+  // Nothing opens it later either (openAfterPress's timer).
+  cx.flush(1000, 3);
+  expect(v.open.has(b)).toBe(false);
+  expect(v.sel).toBe(a);
+  expect(toastText(v)).toBe(`Unpinned #${n} · u to undo`);
+  v.key(keyEv("u"), cx);
+  expect(compactPins(v).map((r) => r.key)).toEqual([a, b, c]);
+  draw(v, cx);
+});
+
+test("the Pinned column: a press on a pin anywhere but its unpin control still selects it and keeps the pin", async () => {
+  const { v, cx, press, keyOf } = await threePins(60);
+  const b = keyOf(1);
+  press(b);
+  expect(v.isPinned(b)).toBe(true);
+  expect(v.sel).toBe(b);
+  // Just left of the control, too.
+  const c = keyOf(2);
+  press(c, v.width - PIN_ROW.PAD_X - PIN_ROW.UNPIN - 4);
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+  // An open pin is the full card: its own pin does that, not the row's right edge.
+  v.toggle(c, cx);
+  press(c, v.width - 8);
+  expect(v.isPinned(c)).toBe(true);
+  draw(v, cx);
+});
+
+test("the Pinned column: the unpin control is the heading's button, shown on hover and on the selected pin, and the text stays put", async () => {
+  const { v, keyOf } = await threePins(390);
+  const rows = compactPins(v);
+  const r = rows[1];
+  v.sel = rows[0].key;
+  const rest = itemWords(v, r);
+  const own = ownOf(rest, "th-unpin-2");
+  expect(own.length).toBeGreaterThan(0);
+  // As the heading's buttons (iconButton): 24 px, radius 5, a 14 px icon, the hover fill and a tooltip.
+  for (const [m, x] of [["size", 24], ["rounded", 5]]) expect(own.some((e) => e[0] === m && e[1] === x)).toBe(true);
+  expect(svgs(own)).toEqual(["pin-off.svg"]);
+  expect(own.some((e) => e[0] === "size" && e[1] === 14)).toBe(true);
+  expect(own.some((e) => e[0] === "bg" && e[1] === theme.hover)).toBe(true);
+  expect(own.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n}`]);
+  // At rest it is clear, and the row's hover shows it (Herdr restyles only the hovered element,
+  // so the row carries the colour the control takes).
+  expect(own.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.foreground]); // its own hover
+  const head = rest.slice(rest.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X));
+  expect(head.filter((e) => e[0] === "text_color").slice(0, 2).map((e) => e[1])).toEqual(["#00000000", theme.dim]);
+  // The selected pin shows it at rest, with p in its tooltip.
+  v.sel = r.key;
+  const on = itemWords(v, r);
+  const ownOn = ownOf(on, "th-unpin-2");
+  expect(ownOn.filter((e) => e[0] === "text_color").map((e) => e[1])).toEqual([theme.dim, theme.foreground]);
+  expect(on.slice(on.findIndex((e) => e[0] === "px" && e[1] === PIN_ROW.PAD_X)).some((e) => e[0] === "text_color" && e[1] === "#00000000")).toBe(false);
+  expect(ownOn.filter((e) => e[0] === "tooltip").map((e) => e[1])).toEqual([`Unpin #${r.turn.n} (p)`]);
+  // Over the row, so the text does not move when it shows: the same layout either way.
+  expect(own.some((e) => e[0] === "absolute")).toBe(false);
+  const layout = (c) => c.filter((e) => ["px", "pt", "pb", "pr", "pl", "w", "mr", "gap", "absolute", "right", "top", "bottom"].includes(e[0])).map((e) => e.join(" "));
+  expect(layout(on)).toEqual(layout(rest));
+  expect(rest.some((e) => e[0] === "absolute")).toBe(true);
+  // The text keeps clear of it: the lines' column leaves its room, and the prompt is cut for
+  // the row's width less that room.
+  expect(rest.some((e) => e[0] === "pr" && e[1] === PIN_ROW.UNPIN_ROOM)).toBe(true);
+  const textW = 300 - 2 * PIN_ROW.PAD_X - PIN_ROW.BADGE - PIN_ROW.GAP_X - PIN_ROW.UNPIN_ROOM;
+  const long = pinRowShape({ prompt: "ab ".repeat(200), reply: "cd ".repeat(200), width: 300 });
+  expect(long.prompt[0].length).toBeLessThanOrEqual(Math.floor(textW / ROW.PROMPT_CHAR));
+  expect(long.prompt[0].length).toBeGreaterThan(Math.floor(textW / ROW.PROMPT_CHAR) - 3);
+  expect(long.reply.length).toBeLessThanOrEqual(Math.floor(textW / (ROW.REPLY_CHAR * (PIN_ROW.REPLY_SIZE / 13))) + 1);
+  expect({ prompt: r.shape.prompt, reply: r.shape.reply, height: r.shape.height }).toEqual(pinRowShape({ prompt: pinPromptText(r.turn.prompt), reply: r.shape.reply, width: v.width }));
+  // No Tab stop: the heading's buttons have none either.
+  const focusable = (c) => c.some((e) => ["track_focus", "tab_index", "tab_stop", "focusable"].includes(e[0]));
+  expect(focusable(own)).toBe(false);
+  expect(focusable(ownOf(frame(v, { ...makeCx() }), "th-pin"))).toBe(false);
+  void keyOf;
+});
+
+test("in the list, a press at the right edge of a pinned turn's row is a press on the turn: only the Pinned view's rows have the control", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "6");
+  const k = keys()[1];
+  v.sel = k;
+  v.action("pin", cx);
+  v.sel = null;
+  v.pressX = v.width - 8;
+  v.bodyW = v.width;
+  v.click(k, cx);
+  expect(v.isPinned(k)).toBe(true);
+  expect(v.sel).toBe(k);
+});
+
+test("the Pinned column: p on a selected pin still unpins it, and u puts it back", async () => {
+  const { v, cx, keyOf } = await threePins(390);
+  const b = keyOf(1);
+  v.sel = b;
+  v.key(keyEv("p"), cx);
+  expect(v.isPinned(b)).toBe(false);
+  expect(toastText(v)).toMatch(/^Unpinned #\d+ · u to undo$/);
+  v.key(keyEv("u"), cx);
+  expect(v.isPinned(b)).toBe(true);
 });
 
 test("a digit returns: the turn opens, stays selected, and shows from its head", async () => {
@@ -4882,12 +5035,12 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   expect(v.view).toBe("pinned");
   expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
   expect(toastText(v)).toBe("Pinned shows here: the Pinned column needs Threads 480 px wide");
-  expect(v.headerText()).toBe("3 of 5");
+  expect(v.headerText()).toBe("3 of 7");
   // The heading leads: the pin and "Pinned", then the agent badge, then the count.
   const head = (x) => { rec = []; x.header(theme); const c = rec; rec = null; return c.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]); };
   const hv = head(v);
   expect(hv.indexOf("Pinned")).toBeGreaterThanOrEqual(0);
-  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 5"));
+  expect(hv.indexOf("Pinned")).toBeLessThan(hv.indexOf("3 of 7"));
   rec = []; v.header(theme); const ids = rec.filter((e) => e[0] === "id").map((e) => e[1]); rec = null;
   expect(ids.indexOf("th-pinned-heading")).toBeGreaterThanOrEqual(0);
   expect(ids.indexOf("th-pinned-heading")).toBeLessThan(ids.indexOf("th-badge"));
@@ -4919,6 +5072,7 @@ test("v in a pane under 480 px shows Pinned in the same pane: pins oldest first,
   for (const p of [...v.pinnedList()]) v.unpin(p, cx);
   v.setView("pinned");
   expect(v.rows()).toEqual([expect.objectContaining({ kind: "note", key: "pins:none" })]);
+  expect(v.rows()[0].text).toMatch(/and 1 to 7 bring you back to each\.$/);
   draw(v, cx);
 });
 
@@ -4967,7 +5121,7 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   w.listH = 900;
   w.rowsKey = null;
   expect(w.rows()[0].kind).not.toBe("spacer");
-  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 5" at 240 px.
+  // Its header: the Pinned heading, no badge, the pin button and "All turns", with room for "1 of 7" at 240 px.
   w.width = 240;
   expect(w.headerButtons().map((b) => [b[0], b[6]])).toEqual([["th-pinned", "All turns"]]);
   expect(w.headerButtons()[0][2]).toBe("Back to Threads, all turns (v)");
@@ -4977,10 +5131,10 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   expect(w.headerButtons().map((b) => b[0])).toEqual(["th-pin", "th-pinned"]);
   w.width = 240;
   expect(w.headerLayout().badge).toBe(0);
-  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 5".length * 6.6));
+  expect(w.headerLayout().text).toBeGreaterThanOrEqual(Math.ceil("1 of 7".length * 6.6));
   rec = []; w.header(theme); const wh = rec; rec = null;
   const ws = wh.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 5"]);
+  expect(ws.slice(0, 2)).toEqual(["Pinned", "1 of 7"]);
   expect(ws).not.toContain("Claude");
   // The accent: the header's tint, and its bar along the top.
   expect(wh.some((e) => e[0] === "bg" && e[1] === alphaForTest(theme.accent, 0.08))).toBe(true);
@@ -5235,6 +5389,22 @@ test("Pinned column: five pins, one day apart, fit a 240 to 400 px column at a 1
   expect(compactPins(v).every((r) => v.height(r) === pinRowHeight(2))).toBe(true);
   expect(long.reduce((sum, r) => sum + v.height(r), 0)).toBeLessThanOrEqual(PIN_LIST_H);
   draw(v, cx);
+});
+
+test("Pinned column: seven pins, one day apart, fit a 240 to 400 px column at a 1150 px window without scrolling", async () => {
+  const { v, cx } = await pinsShown(["--only", "7", "--gap", "86400"], [6, 4, 2, 0, 3, 1, 5]);
+  for (const width of [240, 280, 320, 400]) {
+    v.width = width;
+    v.rowsKey = null;
+    const rows = v.rows();
+    expect(rows.filter((r) => r.kind === "pday").length).toBe(7);
+    expect(compactPins(v).map((r) => r.pinNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    draw(v, cx);
+    expect(lastList.sizes.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(PIN_LIST_H);
+  }
+  // The longest rows (two prompt lines each) with a pill over each still fit.
+  const pday = v.rows().find((r) => r.kind === "pday");
+  expect(7 * pinRowHeight(2) + 7 * v.height(pday)).toBeLessThanOrEqual(PIN_LIST_H);
 });
 
 test("a closed running pin keeps its clock ticking: the 1 s timer still sees a live turn shown", async () => {
