@@ -127,6 +127,7 @@ test("antigravity: the session id is the conversation's folder in agy's layout, 
   expect(idOf(put("odd", "brain", "0000.00a7", ...logs, "transcript_full.jsonl"))).toBe("transcript_full");
   expect(idOf(put("other", "brain", ID, ...logs, "transcript_part.jsonl"))).toBe("transcript_part");
   expect(idOf(put("near", "mybrain", ID, ...logs, "transcript_full.jsonl"))).toBe("transcript_full");
+  expect(idOf(put("bak", "brain", ID, ...logs, "transcript_full.jsonl.bak"))).toBe("transcript_full.jsonl.bak");
   // Another agent's file in that layout keeps its name: the rule is Antigravity's alone.
   const claude = join(base, "claude", "brain", ID, ...logs, "transcript_full.jsonl");
   mkdirSync(dirname(claude), { recursive: true });
