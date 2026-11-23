@@ -5040,6 +5040,29 @@ export default class Threads extends View {
     const ask = this.scrollAsk;
     this.scrollAsk = null;
     this.listOff = listOffset(this.slotPre(slots), this.listOff ?? 0, this.listH, ask, range.start, range.end);
+    // What lies under a still pointer in the Pinned view: its rows' heights and where the list
+    // is (unpinDrawn). A short list: a few dozen numbers.
+    this.pinLayout = this.view === "pinned" ? `${slots.join(",")}|${Math.round(this.listOff)}|${range.start}` : null;
+  }
+  // The layout a hover was seen on: the last one drawn, and the wheels since (a wheel moves the
+  // list before the pane draws again).
+  pinSeenSig() { return `${this.pinLayout}|${this.wheelN ?? 0}`; }
+  // Whether a press on a closed pin is on its unpin button while the button is drawn. The
+  // selected pin draws it at rest. Another draws it while the row is hovered, which gpui works
+  // out from the pointer's moves and paints with no event to the pane, so the pane asks for
+  // what makes it so: the pointer's last move was over the button at the press's place, with
+  // nothing moved under it since (no new layout of the rows, no wheel). A pointer resting
+  // where the list redrew, a tap straight after the window took focus, or a row scrolled
+  // under a still pointer: the press selects the pin, and nothing is lost.
+  unpinDrawn(key) {
+    const w = this.bodyW ?? this.width;
+    if (!pinUnpinHit(this.pressX, w)) return false;
+    if (this.sel === key) return true;
+    const m = this.pinMoved;
+    if (!m || m.sig !== this.pinSeenSig()) return false;
+    const p = this.pressAt;
+    if (m.at && p) return Math.abs(m.at.x - p.x) <= 1 && Math.abs(m.at.y - p.y) <= 1;
+    return Math.abs(m.x - this.pressX) <= 1;
   }
   // The rows' tops in a list's heights, and its end: made once for each set of heights.
   slotPre(slots) {
@@ -6064,7 +6087,7 @@ export default class Threads extends View {
     if (/^\d+$/.test(kind)) {
       // A closed pin's unpin control (pinRow), told apart by position: the pin goes, and the
       // turn is neither selected nor opened. The notice offers undo (unpin).
-      if (this.view === "pinned" && !this.open.has(key) && pinUnpinHit(this.pressX ?? this.mouseX, this.bodyW ?? this.width)) {
+      if (this.view === "pinned" && !this.open.has(key) && this.unpinDrawn(key)) {
         const p = this.pinnedList().find((x) => x.key === key);
         this.pressX = null;
         if (p) { this.unpin(p, cx); return cx.notify(); }
@@ -9181,6 +9204,8 @@ export default class Threads extends View {
         if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
+        // Where the pointer last moved in the Pinned view, and on what layout (unpinDrawn).
+        this.pinMoved = this.view === "pinned" ? { x: this.mouseX, at: e.position ? { x: e.position.x, y: e.position.y } : null, sig: this.pinSeenSig() } : null;
         this.notePointer(e.position, cx);
       })
       // Where the press landed, for the action bar (a list item takes one click handler,

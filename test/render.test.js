@@ -4416,11 +4416,17 @@ test("pins saved before seven load unchanged: the same pins, in the same order, 
   expect(recordFiles[PINS]).toBe(text);
 });
 
-// The Pinned view with three pins, in this pane (under 480 px), the pointer at x on the press.
+// The Pinned view with three pins, in this pane (under 480 px). The pointer goes through the
+// list's own handlers (threads-body): a frame is drawn, then the pointer moves to x (unless
+// move is false) and presses there, and the list reports the item pressed (click).
 async function threePins(x) {
   const { v, cx, k } = await pinsShown(["--extra", "6"], [1, 3, 5]);
-  const press = (key, at = x) => { v.pressX = at; v.bodyW = v.width; v.click(key, cx); };
-  return { v, cx, k, press, keyOf: (i) => compactPins(v)[i].key };
+  const body = () => { const c = frame(v, cx); return { move: handlerAfterId(c, "threads-body", "on_mouse_move"), down: handlerAfterId(c, "threads-body", "on_mouse_down") }; };
+  // pos false: an event with no window position (only the list's own x).
+  const ev = (at, pos = true) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y: 300 }, ...(pos ? { position: { x: lx, y: 300 } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
+  const point = (at = x, pos = true) => body().move(ev(at, pos), cx);
+  const press = (key, at = x, { move = true, pos = true } = {}) => { const h = body(); if (move) h.move(ev(at, pos), cx); h.down(ev(at, pos), cx); v.click(key, cx); };
+  return { v, cx, k, press, point, keyOf: (i) => compactPins(v)[i].key };
 }
 
 test("the Pinned column: a click on a pin's unpin control unpins it and it leaves the list; the turn is not opened or selected, and u puts it back", async () => {
@@ -4442,6 +4448,75 @@ test("the Pinned column: a click on a pin's unpin control unpins it and it leave
   v.key(keyEv("u"), cx);
   expect(compactPins(v).map((r) => r.key)).toEqual([a, b, c]);
   draw(v, cx);
+});
+
+test("the Pinned column: a press in the control's column is an unpin only while the button is drawn: hovered after a move there, or on the selected pin", async () => {
+  const { v, cx, press, point, keyOf } = await threePins(390);
+  const [a, b, c] = [0, 1, 2].map(keyOf);
+  // No move over the list yet (a tap straight after the window took focus, a pointer resting
+  // there since before the list drew): the button was never drawn, so the press selects.
+  press(b, 390, { move: false });
+  expect(v.isPinned(b)).toBe(true);
+  expect(v.sel).toBe(b);
+  // Selected, the button is drawn at rest: the same press unpins.
+  press(b, 390, { move: false });
+  expect(v.isPinned(b)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // A press at a place the pointer never moved to (no move seen there) selects.
+  v.sel = a;
+  point(390);
+  press(c, 376, { move: false });
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+  // With no window position on the events, the list's own x says the place.
+  v.sel = a;
+  point(390, false);
+  press(c, 376, { move: false, pos: false });
+  expect(v.isPinned(c)).toBe(true);
+  v.sel = a;
+  point(390, false);
+  press(c, 390, { move: false, pos: false });
+  expect(v.isPinned(c)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // A move there, then frames with nothing moved under the pointer (a clock tick): still drawn.
+  v.sel = a;
+  point(390);
+  draw(v, cx);
+  press(c, 390, { move: false });
+  expect(v.isPinned(c)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // A move there, then the rows move under a still pointer (a pin above goes): the hover has
+  // not been seen on what is under it now, so the press selects.
+  v.sel = a;
+  point(390);
+  v.key(keyEv("p"), cx);
+  expect(v.isPinned(a)).toBe(false);
+  press(c, 390, { move: false });
+  expect(v.isPinned(c)).toBe(true);
+  expect(v.sel).toBe(c);
+  v.key(keyEv("u"), cx);
+  // A wheel under a still pointer, likewise.
+  v.sel = null;
+  point(390);
+  v.wheelN = (v.wheelN ?? 0) + 1;
+  press(b, 390, { move: false });
+  expect(v.isPinned(b)).toBe(true);
+});
+
+test("the Pinned column: only the button's own 24 px is the control: a press at the row's edge, or just left of the button, selects", async () => {
+  const { v, press, keyOf } = await threePins(390);
+  const b = keyOf(1);
+  const left = v.width - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN;
+  for (const x of [v.width - 3, v.width - PIN_ROW.UNPIN_R + 1, left - 1]) {
+    v.sel = null;
+    press(b, x);
+    expect(v.isPinned(b)).toBe(true);
+    expect(v.sel).toBe(b);
+  }
+  // Its two edges are on it.
+  v.sel = null;
+  press(b, left);
+  expect(v.isPinned(b)).toBe(false);
 });
 
 test("the Pinned column: a press on a pin anywhere but its unpin control still selects it and keeps the pin", async () => {
