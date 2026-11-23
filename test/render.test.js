@@ -6,7 +6,7 @@ import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
+import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
@@ -20382,4 +20382,24 @@ test("the opening: read, with its first rows still being built, keeps the loadin
     expect(said).toContain("Reading this session");
     expect(v.openActive()).toBe(true);
   } finally { v.rows = rows; v.rowJob = null; v.baseRows = null; }
+});
+
+test("the opening: a new session on the list while the first is read starts from its own figures, not the first one's peaks", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  const was = v.openInfo(v.current());
+  expect(was.turns).toBeGreaterThan(3);
+  expect(was.pct).toBeGreaterThan(0);
+  // A /clear part way: a new session of 5 KB, nothing of it read yet, on the same list.
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.size = 5000;
+  v.sessions.push(n);
+  expect(v.current()).toBe(n);
+  const now = v.openInfo(n);
+  expect([now.offset, now.size, now.pct, now.turns]).toEqual([0, 5000, null, 0]);
+  expect(openLines(now)[1]).not.toContain("of");
+  expect(openLines(now)[2]).toBe("");
+  go(() => false);
 });

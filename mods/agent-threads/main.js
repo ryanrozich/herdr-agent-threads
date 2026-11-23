@@ -9397,6 +9397,9 @@ export default class Threads extends View {
   // the session changed, as the status line's are (statusStats, whose tokens these are).
   openInfo(s) {
     const o = this.opening;
+    // The bar and the peaks are this session's: another one on the list (a /clear, a restart
+    // while the first still loads) starts from its own.
+    if (o.peakFor !== s) { o.peakFor = s; o.peak = {}; o.pct = null; }
     const pct = this.readPct(s) ?? (s.loaded ? 100 : null);
     // The bar never goes back (a chunk read again at a smaller size, a rewind).
     if (pct != null) o.pct = Math.max(o.pct ?? 0, pct);
