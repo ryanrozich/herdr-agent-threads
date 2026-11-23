@@ -27,11 +27,9 @@ export function keyAction(e, filtering = false, quoteKey = "q") {
   const m = e?.modifiers ?? {};
   if (m.platform || m.control || m.alt || m.function) return null;
   const k = e?.key ?? "";
-  // ? is Shift-/ on most layouts; Herdr may name it either way. Shift w steps the reading
-  // width (Comfortable, Wide, Full), beside w, which fits the pane to it.
-  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "w" || k === "W" ? (filtering ? null : "widthStep") : k === "?" || k === "/" ? (filtering ? null : "keys") : k === "n" || k === "N" ? (filtering ? null : "newerMatch") : null;
+  // ? is Shift-/ on most layouts; Herdr may name it either way.
+  if (m.shift) return k === "g" || k === "G" ? "latest" : k === "?" || k === "/" ? (filtering ? null : "keys") : k === "n" || k === "N" ? (filtering ? null : "newerMatch") : null;
   if (k === "G") return "latest";
-  if (k === "W") return filtering ? null : "widthStep";
   if (k === "N") return filtering ? null : "newerMatch";
   if (filtering && !["escape", "up", "down", "enter"].includes(k)) return null;
   return KEYS[k] ?? (k === quoteKey && /^[a-z]$/.test(k) ? "quote" : SEARCH_KEYS[k] ?? PIN_KEYS[k] ?? TRAJ_KEYS[k] ?? null);
@@ -143,7 +141,7 @@ export function keySheet(quoteKey = "q", { outline = true, ledger = false, inPan
       [["Tab", "Shift Tab"], "Next or previous control, then ↵ or Space to press it"], [["Esc", ","], "Close it"],
     ]],
     ["View", [
-      [["w"], "Fit to the reading width"], [["Shift w"], "Step the reading width: Comfortable, Wide, Full"], [["-", "="], "Pinned column or Trajectory pane narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
+      [["w"], "Fit the pane to its column"], [["-", "="], "Pinned column or Trajectory pane narrower or wider"], [[","], "Settings"], [["?"], "Show or hide these keys"],
     ]],
   ];
 }
@@ -1103,12 +1101,11 @@ export const LINE_RATIO = 1.57;
 export const TEXT_RANGE = Object.freeze([12, 18]);
 export const MEASURE = 70;
 export const PROSE_EM = 0.47;
-// settings width: how long a reading line may be, in characters. Comfortable is MEASURE
-// (the line the owner found right, 461 px at 14 px), Wide is 90 (the top of
-// Butterick's 45 to 90), Full has no limit. A bubble stops at Wide's line even in Full.
-export const WIDTHS = Object.freeze({ comfortable: MEASURE, wide: 90, full: Infinity });
-export const WIDTH_NAMES = Object.freeze(Object.keys(WIDTHS));
-export function widthChars(width) { return WIDTHS[width] ?? MEASURE; }
+// The text column steps with the pane (the owner's breakpoints): a line of 70 characters
+// (MEASURE, the line the owner found right, 461 px at 14 px), then 90 (the top of
+// Butterick's 45 to 90) and 120 as the pane grows. A bubble stops at the 90 line.
+export const STEPS = Object.freeze([MEASURE, 90, 120]);
+export const BUBBLE_CHARS = 90;
 export function readType(size = TEXT_SIZE, chars = MEASURE) {
   const px = Number.isFinite(size) ? Math.max(TEXT_RANGE[0], Math.min(TEXT_RANGE[1], size)) : TEXT_SIZE;
   const k = px / 13;
@@ -1117,7 +1114,7 @@ export function readType(size = TEXT_SIZE, chars = MEASURE) {
   return Object.freeze({
     size: px, small: px - 0.5, line: Math.round(px * LINE_RATIO),
     prompt: ROW.PROMPT_CHAR * k, agent: ROW.AGENT_CHAR * k, reply: ROW.REPLY_CHAR * k,
-    measure: line(n), bubble: line(Math.min(n, WIDTHS.wide)),
+    measure: line(n), bubble: line(Math.min(n, BUBBLE_CHARS)),
   });
 }
 
@@ -1132,20 +1129,45 @@ export function rowTextWidth(width, _agent = false, size = TEXT_SIZE, chars = ME
 // at most one reading line.
 export function replyWidth(width) { return Math.max(60, width - 2 * ROW.PAD_X); }
 export function readWidth(width, size = TEXT_SIZE, chars = MEASURE) { return Math.min(replyWidth(width), readType(size, chars).measure); }
-// Side gutters: GUTTER.PCT of the pane each side, never under MIN or over MAX px. The column
-// holds the text, at most one reading line, and the turns' rows pad ROW.PAD_X inside it, so
-// columnWidth is the text plus 2 * ROW.PAD_X; a pane wider than that centres it, which
-// splits the spare room evenly. Bubbles and replies end at the same edge.
+// Side gutters: from the pane's edge to the text, at most MAX px. The column holds the text,
+// one reading line of its step, and the turns' rows pad ROW.PAD_X inside it, so columnWidth
+// is the text plus 2 * ROW.PAD_X; a pane wider than that centres it, which splits the spare
+// room evenly, and a resize inside a step moves only those margins. A pane too narrow for a
+// whole line and MAX each side takes the room from the gutters first, down to MIN, and only
+// then from the text, which follows the pane from there (no snap-back to a wider pane).
+// Bubbles and replies end at the same edge. gutter() is the rail's own measure (railRoom).
 export const GUTTER = Object.freeze({ PCT: 0.08, MIN: 24, MAX: 56 });
 export function gutter(paneW) { return Math.max(GUTTER.MIN, Math.min(GUTTER.MAX, Math.round(paneW * GUTTER.PCT))); }
 export function columnWidth(paneW, size = TEXT_SIZE, chars = MEASURE) {
-  const text = Math.max(60, Math.min(readType(size, chars).measure, paneW - 2 * gutter(paneW)));
+  const line = readType(size, chars).measure;
+  const side = Math.max(GUTTER.MIN, Math.min(GUTTER.MAX, Math.floor((paneW - line) / 2)));
+  const text = Math.max(60, Math.min(line, paneW - 2 * side));
   return Math.min(paneW, text + 2 * ROW.PAD_X);
 }
 // The width that fits a reading line: the line and GUTTER.MAX each side. 573 px at 14 px
-// (Wide 704); it scales with Text size (505 at 12, 704 at 18). Cmd-Shift-T opens Threads at
-// this width and "Keep the pane at this width" holds it there. Full has none (Infinity).
+// for 70 characters, 704 for 90 and 902 for 120; it scales with Text size. Cmd-Shift-T opens
+// Threads at its step's width, and w fits the pane to it.
 export function fitWidth(size = TEXT_SIZE, chars = MEASURE) { return readType(size, chars).measure + 2 * GUTTER.MAX; }
+// The column's step for a pane (STEPS, in characters): a step's line once the pane fits it
+// (fitWidth: 704 and 902 px at 14 px), and back down only STEP_BACK px under that (688 and
+// 886), so a pane a few px either side of a switch point does not flip the column (and
+// re-wrap every turn) on each move. cur: the step the pane shows now, or null for none yet.
+// The switch points and the 16 px scale with the text size.
+export const STEP_BACK = 16;
+// After a resize that changes the column (another step, or a pane narrower than the narrowest
+// step), the turns are laid out again once the pane has been still this long. A person who
+// stops moving with the button still down usually moves on within it (the owner's report on
+// 300 ms, 21 Nov 2026). A resize inside a step lays nothing out again, so nothing waits.
+export const REWRAP_PAUSE_MS = 1200;
+export function columnStep(paneW, size = TEXT_SIZE, cur = null) {
+  if (!Number.isFinite(paneW)) return cur ?? STEPS[0];
+  const back = Math.round((STEP_BACK * readType(size).size) / TEXT_SIZE);
+  let i = STEPS.indexOf(cur);
+  if (i < 0) i = 0;
+  while (i + 1 < STEPS.length && paneW >= fitWidth(size, STEPS[i + 1])) i++;
+  while (i > 0 && paneW < fitWidth(size, STEPS[i]) - back) i--;
+  return STEPS[i];
+}
 
 // ---- pasted images over a message ----
 // Tiles over the message, on the right: each THUMB high, about a third of the widest bubble
@@ -2477,7 +2499,110 @@ export function landExact(slots, i, want) {
   }
   return { j: 0, how: "top", y, lift: 0 };
 }
-// The rail shows only in a pane that holds a whole Comfortable reading line (MEASURE
+// The line on screen is kept across a re-wrap (main.js takeAnchor and holdPlace) from the
+// list's scroll offset, which Herdr's v_virtual_list keeps in px and gives no read of. pre
+// is the rows' tops (pre[i]) and the list's end (pre[n]), in the layout's heights.
+// listOffset: the offset after a layout, from the one before (off), as Herdr works it out
+// (gpui-component's virtual_list.rs). ask is the pane's scroll since the last layout, which
+// Herdr applies at that layout, before it picks the rows to draw: { i, how: "center" } puts
+// row i's middle at the list's middle, any other how brings row i to the near edge (its top
+// to the top edge when it is above, its bottom to the bottom edge when it is below), and
+// { end } is scroll_to_bottom, which is the near edge for the last row. Then the offset is
+// held to the list, and to the rows drawn, [start, end): Herdr draws from the first row whose
+// bottom is past the top edge to two rows past the first whose bottom is past the bottom
+// edge, or to the list's end. So start's top is at or above the top edge and its bottom below
+// it, and when end is short of the list's end, row end-2 is the first whose bottom is past
+// the bottom edge. That puts right a scroll the pane did not see.
+export function listOffset(pre, off, H, ask, start, end) {
+  const n = pre.length - 1;
+  let o = off;
+  const i = ask?.end ? n - 1 : ask?.i;
+  if (ask && i >= 0 && i < n) {
+    const top = pre[i];
+    const bot = pre[i + 1];
+    if (ask.how === "center") o = (top + bot - H) / 2;
+    else if (top < o) o = top;
+    else if (bot > o + H) o = bot - H;
+  }
+  o = Math.max(0, Math.min(o, pre[n] - H));
+  // A bound that is strict (a bottom past an edge) keeps half a px inside it.
+  if (start >= 0 && start < n) {
+    let lo = pre[start];
+    let hi = Math.max(lo, pre[start + 1] - 0.5);
+    if (end > start + 1 && end < n) {
+      lo = Math.max(lo, pre[end - 2] - H);
+      hi = Math.min(hi, pre[end - 1] - H - 0.5);
+    }
+    if (lo > hi) { lo = pre[start]; hi = Math.max(lo, pre[start + 1] - 0.5); }
+    o = Math.max(lo, Math.min(o, hi));
+  }
+  return o;
+}
+// The row at the top edge for offset off, the last whose top is at or above it, and the share
+// of its height above the edge.
+export function placeAt(pre, off) {
+  let lo = 0;
+  let hi = pre.length - 2;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (pre[m] <= off) lo = m;
+    else hi = m - 1;
+  }
+  const h = pre[lo + 1] - pre[lo];
+  return { i: lo, share: h > 0 ? Math.max(0, Math.min(1, (off - pre[lo]) / h)) : 0 };
+}
+// How to bring the offset from off to want in one layout, when Herdr can only bring a row to
+// the near edge or put its middle at the middle. The pane can change row 0's height by lift
+// px for that layout and put it back at the next. The offset stays in px, so everything below
+// row 0 then moves by lift. Row 0 can be made taller, or shorter while it keeps 1 px and is
+// above the view. The options, each with the rows on both sides of the edge:
+// - a row's top at the top edge, when want is above off;
+// - a row's bottom at the bottom edge, when want is below off (its top must not be above
+//   the top edge, or it would go to the top);
+// - a row's middle at the middle.
+// The one with the smallest lift wins: the frame with it shows the place that many px off.
+// Down (want below off) there is a landing with nothing off, tried first: the row k that will
+// cross the bottom edge, given for that layout a height (slot) that puts its bottom at the
+// bottom edge, below the view: what it shows is its top part, which does not move. With its
+// top at or below off, the near edge brings that bottom to the bottom edge; with its top above
+// off (so above want too: a row taller than the view), its middle at the middle does, its
+// bottom still below the edge. Only the rows below it move when its height comes back.
+// Returns { j, how, lift, slot? }, { end } for the end of the list, or null when the offset is
+// at want already.
+export function anchorPlan(pre, want, off, H) {
+  const n = pre.length - 1;
+  if (Math.abs(want - off) < 0.5) return null;
+  if (want >= pre[n] - H - 0.5) return { end: true, lift: 0 };
+  if (want > off) {
+    const k = placeAt(pre, want + H - 0.5).i;
+    if (pre[k] >= off) return { j: k, how: "top", lift: 0, slot: { i: k, h: Math.round(want + H - pre[k]) } };
+    return { j: k, how: "center", lift: 0, slot: { i: k, h: Math.round(2 * (want - pre[k]) + H) } };
+  }
+  const short = 1 - pre[1];
+  let best = null;
+  const take = (j, how, lift) => {
+    // Row 0 kept at 1 px and above the view, and the lifted list still long enough for want.
+    if (j < 1 || j >= n || lift < short || (lift < 0 && want < pre[1] + lift) || want > pre[n] + lift - H) return;
+    if (!best || Math.abs(lift) < Math.abs(best.lift)) best = { j, how, lift: Math.round(lift) };
+  };
+  // Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
+  if (want < off) {
+    const t = placeAt(pre, want).i;
+    for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
+  }
+  if (want > off) {
+    const b = placeAt(pre, want + H).i;
+    for (const k of [b - 1, b]) {
+      const lift = want + H - pre[k + 1];
+      if (pre[k] + lift >= off) take(k, "top", lift);
+    }
+  }
+  const c = placeAt(pre, want + H / 2).i;
+  for (const j of [c - 1, c, c + 1]) if (j >= 0 && j < n) take(j, "center", want + H / 2 - (pre[j] + pre[j + 1]) / 2);
+  // Near the start with no option: the start at the top.
+  return best ?? (want < off ? { j: 0, how: "top", lift: 0 } : null);
+}
+// The rail shows only in a pane that holds a whole 70 character reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
 // line, and the rail gives it the room, as Codex hides its side rail. 549 px at 14 px.
 export function railRoom(paneW, size = TEXT_SIZE) {
@@ -2685,9 +2810,7 @@ export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 // characters of its prompt a line (the row's text is the column less PIN_ROW's 54 px of
 // padding and badge); the owner found one step narrower too tight. A pane under 620 px gives
 // the column less, down to 240 px (PIN_COL[0]), so that Threads keeps at least
-// PIN_MAIN_MIN less a step if Herdr takes all the room from it: 373 px beside a 573 px pane. Mostly it does not: with
-// readingWidth on, Threads sits at its reading width (about 570 px at text size 14) and
-// Herdr takes the column's room from the terminal beside it. A pane from
+// PIN_MAIN_MIN less a step if Herdr takes all the room from it: 373 px beside a 573 px pane. A pane from
 // PIN_SPLIT_MIN (480 px, so a pane set to 500 that measures a pixel or two less still
 // counts) gets the column; narrower, Pinned shows in the same pane. Herdr takes the column's
 // room from the pane's neighbours as well as from Threads. A width the owner set with - and =

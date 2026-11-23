@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utim
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
@@ -3146,6 +3146,8 @@ test("V3a: at zoom 0.9 the panel lays out in design px and hands the list the sa
     rec = null;
     handlerAfterId(calls, "threads-root", "on_size_change")({ width: reported, height: 800 * zoom }, cx);
     handlerAfterId(calls, "threads-listbox", "on_size_change")({ width: reported, height: 700 * zoom }, cx);
+    // Each run is a pane of its own size, not a drag: the column takes it at once (REWRAP_PAUSE_MS).
+    v.sizeAt = Date.now() - 1000;
     rec = [];
     v.render(cx);
     const drawn = rec;
@@ -3186,6 +3188,7 @@ test("V3a: at zoom 0.9 a press in the action bar hits the button drawn there", a
       const calls = rec;
       rec = null;
       handlerAfterId(calls, "threads-root", "on_size_change")({ width: w * 0.9, height: 720 }, cx);
+      v.sizeAt = Date.now() - 1000;
       rec = [];
       v.render(cx);
       const down = handlerAfterId(rec, "threads-body", "on_mouse_down");
@@ -4988,9 +4991,6 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   expect(w.view).toBe("pinned");
   // = and - in the column: the column 40 px wider or narrower and Threads the other way, so
   // the terminal keeps its width (a drag on the divider between them resizes Threads alone).
-  // (Keep to reading width off here, so Threads may be wider than the reading width.)
-  v.prefs = { ...v.prefs, readingWidth: false };
-  w.prefs = { ...w.prefs, readingWidth: false };
   state.shared["threads.width"] = { p2: 698, p3: 250 }; // measured: the px sizes less the 2 px frame
   log = [];
   w.key(keyEv("="), cx2);
@@ -4998,13 +4998,11 @@ test("v in a pane from 480 px splits the Pinned column beside it, 380 px at 700,
   log = [];
   v.key(keyEv("-"), cx);
   expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 700 }]);
-  // With it on (the default), - narrows the column but Threads stops at the reading width:
-  // the terminal takes the rest.
-  v.prefs = { ...v.prefs, readingWidth: true };
+  // No cap at the reading width: Threads takes all 40 px however narrow its column is.
   state.shared["threads.width"] = { p2: 543, p3: 290 };
   log = [];
   v.key(keyEv("-"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 573 }]);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 252 }, { id: "p2", px: 585 }]);
   // The column's footer: the same one row, ? keys last (- and = are on the sheet).
   expect(w.footerHints().map((x) => x.join(" "))).toEqual(["↑↓ next pin", "↵ open", "? keys"]);
   // Threads closes: the column closes too, once.
@@ -5778,8 +5776,10 @@ test("reading type: message and reply text at the Text size on 1.57 lines, a rea
   await new Promise((r) => setTimeout(r, 20));
 });
 
-test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fitWidth once, a narrower one keeps its width and goes to a weight", async () => {
-  for (const [measured, size, want] of [[900, 14, 573], [900, 18, 704], [480, 14, null]]) {
+test("Cmd-Shift-T opens Threads at its step's width: a wider pane shrinks to it once, a narrower one keeps its width and goes to a weight", async () => {
+  // The step goes by the pane's px (its measured width and the 2 px frame): 1200 is 120
+  // characters (902 px), 800 is 90 (704), 650 is 70 (573); at 18 px 900 is 90 (873).
+  for (const [measured, size, want] of [[1200, 14, 902], [800, 14, 704], [650, 14, 573], [900, 18, 873], [480, 14, null]]) {
     const { v, cx } = await pane(fixture("--extra", "2"));
     v.prefs = { ...v.prefs, textSize: size };
     // The fixture has pins: no Pinned column opening by itself here.
@@ -5796,46 +5796,45 @@ test("Cmd-Shift-T opens Threads at the reading width: a wider pane shrinks to fi
     // Once only: the flag is gone, and another pane's flag stays.
     expect(state.shared["threads.fit"]).toEqual({ p9: true });
   }
-  // A pane the launcher did not just open (a restart, an existing layout, a drag): with Keep
-  // to reading width on, it is asked back once per width; off, it is left alone.
+  // A pane the launcher did not just open (a restart, an existing layout, a drag) is never
+  // asked back: no snap-back at any width.
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.pinAutoDone = true;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
-  v.paneW = 900;
-  log = [];
-  v.poll(cx);
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // (The weight that follows a px is in the weight tests below.)
-  v.weighAfter = null;
-  // Herdr left it wide (a pane alone in its tab): no second ask at the same width; a new
-  // width (a drag) asks again.
-  log = [];
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  for (const w of [900, 960, 1400, 600]) {
+    v.paneW = w;
+    log = [];
+    v.poll(cx);
+    v.poll(cx);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  }
+  // The header offers the fit button while the pane is wider than its step's width; w fits it.
   v.paneW = 960;
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // The header offers the fit button while it is wider; w fits Threads and an open column.
+  draw(v, cx);
+  expect(v.chars()).toBe(120);
   expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
   log = [];
   v.key(keyEv("w"), cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  v.paneW = 571;
-  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
-  // Off: a wide pane stays as it is.
-  v.prefs = { ...v.prefs, readingWidth: false };
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 902 }]);
   v.paneW = 900;
+  draw(v, cx);
+  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
+  // Between two steps (800 px shows 90 characters): w takes it to 704.
+  v.paneW = 798;
+  draw(v, cx);
+  expect(v.headerButtons().map((b) => b[0])).toContain("th-fit");
   log = [];
-  v.poll(cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  v.key(keyEv("w"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
 });
 
-test("a pane wider than the reading width lays the turns out in a centred column that wide, scaled with Text size", async () => {
+test("a pane wider than its step lays the turns out in a centred column that wide, scaled with Text size", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
-  // The text is at most a reading line with gutters of 8% of the pane each side (24 to 56 px),
-  // and the rows pad 16 px inside the column: 461 + 32 at 14 px, 592 + 32 at 18.
-  for (const [paneW, size, col] of [[960, 14, 493], [960, 18, 624], [500, 14, 452], [300, 14, 284]]) {
+  // The text is at most its step's line, with gutters that give way to 24 px before it does,
+  // and the rows pad 16 px inside the column: at 14 px 461, 592 or 790 + 32; at 18 px a 960
+  // px pane is 90 characters, 761 + 32.
+  for (const [paneW, size, col] of [[648, 14, 493], [748, 14, 624], [960, 14, 822], [960, 18, 793], [500, 14, 484], [300, 14, 284]]) {
+    v.colStep = null;
     v.prefs = { ...v.prefs, textSize: size };
     v.paneW = paneW;
     draw(v, cx);
@@ -5851,72 +5850,193 @@ test("a pane wider than the reading width lays the turns out in a centred column
   expect(v.headerButtons().find((b) => b[0] === "th-pinned")[2]).toBe("Open the Pinned column beside Threads (v)");
 });
 
-test("width: Comfortable, Wide and Full set the column and the reading line; choosing one resizes the pane while it is kept at its width, and Full sends no px", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
+// The column steps with the pane (the ticket's eight scenarios). A pane's px is its measured
+// width (paneW) and Herdr's 2 px frame. Between two steps nothing re-wraps: the column and
+// every row's layout stay as they were, and only the margins beside the column move.
+async function colPane(px) {
+  const { v, cx } = await pane(fixture("--extra", "4"));
   v.pinAutoDone = true;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
-  // The column a wide pane lays its turns out in: the line and 16 px each side, and in Full
-  // the pane less its 56 px gutters.
-  for (const [w, col, prose] of [["comfortable", 493, 461], ["wide", 624, 592], ["full", 880, 848]]) {
-    v.prefs = { ...v.prefs, textSize: 14, width: w };
-    v.paneW = 960;
-    draw(v, cx);
-    expect(v.width).toBe(col);
-    expect(v.prose()).toBe(prose);
-  }
-  // A bubble stops at Wide's line even in Full.
-  expect(bubbleMax(960, 14, Infinity)).toBe(592 + 20);
-  // Choosing Wide with the pane kept at its width grows the pane to 676; Comfortable takes it
-  // back to 573; Full leaves it alone and the switch as it was.
-  v.prefs = { ...v.prefs, width: "comfortable", readingWidth: true };
-  v.paneW = 573;
+  const at = (w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 1000; draw(v, cx); };
+  at(px);
   log = [];
-  expect(v.action("width:wide", cx)).toBe(true);
-  expect(v.prefs.width).toBe("wide");
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 704 }]);
-  v.paneW = 704;
-  log = [];
-  v.action("width:comfortable", cx);
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  v.paneW = 573;
-  log = [];
-  v.action("width:full", cx);
-  v.poll(cx);
-  expect(v.prefs).toMatchObject({ width: "full", readingWidth: true });
-  // No px: the pane goes to a weight (the weight tests below).
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", weight: 1 }]);
-  v.weighing = null;
-  // Full has no reading width: no fit button, and the pane is never asked back.
-  log = [];
-  v.paneW = 1200;
-  v.poll(cx);
+  return { v, cx, at };
+}
+// The characters a line holds: the text's px over the width readType gives a character.
+const lineChars = (v) => Math.round(v.prose() / (0.47 * v.prefs.textSize));
+
+test("scenario: a pane between 573 and 703 px shows the narrowest column, centred", async () => {
+  const { v } = await colPane(650);
+  expect(lineChars(v)).toBe(70);
+  expect([v.prose(), lineChars(v)]).toEqual([461, 70]);
+  expect(v.width).toBe(461 + 32);
+  expect(v.colLeft()).toBe((648 - v.width) / 2);
   expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
-  expect(v.headerButtons().map((b) => b[0])).not.toContain("th-fit");
-  // With the switch off, Wide changes the column and sends no px.
-  v.prefs = { ...v.prefs, readingWidth: false };
-  log = [];
-  v.action("width:wide", cx);
-  expect(log.filter((x) => x[1] === "layout.resize" && "px" in x[2])).toEqual([]);
-  v.weighing = null;
-  expect(v.action("width:huge", cx)).toBe(false);
-  // The card's Chat tab: a Width row with the three choices, each with its icon, then the
-  // pane and its reading column as a line, with the characters a line; in a pane narrower
-  // than the column, the line says it looks like Full here.
-  v.paneW = 420;
+});
+
+test("scenario: a drag that crosses 704 px keeps the 70 character column until the pane is still", async () => {
+  const { v, cx } = await colPane(650);
+  // A re-wrap that took long last time: the column holds through a drag.
+  v.rewrapMs = 151;
+  const before = [v.width, v.prose()];
+  for (const w of [690, 720, 760]) {
+    v.paneW = w - 2;
+    v.sizeAt = Date.now();
+    draw(v, cx);
+    // Past 704 the pane wants 90 characters; the column waits.
+    expect(v.widthHeld).toBe(w >= 704);
+    expect(v.paneStep()).toBe(w >= 704 ? 90 : 70);
+    expect(v.chars()).toBe(70);
+    expect(lineChars(v)).toBe(70);
+    expect([v.width, v.prose()]).toEqual(before);
+  }
+  // Still for 400 ms, past the old 300 ms: still held.
+  v.sizeAt = Date.now() - 400;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(v.chars()).toBe(70);
+  // Still for REWRAP_PAUSE_MS (1.2 s): the step the pane wants.
+  expect(REWRAP_PAUSE_MS).toBe(1200);
+  v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(false);
+  expect(v.chars()).toBe(90);
+  expect(lineChars(v)).toBe(90);
+});
+
+test("scenario: a resize inside a step waits for nothing: no hold, no timer, no rows built again", async () => {
+  const { v, cx } = await colPane(750);
+  v.rewrapMs = 151;
+  settleRows(v, cx);
+  const [key, width] = [v.rowsKey, v.width];
+  for (const w of [780, 860, 720, 900]) {
+    cx.timers = [];
+    v.paneW = w - 2;
+    v.sizeAt = Date.now();
+    draw(v, cx);
+    expect(v.chars()).toBe(90);
+    expect(v.widthHeld).toBe(false);
+    expect(cx.timers.filter((x) => x.ms >= 100)).toEqual([]);
+    expect(v.width).toBe(width);
+    expect(v.rowsKey).toBe(key);
+  }
+});
+
+test("scenario: a pane widened from 650 to 750 px shows the 90 character column", async () => {
+  const { v, at } = await colPane(650);
+  at(750);
+  expect(lineChars(v)).toBe(90);
+  expect([v.prose(), lineChars(v)]).toEqual([592, 90]);
+  expect(v.colLeft()).toBe((748 - v.width) / 2);
+});
+
+test("scenario: a pane widened from 750 to 950 px shows the 120 character column", async () => {
+  const { v, at } = await colPane(750);
+  at(950);
+  expect(lineChars(v)).toBe(120);
+  expect([v.prose(), lineChars(v)]).toEqual([790, 120]);
+});
+
+test("scenario: resizing from 750 to 850 px re-wraps nothing; only the margins beside the column grow", async () => {
+  const { v, cx, at } = await colPane(750);
+  // Every turn open, so each reply's wrapped lines are in the heights.
+  for (const k of v.turnKeys(v.rows())) v.open.add(k);
+  v.rowsKey = null;
+  draw(v, cx);
+  const heights = () => v.rows().map((r) => v.height(r));
+  const before = { width: v.width, prose: v.prose(), sig: v.sigBase(), h: heights(), left: v.colLeft() };
+  expect(before.h.length).toBeGreaterThan(8);
+  for (const w of [770, 800, 850]) {
+    at(w);
+    expect([lineChars(v), v.width, v.prose(), v.sigBase()]).toEqual([90, before.width, before.prose, before.sig]);
+    expect(heights()).toEqual(before.h);
+    expect(v.colLeft()).toBe((w - 2 - before.width) / 2);
+  }
+  expect(v.colLeft() - before.left).toBe(50);
+});
+
+test("scenario: a few px back across a switch point keep the column: 704 to 700 px stays at 90 characters", async () => {
+  const { v, at } = await colPane(704);
+  expect(lineChars(v)).toBe(90);
+  for (const w of [703, 700, 690, 688]) { at(w); expect([w, lineChars(v), v.prose()]).toEqual([w, 90, 592]); }
+});
+
+test("scenario: the column steps down 16 px below where it stepped up: 704 to 680 px is 70 characters", async () => {
+  const { v, at } = await colPane(704);
+  at(680);
+  expect([lineChars(v), v.prose(), lineChars(v)]).toEqual([70, 461, 70]);
+  // The same from 120: down at 886, not at 901.
+  const w = await colPane(902);
+  expect(lineChars(w.v)).toBe(120);
+  w.at(887);
+  expect(lineChars(w.v)).toBe(120);
+  w.at(885);
+  expect(lineChars(w.v)).toBe(90);
+});
+
+test("scenario: a 500 px pane wraps the text to its own width with 24 px each side, and nothing runs past its right edge", async () => {
+  const { v, cx } = await colPane(500);
+  // The narrowest step, its line cut to the pane: 450 px, about 68 characters.
+  expect([v.prose(), lineChars(v)]).toEqual([498 - 48, 68]);
+  expect(v.side()).toBe(24);
+  expect(v.colLeft() + v.width).toBeLessThanOrEqual(v.pw());
+  // Every list item fits the column: none is wider than the pane.
+  rec = [];
+  const rows = v.rows();
+  v.listItems(theme, rows, rows.map(() => 400), { start: 0, end: rows.length }, true, false);
+  const ws = rec.filter((e) => e[0] === "w" || e[0] === "max_w").map((e) => e[1]).filter((x) => typeof x === "number");
+  rec = null;
+  expect(Math.max(...ws)).toBeLessThanOrEqual(v.pw());
+  // No pane resize asked: no snap-back at any width.
+  for (const w of [480, 520, 560]) { v.paneW = w; v.poll(cx); }
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+});
+
+test("scenario: a settings file with the old width and keep-width switch opens with no error; the card has neither; Shift w does nothing", async () => {
+  const { v, cx } = await colPane(900);
+  const text = JSON.stringify({ width: "full", readingWidth: true, textSize: 14 });
+  v.applyPrefs(text, cx);
+  expect([v.prefsError, v.prefsNotes ?? []]).toEqual([null, []]);
+  expect("width" in v.prefs || "readingWidth" in v.prefs).toBe(false);
   v.action("settings", cx);
-  rec = []; v.settingsCard(theme); const sp = rec; rec = null;
-  const ids = sp.filter((e) => e[0] === "id").map((e) => e[1]);
-  expect(ids).toEqual(expect.arrayContaining(["th-width-comfortable", "th-width-wide", "th-width-full", "th-set-ruler"]));
-  const icons = sp.filter((e) => e[0] === "svg").map((e) => String(e[1]).split("/").pop());
-  expect(icons).toEqual(expect.arrayContaining(["width-comfortable.svg", "width-wide.svg", "width-full.svg"]));
-  const texts = sp.filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect(texts).toContain("Keep the pane at this width");
-  expect(texts).toContain("Up to 90 characters a line. This pane has room for less, so it looks like Full here.");
-  v.paneW = 900;
-  expect(v.widthNote()).toBe("Up to 90 characters a line.");
-  v.prefs = { ...v.prefs, width: "full" };
-  expect(v.widthNote()).toBe("Text runs the whole pane.");
+  const g = cardOf(v);
+  const gs = strsOf(g);
+  for (const gone of ["Width", "Comfortable", "Wide", "Full", "Keep the pane at this width"]) expect(gs).not.toContain(gone);
+  expect(idsIn(g).filter((id) => /^th-width-|^th-set-ruler|keep/i.test(id))).toEqual([]);
   v.closeSettings();
+  // Shift w: no action, no notice, no resize, and the column as it was.
+  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
+  const before = [lineChars(v), v.width, JSON.stringify(v.prefs)];
+  v.toast = null;
+  log = [];
+  v.key(shiftW, cx);
+  v.key(keyEv("W"), cx);
+  draw(v, cx);
+  expect([lineChars(v), v.width, JSON.stringify(v.prefs)]).toEqual(before);
+  expect(v.toast).toBe(null);
+  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  // The old actions are gone.
+  for (const a of ["widthStep", "keepWidth", "width:wide"]) expect(v.action(a, cx)).toBeFalsy();
+});
+
+test("a table in a reply takes the pane's room past its step's line, as Full gave it: up to the pane less the gutters and the rail", async () => {
+  const { v, at } = await colPane(1400);
+  const key = v.turnKeys(v.rows()).at(-2);
+  const turn = v.findTurn(key);
+  const cells = Array.from({ length: 9 }, (_x, i) => `Column ${i} heading words`);
+  turn.after = [`Plan:\n\n| ${cells.join(" | ")} |\n|${"---|".repeat(9)}\n| ${cells.map((c) => `${c} and a long value`).join(" | ")} |\n`];
+  turn.shapeKey = null;
+  v.rowsKey = null;
+  for (const [px, chars] of [[650, 70], [750, 90], [950, 120], [1400, 120]]) {
+    at(px);
+    const row = v.rows().find((r) => r.kind === "turn" && r.key === key);
+    const extra = v.tableExtra(row);
+    const lane = v.railShown() ? 32 : 0;
+    expect([px, v.chars()]).toEqual([px, chars]);
+    // The table reaches the pane's room on the side it has least, less the gutter and the lane.
+    const room = Math.min(v.colLeft() - lane, v.pw() - v.colLeft() - 32 - v.prose() - lane);
+    expect(extra / 2).toBe(Math.floor(Math.max(0, room)));
+  }
 });
 
 // Herdr's row for the weight tests: R px shared by the panes at a weight, the others'
@@ -5933,6 +6053,7 @@ async function weightPane(prefs, paneW = 700) {
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
   v.prefs = { ...v.prefs, textSize: 14, ...prefs };
   v.paneW = paneW;
+  v.fitColumn();
   // The fixture has pins: the column would open by itself (its split never comes here).
   v.pinAutoDone = true;
   log = [];
@@ -5960,13 +6081,13 @@ test("weightLine: 1/px is a line in 1/weight, so two weights tried give the weig
   expect(weightFor(null, 700)).toBe(null);
 });
 
-test("Full chosen puts the main Threads pane on a weight that keeps its width: weight 1, a guess, then the measured one; the next one in the same row asks once", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  v.action("width:full", cx);
+test("toWeight puts the main Threads pane on a weight that keeps its width: weight 1, a guess, then the measured one; the next one in the same row asks once", async () => {
+  const { v, cx } = await weightPane({}, 560);
+  v.toWeight();
   // Herdr's row: 1500 px, the others' weights 1.2. The pane is 560 wide (562 with its frame).
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  // Choosing again while it measures starts nothing new.
-  v.action("width:full", cx);
+  // Asked again while it measures: nothing new.
+  v.toWeight();
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
   for (let i = 0; i < 4; i++) { herdr(v, 1500, 1.2); v.poll(cx); }
   const asks = resized();
@@ -5975,32 +6096,36 @@ test("Full chosen puts the main Threads pane on a weight that keeps its width: w
   expect(asks[2].weight).toBeCloseTo((1.2 * 562) / (1500 - 562), 2);
   expect(Math.abs(v.paneW - 560)).toBeLessThanOrEqual(1);
   expect(v.weighing).toBe(null);
-  // At its weight now: choosing again asks nothing.
+  // At its weight now: asked again, nothing.
   log = [];
-  v.action("width:full", cx);
+  v.toWeight();
   expect(resized()).toEqual([]);
-  // The window 450 px wider: the pane at its weight grows with it. With Comfortable kept,
-  // the cap takes it back to 573, and one weight keeps that, from the width the old weight
-  // gave in the new row and the line the last probe measured.
+  // The window 450 px wider: the pane at its weight grows with it, and nothing asks it back.
   v.paneW = Math.round((v.weightNow * 1950) / (v.weightNow + 1.2)) - 2;
+  v.sizeAt = Date.now() - 1000;
   expect(v.paneW).toBeGreaterThan(700);
-  v.prefs = { ...v.prefs, width: "comfortable" };
   v.poll(cx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
+  expect(resized()).toEqual([]);
+  // w sizes it to its step's width, and one weight keeps that, from the width the old weight
+  // gave in the new row and the line the last probe measured.
+  draw(v, cx);
+  const px = v.readingPx();
+  v.key(keyEv("w"), cx);
+  expect(resized()).toEqual([{ id: "p2", px }]);
   herdr(v, 1950, 1.2);
   v.poll(cx);
   herdr(v, 1950, 1.2);
-  // It lands on 571 again: no size change, so it counts after 400 ms.
+  // It lands on its width again: no size change, so it counts after 400 ms.
   v.weighing.asked -= 500;
   v.poll(cx);
   expect(resized().length).toBe(2);
-  expect(Math.abs(v.paneW - 571)).toBeLessThanOrEqual(2);
+  expect(Math.abs(v.paneW - (px - 2))).toBeLessThanOrEqual(2);
   expect(v.weighing).toBe(null);
   expect(v.weightNow).toBe(resized()[1].weight);
 });
 
 test("opening the Pinned column puts Threads at its px width first, so the column's room comes from the terminal", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.weightNow = 0.9;
   v.openPinned(cx);
   expect(log.filter(([, n]) => n === "layout.resize" || n === "pane.split").map((x) => [x[1], x[2].px ?? null])).toEqual([["layout.resize", 702], ["pane.split", null]]);
@@ -6009,8 +6134,8 @@ test("opening the Pinned column puts Threads at its px width first, so the colum
 
 test("the probe stops at the first weight within 2 px, and a weight that leaves the width as it was counts as a measure after 400 ms", async () => {
   // Threads not in a row with the others (or alone): no weight changes its width.
-  const { v, cx } = await weightPane({ width: "full" });
-  v.action("width:full", cx);
+  const { v, cx } = await weightPane({});
+  v.toWeight();
   v.poll(cx);
   expect(v.weighing).not.toBe(null);
   v.weighing.asked -= 500;
@@ -6019,21 +6144,21 @@ test("the probe stops at the first weight within 2 px, and a weight that leaves 
   expect(v.weighing).toBe(null);
 });
 
-test("Threads opened with Full goes to a weight once it has measured itself; opened at Comfortable it is sized first, then weighed at that width", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 900);
+test("Threads opened at its step's width goes to a weight once it has measured itself; opened wider it is sized to its step first, then weighed at that width", async () => {
+  const { v, cx } = await weightPane({}, 900);
   state.shared["threads.fit"] = { p2: true };
   v.poll(cx);
   expect(resized()).toEqual([{ id: "p1", weight: 1 }, { id: "p2", weight: 1 }]);
   expect(state.shared["threads.fit"]).toEqual({});
-  const { v: c, cx: cc } = await weightPane({ width: "comfortable", readingWidth: true }, 900);
+  const { v: c, cx: cc } = await weightPane({}, 1000);
   state.shared["threads.fit"] = { p2: true };
   c.poll(cc);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-  herdr(c, 1500, 1.2);
+  expect(resized()).toEqual([{ id: "p2", px: 902 }]);
+  herdr(c, 2000, 1.2);
   c.poll(cc);
-  // The split made a 1804 px row (twice 902): 573 of it is weight 573 / (1804 - 573).
-  expect(resized()).toEqual([{ id: "p2", px: 573 }, { id: "p1", weight: 1 }, { id: "p2", weight: 0.46548 }]);
-  expect(c.weighing.n0).toBe(573);
+  // The split made a 2004 px row (twice 1002): 902 of it is weight 902 / (2004 - 902).
+  expect(resized()).toEqual([{ id: "p2", px: 902 }, { id: "p1", weight: 1 }, { id: "p2", weight: 0.81851 }]);
+  expect(c.weighing.n0).toBe(902);
 });
 
 // The owner's report: Threads opened wide for a moment, then came back. The probe's first try
@@ -6057,7 +6182,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
     return { apply, seen };
   };
   const open = async (R, S0, paneW = 752) => {
-    const r = await weightPane({ width: "wide", readingWidth: false }, paneW);
+    const r = await weightPane({}, paneW);
     state.shared["threads.fit"] = { p2: true };
     const m = row(r.v, R, S0);
     for (let k = 0; k < 6; k++) {
@@ -6086,7 +6211,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
   // Another pane in the tab (the row is not the split's two): as before, weight 1 first, and
   // the terminal's weight is left alone.
   {
-    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    const { v, cx } = await weightPane({}, 752);
     state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
     state.shared["threads.fit"] = { p2: true };
     v.poll(cx);
@@ -6097,7 +6222,7 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
   }
   // A pane opened by the launcher that gets a neighbour before it is weighed: as before too.
   {
-    const { v, cx } = await weightPane({ width: "wide", readingWidth: false }, 752);
+    const { v, cx } = await weightPane({}, 752);
     state.shared["threads.fit"] = { p2: true };
     v.poll(cx);
     state.panes.push({ pane: "p5", tab: "A", terminal: "t5" });
@@ -6109,9 +6234,9 @@ test("Threads opened by Cmd-Shift-T is weighed from the row its split made: no w
 });
 
 test("every px resize the pane asks for is followed by a weight that keeps the width it gave, once the width has applied and been still 300 ms", async () => {
-  // Wide chosen with the pane kept at its width: 704 px, then the weight for 704.
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 571);
-  v.action("width:wide", cx);
+  // w at 760 px (90 characters): 704 px, then the weight for 704.
+  const { v, cx } = await weightPane({}, 758);
+  v.key(keyEv("w"), cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }]);
   // Not applied yet, or applied but still moving (a window being resized): no weight yet.
   v.poll(cx);
@@ -6123,56 +6248,28 @@ test("every px resize the pane asks for is followed by a weight that keeps the w
   v.poll(cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
   expect(v.weighing.n0).toBe(704);
-  // keepWidth's cap: wider than the width (a window grown) snaps back, then weighs again.
-  const { v: k, cx: kx } = await weightPane({ width: "comfortable", readingWidth: true }, 900);
-  k.poll(kx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-  herdr(k, 1500, 1.2);
-  k.poll(kx);
-  expect(resized().at(-1)).toEqual({ id: "p2", weight: 1 });
-  // While it weighs, the cap waits: a probe wider than the width is not snapped back.
-  k.paneW = 800;
-  k.weighing.at = 800;
-  k.poll(kx);
-  expect(resized().filter((a) => "px" in a).length).toBe(1);
-  // w: the reading width, then its weight.
-  const { v: f, cx: fx } = await weightPane({ width: "comfortable", readingWidth: false }, 900);
+  // w at 1000 px (120 characters): 902, then its weight.
+  const { v: f, cx: fx } = await weightPane({}, 1000);
   f.key(keyEv("w"), fx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
+  expect(resized()).toEqual([{ id: "p2", px: 902 }]);
   herdr(f, 1500, 1.2);
   f.poll(fx);
   expect(resized().at(-1)).toEqual({ id: "p2", weight: 1 });
   // A Pinned split that never came: the pane is still alone, so it is weighed.
-  const { v: s, cx: sx } = await weightPane({ width: "full" }, 900);
+  const { v: s, cx: sx } = await weightPane({}, 900);
   s.splitAsk = { before: state.panes.map((p) => p.pane), px: 380, until: Date.now() - 1 };
   s.poll(sx);
   expect(s.splitAsk).toBe(null);
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
 });
 
-test("with the switch off the pane's width is not held: choosing a width, or turning the switch off, goes to a weight", async () => {
-  const { v, cx } = await weightPane({ width: "full", readingWidth: false });
-  v.action("width:comfortable", cx);
-  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  const { v: w, cx: wx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  w.action("keepWidth", wx);
-  expect(w.prefs.readingWidth).toBe(false);
-  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
-  // Turned on in a pane wider than the width: sized to it first, then weighed.
-  w.weighing = null;
-  w.paneW = 900;
-  log = [];
-  w.action("keepWidth", wx);
-  expect(resized()).toEqual([{ id: "p2", px: 573 }]);
-});
-
 test("no weight with the Pinned column open, a split pending, zoomed or in the Pinned pane; the column closing converts", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
-  // The column open: - and = keep both panes at px, so Full chosen sends nothing.
+  const { v, cx } = await weightPane({}, 560);
+  // The column open: - and = keep both panes at px, so toWeight sends nothing.
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
   v.poll(cx);
-  v.action("width:full", cx);
+  v.toWeight();
   v.poll(cx);
   expect(resized()).toEqual([]);
   // The column closes: once the row settles (500 ms), Threads goes to a weight.
@@ -6190,9 +6287,9 @@ test("no weight with the Pinned column open, a split pending, zoomed or in the P
     (x) => { x.myPane = "p2"; x.pinnedPane = true; },
   ];
   for (const block of blocks) {
-    const { v: x, cx: xc } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+    const { v: x } = await weightPane({}, 560);
     block(x);
-    x.action("width:full", xc);
+    x.toWeight();
     expect(resized()).toEqual([]);
   }
 });
@@ -6204,7 +6301,7 @@ const trajBeside = () => {
 };
 
 test("y puts the Chat at its px before the Trajectory's split: a px of its own still applying is the one kept, and a probe under way stops", async () => {
-  const { v, cx } = await weightPane({ width: "full" }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.width = 700;
   v.weighing = { pane: "p2", n0: 702, tried: [], w: 1, at: 700, asked: Date.now() };
   v.key(keyEv("y"), cx);
@@ -6215,7 +6312,7 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
   expect(v.weighing).toBe(null);
   expect(v.splitAsk.chat).toBe(702);
   // A px of its own on its way (sizeTo): that width, not the one it is leaving.
-  const { v: w, cx: wx } = await weightPane({ width: "full" }, 700);
+  const { v: w, cx: wx } = await weightPane({}, 700);
   w.width = 700;
   w.weighAfter = { px: 573, until: Date.now() + 1500 };
   w.weightNow = 1.2;
@@ -6223,7 +6320,7 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
   expect(resized()).toEqual([{ id: "p2", px: 573 }]);
   expect([w.weighAfter, w.weightNow, w.splitAsk.chat]).toEqual([null, null, 573]);
   // Too narrow to split: the Trajectory shows in the Chat's pane, and nothing is resized.
-  const { v: n, cx: nx } = await weightPane({ width: "full" }, 400);
+  const { v: n, cx: nx } = await weightPane({}, 400);
   n.width = 400;
   n.key(keyEv("y"), nx);
   expect(n.traj).toBe(true);
@@ -6231,21 +6328,21 @@ test("y puts the Chat at its px before the Trajectory's split: a px of its own s
 });
 
 test("no weight with the Trajectory open beside the Chat or in the Trajectory pane, and a probe under way stops when it opens", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  const { v, cx } = await weightPane({}, 560);
   trajBeside();
   v.poll(cx);
-  v.action("width:full", cx);
+  v.toWeight();
   v.poll(cx);
   v.toWeight(true);
   expect(resized()).toEqual([]);
   // The Trajectory pane itself, with nothing else open.
-  const { v: t } = await weightPane({ width: "full" }, 560);
+  const { v: t } = await weightPane({}, 560);
   t.myPane = "p2";
   t.trajPane = true;
   t.toWeight(true);
   expect(resized()).toEqual([]);
   // A probe asked its first weight, then the Trajectory opened: no second ask.
-  const { v: g, cx: gx } = await weightPane({ width: "full" }, 700);
+  const { v: g, cx: gx } = await weightPane({}, 700);
   g.toWeight();
   expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
   trajBeside();
@@ -6257,22 +6354,79 @@ test("no weight with the Trajectory open beside the Chat or in the Trajectory pa
 });
 
 test("a size change alone (a drag) never converts, and the pane's own px mid-probe ends the probe", async () => {
-  for (const readingWidth of [true, false]) {
-    const { v, cx } = await weightPane({ width: readingWidth ? "full" : "comfortable", readingWidth });
+  {
+    const { v, cx } = await weightPane({});
     for (const w of [800, 650, 1100, 700]) { v.paneW = w; v.sizeAt = Date.now() - 1000; v.poll(cx); }
     expect(resized()).toEqual([]);
   }
-  const { v, cx } = await weightPane({ width: "full", readingWidth: true }, 560);
-  v.action("width:full", cx);
-  v.action("width:comfortable", cx);
+  const { v, cx } = await weightPane({}, 560);
+  v.toWeight();
+  v.key(keyEv("w"), cx);
   expect(v.weighing).toBe(null);
   expect(resized()).toEqual([{ id: "p2", weight: 1 }, { id: "p2", px: 573 }]);
 });
 
+// Where the steps meet the weights. keepWidth's cap is gone: no px resize after a drag, past
+// the step's width or not, on a weight or on a px; a weight probe's answers past it are
+// measures, not a cap's cue; and the column follows the pane's step instead.
+test("a drag past the step's width on a weight: no snap-back, no new weight, the weight kept, and the column steps with it", async () => {
+  const { v, cx } = await weightPane({}, 700);
+  v.toWeight();
+  for (let i = 0; i < 4; i++) { herdr(v, 1500, 1.2); v.poll(cx); }
+  expect(v.weighing).toBe(null);
+  const w = v.weightNow;
+  expect(w).toBeGreaterThan(0);
+  log = [];
+  // 1100 is past 902, the widest step's width; 650 is under 704; then 980. Each still past
+  // the 1.2 s pause, polled and drawn.
+  for (const [px, step] of [[1100, 120], [650, 70], [980, 120]]) {
+    v.paneW = px - 2;
+    v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 100;
+    v.poll(cx);
+    draw(v, cx);
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+    expect([v.weightNow, v.weighing, v.weighAfter ?? null]).toEqual([w, null, null]);
+    expect(v.chars()).toBe(step);
+    expect(lineChars(v)).toBe(step);
+  }
+  // The same drags on a px pane (an older layout): it stays on its px.
+  const { v: p, cx: px } = await weightPane({}, 700);
+  for (const w2 of [1100, 650, 980]) { p.paneW = w2 - 2; p.sizeAt = Date.now() - 2000; p.poll(px); draw(p, px); p.poll(px); }
+  expect(resized()).toEqual([]);
+  expect([p.weightNow ?? null, p.weighing ?? null]).toEqual([null, null]);
+});
+
+test("a weight probe whose answer lands past the step's width asks only weights: the width it keeps is the one it started from", async () => {
+  const { v, cx } = await weightPane({}, 700);
+  v.toWeight();
+  expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
+  // Herdr lays weight 1 out at 1100 px (a row of 2200 at weight 1 beside it): past 902.
+  v.paneW = 1098;
+  v.sizeAt = Date.now() - 1000;
+  v.weighing.asked -= 500;
+  v.poll(cx);
+  draw(v, cx);
+  const asks = resized();
+  expect(asks.every((a) => a.px === undefined)).toBe(true);
+  expect(asks.length).toBe(2);
+  expect(v.weighing.n0).toBe(702);
+});
+
+test("the Width setting's old actions resize nothing: no width choice, Shift w or keep-width switch sizes the pane", async () => {
+  const { v, cx } = await weightPane({}, 1100);
+  for (const a of ["widthStep", "keepWidth", "width:wide", "width:comfortable", "width:full"]) {
+    log = [];
+    v.action(a, cx);
+    v.poll(cx);
+    expect(resized()).toEqual([]);
+  }
+});
+
 test("the 300 ms stillness is timed from the pane's own size changes: a width still moving is not weighed", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 571);
+  const { v, cx } = await weightPane({}, 758);
   v.forcedWidth = null;
-  v.action("width:wide", cx);
+  v.key(keyEv("w"), cx);
   expect(resized()).toEqual([{ id: "p2", px: 704 }]);
   const real = Date.now;
   const t0 = real();
@@ -6289,7 +6443,7 @@ test("the 300 ms stillness is timed from the pane's own size changes: a width st
 
 test("a probe stops when the pane goes, changes or zooms, a split or the Pinned column opens, or Herdr has not answered in 3 s; else it asks again", async () => {
   const start = async () => {
-    const r = await weightPane({ width: "full" }, 700);
+    const r = await weightPane({}, 700);
     r.v.toWeight();
     expect(resized()).toEqual([{ id: "p2", weight: 1 }]);
     r.v.paneW = 650;
@@ -6324,7 +6478,7 @@ test("a probe stops when the pane goes, changes or zooms, a split or the Pinned 
 
 test("a probe asks at most three weights, and keeps the third", async () => {
   // The row moving under it (a window being resized): no width within 2 px of 702.
-  const { v } = await weightPane({ width: "full" }, 700);
+  const { v } = await weightPane({}, 700);
   v.toWeight();
   for (const w of [650, 680, 690]) {
     v.paneW = w;
@@ -6337,7 +6491,7 @@ test("a probe asks at most three weights, and keeps the third", async () => {
 });
 
 test("w in the Pinned column sizes the main pane by px, not the column, and starts no weight there", async () => {
-  const { v, cx } = await weightPane({ width: "comfortable", readingWidth: true }, 400);
+  const { v, cx } = await weightPane({}, 400);
   state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
   state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
   v.myPane = "p3";
@@ -6351,7 +6505,7 @@ test("w in the Pinned column sizes the main pane by px, not the column, and star
 });
 
 test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane zoomed when it would convert converts once unzoomed", async () => {
-  const { v, cx } = await weightPane({ width: "full" }, 700);
+  const { v, cx } = await weightPane({}, 700);
   v.toWeight();
   // The trial weight laid it out 650 wide; 702 is the width being kept.
   v.paneW = 650;
@@ -6359,10 +6513,10 @@ test("the Pinned column opened mid-probe keeps the width the probe keeps; a pane
   v.openPinned(cx);
   expect(resized()).toEqual([{ id: "p2", px: 702 }]);
   expect(v.weighing).toBe(null);
-  const { v: z, cx: zx } = await weightPane({ width: "comfortable", readingWidth: true }, 560);
+  const { v: z, cx: zx } = await weightPane({}, 560);
   const p2 = state.panes.find((p) => p.pane === "p2");
   p2.zoomed = true;
-  z.action("width:full", zx);
+  z.toWeight();
   z.poll(zx);
   expect(resized()).toEqual([]);
   // Unzoomed: 500 ms for the row to settle, then the weight.
@@ -7442,6 +7596,336 @@ test("a long session's rows are built over several frames, the old rows shown ti
   expect(rowSig(v)).toEqual(whole);
 });
 
+test("a width that changes while the pane is resized keeps the column until the pane has been still for 1.2 s, then the turns re-wrap", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  // Its last full re-wrap was slow (HOLD_WORK_MS): the column is held.
+  v.rewrapMs = 400;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  // The first width the pane measures is taken at once.
+  size(540);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  settleRows(v, cx);
+  const key = v.rowsKey;
+  // A step of a drag: the column stays, nothing is built again, and a draw is asked for once
+  // the pane has been still.
+  cx.timers = [];
+  size(440);
+  draw(v, cx);
+  draw(v, cx);
+  expect(v.paneW).toBe(440);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  expect(v.rowsKey).toBe(key);
+  // One draw asked for, 1.2 s after the last size change (REWRAP_PAUSE_MS), not 300 ms.
+  expect(cx.timers.filter((x) => x.ms > 200 && x.ms <= 310)).toEqual([]);
+  const wait = cx.timers.filter((x) => x.ms > REWRAP_PAUSE_MS - 100 && x.ms <= REWRAP_PAUSE_MS + 10);
+  expect(wait.length).toBe(1);
+  // Still for 400 ms: held yet.
+  v.sizeAt = Date.now() - 400;
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  // Still for 1.2 s: the column takes the pane's width and the turns are built for it.
+  v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
+  wait[0].fn(cx);
+  draw(v, cx);
+  expect(v.width).toBeCloseTo(col(440), 6);
+  expect(v.widthHeld).toBe(false);
+  settleRows(v, cx);
+  expect(v.rowsKey).not.toBe(key);
+});
+
+test("a second drag holds the column too: the draw asked for once the pane is still is asked for again after it comes", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  v.rewrapMs = 400;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  const waits = () => cx.timers.filter((x) => x.ms > REWRAP_PAUSE_MS - 100 && x.ms <= REWRAP_PAUSE_MS + 10);
+  size(540);
+  settleRows(v, cx);
+  // Two drags, each held until the pane is still, then built for its width.
+  for (const w of [440, 360]) {
+    // Each one after a slow re-wrap, so the hold applies (HOLD_WORK_MS).
+    v.rewrapMs = 400;
+    const key = v.rowsKey;
+    const was = v.width;
+    cx.timers = [];
+    size(w);
+    draw(v, cx);
+    expect(v.widthHeld).toBe(true);
+    expect(v.width).toBe(was);
+    const wait = waits();
+    expect(wait.length).toBe(1);
+    cx.timers = [];
+    v.sizeAt = Date.now() - REWRAP_PAUSE_MS - 50;
+    wait[0].fn(cx);
+    draw(v, cx);
+    expect(v.widthHeld).toBe(false);
+    expect(v.width).toBeCloseTo(col(w), 6);
+    settleRows(v, cx);
+    expect(v.rowsKey).not.toBe(key);
+  }
+  // A draw that comes while the pane still moves asks for another.
+  v.rewrapMs = 400;
+  cx.timers = [];
+  size(300);
+  draw(v, cx);
+  const first = waits();
+  expect(first.length).toBe(1);
+  cx.timers = [];
+  v.sizeAt = Date.now();
+  first[0].fn(cx);
+  draw(v, cx);
+  expect(v.widthHeld).toBe(true);
+  expect(waits().length).toBe(1);
+});
+
+test("the hold is for a conversation whose last full re-wrap took over 150 ms, or, before one has finished, one of over 500 turns", async () => {
+  const { v, cx } = await longSession(60);
+  v.debug = false;
+  const size = (w) => {
+    rec = [];
+    v.render(cx);
+    const calls = rec;
+    rec = null;
+    handlerAfterId(calls, "threads-root", "on_size_change")({ width: w, height: 800 }, cx);
+    draw(v, cx);
+  };
+  const col = (w) => columnWidth(w, v.prefs.textSize, v.chars());
+  size(540);
+  settleRows(v, cx);
+  // 60 turns and no re-wrap timed yet: the width is taken at once.
+  expect(v.rewrapMs ?? null).toBe(null);
+  size(500);
+  expect(v.width).toBeCloseTo(col(500), 6);
+  expect(v.widthHeld).toBe(false);
+  // The re-wrap at 500, a width not kept, is timed until nothing is left to do.
+  expect(v.rewrap?.full).toBe(true);
+  // Until the probe has nothing left (it tries each part three times here, with no sizes).
+  const done = () => { settleRows(v, cx); for (let i = 0; i < 100 && v.rewrap; i++) draw(v, cx); };
+  done();
+  expect(v.rewrap).toBe(null);
+  expect(v.rewrapMs).toBeGreaterThan(0);
+  expect(v.rewrapMs).toBeLessThan(150);
+  // A width kept (540) is not a full re-wrap: the last full one's time stays.
+  v.rewrapMs = 12;
+  size(540);
+  expect(v.rewrap?.full).toBe(false);
+  done();
+  expect(v.rewrap).toBe(null);
+  expect(v.rewrapMs).toBe(12);
+  // Slow last time: held.
+  v.rewrapMs = 151;
+  size(460);
+  expect(v.widthHeld).toBe(true);
+  expect(v.width).toBeCloseTo(col(540), 6);
+  v.rewrapMs = 150;
+  size(450);
+  expect(v.widthHeld).toBe(false);
+  expect(v.width).toBeCloseTo(col(450), 6);
+  // A re-wrap still going that has taken over 150 ms already: held.
+  v.rewrap = { ms: 151, full: true };
+  size(430);
+  expect(v.widthHeld).toBe(true);
+  // None timed yet: by the turns, over 500.
+  v.rewrap = null;
+  v.rewrapMs = null;
+  const saved = v.sessions;
+  try {
+    v.sessions = [{ turns: { length: 300 } }, { turns: { length: 201 } }];
+    expect(v.rewrapCostly()).toBe(true);
+    v.sessions = [{ turns: { length: 300 } }, { turns: { length: 200 } }];
+    expect(v.rewrapCostly()).toBe(false);
+  } finally { v.sessions = saved; }
+});
+
+test("a column width seen before is not walked again by the probe, and the walk waits while rows are built", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  const measureAll = () => {
+    for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+    settleRows(v, cx);
+  };
+  at(545);
+  measureAll();
+  for (let i = 0; i < 20 && v.probeLeft !== 0; i++) v.probeDue();
+  at(480);
+  measureAll();
+  let sigs = 0;
+  const partSig = v.partSig.bind(v);
+  v.partSig = (...a) => { sigs++; return partSig(...a); };
+  v.width = 545;
+  // While the rows for 545 are built over several frames, the walk waits for them.
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  performance.now = () => (fake += 2);
+  try {
+    draw(v, cx);
+    if (v.rowJob) {
+      sigs = 0;
+      expect(v.probeDue()).toEqual([]);
+      expect(v.probeLeft).toBe(1);
+      expect(sigs).toBe(0);
+    }
+  } finally { performance.now = realPerf; }
+  settleRows(v, cx);
+  expect(v.rowJob).toBe(null);
+  expect(v.baseRows.length).toBeGreaterThan(300);
+  sigs = 0;
+  v.probeQuiet = null;
+  v.probeWalk = null;
+  // One call passes over every closed turn, measured here before (more rows than one
+  // frame's walk, PROBE_WALK, looks at).
+  expect(v.probeDue()).toEqual([]);
+  expect(v.probeLeft).toBe(0);
+  expect(sigs).toBeLessThan(10);
+  // A measure dropped for this layout (a fourth width measured): looked at again.
+  const turnRow = v.baseRows.find((r) => r.kind === "turn" && r.shape?.md != null);
+  const part = v.cmdFor(turnRow);
+  const sig545 = v.partSig(part);
+  for (const w of [400, 380, 360]) { const s = sig545.replace(/^545\|/, `${w}|`); v.probed(part.key, s, { width: 300, height: 40 * v.zoom() }, cx); }
+  expect(v.measOf(part.key, sig545)).toBe(null);
+  sigs = 0;
+  // The walk found every row clean before; the drop starts it again (its key holds the stamp).
+  expect(v.probeWalk.clean).toBeGreaterThanOrEqual(v.baseRows.length);
+  const due = v.probeDue();
+  expect(due.map(([r]) => r.key)).toContain(part.key);
+  expect(sigs).toBeGreaterThan(0);
+});
+
+test("a column width among the last three is laid out from what was kept: no reshape, no probe, no row heights", async () => {
+  const { v, cx } = await longSession(300);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  const measureAll = () => {
+    for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+    settleRows(v, cx);
+  };
+  at(545);
+  measureAll();
+  const kept = rowSig(v);
+  at(480);
+  measureAll();
+  let shaped = 0;
+  let sized = 0;
+  const reshape = v.reshape.bind(v);
+  const height = v.height.bind(v);
+  v.reshape = (...a) => { shaped++; return reshape(...a); };
+  v.height = (...a) => { sized++; return height(...a); };
+  at(545);
+  expect(shaped).toBe(0);
+  expect(sized).toBeLessThan(20);
+  expect(v.probeRows.every((r) => v.measured(r) != null)).toBe(true);
+  expect(rowSig(v)).toEqual(kept);
+  // A turn that changed since is shaped again.
+  const turn = v.sessions[0].turns[100];
+  turn.prompt += " And the tax line too.";
+  turn.v = (turn.v ?? 0) + 1;
+  v.sessions[0].version++;
+  at(480);
+  expect(shaped).toBe(1);
+  // Three widths are kept: a fourth pushes out the one used longest ago (545 here).
+  at(420);
+  at(400);
+  shaped = 0;
+  at(545);
+  expect(shaped).toBeGreaterThan(250);
+});
+
+test("the kept widths are the three used last: one used again is kept over one used before it", async () => {
+  const { v, cx } = await longSession(200);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  for (const w of [545, 480, 420, 545, 400]) at(w);
+  let shaped = 0;
+  let sized = 0;
+  const reshape = v.reshape.bind(v);
+  const height = v.height.bind(v);
+  v.reshape = (...a) => { shaped++; return reshape(...a); };
+  v.height = (...a) => { sized++; return height(...a); };
+  // 545 was used again after 480 and 420, so 480 went when 400 came, and 545 stayed.
+  at(545);
+  expect(shaped).toBe(0);
+  expect(sized).toBeLessThan(20);
+  shaped = 0;
+  at(480);
+  expect(shaped).toBeGreaterThan(150);
+});
+
+test("a measure taken for a width the pane has left is used when the pane comes back to it", async () => {
+  const { v, cx } = await longSession(120);
+  v.debug = false;
+  const at = (w) => { v.width = w; settleRows(v, cx); };
+  at(545);
+  for (const r of v.probeRows) v.probed(r.key, v.partSig(r), { width: 300, height: 40 * v.zoom() }, cx);
+  settleRows(v, cx);
+  const part = v.probeRows[60];
+  const sig = v.partSig(part);
+  // The pane is narrower now; the probe's answer for the 545 px layout comes in late.
+  at(480);
+  v.probed(part.key, sig, { width: 300, height: 140 * v.zoom() }, cx);
+  at(545);
+  expect(v.measured(part)).toBe(140);
+  const kept = rowSig(v);
+  // The same rows as a build with nothing kept.
+  v.keptBases = null;
+  for (const t of v.sessions[0].turns) t.shapesKept = null;
+  v.rowsKey = null;
+  v.rowJob = null;
+  settleRows(v, cx);
+  expect(kept).toEqual(rowSig(v));
+});
+
+test("a rebuild sizes its rows inside the slice's time too, and the rows on screen stay until every new row has its height", async () => {
+  const { v, cx } = await longSession(450);
+  v.debug = false;
+  v.width = 545;
+  settleRows(v, cx);
+  const whole = rowSig(v);
+  const height = v.height.bind(v);
+  const realPerf = performance.now.bind(performance);
+  let fake = 0;
+  let per = 0;
+  let most = 0;
+  // Building costs nothing on this clock, and each row's height 1 ms.
+  performance.now = () => fake;
+  let building = false;
+  const step = v.buildStep.bind(v);
+  v.buildStep = (...a) => { building = true; try { return step(...a); } finally { building = false; } };
+  v.height = (r) => { fake += 1; if (building) per++; return height(r); };
+  try {
+    v.width = 520;
+    const old = v.baseRows;
+    draw(v, cx);
+    expect(v.rowJob?.sizing).toBeTruthy();
+    expect(v.baseRows).toBe(old);
+    let slices = 1;
+    for (; slices < 400 && v.rowJob; slices++) { per = 0; draw(v, cx); most = Math.max(most, per); }
+    // A slice sizes 32 rows past its time at most, or the last few (SIZE_REST, 64) with them.
+    expect(slices).toBeGreaterThan(5);
+    expect(most).toBeLessThanOrEqual(96);
+    expect(v.baseRows).not.toBe(old);
+  } finally { performance.now = realPerf; v.height = height; v.buildStep = step; }
+  v.width = 545;
+  settleRows(v, cx);
+  expect(rowSig(v)).toEqual(whole);
+});
+
 test("a long session whose read ends while its first rows still build selects the newest turn when the build is done", async () => {
   // The read's end selects the newest turn, but on a long session or a slow machine the first
   // rows build is still going over several frames then, so there is no turn to select yet.
@@ -7848,9 +8332,9 @@ test("? opens a sheet of every key, grouped; Esc, ? or the close button shuts it
   expect(state.shared["threads.debug"].t4.keysOpen).toBe(true);
   // The card is as tall as its keys in a tall pane, and fits between header and footer in a short one.
   v.footerH = 38;
-  // Six groups (the settings card's keys among them), 38 rows.
+  // Six groups (the settings card's keys among them), 37 rows.
   v.rootH = 1400;
-  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 38 * 25 + 5 * 12 + 8);
+  expect(v.keySheetH(keySheet("q"))).toBe(36 + 20 + 6 * 22 + 37 * 25 + 5 * 12 + 8);
   v.rootH = 500;
   // Above the key hints and the status line (24 px).
   expect(v.keySheetH(keySheet("q"))).toBe(500 - 46 - 38 - 24 - 6);
@@ -9646,7 +10130,7 @@ test("a rail click lands the turn level with its tick, clear of the floating top
   const best = Math.min(...[0, ...Array.from({ length: head }, (_, k) => slots.slice(head - 1 - k, head).reduce((x, n) => x + n, 0))]
     .filter((z) => z >= 32 && z + Math.min(slots[head], 48) <= 600).map((z) => Math.abs(z - want)));
   expect(Math.abs(y - want)).toBeLessThanOrEqual(best);
-  // A pane too narrow for a whole Comfortable line hides the rail: 549 px at 14 px text.
+  // A pane too narrow for a whole 70 character line beside the rail's gutter hides the rail: 549 px at 14 px text.
   const { railMinPane } = await import("../mods/agent-threads/ui.js");
   expect(v.prefs.textSize).toBe(14);
   expect(railMinPane(14)).toBe(549);
@@ -9714,6 +10198,143 @@ test("a rail click lands a tall turn level with its tick when the turn above it 
   const offset = slots.slice(0, j).reduce((x, n) => x + n, 0) + lift;
   const top = slots.slice(0, head).reduce((x, n) => x + n, 0);
   expect(top - offset).toBe(want);
+});
+
+test("listOffset: a scroll lands as Herdr lands it, the list's ends hold it, and the rows drawn put right a scroll the pane missed", async () => {
+  const { listOffset } = await import("../mods/agent-threads/ui.js");
+  // Five rows of 100 px in a list 250 px tall: tops 0 to 400, the end at 500.
+  const pre = [0, 100, 200, 300, 400, 500];
+  const H = 250;
+  expect(listOffset(pre, 150, H, null, -1)).toBe(150);
+  // The end: its bottom at the bottom edge.
+  expect(listOffset(pre, 0, H, { end: true }, -1)).toBe(250);
+  // scroll_to_bottom is the near edge for the last row: with a last row taller than the list
+  // and its top above the top edge, Herdr puts its top there, short of the end.
+  expect(listOffset([0, 100, 700], 0, H, { end: true }, -1)).toBe(450);
+  expect(listOffset([0, 100, 700], 300, H, { end: true }, -1)).toBe(100);
+  // To the near edge: row 3 below the view goes to the bottom edge, row 1 above it to the top
+  // edge, row 2 on screen stays where it is.
+  expect(listOffset(pre, 0, H, { i: 3, how: "top" }, -1)).toBe(150);
+  expect(listOffset(pre, 180, H, { i: 1, how: "top" }, -1)).toBe(100);
+  expect(listOffset(pre, 150, H, { i: 2, how: "top" }, -1)).toBe(150);
+  // Row 2's middle at the list's middle.
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, -1)).toBe(125);
+  // A row the list does not have asks nothing.
+  expect(listOffset(pre, 150, H, { i: 5, how: "top" }, -1)).toBe(150);
+  expect(listOffset(pre, 150, H, { i: -1, how: "top" }, -1)).toBe(150);
+  // Held to the list: not above its start, not past its end, 0 in a list the pane holds.
+  expect(listOffset(pre, -40, H, null, -1)).toBe(0);
+  expect(listOffset(pre, 400, H, null, -1)).toBe(250);
+  expect(listOffset([0, 100, 200], 50, H, null, -1)).toBe(0);
+  // The pane thought 150, but row 2 is the first drawn: its top is at or above the top edge
+  // and its bottom below it.
+  expect(listOffset(pre, 150, H, null, 2)).toBe(200);
+  expect(listOffset(pre, 240, H, null, 2)).toBe(240);
+  expect(listOffset(pre, 20, H, null, 1)).toBe(100);
+  expect(listOffset(pre, 210, H, null, 1)).toBe(199.5);
+  // Ten rows: Herdr draws to two rows past the first whose bottom is past the bottom edge. At
+  // 120 that is row 3 (bottom 400 past 370), so rows 1 to 4: row 3's bottom is past the edge
+  // and row 2's is not, which puts the offset at 50 or more and under 150, and row 1's top
+  // makes it 100 or more and under 200: 100 to 149.5, half a px inside the strict bounds.
+  const ten = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+  expect(listOffset(ten, 120, H, null, 1, 5)).toBe(120);
+  expect(listOffset(ten, 180, H, null, 1, 5)).toBe(149.5);
+  expect(listOffset(ten, 90, H, null, 1, 5)).toBe(100);
+  expect(listOffset(ten, 40, H, null, 0, 5)).toBe(50);
+  // Drawn to the list's end says nothing of the bottom edge; rows that cannot be drawn
+  // together leave the first row's bound alone.
+  expect(listOffset(ten, 730, H, null, 7, 10)).toBe(730);
+  expect(listOffset(ten, 300, H, null, 1, 9)).toBe(199.5);
+  // After a scroll: the scroll first, then the first row drawn.
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, 1)).toBe(125);
+  expect(listOffset(pre, 0, H, { i: 2, how: "center" }, 2)).toBe(200);
+  // No such row: nothing to go by.
+  expect(listOffset(pre, 150, H, null, 5)).toBe(150);
+});
+
+test("placeAt: the row at the top edge, the last whose top is at or above it, and the share of it above the edge", async () => {
+  const { placeAt } = await import("../mods/agent-threads/ui.js");
+  const pre = [0, 100, 200, 260, 400];
+  expect(placeAt(pre, 0)).toEqual({ i: 0, share: 0 });
+  expect(placeAt(pre, 50)).toEqual({ i: 0, share: 0.5 });
+  expect(placeAt(pre, 100)).toEqual({ i: 1, share: 0 });
+  expect(placeAt(pre, 230)).toEqual({ i: 2, share: 0.5 });
+  expect(placeAt(pre, 260)).toEqual({ i: 3, share: 0 });
+  expect(placeAt(pre, 330)).toEqual({ i: 3, share: 0.5 });
+  // Past the end: the last row, all of it above the edge. Above the start: the first.
+  expect(placeAt(pre, 900)).toEqual({ i: 3, share: 1 });
+  expect(placeAt(pre, -5)).toEqual({ i: 0, share: 0 });
+  // A row of no height has no share.
+  expect(placeAt([0, 0, 100], 0)).toEqual({ i: 1, share: 0 });
+});
+
+test("anchorPlan: one layout brings the offset to the place asked, with the least lift, as Herdr lands each kind of scroll", async () => {
+  const { anchorPlan, listOffset } = await import("../mods/agent-threads/ui.js");
+  // Rows 40, 100, 60, 220, 60, 120, 100, 300 px.
+  const pre = [0, 40, 140, 200, 420, 480, 600, 700, 1000];
+  // There already, and the end.
+  expect(anchorPlan(pre, 300, 300, 300)).toBe(null);
+  expect(anchorPlan(pre, 700, 100, 300)).toEqual({ end: true, lift: 0 });
+  // Up: the top row at the top edge, 10 px lower for a frame (the middle would take 130).
+  expect(anchorPlan(pre, 150, 400, 300)).toEqual({ j: 2, how: "top", lift: 10 });
+  // Down: the row that will cross the bottom edge (row 5, from 480) given 70 px for the
+  // layout, so its bottom is at the bottom edge: no lift, nothing on screen off.
+  expect(anchorPlan(pre, 250, 100, 300)).toEqual({ j: 5, how: "top", lift: 0, slot: { i: 5, h: 70 } });
+  // Down into a row taller than the list, which starts above the top edge: its middle at the
+  // middle, at a height that keeps its bottom below the bottom edge.
+  expect(anchorPlan([0, 50, 100, 1100, 1150, 1200], 500, 200, 300)).toEqual({ j: 2, how: "center", lift: 0, slot: { i: 2, h: 1100 } });
+  // Up a short way inside a tall row, near the start: row 0 made shorter for the frame, kept
+  // above the view, puts row 1's top at the top edge.
+  expect(anchorPlan([0, 400, 800, 1200], 30, 90, 300)).toEqual({ j: 1, how: "top", lift: -370 });
+  // The start itself: nothing to put anywhere but the start at the top.
+  expect(anchorPlan([0, 400, 800, 1200], 0, 90, 300)).toEqual({ j: 0, how: "top", lift: 0 });
+  // Every plan lands where it was asked, as listOffset lands it: the lifted rows for the
+  // layout, then the lift taken away with the offset left in px.
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  let checked = 0;
+  let slotChecked = 0;
+  for (let k = 0; k < 400; k++) {
+    const n = 4 + Math.floor(rnd() * 30);
+    const p = [0];
+    for (let i = 0; i < n; i++) p.push(p[i] + 20 + Math.round(rnd() * (rnd() < 0.1 ? 900 : 200)));
+    const H = 200 + Math.round(rnd() * 500);
+    const room = Math.max(0, p[n] - H);
+    if (!room) continue;
+    const want = Math.round(rnd() * room);
+    const off = Math.round(rnd() * room);
+    const plan = anchorPlan(p, want, off, H);
+    if (Math.abs(want - off) < 0.5) { expect(plan).toBe(null); continue; }
+    expect(plan).not.toBe(null);
+    if (plan.end) { expect(want).toBeGreaterThanOrEqual(room - 0.5); continue; }
+    if (plan.slot) {
+      // Down: nothing lifted; every row on screen keeps its place in that layout, the row at
+      // the bottom edge keeps its bottom below it, and the offset lands at want.
+      const { i, h } = plan.slot;
+      expect(want > off).toBe(true);
+      expect(plan.lift).toBe(0);
+      expect(p[i] < want + H && p[i] + h >= want + H - 0.5).toBe(true);
+      const d = h - (p[i + 1] - p[i]);
+      const slotted = p.map((x, r) => (r > i ? x + d : x));
+      const got = listOffset(slotted, off, H, { i: plan.j, how: plan.how }, -1, -1);
+      expect(Math.abs(got - want)).toBeLessThanOrEqual(0.5);
+      slotChecked++;
+      checked++;
+      continue;
+    }
+    if (plan.j === 0) continue;
+    // Row 0 keeps 1 px at least, and when made shorter it is above the view.
+    expect(p[1] + plan.lift).toBeGreaterThanOrEqual(1);
+    if (plan.lift < 0) expect(want).toBeGreaterThanOrEqual(p[1] + plan.lift);
+    // Up only: a lift moves what is on screen for the layout.
+    expect(want < off).toBe(true);
+    const lifted = p.map((x, i) => (i >= 1 ? x + plan.lift : x));
+    const got = listOffset(lifted, off, H, { i: plan.j, how: plan.how }, -1, -1);
+    expect(Math.abs(got - want)).toBeLessThanOrEqual(0.5);
+    checked++;
+  }
+  expect(checked).toBeGreaterThan(300);
+  expect(slotChecked).toBeGreaterThan(100);
 });
 
 test("landExact: the nearest earlier item at least want above, lifted by the rest", async () => {
@@ -9975,7 +10596,7 @@ test("the image viewer draws a prompt's quote without its marker, muted, behind 
   expect(drawn.some((e) => e[0] === "text_color" && e[1] === VIEW_TURN.sub)).toBe(true);
 });
 
-test("a rebuild keeps a closed turn's rows until the turn, its measures or the look change", async () => {
+test("a rebuild keeps a closed turn's rows until the turn or the look changes, with the size a new measure gives", async () => {
   const { v, cx } = await pane(fixture("--extra", "30"));
   for (let i = 0; i < 40; i++) draw(v, cx);
   const keys = v.turnKeys(v.rows());
@@ -10002,8 +10623,8 @@ test("a rebuild keeps a closed turn's rows until the turn, its measures or the l
   expect(rowOf(a)).toBe(before.a);
   expect(rowOf(b)).not.toBe(before.b);
   expect(rowOf(b).shape).not.toBe(before.b.shape);
-  // A new measure of a closed turn's reply: its kept rows carry the old size, so it is built
-  // again with the measured one.
+  // A new measure of a closed turn's reply: its kept row takes the measured size, so the
+  // next build keeps the row with that size.
   const rc = rowOf(c);
   const part = v.cmdFor(rc);
   v.probed(part.key, v.partSig(part), { height: 400 * v.zoom() }, cx);
@@ -10011,7 +10632,7 @@ test("a rebuild keeps a closed turn's rows until the turn, its measures or the l
   // The next build of every row.
   v.rowsKey = null;
   draw(v, cx);
-  expect(rowOf(c)).not.toBe(rc);
+  expect(rowOf(c)).toBe(rc);
   expect(sizeOf(c)).toBe(rc.shape.mdBase + 400);
   // A new width: every row is built again.
   const wa = rowOf(a);
@@ -10364,7 +10985,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   const PAGE = [
     ["Messages", ["Text size", "User message color", "Shorten long messages", "Always show time"]],
     ["Agent messages", ["Show agent messages", "Agent messages on the rail", "Agent message color", "Sender rules"]],
-    ["Layout", ["Width", "Keep the pane at this width", "Rail side", "Key hints at the bottom"]],
+    ["Layout", ["Rail side", "Key hints at the bottom"]],
     ["Links and keys", ["Link rules", "Quote key"]],
     ["File", ["Copy path"]],
   ];
@@ -10382,7 +11003,7 @@ test("one page: Messages, Agent messages, Layout, Links and keys and File, in th
   // Then Reset, once, with its line, at the end.
   expect(gs.indexOf("Reset to defaults")).toBeGreaterThan(gs.indexOf("Copy path"));
   expect(gs.indexOf("Link rules, sender rules and the quote key stay.")).toBeGreaterThan(gs.indexOf("Reset to defaults"));
-  for (const x of ["Comfortable", "Wide", "Full", "Left", "Right"]) expect(gs).toContain(x);
+  for (const x of ["Left", "Right"]) expect(gs).toContain(x);
   for (const x of ["General", "Chat", "Text", "Colors", "Text and colors", "Rules and keys", "User messages", "From an agent", "From the user", "Your name", "Message patterns", "Dock side"]) expect(gs).not.toContain(x);
   expect(gs.filter((x) => x === "Reset to defaults")).toHaveLength(1);
   expect(gs.filter((x) => x === "Layout")).toHaveLength(1);
@@ -10443,12 +11064,11 @@ test("Reset covers every control on the card, is dim at the defaults, and leaves
   const reset = () => { const c = cardOf(v); const at = c.findIndex((e) => e[0] === "id" && e[1] === "th-set-reset"); return c.slice(at, at + 20); };
   expect(v.prefsDiffer()).toBe(false);
   expect(reset()).toContainEqual(["opacity", 0.45]);
-  for (const a of ["agents", "keyHints", "statusLine", "keepWidth", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
-  v.prefs = { ...v.prefs, width: "wide" };
+  for (const a of ["agents", "keyHints", "statusLine", "alwaysTime", "truncate", "textSize:+", "promptLines:+", "replyLines:-", "railSide:left", "bubbleColor:teal", "agentBubbleColor:rose"]) v.action(a, cx);
   expect(v.prefsDiffer()).toBe(true);
   expect(reset()).not.toContainEqual(["opacity", 0.45]);
   v.action("resetSettings", cx);
-  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
+  for (const k of ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "truncate", "promptLines", "replyLines", "alwaysShowTime"]) expect(v.prefs[k]).toEqual(DEFAULTS_FOR_TEST[k]);
   expect(v.quoteKey).toBe("y");
   expect(v.links.length).toBe(1);
   await new Promise((r) => setTimeout(r, 20));
@@ -10591,49 +11211,6 @@ test("the quote key field: a free letter becomes the key and is written; a taken
   expect(v.quoteNote()).toMatch(/^quoteKey "i" is not a free letter/);
   keepSettings = false;
   delete recordFiles[v.prefsPath()];
-});
-
-test("Shift w steps the width with the toast that names all three; inside the card a width change shows none", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 900;
-  expect(v.prefs.width).toBe("comfortable");
-  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("wide");
-  expect(v.toast.icon).toBe("width-wide");
-  expect(v.toast.widths).toEqual({ cur: "wide", tight: false });
-  rec = []; v.toastView(theme); let c = rec; rec = null;
-  expect(strsOf(c)).toEqual(["Comfortable", "Wide", "Full"]);
-  expect(c).toContainEqual(["font_semibold"]);
-  // A second press changes the words in place, and the first toast's timer leaves it.
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("full");
-  const at = v.toast.at;
-  v.key(shiftW, cx);
-  expect(v.prefs.width).toBe("comfortable");
-  expect(v.toast.at).not.toBe(at);
-  // Too narrow for the list to change, with the pane not kept at the width: it says so, down to 420 px.
-  v.paneW = 440;
-  v.prefs = { ...v.prefs, readingWidth: false };
-  v.key(shiftW, cx);
-  expect(v.toast.widths.tight).toBe(true);
-  rec = []; v.toastView(theme); c = rec; rec = null;
-  expect(strsOf(c)).toContain("too narrow here to show");
-  v.paneW = 400;
-  rec = []; v.toastView(theme); c = rec; rec = null;
-  expect(strsOf(c)).not.toContain("too narrow here to show");
-  // With the card open the toast is drawn after it, so it sits over the card.
-  v.toast = null;
-  v.action("settings", cx);
-  v.key(shiftW, cx);
-  const f = idsIn(frame(v, cx));
-  expect(f.indexOf("th-toast-widths")).toBeGreaterThan(f.indexOf("th-set-card"));
-  // A width chosen in the card says nothing.
-  v.toast = null;
-  c = frame(v, cx);
-  onOf(c, "th-width-full", "on_click")({}, cx);
-  expect(v.prefs.width).toBe("full");
-  expect(v.toast).toBe(null);
 });
 
 test("key hints at the bottom are off by default; the switch brings the row back, and ? keys sits at the card's foot", async () => {
@@ -11075,30 +11652,6 @@ test("the card's spacing: a 16 px inset on every band, 40 px head and foot, no t
   expect(narrow.length).toBeLessThan(full.length);
 });
 
-test("the width line under Width ends on the controls' right edge: it fills its row, the column centered in the row's width", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
-  v.width = 545; v.paneW = 573; v.rootH = 700;
-  v.action("settings", cx);
-  const own = (c, id) => { const at = c.findIndex((e) => e[0] === "id" && e[1] === id); let end = c.findIndex((e, j) => j > at && e[0] === "id"); if (end < 0) end = c.length; return c.slice(at, end); };
-  for (const [paneW, pad] of [[573, 16], [330, 12]]) {
-    v.paneW = paneW;
-    const w = v.setCardW();
-    const c = cardOf(v);
-    expect(own(c, "th-set-rows-main")).toContainEqual(["px", pad]);
-    const ruler = own(c, "th-set-ruler");
-    // The line takes its row's width, as the chooser's row and the switch rows do, so no fixed
-    // width can run past them (it was 2 px over: the card's border).
-    expect(ruler).toContainEqual(["w_full"]);
-    expect(ruler[0]).toEqual(["id", "th-set-ruler"]);
-    const ws = ruler.filter((e) => e[0] === "w").map((e) => e[1]);
-    expect(ws.length).toBe(1); // the column's only
-    const row = w - 2 - 2 * pad;
-    const left = ruler.find((e) => e[0] === "left")[1];
-    expect(Math.abs(left * 2 + ws[0] - row)).toBeLessThanOrEqual(1);
-    expect(left + ws[0]).toBeLessThanOrEqual(row);
-  }
-});
-
 test("the Link rules page, read only: each rule with its type icon, name, description, example and address, On or Off, or why it is not working", async () => {
   const { v, cx } = await pane(fixture("--extra", "2"));
   v.applyPrefs(JSON.stringify({ links: [
@@ -11148,30 +11701,6 @@ test("the Link rules page, read only: each rule with its type icon, name, descri
   v.action("settings", cx);
   v.setPage = "links";
   expect(strsOf(cardOf(v))).toContain("No rules yet.");
-});
-
-test("Shift w through Full keeps Keep the pane at this width as it was, and Reset resizes the pane the way a width change does", async () => {
-  const { v, cx } = await pane(fixture("--extra", "3"));
-  v.width = 545; v.paneW = 573;
-  const shiftW = keyEv("w", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } });
-  for (const want of ["wide", "full", "comfortable"]) { v.key(shiftW, cx); expect(v.prefs.width).toBe(want); expect(v.prefs.readingWidth).toBe(true); }
-  // Off by hand stays off through a cycle too.
-  v.prefs = { ...v.prefs, readingWidth: false };
-  for (let i = 0; i < 3; i++) v.key(shiftW, cx);
-  expect(v.prefs.readingWidth).toBe(false);
-  // Reset: back to Comfortable with the switch on, and the pane to its column.
-  v.prefs = { ...v.prefs, width: "wide", readingWidth: true };
-  v.paneW = 704;
-  log = [];
-  v.action("resetSettings", cx);
-  expect(v.prefs).toMatchObject({ width: "comfortable", readingWidth: true });
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p2", px: 573 }]);
-  // At the defaults already, at that width: nothing to resize.
-  v.paneW = 573;
-  log = [];
-  v.action("resetSettings", cx);
-  expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
-  await new Promise((r) => setTimeout(r, 20));
 });
 
 test("a rule that turned slow on a reply shows Not working with the reason on the page and in the count", async () => {
@@ -13605,7 +14134,7 @@ test("card keys: Tab goes through every control of the card in the order they ar
   expect(stopsOf(v)).toEqual(["th-set-close",
     "th-textSize-minus", "th-textSize-plus", ...SWATCHES("bubbleColor"), "th-set-truncate", "th-set-time",
     "th-set-agents", "th-set-agent-rail", ...SWATCHES("agentBubbleColor"), "th-set-senders",
-    "th-width-comfortable", "th-width-wide", "th-width-full", "th-set-width", "th-rail-left", "th-rail-right", "th-set-hints", "th-set-status",
+    "th-rail-left", "th-rail-right", "th-set-hints", "th-set-status",
     "th-set-links", "th-set-quote", "th-set-copy", "th-set-reset", "th-set-keys"]);
   v.prefs = { ...v.prefs, truncate: true };
   const all = stopsOf(v);
@@ -14177,8 +14706,8 @@ test("card keys: Enter and Space press the control with the ring, as a click doe
   expect(Boolean(v.prefs.truncate)).toBe(was);
   expect(v.cardRing).toBe("th-set-truncate");
   // A choice, a stepper and a color dot.
-  v.cardRing = "th-width-full"; stopsOf(v); pressKey(v, cx, "enter");
-  expect(v.prefs.width).toBe("full");
+  v.cardRing = "th-rail-left"; stopsOf(v); pressKey(v, cx, "enter");
+  expect(v.prefs.railSide).toBe("left");
   const size = v.prefs.textSize;
   v.cardRing = "th-textSize-plus"; stopsOf(v); pressKey(v, cx, "enter");
   expect(v.prefs.textSize).toBe(size + 1);
@@ -14837,8 +15366,8 @@ test("- and = step the Trajectory pane 40 px and the Chat the other way, keep it
   state.props = props;
   log = [];
   w.key(keyEv("-"), cx2);
-  // The Chat gives way up to its reading width (readingWidth on), as beside the Pinned column.
-  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: Math.min(602, w.readingPx()) }]);
+  // The Chat takes all 40 px: no cap at its reading width.
+  expect(log.filter(([, n]) => n === "layout.resize").map((x) => x[2])).toEqual([{ id: "p3", px: 920 }, { id: "p2", px: 602 }]);
   expect(state.shared["threads.trajWidth"]).toEqual({ px: 920 });
   // The Chat at its 240 px: = does nothing, with no notice.
   state.shared["threads.width"] = { p2: 238, p3: 918 };
@@ -15525,12 +16054,9 @@ test("with no width kept, the split's 560 px is held to what a 600 px Chat can g
 });
 
 // The Trajectory split takes its room from the terminal first, then the Chat, then itself
-// (settleTraj, ui.js trajFit). A 704 px Chat (the Wide reading width) with 600 px kept asks
-// for 464.
+// (settleTraj, ui.js trajFit). A 704 px Chat (90 characters) with 600 px kept asks for 464.
 async function trajSplit(chatW = 702, kept = 600) {
   const r = await pane(fixture("--extra", "3"));
-  // The Wide reading width, 704 px, so the Chat is at it and keepWidth leaves it there.
-  r.v.prefs = { ...r.v.prefs, width: "wide" };
   r.v.width = chatW;
   r.v.paneW = chatW;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -15594,21 +16120,87 @@ test("the Trajectory split where the terminal is short: the Chat gives the rest,
   expect(resizes()).toEqual([]);
 });
 
-test("a reading width chosen while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
-  // Shift w or the settings card: Comfortable, wider than the 475 px the Chat was narrowed to.
-  let { v, cx } = await trajSplit();
-  roomIs(v, cx, "p3", 433);
-  expect(resizes().at(-1)).toEqual({ id: "p2", px: 475 });
-  v.paneW = 473;
+// The column's steps through a Trajectory split (fitColumn): each one taken, as [the
+// characters it steps to, whether it is a full re-wrap or one from the kept layouts]. The
+// Chat drawn and settled first, at 704 px (90 characters, 624 px).
+function trajSteps(v, cx) {
+  const still = (w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 2000; };
+  const done = () => { settleRows(v, cx); for (let i = 0; i < 100 && v.rewrap; i++) draw(v, cx); };
+  still(704);
+  draw(v, cx);
+  done();
+  expect([v.chars(), v.width, v.rewrap ?? null]).toEqual([90, 624, null]);
+  const steps = [];
+  const fit = v.fitColumn.bind(v);
+  v.fitColumn = () => {
+    const was = [v.colStep, v.width];
+    fit();
+    if (v.colStep !== was[0] || v.width !== was[1]) steps.push([v.chars(), v.rewrap?.full ?? null]);
+  };
+  return { steps, still, done };
+}
+// While open, the mod moves the Chat's width by nothing of its own: no weight and no probe,
+// however long the width has been still and even when asked to (toWeight).
+function nothingWhileOpen(v, cx, still, w) {
   log = [];
-  v.chooseWidth("comfortable", cx);
-  const px = v.readingPx();
-  expect(px).toBeGreaterThan(475);
-  expect(resizes()).toEqual([{ id: "p2", px }]);
+  for (let i = 0; i < 3; i++) { still(w); v.toWeight(true); v.poll(cx); draw(v, cx); }
+  expect(Boolean(v.trajPaneOpen())).toBe(true);
+  expect([resizes(), v.weighing ?? null, v.weighAfter ?? null, v.weighAt ?? null]).toEqual([[], null, null, null]);
+}
+
+test("the Trajectory open beside the Chat where the terminal has the room: the column does not step on open or close, and closing it sends only a weight", async () => {
+  const { v, cx } = await trajSplit();
+  const { steps, still, done } = trajSteps(v, cx);
+  roomIs(v, cx, "p3", 900);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }]);
+  nothingWhileOpen(v, cx, still, 704);
+  expect(steps).toEqual([]);
+  // Closed: nothing at once, then a weight once the row settles (500 ms), at the same width.
   closeTraj(v, cx);
   expect(resizes()).toEqual([]);
-  // w, the reading width at once.
-  ({ v, cx } = await trajSplit());
+  expect(v.weighAt - Date.now()).toBeGreaterThan(400);
+  v.weighAt = Date.now() - 1;
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", weight: 1 }]);
+  draw(v, cx);
+  done();
+  expect(steps).toEqual([]);
+  expect([v.chars(), v.width]).toEqual([90, 624]);
+});
+
+test("the Trajectory open beside the Chat where the terminal is short: the split's narrowing steps the column once, and closing it hands the px back, then a weight, with one step back from the kept layouts", async () => {
+  const { v, cx } = await trajSplit();
+  const { steps, still, done } = trajSteps(v, cx);
+  roomIs(v, cx, "p3", 433);
+  expect(resizes()).toEqual([{ id: "p3", weight: 1000 }, { id: "p3", px: 464 }, { id: "p2", px: 475 }]);
+  // The Chat at 475 px: 90 to 70 characters while the Trajectory is open, a full re-wrap
+  // (no layout kept for that width yet).
+  still(475);
+  draw(v, cx);
+  expect(steps).toEqual([[70, true]]);
+  done();
+  expect(v.chars()).toBe(70);
+  nothingWhileOpen(v, cx, still, 475);
+  expect(steps).toEqual([[70, true]]);
+  // Closed: the 704 px back at once, then a weight that keeps it once it applies.
+  closeTraj(v, cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }]);
+  still(704);
+  v.poll(cx);
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  // One step back to 90, from the layout kept for 704 px.
+  draw(v, cx);
+  expect(steps).toEqual([[70, true], [90, false]]);
+  done();
+  // And no more: no second px, weight or step.
+  for (let i = 0; i < 3; i++) { v.poll(cx); draw(v, cx); }
+  expect(resizes()).toEqual([{ id: "p2", px: 704 }, { id: "p2", weight: 1 }]);
+  expect(steps).toEqual([[70, true], [90, false]]);
+  expect([v.chars(), v.width]).toEqual([90, 624]);
+});
+
+test("w while the Trajectory is open stands: closing it does not give the Chat its earlier width back", async () => {
+  const { v, cx } = await trajSplit();
   roomIs(v, cx, "p3", 433);
   v.paneW = 473;
   log = [];
@@ -15618,9 +16210,8 @@ test("a reading width chosen while the Trajectory is open stands: closing it doe
   expect(resizes()).toEqual([]);
 });
 
-test("a reading width chosen beside the Trajectory is the Chat's own px (sizeTo), and stays a px while the Trajectory is open", async () => {
-  const ways = [(v, cx) => v.chooseWidth("comfortable", cx), (v, cx) => v.fitToReading(cx)];
-  for (const choose of ways) {
+test("w beside the Trajectory sizes the Chat by its own px (sizeTo), and it stays a px while the Trajectory is open", async () => {
+  for (const choose of [(v, cx) => v.fitToReading(cx)]) {
     const { v, cx } = await trajSplit();
     roomIs(v, cx, "p3", 433);
     expect(v.trajChatBack).toEqual({ px: 704, pane: "p3" });
@@ -15744,7 +16335,6 @@ test("no width the split passes through is kept as the owner's Trajectory width,
   const t0 = real();
   const at = (ms, fn) => { Date.now = () => t0 + ms; try { fn(); } finally { Date.now = real; } };
   const { v, cx } = await pane(fixture("--extra", "3"));
-  v.prefs = { ...v.prefs, width: "wide" };
   v.width = 702;
   v.paneW = 702;
   state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
@@ -16050,3 +16640,529 @@ test("a Trajectory split while the session is still read: the last turn read so 
   s.loaded = true;
   expect(tailHead()).toMatchObject({ reading: false, stale: true });
 }, 30000);
+
+// A long made-up session whose prompts and replies wrap to more lines at 70 characters than
+// at 90, so a column step changes every row's height.
+async function wrapSession(n) {
+  const words = "the cart total rounds per line so the order is off by a cent when a coupon applies to a split shipment".split(" ");
+  const say = (i, k) => Array.from({ length: k }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(" ");
+  const ev = [];
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: ${say(i, 18 + (i % 5) * 6)}.`, ts }, { k: "t", t: `Reply ${i}: ${say(i + 3, 30 + (i % 7) * 8)}.` }, { k: "d", ts });
+  }
+  return scripted(ev);
+}
+// Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
+// held to the list at each layout; scroll_to_item to the near edge or the middle, and
+// scroll_to_bottom, each taken at the next layout; the rows on screen drawn. A wheel moves the
+// list first, then the pane hears of it. Each layout is kept in frames.
+function simList(v) {
+  const sim = { off: 0, ask: null, frames: [], asks: 0 };
+  v.scroll = { scroll_to_item(i, how) { sim.ask = { i, how }; sim.asks++; }, scroll_to_bottom() { sim.ask = { end: true }; sim.asks++; } };
+  const room = (s) => Math.max(0, s.reduce((x, y) => x + y, 0) - v.listH);
+  listWindow = (n) => {
+    const s = lastList.sizes;
+    const pre = [0];
+    for (const x of s) pre.push(pre[pre.length - 1] + x);
+    let off = sim.off;
+    const a = sim.ask;
+    sim.ask = null;
+    // As gpui-component's virtual_list.rs: scroll_to_bottom is the near edge for the last row.
+    const ai = a?.end ? n - 1 : a?.i;
+    if (a && ai >= 0 && ai < n) {
+      const top = pre[ai];
+      const bot = pre[ai + 1];
+      if (a.how === "center") off = (top + bot - v.listH) / 2;
+      else if (top < off) off = top;
+      else if (bot > off + v.listH) off = bot - v.listH;
+    }
+    off = Math.max(0, Math.min(off, room(s)));
+    sim.off = off;
+    // The rows drawn: from the first whose bottom is past the top edge, to two past the first
+    // whose bottom is past the bottom edge, or to the end.
+    const past = (edge) => { let k = 0; while (k < n && pre[k + 1] <= edge) k++; return k; };
+    const start = Math.min(past(off), n - 1);
+    const pe = past(off + v.listH);
+    const end = Math.max(start + 1, pe === n ? n : Math.min(pe + 2, n));
+    sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
+    return { start, end };
+  };
+  sim.wheel = (dy) => {
+    sim.off = Math.max(0, Math.min(sim.off - dy, room(lastList.sizes)));
+    v.listWheel({ delta: { y: dy * v.zoom() } });
+  };
+  sim.last = () => sim.frames[sim.frames.length - 1];
+  return sim;
+}
+// A frame, then the probe's parts drawn in it answered with made-up heights, as the real probe
+// trickles measures in over the frames after a re-wrap.
+const fakeH = (p) => 30 + ((p.key.length * 37 + p.key.charCodeAt(p.key.length - 1) * 13) % 70);
+function probeFrame(v, cx) {
+  let due = [];
+  v.probeDue = function () { due = Threads.prototype.probeDue.call(this); return due; };
+  try { draw(v, cx); } finally { delete v.probeDue; }
+  // The timers due before the next frame run, as Herdr runs them between frames (a scroll
+  // asked 16 or 48 ms on); the frame marks they would clear are cleared.
+  cx.flush(120, 3);
+  dropTimers(v, cx);
+  for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
+  return due.length;
+}
+// Frames until the rows are built and shaped, the probe has measured everything, and no
+// place is held; the frames each drew.
+function settleList(v, cx, sim, max = 900) {
+  const from = sim.frames.length;
+  for (let k = 0; k < max; k++) {
+    probeFrame(v, cx);
+    if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0) && v.probeLeft === 0 && !v.anchor && !v.anchorLift) break;
+  }
+  probeFrame(v, cx);
+  return sim.frames.slice(from);
+}
+// A pane width through the column's steps, still for long enough that it re-wraps at once.
+const stillAt = (v, w) => { v.paneW = w - 2; v.sizeAt = Date.now() - 2000; };
+// The pane at w px with the rows built, measured and at the end, as a session opens.
+function openAt(v, cx, sim, w) {
+  stillAt(v, w);
+  settleList(v, cx, sim);
+  v.jumpLatest();
+  settleList(v, cx, sim);
+  expect([v.follow, sim.last().end]).toEqual([true, true]);
+}
+// Crosses a column step mid-chat and back, and checks the place held through each:
+// - the row at the top edge is the same in every frame, but for the one frame that lands
+//   the place again (its lift), which shows it at most lift px off;
+// - while held, nothing above the anchor moves: the px into the row stay as they were;
+// - once let go, the rows above have their measured heights, and the anchor sits at the
+//   share it had.
+function crossStep(v, cx, sim, from, to) {
+  const whys = [];
+  const go = v.letGo;
+  v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+  try {
+    for (const w of [to, from]) {
+      const before = sim.last();
+      const was = new Map(before.keys.map((k, i) => [k, before.sizes[i]]));
+      const chars = v.chars();
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      expect(v.chars()).not.toBe(chars);
+      const odd = frames.filter((f) => f.key !== before.key);
+      expect(odd.length).toBeLessThanOrEqual(1);
+      for (const f of odd) expect(f.lift).not.toBe(0);
+      // Held: the same px into the row in every frame, the first taking the share of its new height.
+      const held = frames.filter((f) => f.held);
+      expect(held.length).toBeGreaterThan(0);
+      expect(new Set(held.map((f) => Math.round(f.into))).size).toBe(1);
+      expect(Math.abs(held[0].share - before.share)).toBeLessThan(0.02);
+      // The rows above keep the heights the list had for them, but for the few nearest the
+      // place that take the px it lacks or has over.
+      for (const f of held) {
+        const a = f.keys.indexOf(before.key);
+        const moved = f.keys.slice(0, a).filter((k, i) => was.has(k) && f.sizes[i] !== was.get(k));
+        expect(moved.length).toBeLessThan(Math.max(3, a / 10));
+      }
+      const after = sim.last();
+      expect(after.key).toBe(before.key);
+      expect(Math.abs(after.share - before.share)).toBeLessThan(0.15);
+      expect(after.sizes).toEqual(v.sizesMemo.map((h) => Math.ceil(h)));
+      // The pane's offset is the list's.
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+    }
+  } finally { v.letGo = go; }
+  return whys;
+}
+
+test("a column step crossed mid-chat keeps the row at the top edge at the same share of its height, both ways: still while the probe measures, put back in one frame once it is done", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    expect(v.chars()).toBe(70);
+    // Up to the middle by the wheel, to part way into a row.
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    expect(v.follow).toBe(false);
+    expect(sim.last().into).toBeGreaterThan(0);
+    // Each probe measure that comes in while the place is held moves nothing above it.
+    const hold = v.holdPlace;
+    const seen = [];
+    v.holdPlace = function (rows, slots) { hold.call(this, rows, slots); seen.push(slots.slice(0, this.anchor?.a ?? 0).reduce((x, y) => x + y, 0)); };
+    const whys = crossStep(v, cx, sim, 650, 750);
+    v.holdPlace = hold;
+    expect(new Set(seen).size).toBeLessThanOrEqual(2);
+    expect(seen.length).toBeGreaterThan(4);
+    // Let go once the probe had measured the rows above, before the 2 s.
+    expect(whys).toEqual(["settled", "settled"]);
+  } finally { listWindow = null; }
+});
+
+test("the release frame: narrowing, every frame from the swap on shows the top row at the same px; widening, one frame at most off, by its lift", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 750);
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    for (const w of [650, 750]) {
+      const before = sim.last();
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      const from = frames.findIndex((f) => f.held);
+      expect(from).toBeGreaterThanOrEqual(0);
+      const after = frames.slice(from);
+      const into = after[0].into;
+      const off = after.filter((f) => f.key !== before.key || Math.abs(f.into - into) > 1);
+      if (w === 650) expect(off).toEqual([]);
+      else {
+        expect(off.length).toBeLessThanOrEqual(1);
+        for (const f of off) expect(f.lift).not.toBe(0);
+      }
+    }
+  } finally { listWindow = null; }
+});
+
+test("while a place is held the probe measures the rows above it and only a few below, so it is let go sooner; the rest below come after", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off * 0.4);
+    probeFrame(v, cx);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    const A = v.anchor;
+    expect(Boolean(A) && !A.end).toBe(true);
+    const rows = v.rows();
+    const a = rows.findIndex((r) => r.key === A.key);
+    expect(rows.length - a).toBeGreaterThan(100);
+    // Each part the probe asks for, by its row's index, until the place is let go.
+    const at = new Map(rows.map((r, i) => [r.key, i]));
+    let below = 0;
+    while (v.anchor) {
+      const wanted = [];
+      v.probeDue = function () { const due = Threads.prototype.probeDue.call(this); wanted.push(...due); return due; };
+      try { draw(v, cx); } finally { delete v.probeDue; }
+      cx.flush(120, 3);
+      dropTimers(v, cx);
+      for (const [p2, sig] of wanted) {
+        const tk = p2.key.match(/\d+:\d+/)?.[0];
+        const i = tk ? at.get(tk) : null;
+        if (i != null && i > a + 60) below++;
+        v.probed(p2.key, sig, { width: 300, height: fakeH(p2) * v.zoom() }, cx);
+      }
+    }
+    expect(below).toBe(0);
+    // Once let go the probe goes on below.
+    expect(v.probeLeft).toBe(1);
+  } finally { listWindow = null; }
+});
+
+test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(1e9);
+    probeFrame(v, cx);
+    expect(sim.off).toBe(0);
+    const top = sim.last().key;
+    for (const w of [750, 650]) {
+      stillAt(v, w);
+      for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([top, 0]);
+    }
+  } finally { listWindow = null; }
+});
+
+test("an end held through a re-wrap asks for the end once more as it is let go, when following and the reader did not scroll it away", async () => {
+  const { v, cx } = await wrapSession(40);
+  let toEnd = 0;
+  v.scroll = { scroll_to_bottom() { toEnd++; }, scroll_to_item() {} };
+  for (const [why, follow, asks] of [["settled", true, 1], ["jump", true, 1], ["scroll", true, 0], ["settled", false, 0]]) {
+    toEnd = 0;
+    v.follow = follow;
+    v.anchor = { end: true, wheels: v.wheelN ?? 0 };
+    v.letGo(why, cx);
+    expect([why, follow, toEnd, v.anchor]).toEqual([why, follow, asks, null]);
+  }
+});
+
+test("a reader at the end stays at the end through a column step, both ways: the end on screen in every frame while the rows come in and the probe measures them", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    for (const w of [750, 650]) {
+      stillAt(v, w);
+      const frames = settleList(v, cx, sim);
+      expect(frames.length).toBeGreaterThan(1);
+      expect(frames.filter((f) => !f.end)).toEqual([]);
+      expect(v.follow).toBe(true);
+      // The pane knows where the list is: at its end.
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+    }
+  } finally { listWindow = null; }
+});
+
+test("the place is kept across a column step with the Trajectory open beside the Chat, and with the Pinned column open", async () => {
+  for (const open of ["trajectory", "pinned"]) {
+    const { v, cx } = await wrapSession(300);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+      if (open === "trajectory") {
+        state.shared["threads.trajWidth"] = { px: 600 };
+        v.width = 702;
+        v.paneW = 702;
+        v.key(keyEv("y"), cx);
+        state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+        v.settleSplit(cx);
+        expect(Boolean(v.trajPaneOpen())).toBe(true);
+      } else {
+        v.openPinned(cx);
+        state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+        state.shared["threads.pinnedByTerminal"] = { t4: { pane: "p3" } };
+        expect(Boolean(v.pinnedPaneOpen())).toBe(true);
+      }
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      sim.wheel(23);
+      probeFrame(v, cx);
+      crossStep(v, cx, sim, 650, 750);
+    } finally { listWindow = null; }
+  }
+});
+
+test("while the probe still measures, the place holds as long as that takes, past 2 s and 10 s: a scroll lets it go at once, in the same millisecond too", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  const real = Date.now;
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off / 2);
+    probeFrame(v, cx);
+    const whys = [];
+    const go = v.letGo;
+    v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+    // The probe still has rows above the place to measure in every frame.
+    v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+    // The clock stopped: the place is taken, held and the wheel comes in the same millisecond.
+    const t0 = real();
+    Date.now = () => t0;
+    stillAt(v, 750);
+    settleRows(v, cx);
+    expect(v.anchor?.key).toBe(sim.last().key);
+    const key0 = sim.last().key;
+    for (const s of [1.9, 2.1, 10.5, 60]) {
+      Date.now = () => t0 + s * 1000;
+      draw(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      expect(sim.last().key).toBe(key0);
+    }
+    expect(whys).toEqual([]);
+    // A wheel while held lets it go in the next frame, at the place the wheel took it to.
+    Date.now = () => t0 + 60000;
+    sim.wheel(40);
+    const key = sim.last().key;
+    draw(v, cx);
+    expect(whys).toEqual(["scroll"]);
+    expect(v.anchor).toBe(null);
+    draw(v, cx);
+    expect(sim.last().key).toBe(key);
+    // A reader at the end is kept at the end past 10 s, the end asked in every frame.
+    Date.now = real;
+    delete v.probeDue;
+    v.letGo = go;
+    v.jumpLatest();
+    settleList(v, cx, sim);
+    expect(sim.last().end).toBe(true);
+    v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+    const t1 = real();
+    Date.now = () => t1;
+    stillAt(v, 650);
+    settleRows(v, cx);
+    expect(v.anchor?.end).toBe(true);
+    for (const s of [2.1, 10.5, 30]) {
+      Date.now = () => t1 + s * 1000;
+      const asks = sim.asks;
+      draw(v, cx);
+      expect(sim.asks).toBeGreaterThan(asks);
+      expect(v.anchor?.end).toBe(true);
+      expect(sim.last().end).toBe(true);
+    }
+  } finally { Date.now = real; delete v.probeDue; listWindow = null; }
+});
+
+test("a jump while a place is held lets it go and goes where it goes: End, a jump key, a rail click", async () => {
+  for (const jump of ["end", "home", "rail"]) {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      probeFrame(v, cx);
+      const whys = [];
+      const go = v.letGo;
+      v.letGo = function (why, c) { whys.push(why); return go.call(this, why, c); };
+      v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+      stillAt(v, 750);
+      settleRows(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      const keys = v.turnKeys(v.rows());
+      if (jump === "end") v.jumpLatest();
+      else if (jump === "home") v.key(keyEv("home"), cx);
+      else v.railJump(keys[3], cx);
+      draw(v, cx);
+      expect(whys).toEqual(["jump"]);
+      expect(v.anchor).toBe(null);
+      delete v.probeDue;
+      v.letGo = go;
+      settleList(v, cx, sim);
+      if (jump === "end") expect(sim.last().end).toBe(true);
+      else if (jump === "home") expect(sim.off).toBe(0);
+      else {
+        const f = sim.last();
+        const pre = [0];
+        for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+        const i = f.keys.indexOf(keys[3]);
+        expect(i).toBeGreaterThanOrEqual(0);
+        // The turn on screen, not the place held before.
+        expect(pre[i] >= f.off - 1 && pre[i] < f.off + v.listH).toBe(true);
+      }
+    } finally { listWindow = null; }
+  }
+});
+
+test("a held place whose row is gone (its reply parted anew) falls back to its turn's first row, at the top edge from its top", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off / 2);
+    sim.wheel(37);
+    probeFrame(v, cx);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    const A = v.anchor;
+    expect(A?.turn).toBeTruthy();
+    // The row's key is not among the new rows any more.
+    A.key = `${A.key}:gone`;
+    A.pre = null;
+    v.fitKey = null;
+    probeFrame(v, cx);
+    // The hold goes on, on a row of the new rows, from its top.
+    expect(v.anchor).toBe(A);
+    expect(A.key.endsWith(":gone")).toBe(false);
+    expect(v.rows().some((r) => r.key === A.key)).toBe(true);
+    expect(A.share).toBe(0);
+    const frames = settleList(v, cx, sim);
+    expect(v.anchor).toBe(null);
+    // Let go: the turn's first row at the top edge.
+    expect(sim.last().key).toBe(A.key);
+    expect(Math.abs(sim.last().into)).toBeLessThan(1);
+    expect(frames.length).toBeGreaterThan(0);
+  } finally { listWindow = null; }
+});
+
+test("a column step crossed mid-chat at zoom 0.9 keeps the row at the top edge at the same share, both ways: the wheel is taken in the list's px", async () => {
+  herdrSettings = { font_family: "Mono", zoom: 0.9 };
+  try {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      sim.wheel(37);
+      probeFrame(v, cx);
+      expect(Math.abs(v.listOff - sim.off)).toBeLessThan(1);
+      crossStep(v, cx, sim, 650, 750);
+    } finally { listWindow = null; }
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+test("the sessions starting over drop a held place: a pick, and a session read again from the top", async () => {
+  for (const how of ["pick", "restart"]) {
+    const { v, cx } = await wrapSession(400);
+    v.debug = false;
+    v.listH = 600;
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 650);
+      sim.wheel(sim.off / 2);
+      probeFrame(v, cx);
+      v.probeDue = function () { this.probeFor = this.anchor ?? null; this.probeLeft = 1; this.probeAbove = false; return []; };
+      stillAt(v, 750);
+      settleRows(v, cx);
+      expect(Boolean(v.anchor)).toBe(true);
+      v.anchorDue = true;
+      if (how === "pick") v.pick({ path: v.current().file }, cx);
+      else v.restart(v.current(), true);
+      expect(v.anchor).toBe(null);
+      expect(v.anchorDue).toBe(false);
+      delete v.probeDue;
+    } finally { listWindow = null; }
+  }
+});
+
+test("a scroll the pane did not see: the rows drawn bound the offset it works out, and the row at the top edge is kept across a step", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    // As a scrollbar drag: the list moves with no wheel event.
+    sim.off = Math.round(sim.off / 3) + 11;
+    probeFrame(v, cx);
+    const f = sim.last();
+    const i = f.keys.indexOf(f.key);
+    const top = f.sizes.slice(0, i).reduce((x, y) => x + y, 0);
+    expect(v.listOff).toBeGreaterThanOrEqual(top);
+    expect(v.listOff).toBeLessThan(top + f.sizes[i]);
+    stillAt(v, 750);
+    settleList(v, cx, sim);
+    expect(sim.last().key).toBe(f.key);
+  } finally { listWindow = null; }
+});
+
+test("inside a step nothing is held or moved: 720 to 800 px and back takes no place and asks no scroll", async () => {
+  const { v, cx } = await wrapSession(300);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 720);
+    sim.wheel(sim.off / 2);
+    probeFrame(v, cx);
+    const before = sim.last();
+    const asks = sim.asks;
+    for (const w of [800, 720]) {
+      stillAt(v, w);
+      for (const f of settleList(v, cx, sim)) expect([f.key, f.off]).toEqual([before.key, before.off]);
+      expect([v.anchor ?? null, v.anchorDue ?? false, sim.asks]).toEqual([null, false, asks]);
+    }
+  } finally { listWindow = null; }
+});
