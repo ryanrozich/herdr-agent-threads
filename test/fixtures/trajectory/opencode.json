@@ -23,10 +23,10 @@
      {
       "kind": "tool",
       "tool": "grep",
-      "call": "call_grep",
+      "call": "call_000001",
       "input": null,
       "result": {
-       "call": "call_grep",
+       "call": "call_000001",
        "end": null,
        "failed": null
       },
@@ -36,10 +36,10 @@
      {
       "kind": "tool",
       "tool": "edit",
-      "call": "call_edit",
+      "call": "call_000002",
       "input": null,
       "result": {
-       "call": "call_edit",
+       "call": "call_000002",
        "end": null,
        "failed": null
       },
@@ -85,10 +85,10 @@
      {
       "kind": "tool",
       "tool": "edit",
-      "call": "call_edit",
+      "call": "call_000003",
       "input": null,
       "result": {
-       "call": "call_edit",
+       "call": "call_000003",
        "end": null,
        "failed": null
       },

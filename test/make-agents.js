@@ -71,16 +71,18 @@ const orow = (id, type, t, data) => {
   db.run("insert into session_message values (?, ?, ?, ?, ?, ?, ?)", [id, SID, type, seq, O0 + t, O0 + t, JSON.stringify({ time: { created: O0 + t }, ...data })]);
 };
 const otext = (t) => ({ type: "text", text: t });
-const otool = (name) => ({ type: "tool", id: `call_${name}`, name, state: { status: "completed", input: {}, content: [] } });
+// A completed call: its input, its output text, and when it was made and finished.
+const otool = (id, name, input, out, t, done) => ({ type: "tool", id, name, state: { status: "completed", input, content: [otext(out)] },
+  time: { created: O0 + t, completed: O0 + done } });
 const oreply = (id, t, done, content, input, output, read) => orow(id, "assistant", t, {
   time: { created: O0 + t, completed: O0 + done }, agent: "build", model: { id: "glm-5.3", providerID: "opencode", variant: "default" },
   content, finish: "stop", cost: 0, tokens: { input, output, reasoning: 0, cache: { read, write: 0 } },
 });
 orow("msg_u1", "user", 0, { text: "Rename useCart to useBasket everywhere", files: [], agents: [] });
-oreply("msg_a1", 100, 38000, [otool("grep"), otool("edit"), otext("Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`.")], 30400, 540, 22000);
+oreply("msg_a1", 100, 38000, [otool("call_000001", "grep", { pattern: "useCart" }, "14 files match", 200, 1400), otool("call_000002", "edit", { filePath: "src/hooks/useBasket.ts" }, "Edit applied.", 1500, 2300), otext("Renamed `useCart` to `useBasket` in 14 files, including the hook's own file and its tests. The old name is gone from `src/`.")], 30400, 540, 22000);
 orow("msg_i1", "idle", 38001, { outcome: "succeeded" });
 orow("msg_u2", "user", 95000, { text: "Update the README example too", files: [], agents: [] });
-oreply("msg_a2", 95100, 112000, [otool("edit"), otext("The README's **Cart state** example now imports `useBasket`.")], 31800, 210, 30000);
+oreply("msg_a2", 95100, 112000, [otool("call_000003", "edit", { filePath: "README.md" }, "Edit applied.", 95200, 96000), otext("The README's **Cart state** example now imports `useBasket`.")], 31800, 210, 30000);
 orow("msg_i2", "idle", 112001, { outcome: "succeeded" });
 db.run("insert into session_v2 values (?, 'prj', null, ?, 'Rename useCart', ?, ?, null, ?, ?)", [SID, cwd, O0, O0 + 112001, O0 + 95000, O0 + 112001]);
 db.close();
