@@ -986,7 +986,7 @@ export default class Threads extends View {
         const tag = `${fieldTag(kind)}${k}`;
         const inp = InputState.new({ placeholder: hint, value: "" });
         inp.on("change", (_e, cx) => { this.ruleTyped(k, cx, kind); cx.notify(); });
-        inp.on("focus", (_e, cx) => { this.fieldFocused = tag; cx.notify(); });
+        inp.on("focus", (_e, cx) => { this.fieldFocused = tag; this.ruleFieldTook(tag); cx.notify(); });
         inp.on("blur", (_e, cx) => { if (this.fieldFocused === tag) this.fieldFocused = null; this.ruleShow(k); cx.notify(); });
         inp.on("submit", (_e, cx) => { this.keepRule(cx); cx.notify(); });
         out[k] = inp;
@@ -1479,11 +1479,12 @@ export default class Threads extends View {
   // goes. The ring shows only after Tab: a pointer press on the card takes it away, and a press
   // that moves it (ringMove) does nothing without one, so a click never shows a ring.
 
-  // The ring one stop on (1) or back (-1). Onto a field, the field takes the keyboard; off one,
-  // the pane takes it back.
+  // The ring one stop on (1) or back (-1), from the field with the keyboard if one has it (a
+  // press in a field leaves the ring where it was, TRD-100), else from the ring. Onto a field,
+  // the field takes the keyboard; off one, the pane takes it back.
   moveRing(step) {
     const stops = this.cardStops ?? [];
-    const from = this.cardRing ?? stops.find((s) => s.field && s.field.name === this.fieldFocused)?.id ?? null;
+    const from = stops.find((s) => s.field && s.field.name === this.fieldFocused)?.id ?? this.cardRing ?? null;
     this.ringTo(nextStop(stops.map((s) => s.id), from, step));
     return true;
   }
@@ -1491,7 +1492,7 @@ export default class Threads extends View {
     const field = (this.cardStops ?? []).find((s) => s.id === id)?.field ?? null;
     this.cardRing = id;
     this.askReveal();
-    if (field) { this.fieldFocused = field.name; field.input.focus(); }
+    if (field) { this.fieldFocused = field.name; this.ruleFieldTook(field.name); field.input.focus(); }
     else if (this.fieldFocused) { this.fieldFocused = null; this.h.focus(); }
   }
   // Enter or Space: the control with the ring, pressed as a click presses it.
@@ -1768,6 +1769,20 @@ export default class Threads extends View {
       this.ruleCheck();
     } else e.typeOpen = false;
     this.ringMove(this.editorFirst(e) === "th-rule-type-change" ? "th-rule-type-change" : `th-rule-type-${k}`);
+  }
+  // A field of the open rule took the keyboard, by a press or by Tab (tag: its fieldFocused
+  // name, on either page). The type rows Change opened fold back, as a key in Starts with or
+  // Finds folds them, so the fields are where they were before Change; and a ring shown moves
+  // onto the field, so Tab goes on from there. With no ring shown, none comes (TRD-100). A new
+  // link rule's rows, shown while its fields are untouched, stay.
+  ruleFieldTook(tag) {
+    const e = this.ruleEdit;
+    if (!e) return;
+    const head = fieldTag(e.kind);
+    const k = tag?.startsWith(head) ? tag.slice(head.length) : null;
+    if (!this.fieldsOf(e.kind).some(([f]) => f === k)) return;
+    e.typeOpen = false;
+    if (this.cardRing) this.cardRing = `th-rule-f-${k}`;
   }
   // A sender rule's type pressed: its field shows, with the text it had, and on a kept rule
   // the two rows fold back to one line.

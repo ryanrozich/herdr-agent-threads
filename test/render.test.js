@@ -15064,6 +15064,184 @@ test("card keys: on Sender rules the ring follows a press the way it does on Lin
   } finally { done(v); }
 });
 
+// TRD-100: on a kept rule, Change opens the two type rows above Name and pushes the fields
+// down, so a press aimed at Starts with can land in Name. A press reaches the mod as the
+// field's focus event; the ring stayed on the type row, the rows stayed open, and Tab stepped
+// from the type row. The rule here is a Duplicate copy, kept, opened again after the page was
+// left, with the rows open by Change and the ring on its own type's row.
+async function keptCopyPicker(ring = true) {
+  const r = await sendersPane();
+  const { v, cx } = r;
+  onOf(cardOf(v), "th-sender-edit-btn-1", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-dup", "on_click")({}, cx);
+  onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+  await settleAll(cx);
+  v.action("settingsPage:main", cx);
+  v.action("settingsPage:senders", cx);
+  onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+  v.cardRing = ring ? "th-sender-type-change" : null;
+  onOf(cardOf(v), "th-sender-type-change", "on_click")({}, cx);
+  expect([v.ruleEdit.at, v.ruleEdit.draft.name, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, "Checker copy", true, ring ? "th-sender-type-prefix" : null]);
+  return r;
+}
+
+test("TRD-100: a press in Name of a kept copy with its type rows open folds the rows and takes the ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-name", "rule-sender-name"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-sender-type-change");
+    expect(idsIn(c)).not.toContain("th-sender-type-pattern");
+  } finally { done(v); }
+  ({ v, cx } = await keptCopyPicker(false));
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: after a press in Name folds the type rows, the parts above Starts with are the ones drawn before Change, so a second press at the same place lands in Starts with and takes the keys", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    // What sits above Starts with in the open rule, as drawn: its ids and its words.
+    const above = () => {
+      const c = cardOf(v);
+      const ids = idsIn(c);
+      const strs = strsOf(c);
+      return {
+        ids: ids.slice(ids.indexOf("th-rule-edit-2"), ids.indexOf("th-rule-f-prefix")),
+        strs: strs.slice(strs.indexOf("Type"), strs.lastIndexOf("Starts with")),
+      };
+    };
+    expect(above().ids).toContain("th-sender-type-pattern");
+    v.senderInputs.name.handlers.focus({}, cx);
+    const folded = above();
+    // Before Change: the same rule, opened again with its type on one line.
+    v.closeRule();
+    onOf(cardOf(v), "th-sender-edit-btn-2", "on_click")({}, cx);
+    expect(folded).toEqual(above());
+    expect(folded.ids).not.toContain("th-sender-type-pattern");
+    // The press where Name was is now in Starts with, which takes the keys and the text.
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["rule-sender-prefix", false]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+  } finally { done(v); }
+});
+
+test("TRD-100: a press in Starts with of a kept copy with its type rows open folds them and takes the ring; a key edits it and Keep rule writes it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.prefix.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    expect(v.ruleEdit.draft.prefix).toBe("mail from {name}:");
+    onOf(cardOf(v), "th-rule-keep", "on_click")({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1]).toEqual({ name: "Checker copy", prefix: "mail from {name}:", example: SENDS[0].example });
+    expect(lastSenders()[0]).toEqual(SENDS[0]);
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the field a press gave the keyboard, not from a ring left on a type row; Shift-Tab goes back", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    v.senderInputs.name.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-name", "rule-sender-name"]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on Link rules too, Tab steps from a field a press gave the keyboard while the ring is on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-1"; stopsOf(v); pressKey(v, cx, "enter");
+    expect(v.cardRing).toBe("th-rule-type-change");
+    v.ruleInputs.name.handlers.focus({}, cx);
+    const s = stopsOf(v);
+    const next = s[s.indexOf("th-rule-f-name") + 1];
+    expect(next).toMatch(/^th-rule-f-/);
+    pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([next, `rule-${next.slice(10)}`]);
+  } finally { done(v); }
+});
+
+test("TRD-100: on a kept link rule with its Change rows open, a press in a field folds the rows and takes a shown ring; with no ring shown, none comes", async () => {
+  let { v, cx } = await rulesPane();
+  try {
+    v.cardRing = "th-rule-edit-btn-2"; stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.ruleEdit.at, v.ruleEdit.typeOpen, v.cardRing]).toEqual([1, true, "th-rule-type-custom"]);
+    expect(idsIn(cardOf(v))).toContain("th-rule-type-ticket");
+    v.ruleInputs.pattern.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, "th-rule-f-pattern", "rule-pattern"]);
+    const c = cardOf(v);
+    expect(idsIn(c)).toContain("th-rule-type-change");
+    expect(idsIn(c)).not.toContain("th-rule-type-ticket");
+    // Tab goes on from the field pressed into.
+    const s = stopsOf(v);
+    pressKey(v, cx, "tab");
+    expect(v.cardRing).toBe(s[s.indexOf("th-rule-f-pattern") + 1]);
+  } finally { done(v); }
+  ({ v, cx } = await rulesPane());
+  try {
+    onOf(cardOf(v), "th-rule-edit-btn-2", "on_click")({}, cx);
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing]).toEqual([true, null]);
+    v.ruleInputs.name.handlers.focus({}, cx);
+    expect([v.ruleEdit.typeOpen, v.cardRing, v.fieldFocused]).toEqual([false, null, "rule-name"]);
+    // A sender field's focus does nothing to an open link rule.
+    onOf(cardOf(v), "th-rule-type-change", "on_click")({}, cx);
+    v.senderInputs.name.handlers.focus({}, cx);
+    expect(v.ruleEdit.typeOpen).toBe(true);
+  } finally { done(v); }
+});
+
+test("TRD-100: Tab steps from the quote key field a press gave the keyboard, not from the ring on another control", async () => {
+  const { v, cx } = await rulesPane();
+  try {
+    v.setPage = "main";
+    const s = stopsOf(v);
+    const at = s.indexOf("th-set-quote");
+    expect(at).toBeGreaterThan(2);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[1], "quote"]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual([s[at + 1], null]);
+    v.cardRing = s[1];
+    v.quoteInput.handlers.focus({}, cx);
+    stopsOf(v); pressKey(v, cx, "tab", tabEv(true));
+    expect(v.cardRing).toBe(s[at - 1]);
+  } finally { done(v); }
+});
+
+test("TRD-100: the keyboard alone on a kept copy: Change, its type rows, Tab into Name folds them, Tab to Starts with, a key, Enter keeps it", async () => {
+  const { v, cx } = await keptCopyPicker();
+  try {
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-pattern", true]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused, v.ruleEdit.typeOpen]).toEqual(["th-rule-f-name", "rule-sender-name", false]);
+    stopsOf(v); pressKey(v, cx, "tab");
+    expect([v.cardRing, v.fieldFocused]).toEqual(["th-rule-f-prefix", "rule-sender-prefix"]);
+    typeSender(v, "prefix", "mail from {name}:", cx);
+    v.senderInputs.prefix.handlers.submit({}, cx);
+    await settleAll(cx);
+    expect(lastSenders()[1].prefix).toBe("mail from {name}:");
+    expect(v.cardRing).toBe("th-sender-edit-btn-2");
+    // Shift-Tab from Name back into the open rows, and a type chosen there, as before.
+    stopsOf(v); pressKey(v, cx, "enter");
+    stopsOf(v); pressKey(v, cx, "enter");
+    expect([v.cardRing, v.ruleEdit.typeOpen]).toEqual(["th-sender-type-prefix", true]);
+    v.cardRing = "th-sender-type-pattern"; stopsOf(v); pressKey(v, cx, "space");
+    expect([v.ruleEdit.draft.by, v.ruleEdit.typeOpen, v.cardRing]).toEqual(["pattern", false, "th-sender-type-change"]);
+  } finally { done(v); }
+});
+
 // ---- the settings card's bound Tab (issue 104): the window takes plain Tab before on_key_down ----
 
 const CARD_BOUND = [
