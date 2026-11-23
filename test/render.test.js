@@ -2123,16 +2123,19 @@ test("the footer is one row of the most-used keys with q quote for a local termi
 });
 
 test("before Herdr 0.1.13 the first click on a formatted reply says how to select, once", async () => {
+  const was = herdrVersion;
   herdrVersion = "0.1.12";
-  const { v, cx } = await quotePane();
-  v.replySelectable();
-  herdrVersion = "0.1.13";
-  const md = v.rows().find((r) => r.kind === "md");
-  v.click(md.key, cx);
-  expect(v.toast.text).toBe("Press s to select text in this reply");
-  v.toast = null;
-  v.click(md.key, cx);
-  expect(v.toast).toBe(null);
+  try {
+    const { v, cx } = await quotePane();
+    v.replySelectable();
+    herdrVersion = "0.1.13";
+    const md = v.rows().find((r) => r.kind === "md");
+    v.click(md.key, cx);
+    expect(v.toast.text).toBe("Press s to select text in this reply");
+    v.toast = null;
+    v.click(md.key, cx);
+    expect(v.toast).toBe(null);
+  } finally { herdrVersion = was; }
 });
 
 test("the formatted reply is selectable from Herdr 0.1.13, and a click there says nothing", async () => {
@@ -2146,11 +2149,14 @@ test("the formatted reply is selectable from Herdr 0.1.13, and a click there say
   expect(selectable(v)).toBe(true);
   v.click(v.rows().find((r) => r.kind === "md").key, cx);
   expect(v.toast).toBe(null);
+  const was = herdrVersion;
   herdrVersion = "0.1.12";
-  const old = await quotePane();
-  old.v.replySelectable();
-  herdrVersion = "0.1.13";
-  expect(selectable(old.v)).toBe(false);
+  try {
+    const old = await quotePane();
+    old.v.replySelectable();
+    herdrVersion = "0.1.13";
+    expect(selectable(old.v)).toBe(false);
+  } finally { herdrVersion = was; }
 });
 
 test("after ⌘C on the formatted reply q quotes what it copied, as long as the clipboard holds it", async () => {
