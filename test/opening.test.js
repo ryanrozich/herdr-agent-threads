@@ -80,6 +80,12 @@ test("opening: sizes are decimal MB, as a file listing shows them, in the loadin
   const L = openLines({ ...base, size: 499185946, offset: 29100000, pct: 6 });
   expect(L[1]).toBe("29.1 of 499.2 MB · 6%");
   expect(openLines({ ...base, size: 499185946 })[1]).toBe("499.2 MB");
+  // Under a MB, as fmtBytes gives it: "5 KB", never "0.0 MB"; read part way, in KB too.
+  expect(openLines({ ...base, size: 5000 })[1]).toBe("5 KB");
+  expect(openLines({ ...base, size: 5000, offset: 2000, pct: 40 })[1]).toBe("2 KB of 5 KB · 40%");
+  expect(openLines({ ...base, size: 999499 })[1]).toBe("999 KB");
+  expect(openLines({ ...base, size: 999700 })[1]).toBe("1.0 MB");
+  expect(openLines({ ...base, size: 1000000, offset: 400000, pct: 40 })[1]).toBe("0.4 of 1.0 MB · 40%");
   expect(fmtBytes(499185946)).toBe("499 MB");
   expect(fmtBytes(180400000)).toBe("180 MB");
   expect(fmtBytes(1000000)).toBe("1 MB");

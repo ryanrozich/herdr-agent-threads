@@ -2388,6 +2388,9 @@ export default class Threads extends View {
     if (this.reading) { this.readAgain = true; return; }
     const s = this.current();
     if (!s) return;
+    // Another session while the loading state is up: none of the first one's last write or
+    // newest prompt, before its first chunk is read.
+    if (this.opening && !this.opening.done && this.opening.list === this.sessions) this.openSwitch(s);
     // A chunk applied only in part (an interrupt, a read superseded mid-apply, a throw):
     // its offset was never advanced, so reading on would apply its events twice. Start over.
     if (s.partial) this.restart(s, true);
@@ -2471,7 +2474,10 @@ export default class Threads extends View {
             s.partial = false;
             chunk = nextChunk(s, c.used, chunk, CHUNK);
             if (!s.loaded) cx.notify();
-            if (!s.loaded && this.opening && !this.opening.peek && this.opening.list === this.sessions) this.openPeek(s, cx);
+            // Once a session (peek holds the session peeked): another one on the list is
+            // statted and peeked again.
+            const o = this.opening;
+            if (!s.loaded && o && o.list === this.sessions && o.peek !== s) this.openPeek(s, cx);
             // Let the panel draw the new percentage before the next chunk.
             beat();
             await cx.sleep(0);
@@ -9362,8 +9368,9 @@ export default class Threads extends View {
   // end, the newest prompt a person typed. A file read in one chunk has its end already;
   // OpenCode's database and Cursor's transcripts are not read by bytes from the end.
   openPeek(s, cx) {
+    this.openSwitch(s);
     const o = this.opening;
-    o.peek = true;
+    o.peek = s;
     const h = harnessOfFile(s.file);
     if (h === "opencode") return;
     this.openStat(s, cx);
@@ -9374,7 +9381,7 @@ export default class Threads extends View {
         const t0 = now();
         const r = await exec("sh", readArgs(s.file, from, OPEN_PEEK));
         o.peekMs = now() - t0;
-        if (this.opening !== o || o.done || r.code !== 0) return;
+        if (this.opening !== o || this.current() !== s || o.done || r.code !== 0) return;
         const c = newChunk();
         for (const l of r.stdout.split("\n")) parseLine(c, l);
         const tail = newSession(s.id, s.file);
@@ -9391,12 +9398,23 @@ export default class Threads extends View {
   openStat(s, cx) {
     const o = this.opening;
     if (harnessOfFile(s.file) === "opencode") return;
-    listMtimes([s.file]).then((m) => { if (this.opening === o && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
+    listMtimes([s.file]).then((m) => { if (this.opening === o && this.current() === s && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
+  }
+  // The last write and the newest prompt are one session's: another one on the list (a
+  // /clear, a restart while the first still loads) has neither until its own stat and peek,
+  // which its first chunk asks for (peek holds the session peeked, so it differs). Called
+  // before that chunk is read (read), and by the loading state while a read of the first
+  // holds it.
+  openSwitch(s) {
+    const o = this.opening;
+    if (!o || o.shows === s) return;
+    Object.assign(o, { shows: s, mtime: null, newest: null });
   }
   // What the loading state shows now (ui.js openLines). The counts are summed again only when
   // the session changed, as the status line's are (statusStats, whose tokens these are).
   openInfo(s) {
     const o = this.opening;
+    this.openSwitch(s);
     // The bar and the peaks are this session's: another one on the list (a /clear, a restart
     // while the first still loads) starts from its own.
     if (o.peakFor !== s) { o.peakFor = s; o.peak = {}; o.pct = null; }

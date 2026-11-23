@@ -1,7 +1,7 @@
 // agent-threads: small pure helpers for drawing (no Herdr imports), tested under bun.
 
 import { harnessOf } from "./harness.js";
-import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel } from "./core/turns.js";
+import { fmtTokens, fmtPct, fmtDuration, fmtTime, shortModel, fmtBytes } from "./core/turns.js";
 
 // The panel action for a key press, or null. Chords with cmd, ctrl, alt or fn belong to
 // Herdr and the system (cmd-c, cmd-shift-t, ctrl-tab), so they are never taken.
@@ -3151,9 +3151,11 @@ export function fmtSpan(ms) {
 // agent, model, start, active, working, prompts, tools, tokens, pins, newest, now }.
 export function openLines(o) {
   const prompts = o.units === "turns";
-  const amount = (x) => (prompts ? openN(x) : (x / OPEN_MB).toFixed(1));
-  const unit = prompts ? "prompts" : "MB";
-  const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)} ${unit} · ${o.pct}%` : `${amount(o.size)} ${unit}`;
+  // Under a MB, the sizes are fmtBytes' own ("5 KB", never "0.0 MB"), each with its unit.
+  const kb = !prompts && fmtBytes(o.size).endsWith(" KB");
+  const amount = (x) => (prompts ? openN(x) : kb ? fmtBytes(x) : (x / OPEN_MB).toFixed(1));
+  const unit = prompts ? " prompts" : kb ? "" : " MB";
+  const read = !(o.size > 0) ? "" : o.offset > 0 && o.pct != null ? `${amount(Math.min(o.offset, o.size))} of ${amount(o.size)}${unit} · ${o.pct}%` : `${amount(o.size)}${unit}`;
   const turns = o.offset > 0 || o.loaded ? `${openMany(o.turns ?? 0, "turn")}${o.loaded ? "" : " so far"}` : "";
   const agent = [o.agent, o.model ? shortModel(o.model) : null].filter(Boolean).join(" · ");
   const active = o.loaded && o.working ? "Working now" : o.active ? `last active ${openWhen(o.active, o.now)}` : null;

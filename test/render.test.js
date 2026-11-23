@@ -20388,10 +20388,12 @@ test("the opening: a new session on the list while the first is read starts from
   const { openLines } = await import("../mods/agent-threads/ui.js");
   const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
   go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
-  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3 && v.opening?.mtime && v.opening?.newest, "the first chunks, stat and peek");
   const was = v.openInfo(v.current());
   expect(was.turns).toBeGreaterThan(3);
   expect(was.pct).toBeGreaterThan(0);
+  expect(was.active).toBeGreaterThan(0);
+  expect(was.newest?.text).toBeTruthy();
   // A /clear part way: a new session of 5 KB, nothing of it read yet, on the same list.
   const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
   n.size = 5000;
@@ -20399,7 +20401,72 @@ test("the opening: a new session on the list while the first is read starts from
   expect(v.current()).toBe(n);
   const now = v.openInfo(n);
   expect([now.offset, now.size, now.pct, now.turns]).toEqual([0, 5000, null, 0]);
+  // In the frame before its read starts: no last write and no newest prompt of the first's.
+  expect([now.active, now.newest]).toEqual([null, null]);
+  expect(openLines(now)[7]).toBe("");
   expect(openLines(now)[1]).not.toContain("of");
+  expect(openLines(now)[1]).toBe("5 KB");
   expect(openLines(now)[2]).toBe("");
+  go(() => false);
+});
+
+test("the opening: a new session on the list while the first is read shows its own last write and newest prompt, never the first one's", async () => {
+  const { openLines } = await import("../mods/agent-threads/ui.js");
+  const { v, cx, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
+  go((v) => v.current()?.offset > 0);
+  await until(() => v.opening?.mtime && v.opening?.newest, "the first session's stat and peek");
+  const first = v.current();
+  const was = { mtime: v.opening.mtime, newest: v.opening.newest.text };
+  expect(openLines(v.openInfo(first))[7]).toMatch(/^Newest prompt/);
+  // A /clear part way: another session, over a chunk so the loading state stays up and its
+  // end is peeked, its newest prompt in other words, last written two days before the first.
+  const file = join(mkdtempSync(join(tmpdir(), "threads-open-")), "second.jsonl");
+  writeFileSync(file, readFileSync(busy(), "utf8").replaceAll(was.newest, "Sort the made-up changelog by date"));
+  const old = new Date(was.mtime - 2 * 86400000);
+  utimesSync(file, old, old);
+  // What the opening holds when the second's first chunk is in, before its peek, with no
+  // frame drawn in between: the reset is the read's, not the next frame's.
+  const atPeek = [];
+  const peek = v.openPeek.bind(v);
+  v.openPeek = (s, cx) => { atPeek.push({ s, mtime: v.opening.mtime, newest: v.opening.newest }); peek(s, cx); };
+  v.adopt({ kind: "found", id: "made-up-second", file, live: true }, cx);
+  const second = v.current();
+  expect(second).not.toBe(first);
+  // Its first chunk: stat and peek again, for this session.
+  go((v) => v.current() === second && second.offset > 0);
+  await until(() => second.offset > 0 && v.opening.newest && v.opening.mtime, "the second session's stat and peek");
+  expect(atPeek.map((x) => [x.s === second, x.mtime, x.newest])).toEqual([[true, null, null]]);
+  expect(v.openActive()).toBe(true);
+  const info = v.openInfo(second);
+  expect(Math.abs(info.active - old.getTime())).toBeLessThan(2000);
+  expect(info.newest.text).toBe("Sort the made-up changelog by date");
+  expect(openLines(info)[8]).toBe("Sort the made-up changelog by date");
+  // A stat of the first session that comes back late lands nowhere.
+  v.openStat(first, cx);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(Math.abs(v.opening.mtime - old.getTime())).toBeLessThan(2000);
+  go(() => false);
+}, 20000);
+
+test("the opening: the first session's stat and peek that come back after another session took the list land nowhere", async () => {
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.size = 5000;
+  let switched = false;
+  // At the first chunk's pause, its stat and peek just asked for: the list changes there.
+  const hold = (v) => {
+    if (!switched && v.opening?.peek) {
+      switched = true;
+      v.sessions.push(n);
+      v.openInfo(n);
+    }
+    return true;
+  };
+  const { v, go } = await openingPane(busy(), hold);
+  go(hold);
+  await until(() => switched, "the first chunk");
+  expect(v.current()).toBe(n);
+  // Long enough for both to come back (each is one short call).
+  await new Promise((r) => setTimeout(r, 600));
+  expect([v.opening.mtime, v.opening.newest]).toEqual([null, null]);
   go(() => false);
 });
