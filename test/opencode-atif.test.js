@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSession, apply, parseChunk, nextChunk } from "../mods/agent-threads/core/turns.js";
@@ -264,14 +264,20 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
 }
 
 // The other agents: each result's outcome and time in the command line's export are the
-// reader's, from its result events (Claude Code, Codex), or left out where the reader has none
-// (Antigravity), whatever calls.sh says. Cursor's export reads no calls.sh at all. Pi's export,
-// like OpenCode's, takes them from calls.sh (test/pi-atif.test.js).
+// reader's, from its result events (Claude Code, Codex), whatever calls.sh says. Cursor's export
+// reads no calls.sh at all. Pi's and Antigravity's exports, like OpenCode's, take them from
+// calls.sh (test/pi-atif.test.js, test/antigravity-atif.test.js).
 test("the other agents' exported outcomes and result times are their readers', not calls.sh's", () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-ocatif4-"));
   const claude = join(dir, "claude.jsonl");
   execFileSync("bun", [join(root, "test/make-fixture.js"), claude, "00000000-0000-4000-8000-000000000042", "/Users/dev/acme-web"]);
-  const [codex, , , cursor, agy] = execFileSync("bun", [join(root, "test/make-agents.js"), dir, "/Users/dev/acme-web", "2026-11-01T09:00:00Z"], { encoding: "utf8" }).trim().split("\n");
+  const [codex, , , cursor] = execFileSync("bun", [join(root, "test/make-agents.js"), dir, "/Users/dev/acme-web", "2026-11-01T09:00:00Z"], { encoding: "utf8" }).trim().split("\n");
+  // A Claude Code call that never got a result, for the no_result path.
+  const open = join(dir, "open.jsonl");
+  writeFileSync(open, `${[
+    { type: "user", timestamp: "2026-11-01T09:00:00.000Z", message: { role: "user", content: "Run the tests" } },
+    { type: "assistant", timestamp: "2026-11-01T09:00:01.000Z", message: { id: "msg_000001", role: "assistant", content: [{ type: "tool_use", id: "toolu_000001", name: "Bash", input: { command: "bun test" } }] } },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
   const read = (file, harness) => {
     const s = newSession("s", file);
     s.keepWakes = true;
@@ -288,7 +294,7 @@ test("the other agents' exported outcomes and result times are their readers', n
   };
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : undefined);
   let failedSeen = 0, openSeen = 0;
-  for (const [file, harness] of [[claude, "claude"], [codex, "codex"], [cursor, "cursor"], [agy, "antigravity"]]) {
+  for (const [file, harness] of [[claude, "claude"], [open, "claude"], [codex, "codex"], [cursor, "cursor"]]) {
     const cells = new Map(trajectories(read(file, harness)).flatMap((tr) => tr.groups.flatMap((g) => g.cells.filter((c) => c.call).map((c) => [c.call, c.result]))));
     const results = exportOf(file, harness).steps.flatMap((st) => st.observation?.results ?? []);
     expect(results.length).toBe(cells.size);

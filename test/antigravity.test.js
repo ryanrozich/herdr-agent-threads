@@ -179,6 +179,23 @@ test("locate.sh agy-open names the conversation folder a process holds open", as
   expect(execFileSync("sh", [locator, "agy-dir"], { encoding: "utf8", env: { ...process.env, AGY_DATA_DIR: data } }).trim()).toBe(data);
 });
 
+test("calls.sh: a step still RUNNING prints no out line, and a failed step with no text gives its error", () => {
+  step = 0;
+  const body = [
+    user("Sort the widgets", 0),
+    line({ step_index: step++, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(1), input_tokens: 10, output_tokens: 1, cache_read_tokens: 0,
+      tool_calls: [{ name: "run_command", args: { CommandLine: "sort widgets.txt" } }, { name: "view_file", args: { AbsolutePath: "/home/dev/plinth/gizmo.txt" } }] }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "RUNNING", created_at: at(2),
+      content: "Created At: 2026-01-05T09:07:02-06:00\nTool is running as a background task with task id: task-000001" }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "ERROR", created_at: at(3), error: "no such file: gizmo.txt",
+      content: "Created At: 2026-01-05T09:07:03-06:00\nCompleted At: 2026-01-05T09:07:03-06:00" }),
+  ].join("");
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), file(body), "antigravity", "s1.0", "s1.1"], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.ts])).toEqual([["s1.1", true, "no such file: gizmo.txt", "2026-01-05T09:07:03-06:00"]]);
+  expect(got.filter((x) => x.k === "in").map((x) => x.id)).toEqual(["s1.0", "s1.1"]);
+});
+
 test("level 3: a call is named by its planner step and place, and calls.sh reads it and the result step after it", () => {
   step = 0;
   const body = [
@@ -197,10 +214,11 @@ test("level 3: a call is named by its planner step and place, and calls.sh reads
   const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), f, "antigravity", "s1.0", "s1.1", "s9.0"], { encoding: "utf8" })
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["s1.0", "/home/dev/shop/src/cart.ts"], ["s1.1", "bun test cart"]]);
-  // The result's text leaves out its time lines; its time is when it completed.
+  // The result's text leaves out its time lines; its time is when it completed. An ERROR step
+  // failed; a DONE one does not say (its command exited 1 here), so err is null.
   expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.ts])).toEqual([
     ["s1.0", true, "Encountered error in step execution: no such file", "2026-01-05T09:07:02-06:00"],
-    ["s1.1", false, "Command output:\n1 fail\nexpected 3", "2026-01-05T09:07:09-06:00"],
+    ["s1.1", null, "Command output:\n1 fail\nexpected 3", "2026-01-05T09:07:09-06:00"],
   ]);
   // An id that is not s<step>.<i> matches nothing.
   expect(execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), f, "antigravity", "call_1"], { encoding: "utf8" })).toBe("");

@@ -9678,6 +9678,63 @@ test("level 3: an OpenCode call that is not the shell is not failed by an exit c
   }
 });
 
+test("level 3: an Antigravity call whose step is still RUNNING shows no result, not a finished call with the running note as its output", async () => {
+  // agy writes a call's GENERIC step as RUNNING while it runs, and a stopped turn keeps it so;
+  // the call's result is that step once it is DONE or ERROR. Synthetic transcript, made-up words.
+  const { mkdirSync } = await import("node:fs");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const ID = "00000000-0000-4000-8000-000000000098";
+  const dir = join(mkdtempSync(join(tmpdir(), "threads-calls-agy-")), "brain", ID, ".system_generated", "logs");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "transcript_full.jsonl");
+  const ts = (s) => `2026-01-05T15:07:${String(s).padStart(2, "0")}Z`;
+  writeFileSync(file, `${[
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: ts(0), content: "<USER_REQUEST>\nSort the widgets\n</USER_REQUEST>" },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: ts(1),
+      tool_calls: [{ name: "run_command", args: { CommandLine: "wc -l widgets.txt" } }, { name: "run_command", args: { CommandLine: "sort widgets.txt" } }] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "DONE", created_at: ts(3), content: `Created At: ${ts(1)}\nCompleted At: ${ts(3)}\nCommand output:\n3 widgets.txt` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "RUNNING", created_at: ts(8), content: `Created At: ${ts(3)}\nTool is running as a background task with task id: task-000001` },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const a = "0:1";
+  const rows = async (done) => {
+    const { v, cx } = await pane(fixture("--only", "1"));
+    const s = newSession(ID, file);
+    for (const e of [{ k: "p", o: "human", t: "Sort the widgets", ts: ts(0) },
+      { k: "u", n: "run_command", id: "s1.0" }, { k: "u", n: "run_command", id: "s1.1" }, ...(done ? [{ k: "d", ms: 9000, ts: ts(9) }] : [])]) apply(s, e);
+    s.loaded = true;
+    v.sessions = [s];
+    cx.pending = [];
+    const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+    v.sel = a;
+    v.action("deeper", cx);
+    await settled();
+    v.action("deeper", cx);
+    await settled();
+    v.toggleCall(`${a}:0:0`);
+    v.toggleCall(`${a}:0:1`);
+    await settled();
+    const out = v.rows().filter((r) => /^(gp|cl|co):/.test(r.key ?? "")).map((r) => [r.key, v.rowDetail(r)]);
+    draw(v, cx);
+    return out;
+  };
+  // A stopped turn: the group claims no check, and the call has no time and no output. Before,
+  // the group read "[ok]", the call "· 7s" (to the step's created_at), and its output was the
+  // running note.
+  expect(await rows(true)).toEqual([
+    [`gp:${a}:0`, "grp#1 Ran 2 commands [open]"],
+    [`cl:${a}:0:0`, "call#1 wc -l widgets.txt · 2s [open]"],
+    [`co:${a}:0:0`, "cout#1 ok lines 2/2 plain h54 | Command output: ⏎ 3 widgets.txt"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt [open]"],
+    [`co:${a}:0:1`, "cout#1 ok lines 0/0 plain h38"],
+  ]);
+  // A turn still going: the group names the call that runs, which has no time yet.
+  expect((await rows(false)).filter(([k]) => !k.startsWith("co:"))).toEqual([
+    [`gp:${a}:0`, "grp#1 Running 2 commands · sort widgets.txt [open]"],
+    [`cl:${a}:0:0`, "call#1 wc -l widgets.txt · 2s [closed]"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt [closed]"],
+  ]);
+});
+
 test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
   // Two groups: one with a failed command, one where every call worked.
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
