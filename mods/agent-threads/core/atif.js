@@ -265,6 +265,11 @@ const CODEX_DAYS = 60;
 // The agents whose readers give no result events, so the export takes each call's outcome and
 // end time from calls.sh's out lines.
 const OUTCOME_FROM_CALLS = new Set(["opencode", "pi", "antigravity"]);
+// Antigravity names every conversation's file alike, <data>/brain/<id>/.system_generated/logs/
+// transcript_full.jsonl (or transcript.jsonl beside it), so its session id is the folder's
+// <id>, as the panel's reader takes it (harness.js AGY_FILE). A file outside that layout, such
+// as a copy, keeps its own name, as every other agent's does.
+const AGY_FILE = /\/brain\/([0-9A-Za-z_-]+)\/\.system_generated\/logs\/transcript(?:_full)?\.jsonl$/;
 
 async function main(argv) {
   // The model's reasoning is exported by default (Claude Code and Codex); --no-reasoning leaves
@@ -277,7 +282,7 @@ async function main(argv) {
   }
   const cp = await import("node:child_process");
   const fs = await import("node:fs");
-  const { join, dirname, basename, sep } = await import("node:path");
+  const { join, dirname, basename, resolve, sep } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   const { newSession, apply, parseChunk, nextChunk, replaced, rewindTail } = await import("./turns.js");
   const here = dirname(fileURLToPath(import.meta.url));
@@ -322,7 +327,8 @@ async function main(argv) {
       }
       return s;
     }
-    s = newSession(basename(path).replace(/\.jsonl$/, ""), path);
+    const agyId = agent === "antigravity" ? AGY_FILE.exec(resolve(path))?.[1] : undefined;
+    s = newSession(agyId ?? basename(path).replace(/\.jsonl$/, ""), path);
     s.keepWakes = true;
     s.offset = from;
     const base = 1 << 20;

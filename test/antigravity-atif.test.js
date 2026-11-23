@@ -9,7 +9,7 @@ import { test, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { problems } from "./atif-schema.js";
 
 const root = join(import.meta.dir, "..");
@@ -104,6 +104,37 @@ test("antigravity: a failed step with no text keeps its error; a DONE step with 
   expect(got["s1.0"].r.extra).toEqual({ result_ts: "2026-01-05T15:07:02.000Z", tool_result_is_error: true });
   expect(got["s1.1"].r.content).toBe("");
   expect(got["s1.1"].r.extra).toEqual({ result_ts: "2026-01-05T15:07:03.000Z" });
+});
+
+test("antigravity: the session id is the conversation's folder in agy's layout, for either transcript file and a relative path; any other path keeps its file's name", () => {
+  const lines = `${[user("Count the widgets", 0), plan(1, [], "Three.")].map((s, i) => { const { sec, ...rest } = s; return JSON.stringify({ step_index: i, ...rest, created_at: at(sec) }); }).join("\n")}\n`;
+  const base = mkdtempSync(join(tmpdir(), "threads-agyid-"));
+  const put = (...parts) => {
+    const dir = join(base, ...parts.slice(0, -1));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, parts.at(-1)), lines);
+    return join(dir, parts.at(-1));
+  };
+  const idOf = (file, cwd) => JSON.parse(execFileSync("bun", [join(core, "atif.js"), file, "antigravity"], { encoding: "utf8", cwd })).session_id;
+  const logs = [".system_generated", "logs"];
+  expect(idOf(put("data", "brain", ID, ...logs, "transcript_full.jsonl"))).toBe(ID);
+  expect(idOf(put("data", "brain", "0000000000a8", ...logs, "transcript.jsonl"))).toBe("0000000000a8");
+  // Relative to the folder the command runs in.
+  expect(idOf(join("brain", ID, ...logs, "transcript_full.jsonl"), join(base, "data"))).toBe(ID);
+  // Outside the layout, or a folder name the reader does not take as an id: the file's name.
+  expect(idOf(put("copy", "antigravity-cli.trajectory.jsonl"))).toBe("antigravity-cli.trajectory");
+  expect(idOf(put("flat", "brain", ID, "transcript_full.jsonl"))).toBe("transcript_full");
+  expect(idOf(put("odd", "brain", "0000.00a7", ...logs, "transcript_full.jsonl"))).toBe("transcript_full");
+  expect(idOf(put("other", "brain", ID, ...logs, "transcript_part.jsonl"))).toBe("transcript_part");
+  expect(idOf(put("near", "mybrain", ID, ...logs, "transcript_full.jsonl"))).toBe("transcript_full");
+  // Another agent's file in that layout keeps its name: the rule is Antigravity's alone.
+  const claude = join(base, "claude", "brain", ID, ...logs, "transcript_full.jsonl");
+  mkdirSync(dirname(claude), { recursive: true });
+  writeFileSync(claude, `${[
+    { type: "user", timestamp: at(0), message: { role: "user", content: "Count the widgets" } },
+    { type: "assistant", timestamp: at(1), message: { id: "msg_000001", role: "assistant", content: [{ type: "text", text: "Three." }] } },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
+  expect(JSON.parse(execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" })).session_id).toBe("transcript_full");
 });
 
 test("antigravity: a FAILED call failed, as an ERROR one does; a call whose status the export does not know leaves the flag out", () => {
