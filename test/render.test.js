@@ -18483,6 +18483,23 @@ test("the Chat dragged 100 px with the Trajectory open: the Trajectory's close l
     expect(Math.abs(t.row.widths().p2 - dragged) <= 2).toBe(true);
   } finally { t.restore(); }
 }, 30000);
+test("the Chat dragged 3 px with the Trajectory open drops the width a close last sent it back to: the next opening and close leave the Chat at its dragged width, not that one", async () => {
+  const t = await threeRow(722);
+  try {
+    t.run(1000);
+    await t.openTraj(); t.run(4000);
+    t.close("p4"); t.run(4000);
+    const home = t.row.widths().p2;
+    await t.openTraj(); t.run(4000);
+    t.row.drag("p2", 3); t.run(1500);
+    t.close("p4"); t.run(4000);
+    const dragged = t.row.widths().p2;
+    expect(dragged - home).toBeGreaterThanOrEqual(2);
+    await t.openTraj(); t.run(4000);
+    t.close("p4"); t.run(4000);
+    expect([t.row.widths().p2, home]).toEqual([dragged, home]);
+  } finally { t.restore(); }
+}, 30000);
 test("the window resized with the Trajectory open: the Trajectory's close sends the Chat its width from before the Trajectory, scaled by the window", async () => {
   const t = await threeRow(722);
   try {
