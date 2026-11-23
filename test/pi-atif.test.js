@@ -119,6 +119,21 @@ test("pi: an isError that is not true or false (the string \"true\", 1, 0, \"fal
   for (const [id] of odd) expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "3 widgets.txt", { result_ts: at(3 + ids.indexOf(id)) }]);
 });
 
+test("pi: a call with two results takes the last one's text and time, and its outcome when it has an isError; one with none keeps the earlier outcome", () => {
+  const file = session([
+    user("Count the widgets", 1),
+    said([call("call_000061", "bash", { command: "wc -l widgets.txt" }), call("call_000062", "bash", { command: "wc -l widgets.txt" })], "toolUse", 2),
+    result("call_000061", "bash", "first", true, 3),
+    result("call_000061", "bash", "second", false, 4),
+    result("call_000062", "bash", "first", true, 5),
+    result("call_000062", "bash", "second", undefined, 6),
+    said([text("Three.")], "stop", 7),
+  ]);
+  const got = resultsOf(exportOf(file));
+  expect([got.call_000061.r.content, got.call_000061.r.extra]).toEqual(["second", { result_ts: at(4), tool_result_is_error: false }]);
+  expect([got.call_000062.r.content, got.call_000062.r.extra]).toEqual(["second", { result_ts: at(6), tool_result_is_error: true }]);
+});
+
 test("pi: an end time of 0, one that is not a time, one missing, or one before the call's start gives no result_ts, and the outcome stays; one at the start counts", () => {
   const file = session([
     user("Count the widgets", 1),

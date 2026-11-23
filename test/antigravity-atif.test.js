@@ -137,6 +137,30 @@ test("antigravity: the session id is the conversation's folder in agy's layout, 
   expect(JSON.parse(execFileSync("bun", [join(core, "atif.js"), claude, "claude"], { encoding: "utf8" })).session_id).toBe("transcript_full");
 });
 
+test("antigravity: a result step rewritten under its step_index is read whole from its last line: outcome, text and time", () => {
+  const view = ["view_file", { AbsolutePath: "/home/dev/plinth/widgets.txt" }];
+  const file = transcript([
+    user("Count the widgets", 0),
+    plan(1, [view, view, view]),
+    // ERROR, then DONE: the DONE text with no outcome, not the ERROR's true.
+    { ...out(2, "ERROR", at(1), at(2), "Encountered error in step execution: busy", { error: "busy" }), step_index: 2 },
+    { ...out(4, "DONE", at(1), at(4), "widgets"), step_index: 2 },
+    // DONE, then ERROR: the ERROR's text and true.
+    { ...out(5, "DONE", at(1), at(5), "widgets"), step_index: 3 },
+    { ...out(6, "ERROR", at(1), at(6), "Encountered error in step execution: busy", { error: "busy" }), step_index: 3 },
+    // ERROR with a time, then DONE with none: no time, not the ERROR's.
+    { ...out(7, "ERROR", at(1), at(7), "Encountered error in step execution: busy", { error: "busy" }), step_index: 4 },
+    { ...out(null, "DONE", null, null, "widgets"), step_index: 4 },
+    plan(9, [], "Done."),
+  ]);
+  const got = resultsOf(exportOf(file));
+  expect(Object.fromEntries(Object.entries(got).map(([id, { r }]) => [id, [r.content, r.extra]]))).toEqual({
+    "s1.0": ["widgets", { result_ts: "2026-01-05T15:07:04.000Z" }],
+    "s1.1": ["Encountered error in step execution: busy", { result_ts: "2026-01-05T15:07:06.000Z", tool_result_is_error: true }],
+    "s1.2": ["widgets", undefined],
+  });
+});
+
 test("antigravity: a FAILED call failed, as an ERROR one does; a call whose status the export does not know leaves the flag out", () => {
   const file = transcript([
     user("Count the widgets", 0),

@@ -382,6 +382,10 @@ async function main(argv) {
           // Every other agent's stay as its reader has them.
           if (OUTCOME_FROM_CALLS.has(agent)) {
             r.ended = true;
+            // An Antigravity step rewritten under its step_index (ERROR, then DONE) prints a
+            // line each time, and the last is the step: its outcome and time replace the
+            // earlier ones whole, an unknown one included.
+            if (agent === "antigravity") { delete r.failed; delete r.end; }
             if (typeof x.err === "boolean") r.failed = x.err;
             if (typeof x.ts === "string") r.end = x.ts;
           }
