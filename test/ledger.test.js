@@ -6,6 +6,7 @@
 import { test, expect } from "bun:test";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
+  trajCompact, compactRow,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
   BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds, rowTimes,
 } from "../mods/agent-threads/ledger.js";
@@ -465,4 +466,43 @@ test("ledger: a task notification's turn starts with a Background task finished 
   // A teammate's message keeps its own words and name.
   const peer = ledgerTurn(S, turn(5, [], { prompt: "Review the diff", who: "helper-a" }), 0).rows[1];
   expect([peer.lk, peer.text, peer.sender]).toEqual(["agent", "Review the diff", "helper-a"]);
+});
+
+test("compact rows below 200 px: the turn's number and the duration where it fits; below 64 px the mark alone; the label and the time in the tooltip", () => {
+  expect([trajCompact(200), trajCompact(199), trajCompact(100), trajCompact(64), trajCompact(63), trajCompact(60)]).toEqual([null, "line", "line", "line", "icon", "icon"]);
+  const step = { kind: "tr", turn: { n: 291 }, lk: "tool", tool: "Bash", text: "ls -la", start: 12000, dur: 3400, status: null };
+  expect(compactRow(step, 240)).toBe(null);
+  const at100 = compactRow(step, 100);
+  expect([at100.mode, at100.num, at100.dur]).toEqual(["line", "#291", durText(3400)]);
+  expect(at100.tip).toBe(["#291", "Bash ls -la", startText(12000), durText(3400)].join(" · "));
+  // A 100 px pane, 98 inside: a three-figure number and a five-character duration fit.
+  expect(compactRow({ ...step, dur: 50 }, 100, 98).dur).toBe(durText(50));
+  // Too narrow for the duration: the number alone.
+  expect(compactRow(step, 72).dur).toBe(null);
+  expect(compactRow(step, 72).num).toBe("#291");
+  const at60 = compactRow(step, 60);
+  expect([at60.mode, at60.num, at60.dur, at60.tip]).toEqual(["icon", null, null, at100.tip]);
+  const head = { kind: "trh", n: 291, ts: null, total: 8000 };
+  expect([compactRow(head, 100).num, compactRow(head, 100).dur]).toEqual(["#291", durText(8000)]);
+});
+
+test("compact tooltips carry what the compact row drops: a heading's calls, failures, tokens and total; a step's subagent state and tokens and its status now", () => {
+  const head = { kind: "trh", n: 12, ts: null, total: 8000, calls: 3, fails: 1, partial: false, tokens: 12400, timed: true };
+  const p = headParts(head, Infinity);
+  expect(compactRow(head, 100).tip).toBe(["#12", p.calls, p.failed, p.tokens, p.total].join(" · "));
+  expect(compactRow(head, 100).tip).toContain("3 calls");
+  expect(compactRow(head, 100).tip).toContain("1 failed");
+  expect(compactRow(head, 100).tip).toContain("tok");
+  // A running turn says so.
+  expect(compactRow({ ...head, going: true }, 100).tip.endsWith("running")).toBe(true);
+  const step = { kind: "tr", turn: { n: 12 }, lk: "tool", tool: "Task", text: "review", start: 12000, dur: 3400, status: null, sub: { state: "completed", tokens: 5200 } };
+  const tip = compactRow(step, 100).tip;
+  expect(tip).toContain("completed");
+  expect(tip).toContain("5.2k tok");
+  // The status as the row has it now: running, then failed (the subagent state gives way, as in
+  // the full row).
+  expect(compactRow({ ...step, status: "running" }, 100).tip.endsWith("running")).toBe(true);
+  const failed = compactRow({ ...step, status: "failed", failed: true }, 60).tip;
+  expect(failed.endsWith("failed")).toBe(true);
+  expect(failed).not.toContain("completed");
 });
