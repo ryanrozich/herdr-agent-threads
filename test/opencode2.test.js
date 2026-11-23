@@ -251,7 +251,7 @@ test("2.x level 3: calls carry their ids, and calls.sh reads each one's input, o
   user(o, "msg_u1", "Fix the cart total", 0);
   const call = (id, name, input, state, created, completed) => ({ type: "tool", id, name, state: { input, ...state }, time: { created: T0 + created, completed: T0 + completed } });
   assistant(o, "msg_a1", 100, [
-    call("call_s1", "shell", { command: "bun test cart" }, { status: "completed", content: [text("1 fail"), text("expected 3")] }, 100, 2600),
+    call("call_s1", "shell", { command: "bun test cart" }, { status: "completed", content: [text("1 fail"), text("expected 3")], metadata: { exit: 1, truncated: false } }, 100, 2600),
     call("call_r1", "read", { filePath: "src/gone.ts" }, { status: "error", error: { type: "unknown", message: "File not found" } }, 2700, 2706),
   ], { finish: "tool-calls" });
   assistant(o, "msg_a2", 3000, [text("Fixed.")]);
@@ -263,7 +263,8 @@ test("2.x level 3: calls carry their ids, and calls.sh reads each one's input, o
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => [x.id, x.in])).toEqual([["call_s1", "bun test cart"], ["call_r1", "src/gone.ts"]]);
   const outs = got.filter((x) => x.k === "out");
-  expect(outs.map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["call_s1", false, "1 fail\nexpected 3", 2, 2500], ["call_r1", true, "File not found", 1, 6]]);
+  // The shell call completed, but its command exited 1, so it failed.
+  expect(outs.map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["call_s1", true, "1 fail\nexpected 3", 2, 2500], ["call_r1", true, "File not found", 1, 6]]);
   expect(outs[0].ts).toBe("2026-01-02T03:00:02.600Z");
   // A quote in an id or session id is refused before any SQL runs.
   expect(() => execFileSync("sh", [script, "calls", o.path, SID, "call'1"], { stdio: "pipe" })).toThrow();

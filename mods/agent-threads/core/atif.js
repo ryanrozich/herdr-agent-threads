@@ -19,7 +19,7 @@
 //   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
 //   false when the reader knows, left out when it does not). OpenCode's reader gives no
 //   result events, so for OpenCode the command line takes both from calls.sh (a call's
-//   completed or error state, and its end time). The panel's reader keeps no
+//   error state or a non-zero exit code, and its end time). The panel's reader keeps no
 //   arguments, so arguments is {} unless the caller read them (the command line does, from
 //   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
 //   (extra.arguments_unread).
