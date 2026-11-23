@@ -120,6 +120,46 @@ export function slantPoints(a, z, h, d) {
 // detail to the right of the ledger (under it when narrower).
 export const FILTER_MIN = 540;
 export const WIDE_MIN = 900;
+// Below COMPACT_W (the pane's px, its frame in) the Trajectory draws one line a row: a step's kind mark, its turn's number and,
+// when it fits, the duration at the right; a heading its number and the turn's total. Below
+// ICON_W, the mark alone. The label and the time go into the row's tooltip. Rows keep
+// LEDGER_ROW at every width, so the list's heights and scroll do not change across 200 px.
+export const COMPACT_W = 200;
+export const ICON_W = 64;
+export const COMPACT_PAD = 4;
+// A mono character at 11.5 px, for what fits.
+const COMPACT_CH = 6.9;
+export function trajCompact(width) {
+  const w = Number.isFinite(width) ? width : COMPACT_W;
+  return w >= COMPACT_W ? null : w >= ICON_W ? "line" : "icon";
+}
+// What a compact row shows at a pane's px: { mode, num, dur, tip }, num and dur null where they
+// are not drawn. null at COMPACT_W and up. inner is the width inside the frame, for what fits.
+// The tooltip has all the full row shows: a heading's time, calls, failures, tokens and total
+// (headParts at any width); a step's label, subagent state and tokens, time, duration and its
+// status as it is now.
+export function compactRow(r, width, inner = width) {
+  const mode = trajCompact(width);
+  if (!mode || !r) return null;
+  const head = r.kind === "trh";
+  const n = head ? r.n : r.turn?.n;
+  const num = n != null ? `#${n}` : "";
+  const t = rowTimes(r);
+  const dur = head ? (r.total != null ? durText(r.total) : "") : t.dur;
+  let tip;
+  if (head) {
+    const p = headParts(r, Infinity);
+    tip = [num, r.ts ? fmtTime(r.ts) : "", p.calls, p.failed, p.tokens, p.total].filter(Boolean).join(" · ");
+  } else {
+    const label = r.tool ? `${r.tool} ${r.text ?? ""}`.trim() : r.sender ? `${r.sender} · ${r.text ?? ""}` : (r.text ?? "");
+    const sub = r.sub?.state && !r.failed ? [r.sub.state, r.sub.tokens ? `${fmtTokens(r.sub.tokens)} tok` : null] : [];
+    tip = [num, label, ...sub, t.start, dur, r.status].filter(Boolean).join(" · ");
+  }
+  if (mode === "icon") return { mode, num: null, dur: null, tip };
+  const room = inner - 2 * COMPACT_PAD - (head ? 0 : 16 + COMPACT_PAD) - num.length * COMPACT_CH;
+  return { mode, num, dur: dur && room >= COMPACT_PAD + dur.length * COMPACT_CH ? dur : null, tip };
+}
+
 export function ledgerCols(width) {
   const w = Number.isFinite(width) ? width : 0;
   return { start: w >= 420, bar: w >= 500, filters: w >= FILTER_MIN, detailRight: w >= WIDE_MIN };

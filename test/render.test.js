@@ -15310,6 +15310,212 @@ test("the Trajectory at 960 px: the filter bar with counts, the detail open at t
   draw(v, cx);
 });
 
+test("the Trajectory below 200 px: one line a row (a step's mark, its turn's number, its duration when it fits), the heading's icon alone, the label and time in the tooltip; below 64 px the mark alone; rows keep their height", async () => {
+  const { rowTimes: rowTimesOf } = await import("../mods/agent-threads/ledger.js");
+  // The list's row height: one number when every row has it.
+  const listSizes = () => { const u = [...new Set(lastList.sizes)]; return u.length === 1 ? u[0] : u; };
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  const L = v.ledger();
+  const steps = L.rows.filter((r) => r.kind === "tr");
+  const step = steps.find((r) => rowTimesOf(r).dur) ?? steps[0];
+  const head = L.rows.find((r) => r.kind === "trh");
+  const at = (w) => { v.width = w; v.paneW = w; return frame(v, cx); };
+  // A 200 px pane (198 inside its frame): as before.
+  let c = at(198);
+  expect(wordsOf(c)).toContain("Trajectory");
+  expect(hasId(c, "th-settings")).toBe(true);
+  expect(listSizes()).toBe(24);
+  const w200 = wordsOf(c);
+  // A 199 px pane: compact.
+  c = at(197);
+  expect(hasId(c, "th-traj-icon")).toBe(true);
+  // 100 px: the heading's icon only, each step its turn's number, no time of day.
+  c = at(98);
+  expect(wordsOf(c)).not.toContain("Trajectory");
+  expect(hasId(c, "th-traj-icon")).toBe(true);
+  // In the Chat's own pane its way back stays (the next test).
+  expect(hasId(c, "th-settings")).toBe(true);
+  expect(listSizes()).toBe(24);
+  const words = wordsOf(c);
+  expect(words).toContain(`#${step.turn.n}`);
+  expect(words.some((x) => /\d:\d\d (AM|PM)/.test(x))).toBe(false);
+  expect(words).not.toContain(step.text);
+  // The tooltip has the label and the time; the duration is drawn where it fits.
+  const tips = c.filter((e) => e[0] === "tooltip").map((e) => e[1]);
+  const dur = rowTimesOf(step).dur;
+  expect(tips.some((x) => x.includes(`#${step.turn.n}`) && (!step.text || x.includes(step.text)))).toBe(true);
+  if (dur) expect(words).toContain(dur);
+  expect(tips.some((x) => x.startsWith(`#${head.n}`))).toBe(true);
+  expect(w200.length).toBeGreaterThan(0);
+  // 60 px: the marks alone, no numbers and no durations, the tooltips kept.
+  c = at(58);
+  const w60 = wordsOf(c);
+  expect(w60.some((x) => /^#\d+$/.test(x))).toBe(false);
+  if (dur) expect(w60).not.toContain(dur);
+  expect(c.filter((e) => e[0] === "tooltip").length).toBeGreaterThanOrEqual(L.rows.length - L.rows.filter((r) => r.kind === "sess").length);
+  expect(listSizes()).toBe(24);
+  // The selection and the keys work as before at 60 px.
+  const from = v.tsel;
+  v.key(keyEv("j"), cx);
+  expect(v.tsel).not.toBe(from);
+});
+
+test("the compact heading with calls failed: a red dot on its icon and the count in its tooltip; f and Shift f still go through the failures", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  v.width = 98;
+  v.paneW = 98;
+  const s = v.current();
+  const groups = s.turns.flatMap((x) => x.steps.filter((st) => st.k === "group"));
+  const build = (fail) => {
+    for (const g of groups) for (const info of g.info) info.f = false;
+    if (fail) groups.at(-1).info[0].f = true;
+    v.ledgerMemo = null;
+    v.ledgerJob = null;
+    v.turnLedger = new WeakMap();
+    let c = frame(v, cx);
+    for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); c = frame(v, cx); }
+    return c;
+  };
+  let c = build(false);
+  expect(v.ledger().totals.failed).toBe(0);
+  expect(hasId(c, "th-traj-icon-fails")).toBe(false);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory");
+  c = build(true);
+  expect(v.ledger().totals.failed).toBe(1);
+  expect(hasId(c, "th-traj-icon-fails")).toBe(true);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory · 1 failed");
+  v.key(keyEv("f"), cx);
+  expect(v.tsel).toMatch(/^tr:/);
+  c = frame(v, cx);
+  expect(handlerAfterId(c, "th-traj-icon", "tooltip")).toBe("Trajectory · 1 of 1");
+  const at = v.tsel;
+  v.key(keyEv("end"), cx);
+  expect(v.tsel).not.toBe(at);
+  v.key(keyEv("f", { modifiers: { shift: true, control: false, alt: false, platform: false, function: false } }), cx);
+  expect(v.tsel).toBe(at);
+});
+
+test("a running turn's total in the compact band is drawn in the working colour", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  const t = { working: "#00aa00", muted: "#777777", blocked: "#aa0000", dim: "#555555", raised: "#333333", foreground: "#ffffff", hover: "#444444" };
+  const ink = (going) => {
+    rec = [];
+    v.ledgerCompact(t, { kind: "trh", key: "h1", n: 1, going, total: 5000, line: null }, false, {}, { mode: "line", num: "#1", dur: "5s", tip: "#1" });
+    const c = rec;
+    rec = null;
+    const i = c.findIndex((e) => e[0] === "child" && e[1] === "5s");
+    return c.slice(0, i).filter((e) => e[0] === "text_color").at(-1)[1];
+  };
+  expect([ink(true), ink(false)]).toEqual([t.working, t.muted]);
+});
+
+test("the Trajectory in the Chat's own pane below 200 px keeps its way back: the settings and Chat buttons as icons, the Chat button going back; in its own pane, the icon alone", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  expect(Boolean(v.traj) && !v.trajPane).toBe(true);
+  for (const w of [198, 98, 58]) {
+    v.width = w;
+    v.paneW = w;
+    const c = frame(v, cx);
+    expect([w, hasId(c, "th-settings"), hasId(c, "th-traj-chat")]).toEqual([w, true, true]);
+    // The list icon where there is room for it beside them.
+    expect([w, hasId(c, "th-traj-icon")]).toEqual([w, w === 98]);
+  }
+  v.width = 98;
+  v.paneW = 98;
+  let c = frame(v, cx);
+  const after = (id, name) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === id); return c.slice(i + 1, i + 20).find((e) => e[0] === name)?.at(-1) ?? null; };
+  expect(after("th-traj-chat", "tooltip")).toBe("Back to the Chat (y)");
+  after("th-traj-chat", "on_click")({ stop_propagation() {} }, { ...cx, stop_propagation() {} });
+  expect(Boolean(v.traj)).toBe(false);
+  // In the Trajectory's own pane: no Chat button, the icon alone.
+  v.enterTraj();
+  v.trajPane = true;
+  c = frame(v, cx);
+  expect([hasId(c, "th-traj-chat"), hasId(c, "th-settings"), hasId(c, "th-traj-icon")]).toEqual([false, false, true]);
+});
+
+test("what the compact rows draw: every row box 24 px, a turn's band over its activity line, the selected step raised, and a step's status in its tooltip", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  const s = v.current();
+  const groups = s.turns.flatMap((x) => x.steps.filter((st) => st.k === "group"));
+  groups.at(-1).info[0].f = true;
+  v.ledgerMemo = null;
+  v.ledgerJob = null;
+  v.turnLedger = new WeakMap();
+  for (const w of [98, 58]) {
+    v.width = w;
+    v.paneW = w;
+    let c = frame(v, cx);
+    for (let n = 0; v.ledgerJob && n < 100; n++) { cx.timers.splice(0).forEach((x) => x.fn(cx)); c = frame(v, cx); }
+    const rows = v.ledgerRows().filter((r) => r.kind !== "sess");
+    const steps = rows.filter((r) => r.kind === "tr");
+    const heads = rows.filter((r) => r.kind === "trh");
+    // The box each row draws: 24 px tall, whatever the list is told.
+    for (const r of rows) expect([w, r.key, afterId(c, r.key).find((e) => e[0] === "h")?.[1]]).toEqual([w, r.key, 24]);
+    // A turn's band over its activity line, the line drawn in segments.
+    const head = heads.find((r) => r.line?.tools?.length || r.line?.model?.length);
+    expect(hasId(c, `${head.key}-line`)).toBe(true);
+    expect(c.some((e) => e[0] === "id" && (String(e[1]).startsWith(`${head.key}-tools-`) || String(e[1]).startsWith(`${head.key}-model-`)))).toBe(true);
+    // The selected step is raised; the others only take the hover's.
+    const [a, b] = steps;
+    // The box's own calls: up to its first child (the row it holds).
+    const box = (key) => { const a = afterId(c, key); return a.slice(0, a.findIndex((e) => e[0] === "child")); };
+    const bgs = (key) => box(key).filter((e) => e[0] === "bg").map((e) => e[1]);
+    v.tsel = a.key;
+    c = frame(v, cx);
+    const hover = bgs(b.key);
+    expect([w, hover.length]).toEqual([w, 1]);
+    const raised = bgs(a.key).filter((x) => !hover.includes(x));
+    expect([w, raised.length]).toEqual([w, 1]);
+    v.tsel = b.key;
+    c = frame(v, cx);
+    expect([w, bgs(a.key)]).toEqual([w, hover]);
+    expect([w, bgs(b.key).includes(raised[0])]).toEqual([w, true]);
+    // The failed step's status ends its tooltip.
+    const failed = steps.find((r) => r.failed && r.status);
+    expect(afterId(c, failed.key).find((e) => e[0] === "tooltip")[1].endsWith(failed.status)).toBe(true);
+  }
+});
+
+test("the compact switch goes through the size handler by the rounded Herdr px: 199 to 200 and back by 1 px, 64 to 63, and a 200 px pane at zoom 1.25 that reads 199.99", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  v.enterTraj();
+  try {
+    for (const z of [1, 1.25]) {
+      herdrSettings = { font_family: "Mono", zoom: z };
+      v.paneW = null;
+      v.width = 400;
+      let c = frame(v, cx);
+      // Herdr hands the handler the inner width in zoomed px (the pane's px less its 2 px frame).
+      const size = (inner) => { handlerAfterId(c, "threads-root", "on_size_change")({ width: inner * z, height: 800 * z }, cx); c = frame(v, cx); return c; };
+      const compact = () => hasId(c, "th-traj-icon");
+      size(198);
+      expect([z, 198, compact()]).toEqual([z, 198, false]);
+      size(197);
+      expect([z, 197, compact()]).toEqual([z, 197, true]);
+      size(198);
+      expect([z, "198 again", compact()]).toEqual([z, "198 again", false]);
+      // A 200 px pane whose width comes back a hair under: 199.99, from 150 px.
+      size(148);
+      size(197.99);
+      expect([z, 197.99, compact()]).toEqual([z, 197.99, false]);
+      // 64 to 63: the marks alone.
+      size(80);
+      const nums = () => wordsOf(c).some((x) => /^#\d+$/.test(x));
+      size(62);
+      expect([z, 62, nums()]).toEqual([z, 62, true]);
+      size(61);
+      expect([z, 61, nums()]).toEqual([z, 61, false]);
+      size(62);
+      expect([z, "62 again", nums()]).toEqual([z, "62 again", true]);
+    }
+  } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
 test("running rule in the pane: a turn with no end is running only while the agent works; idle, it says no result, never running", async () => {
   const { file } = runningFixture();
   const { v, cx } = await pane(file);
