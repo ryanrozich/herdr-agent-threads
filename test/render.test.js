@@ -4,7 +4,7 @@
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
 import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync, statSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender, newSession as newSessionForTest } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
@@ -116,6 +116,8 @@ mock.module("herdr", () => ({
   exec: async (cmd, args) => {
     // A link the pane opens is logged, never opened.
     if (cmd === "open") { log.push(["open", ...args]); return { code: 0, stdout: "", stderr: "" }; }
+    // The extractor's calls, as [offset, bytes], while a test collects them.
+    if (extractCalls && String(args?.[0] ?? "").endsWith("core/extract.sh")) extractCalls.push([Number(args[2]), Number(args[3])]);
     // A test's stand-in for the extractor: its answer, or null to run it.
     if (extractHook && String(args?.[0] ?? "").endsWith("core/extract.sh")) { const r = await extractHook(args); if (r) return r; }
     stamp("out");
@@ -125,6 +127,7 @@ mock.module("herdr", () => ({
   ...herdrRest(),
 }));
 let pinWrites = 0;
+let extractCalls = null;
 let extractHook = null;
 // What the pane wrote to settings.json (the viewer keeps its panel choice there). With
 // keepSettings set, a write is also what the next read finds, as on disk.
@@ -13700,7 +13703,7 @@ test("a skipped line shows as one dim note after its turn, or at the head", asyn
   const turn = s.turns[1];
   const keyOf = `${v.sessions.indexOf(s)}:${turn.n}`;
   const base = v.rows().filter((r) => r.kind === "note").length;
-  turn.skipped = { lines: 1, bytes: 300 * 1048576 };
+  turn.skipped = { lines: 1, bytes: 300e6 };
   s.version++;
   let rows = v.rows();
   const at = rows.findIndex((r) => r.key === `skip:${keyOf}`);
@@ -20538,4 +20541,66 @@ test("the agent message counts follow a session's read ending: a running agent t
   const fresh = v.counts();
   expect(after).toEqual(fresh);
   expect(fresh).not.toEqual(before);
+});
+
+test("a read takes 2 MiB first, so the first figures come at once, then 16 MiB a call to the end; a read of new bytes starts at 2 MiB again", async () => {
+  extractCalls = [];
+  try {
+    const file = endInChunk2();
+    // Three more copies of its tool results: about 12 MB in all.
+    const extra = readFileSync(file, "utf8").split("\n").filter((l) => l.includes("tool_result")).join("\n");
+    writeFileSync(file, `${readFileSync(file, "utf8")}${extra}\n${extra}\n${extra}\n`);
+    const size = statSync(file).size;
+    expect(size).toBeGreaterThan(2 * 2 ** 20 + 2 * 2 ** 20);
+    const { v, cx, go } = await openingPane(file);
+    go(() => false);
+    await settle(v);
+    const s = v.current();
+    expect(s.loaded).toBe(true);
+    expect(s.offset).toBe(size);
+    // The opening's one read of the file's last 2 MiB for the newest prompt, then the read.
+    const peek = extractCalls.filter(([o, n]) => o === size - 2 * 2 ** 20 && n === 2 * 2 ** 20);
+    expect(peek.length).toBe(1);
+    const first = extractCalls.filter((x) => x !== peek[0] && x[0] < size);
+    expect(first[0]).toEqual([0, 2 * 2 ** 20]);
+    for (const [, n] of first.slice(1)) expect(n).toBe(16 * 2 ** 20);
+    expect(first.length).toBe(2);
+    // New bytes on a session read to its end: 2 MiB first again.
+    extractCalls.length = 0;
+    appendFileSync(file, `${JSON.stringify({ type: "user", uuid: "u9", timestamp: new Date(Date.UTC(2026, 10, 2, 10, 0, 0)).toISOString(), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: "One more" } })}\n`);
+    v.read(cx);
+    await settle(v);
+    expect(extractCalls[0]).toEqual([size, 2 * 2 ** 20]);
+    draw(v, cx);
+  } finally { extractCalls = null; }
+});
+
+test("a read whose 16 MiB call the extractor had to cut (dense text) asks for half from then on", async () => {
+  extractCalls = [];
+  try {
+    // 140 turns, each a prompt and a 100 KB reply of plain words: about 14 MB, nearly all of it
+    // events, so 12 MB in one call would print more than the extractor's 6 MiB.
+    const at = (i, s) => new Date(Date.UTC(2026, 10, 2, 9, 0, 0) + i * 60000 + s * 1000).toISOString();
+    const words = "kaz vel orin tam sula pero dint ".repeat(3300);
+    const lines = [];
+    for (let i = 0; i < 140; i++) {
+      lines.push({ type: "user", uuid: `u${i}`, timestamp: at(i, 0), sessionId: "s", origin: { kind: "human" }, promptSource: "typed", message: { role: "user", content: `Turn ${i + 1}: write it out` } });
+      lines.push({ type: "assistant", uuid: `a${i}`, timestamp: at(i, 30), sessionId: "s", message: { id: `m${i}`, role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: words }] } });
+      lines.push({ type: "system", subtype: "turn_duration", durationMs: 30000, uuid: `d${i}`, timestamp: at(i, 30), sessionId: "s" });
+    }
+    const dir = mkdtempSync(join(tmpdir(), "threads-dense-"));
+    const file = join(dir, "d.jsonl");
+    writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const size = statSync(file).size;
+    const { v, go } = await openingPane(file);
+    go(() => false);
+    await settle(v);
+    expect(v.current().offset).toBe(size);
+    const MiB = 2 ** 20;
+    const read = extractCalls.filter(([o, n]) => !(o === size - 2 * MiB && n === 2 * MiB));
+    // 16 MiB was cut to 8, then 8 to 4: each cut halves the calls after it, and none asks for
+    // a size already cut.
+    expect(read.map(([, n]) => n / MiB)).toEqual([2, 16, 8, 4, 4]);
+    expect(v.current().turns.length).toBe(140);
+  } finally { extractCalls = null; }
 });

@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, existsSync, chmodSync, openSync, writeSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { newSession, apply, parseChunk, nextChunk, noteSkip, skipNote } from "../mods/agent-threads/core/turns.js";
+import { newSession, apply, parseChunk, nextChunk, noteSkip, skipNote, readCap } from "../mods/agent-threads/core/turns.js";
 
 const core = join(import.meta.dir, "../mods/agent-threads/core");
 const CHUNK = 2 * 1024 * 1024; // main.js
@@ -108,11 +108,15 @@ test("a line skipped before the first prompt is noted at the session's head", ()
   expect(s.turns.length).toBe(9);
   expect(s.turns.some((t) => t.skipped)).toBe(false);
   expect(s.skippedHead).toEqual({ lines: 1, bytes: skipped });
-  expect(skipNote({ lines: 2, bytes: 140 * 1048576 })).toBe("2 lines, 140 MB in all, were left out here, too long to read");
+  // Decimal MB and GB, as a file listing and the rest of the pane show sizes.
+  expect(skipNote({ lines: 2, bytes: 140e6 })).toBe("2 lines, 140 MB in all, were left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 300 * 1048576 })).toBe("A line of 315 MB was left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 1500 })).toBe("A line of 1 MB was left out here, too long to read");
   // From 1 GB up, in GB with one decimal.
-  expect(skipNote({ lines: 1, bytes: 1023 * 1048576 })).toBe("A line of 1023 MB was left out here, too long to read");
-  expect(skipNote({ lines: 1, bytes: 1073741824 })).toBe("A line of 1.0 GB was left out here, too long to read");
-  expect(skipNote({ lines: 3, bytes: 5 * 1073741824 + 300 * 1048576 })).toBe("3 lines, 5.3 GB in all, were left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 999e6 })).toBe("A line of 999 MB was left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 999.6e6 })).toBe("A line of 1.0 GB was left out here, too long to read");
+  expect(skipNote({ lines: 1, bytes: 1e9 })).toBe("A line of 1.0 GB was left out here, too long to read");
+  expect(skipNote({ lines: 3, bytes: 5.3e9 })).toBe("3 lines, 5.3 GB in all, were left out here, too long to read");
   // Read again from the top (main.js restart puts a new session's fields over the old): the
   // same line is counted once, not twice.
   Object.assign(s, newSession(s.id, s.file));
@@ -165,4 +169,22 @@ test("a Cursor line longer than the ceiling is read whole, and the session goes 
   expect(skipped).toBe(0);
   expect(s.turns.map((t) => t.prompt)).toEqual(["Turn 1: check the cart.", "Turn 2: print the log.", "Turn 3: and now?"]);
   expect(s.turns[2].after.join("")).toBe("Turn 3 is done.");
+});
+
+test("readCap: a call the extractor cut to half or less (its output over 6 MiB) halves the rest of the read's calls, never below the first call's size", () => {
+  const MiB = 2 ** 20;
+  // Read whole: the cap stays.
+  expect(readCap(16 * MiB, 16 * MiB - 300, 16 * MiB, 2 * MiB)).toBe(16 * MiB);
+  // The first 2 MiB call, read whole: still 16 MiB after.
+  expect(readCap(16 * MiB, 2 * MiB - 10, 2 * MiB, 2 * MiB)).toBe(16 * MiB);
+  // Cut to 8 MiB of 16: 8 MiB a call from then on, so the cut is not paid again each call.
+  expect(readCap(16 * MiB, 8 * MiB - 50, 16 * MiB, 2 * MiB)).toBe(8 * MiB);
+  expect(readCap(8 * MiB, 8 * MiB - 50, 8 * MiB, 2 * MiB)).toBe(8 * MiB);
+  // Cut to a quarter: halved once a call, down to the first call's size and no lower.
+  expect(readCap(16 * MiB, 4 * MiB, 16 * MiB, 2 * MiB)).toBe(8 * MiB);
+  expect(readCap(2 * MiB, MiB, 2 * MiB, 2 * MiB)).toBe(2 * MiB);
+  // Nothing read (a line longer than the call): nextChunk grows that call; the cap stays.
+  expect(readCap(16 * MiB, 0, 16 * MiB, 2 * MiB)).toBe(16 * MiB);
+  // A call grown past the cap to get by a long line, then read short: never above the cap.
+  expect(readCap(8 * MiB, 10 * MiB, 64 * MiB, 2 * MiB)).toBe(8 * MiB);
 });
