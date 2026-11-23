@@ -3604,10 +3604,11 @@ export default class Threads extends View {
     if (fit.T != null) this.rowPx(cx, null);
     // With the Trajectory open, the px the Chat gives so the terminals keep their 200 px come
     // back to it when the column closes (autoPinned, with the Chat's width from before).
-    const was = back ?? Math.round(this.pw()) + PANE_FRAME;
+    const was = back ?? this.chatAt(Math.round(this.pw()) + PANE_FRAME);
     this.pinChatBack = traj && fit.chat != null && fit.chat < was ? { px: was } : null;
-    // The Chat's px: the fit's, else the close's target (its measure may be the close's).
-    this.pinPx(me, fit.chat ?? back);
+    // The Chat's px: the fit's, else the close's target (its measure may be the close's), else
+    // the width a close last sent it back to when it is within 3 px of that (chatAt).
+    this.pinPx(me, fit.chat ?? back ?? (this.chatHome ? this.chatAt(Math.round(this.pw()) + PANE_FRAME) : null));
     // The row as this pane knew it: the column's first weight lands at its width (pairBegin).
     if (fit.R > 0 && !traj) {
       const put = () => setShared(PAIR_KEY, { ...(shared(PAIR_KEY) ?? {}), [this.terminal]: { S: fit.S, R: fit.R } });
@@ -3728,7 +3729,7 @@ export default class Threads extends View {
     if (fit.chat < a.chat && me) run("layout.resize", { id: me.pane, px: fit.chat });
     // The Chat's width from before the Trajectory, whether it gave the Trajectory room or only
     // the px its landing may take: the width it goes back to when the Trajectory closes.
-    if (me) this.trajChatBack = { px: a.chat, pane: a.made };
+    if (me) this.trajChatBack = { px: this.chatAt(a.chat), pane: a.made };
     // The row onto weights once the Trajectory holds its width (rowPoll). The room probe is the
     // first point of the line that lands it: at ROOM_WEIGHT it measured nearly all the room the
     // weights share, and the Chat's narrowing adds to that room what it gave.
@@ -3780,7 +3781,7 @@ export default class Threads extends View {
     const ent = this.rowNow();
     if (closed && side && ent?.k > 0 && ent.ids?.traj && this.me()) {
       const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.traj).map((id) => [id, ent.n[id]]));
-      if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = back.px;
+      if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = this.chatHome = back.px;
       if (this.rowClose(ent.ids.traj, targets, cx)) { this.trajChatBack = null; return; }
     }
     if (back && !panes().some((p) => p.pane === back.pane)) {
@@ -4131,9 +4132,16 @@ export default class Threads extends View {
   chatMoved(ev, d) {
     if (ev?.kind === "scale") {
       for (const b of [this.trajChatBack, this.pinChatBack]) if (b) b.px = Math.round(b.px * ev.f);
+      if (this.chatHome) this.chatHome = Math.round(this.chatHome * ev.f);
       return;
     }
-    if (Math.abs(d) > 2) { this.trajChatBack = null; this.pinChatBack = null; }
+    if (Math.abs(d) > 2) { this.trajChatBack = null; this.pinChatBack = null; this.chatHome = null; }
+  }
+  // The Chat's width as a side pane opens, for the width it goes back to: the last width a close
+  // sent it back to when it is within 2 px of that (the weigh loop and the fix stop within 2 px,
+  // and each cycle would otherwise add its miss to the next), else its width now.
+  chatAt(px) {
+    return this.chatHome && Math.abs(px - this.chatHome) <= 3 ? this.chatHome : px;
   }
   // Each fall back to px, with its reason, for the debug report (rowFalls). The column's
   // opening, and the Trajectory's opening during a close, go to px on purpose and land on
@@ -4391,12 +4399,15 @@ export default class Threads extends View {
       this.rowTick(cx);
       return;
     }
-    // The Chat alone: on its weight with the terminals, R the room they share, and the weigh
-    // loop's correction from there.
+    // The Chat alone: on its weight with the terminals, R the room they share (with the closed
+    // divider's SPLIT_GAP, which Herdr gives back), and the weigh loop's correction from there.
+    // Without the gap every close landed the Chat about 2 px wide, within the loop's 2 px, and
+    // the next opening kept that as its width: 2 px more each cycle.
     if (!me) return;
-    const R = r.k * ent.S + targets[ids.chat];
+    const t = targets[ids.chat];
+    const R = r.k * ent.S + t + SPLIT_GAP;
     this.weighLine = { a: 1 / R, b: ent.S / R };
-    this.weighing = { pane: me.pane, n0: targets[ids.chat], tried: [], w: r.w[ids.chat] };
+    this.weighing = { pane: me.pane, n0: t, tried: [], w: Number(((ent.S * t) / (R - t)).toPrecision(5)) };
     this.askWeight();
   }
   // After a close's weights: Herdr gives the room the closed pane's divider took back to the
@@ -4417,6 +4428,9 @@ export default class Threads extends View {
     if ((now - f.seen.at < 150 || now - f.asked < 150) && now - f.asked < 1500) { this.rowTick(cx); return; }
     this.rowCloseFix = null;
     const off = ids.some((id) => Math.abs(n[id] - f.targets[id]) > 2);
+    // The fix asked unless every pane is within 1 px: a 2 px miss kept would be the next close's
+    // width, and each cycle would add to it.
+    const near = ids.every((id) => Math.abs(n[id] - f.targets[id]) <= 1);
     // The fix's weights asked: where they landed is the check. Off by more than 2 px, the
     // record they came from was wrong: px at the targets, which is exact, and no record.
     if (f.check) {
@@ -4430,7 +4444,7 @@ export default class Threads extends View {
     const k = (R - T) / f.S;
     // No room left for the terminals: the record cannot be right. px at the targets.
     if (!(k > 0)) { this.rowPxAt(f.targets, f.S, cx, "a close left the terminals no room"); return; }
-    if (!off) { this.rowFixSave(f, k, n, cx); return; }
+    if (near) { this.rowFixSave(f, k, n, cx); return; }
     for (const id of ids) run("layout.resize", { id, weight: Number((f.targets[id] / k).toPrecision(5)) });
     this.rowCloseFix = { ...f, check: { k }, asked: now, seen: null };
     this.rowTick(cx);
@@ -4537,7 +4551,7 @@ export default class Threads extends View {
       if (closing) this.rowCloseBoth(closing.targets[this.me()?.pane], cx);
       else if (ent?.k > 0 && ent.ids?.pin) {
         const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.pin).map((id) => [id, ent.n[id]]));
-        if (back && ent.ids.chat) targets[ent.ids.chat] = back.px;
+        if (back && ent.ids.chat) targets[ent.ids.chat] = this.chatHome = back.px;
         if (this.rowClose(ent.ids.pin, targets, cx)) this.weighAt = null;
       } else if (pair?.k > 0 && pair.m > 0) { this.weighAt = null; this.pairClose(pair); }
       if (pair) cx?.timer?.after(0, () => { const map = { ...(shared(PAIR_KEY) ?? {}) }; delete map[this.terminal]; setShared(PAIR_KEY, map); });
@@ -7437,7 +7451,7 @@ export default class Threads extends View {
     this.rowPx(cx, "w");
     const px = this.readingPx();
     if (this.pinnedPane) run("layout.resize", { id: main.pane, px });
-    else { this.trajChatBack = null; this.pinChatBack = null; this.sizeTo(px); }
+    else { this.trajChatBack = null; this.pinChatBack = null; this.chatHome = null; this.sizeTo(px); }
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
     if (col) {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
