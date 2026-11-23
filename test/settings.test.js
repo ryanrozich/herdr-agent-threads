@@ -4,7 +4,7 @@ import { test, expect, mock } from "bun:test";
 
 const writes = [];
 mock.module("herdr", () => ({ writeTextFile: async (path, text, expected) => { writes.push({ path, text, expected }); return null; } }));
-const { DEFAULTS, RANGES, LOOK, behindLook, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks } = await import("../mods/agent-threads/settings.js");
+const { DEFAULTS, RANGES, LOOK, behindLook, parseSettings, parseExtras, settingsText, settingsPath, saveSettings, defaultLinks, ruleFault, LINK_TEMPLATES, parseLinks, parseTrajectory, TRAJ_MIN_H } = await import("../mods/agent-threads/settings.js");
 // The quiet look's settings at their defaults.
 const CHAT = { textSize: 14, agentRail: false, bubbleColor: "blue", agentBubbleColor: "amber", viewerReply: true, alwaysShowTime: false, truncate: false, railSide: "right", keyHints: false, statusLine: true };
 
@@ -256,6 +256,38 @@ test("a file holding the old width and keep-width keys reads with no error or no
     expect([saved.width, saved.readingWidth]).toEqual([JSON.parse(text).width, JSON.parse(text).readingWidth]);
   }
   expect(parseSettings('{"width": "wide", "readingWidth": false}').values).toEqual(DEFAULTS);
+});
+
+// TRD-24: the Trajectory's own object, read and checked; nothing writes it yet.
+test("the trajectory object: where y docks it and the bottom height, read with defaults and a note for each value it cannot use; a chat save keeps it as written", () => {
+  expect(TRAJ_MIN_H).toBe(270);
+  for (const text of [null, "", "{}", '{"textSize": 15}']) expect(parseExtras(text).trajectory).toEqual({ dock: "right", height: null });
+  expect(parseExtras('{"trajectory": {"dock": "bottom", "height": 412}}').trajectory).toEqual({ dock: "bottom", height: 412 });
+  expect(parseExtras('{"trajectory": {"dock": "bottom", "height": 412}}').notes).toEqual([]);
+  expect(parseExtras('{"trajectory": {"dock": "right"}}').trajectory).toEqual({ dock: "right", height: null });
+  // A height is whole px, never under 270; a null height is none, with no note.
+  expect(parseTrajectory({ height: 300.6 })).toEqual({ dock: "right", height: 301, notes: [] });
+  expect(parseTrajectory({ height: null })).toEqual({ dock: "right", height: null, notes: [] });
+  expect(parseTrajectory({ height: 270 })).toEqual({ dock: "right", height: 270, notes: [] });
+  expect(parseTrajectory({ height: 120 })).toEqual({ dock: "right", height: 270, notes: ["trajectory.height 120 is under 270 px; using 270"] });
+  for (const h of ["400", 0, -5, true, [300]]) {
+    const r = parseTrajectory({ height: h });
+    expect(r.height).toBeNull();
+    expect(r.notes).toEqual([`trajectory.height ${JSON.stringify(h)} is not a px height; using the default`]);
+  }
+  for (const d of ["left", "Bottom", 1, null]) {
+    const r = parseTrajectory({ dock: d, height: 400 });
+    expect([r.dock, r.height]).toEqual(["right", 400]);
+    expect(r.notes).toEqual([`trajectory.dock ${JSON.stringify(d)} is not "right" or "bottom"; using "right"`]);
+  }
+  for (const t of ["bottom", 3, ["bottom"]]) expect(parseTrajectory(t)).toEqual({ dock: "right", height: null, notes: ["trajectory is not an object; using its defaults"] });
+  // Its notes join the file's other notes.
+  const text = JSON.stringify({ quoteKey: "j", trajectory: { dock: "top" } });
+  expect(parseExtras(text).notes).toEqual([expect.stringContaining("quoteKey"), 'trajectory.dock "top" is not "right" or "bottom"; using "right"']);
+  // Not a chat setting: a chat save keeps the object as written, unknown keys and all.
+  const kept = JSON.stringify({ textSize: 15, trajectory: { dock: "bottom", height: 412, later: 1 } });
+  expect(parseSettings(kept).values.trajectory).toBeUndefined();
+  expect(JSON.parse(settingsText({ ...parseSettings(kept).values, textSize: 16 }, kept)).trajectory).toEqual({ dock: "bottom", height: 412, later: 1 });
 });
 
 test("a fresh install (no file, or an empty one) has the pull request rule, on; the first write records it; a file of its own keeps its links or none", () => {

@@ -45,6 +45,11 @@
 // (parseSenders), each with two optional keys: on (false skips the rule) and example (a
 // prompt shown on the Sender rules page). The card's Sender rules page writes the whole
 // list. No sender rules ship.
+// trajectory: the Trajectory's own settings, an object, read by parseTrajectory (TRD-24):
+// "dock", where y opens it ("right", the default, or "bottom"), and "height", the bottom
+// dock's px height as the owner last dragged it (a whole number from TRAJ_MIN_H, none until
+// then). Nothing writes it yet: a save keeps the object as written, like any key it does not
+// know. The chat's keys above are not the Trajectory's.
 // This is the only file in the mod that writes, and it writes only this file and pins.json
 // beside it (pins.js has the format).
 
@@ -552,8 +557,30 @@ function senderGroup(pattern) {
   try { return "sender" in (new RegExp(`(?:${pattern})|`).exec("")?.groups ?? {}); } catch { return false; }
 }
 
-// quoteKey, links and senders from the file's text, with their notes. Text that does not
-// parse gives the defaults (parseSettings reports that).
+// The Trajectory's two docks, and the bottom dock's least height in Herdr px (round 7: the
+// heading, the filter bar and a few rows). TRD-87: it starts at 45% of the tab, never under this.
+export const TRAJ_DOCKS = Object.freeze(["right", "bottom"]);
+export const TRAJ_MIN_H = 270;
+// The file's "trajectory" object: { dock, height, notes }. dock: "right" when missing or not one
+// of TRAJ_DOCKS; height: null when missing, a whole number of px when it is a number, never
+// under TRAJ_MIN_H. A value that is there and not used gets a note.
+export function parseTrajectory(t) {
+  const notes = [];
+  if (t == null) return { dock: "right", height: null, notes };
+  if (typeof t !== "object" || Array.isArray(t)) return { dock: "right", height: null, notes: ["trajectory is not an object; using its defaults"] };
+  let dock = "right";
+  if (TRAJ_DOCKS.includes(t.dock)) dock = t.dock;
+  else if (t.dock !== undefined) notes.push(`trajectory.dock ${JSON.stringify(t.dock)} is not "right" or "bottom"; using "right"`);
+  let height = null;
+  if (typeof t.height === "number" && Number.isFinite(t.height) && t.height > 0) {
+    height = Math.round(t.height);
+    if (height < TRAJ_MIN_H) { notes.push(`trajectory.height ${height} is under ${TRAJ_MIN_H} px; using ${TRAJ_MIN_H}`); height = TRAJ_MIN_H; }
+  } else if (t.height !== undefined && t.height !== null) notes.push(`trajectory.height ${JSON.stringify(t.height)} is not a px height; using the default`);
+  return { dock, height, notes };
+}
+
+// quoteKey, links, senders and the Trajectory's object from the file's text, with their
+// notes. Text that does not parse gives the defaults (parseSettings reports that).
 export function parseExtras(text) {
   let raw = null;
   try { raw = JSON.parse(text ?? ""); } catch { /* reported by parseSettings */ }
@@ -562,9 +589,11 @@ export function parseExtras(text) {
   const quote = parseQuoteKey(raw.quoteKey);
   const links = parseLinks(raw.links);
   const senders = parseSenders(raw.senders);
+  const traj = parseTrajectory(raw.trajectory);
   return {
     quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules, senderList: senders.list,
-    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes], linkNotes: links.notes, senderNotes: senders.notes,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes, ...traj.notes], linkNotes: links.notes, senderNotes: senders.notes,
+    trajectory: { dock: traj.dock, height: traj.height },
     linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
     senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
   };
