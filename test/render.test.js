@@ -20154,3 +20154,23 @@ test("TRD-24: a bottom Trajectory pane's dock holds in its map entry whichever w
   v.settleSplit(cx);
   expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
 });
+
+test("TRD-24: a right Trajectory pane finding itself under a stale bottom entry for its own id writes its entry whole, with no dock", async () => {
+  const { v } = await pane(fixture("--extra", "3"));
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  state.panes.push({ pane: "p5", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { t4: { pane: "p5", dock: "bottom" } };
+  const props = state.props;
+  state.props = { ...props, view: "trajectory" };
+  const b = new Threads();
+  const cb = makeCx();
+  b.init(state.props, cb);
+  await settle(b);
+  state.props = props;
+  expect([b.trajPane, b.trajDock]).toEqual([true, "right"]);
+  b.poll(cb);
+  cb.flush(0);
+  expect(state.shared["threads.trajByTerminal"]).toEqual({ t4: { pane: "p5" } });
+  expect(v.trajBottomId()).toBe(null);
+  expect(v.trajRightOpen()?.pane).toBe("p5");
+});
