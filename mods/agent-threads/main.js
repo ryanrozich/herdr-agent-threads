@@ -3765,13 +3765,16 @@ export default class Threads extends View {
     const closed = this.trajWasOpen && !open;
     this.trajWasOpen = open;
     const back = this.trajChatBack;
+    // Its pane gone, the width back is used once, by whichever way the close goes below (back).
+    const gone = back && !panes().some((p) => p.pane === back.pane);
+    if (gone) this.trajChatBack = null;
     const side = !this.pinnedPane && !this.trajPane;
     // The column's give was against the row with the Trajectory: gone with it.
     if (closed) this.pinChatBack = null;
     // The column's close still under way: both side panes closed together (rowCloseBoth).
     const closing = closed && side ? this.rowClosing() : null;
     if (closing && this.me()) {
-      const px = back && !panes().some((p) => p.pane === back.pane) ? back.px : closing.targets[this.me().pane];
+      const px = gone ? back.px : closing.targets[this.me().pane];
       this.rowCloseBoth(px, cx);
       return;
     }
@@ -3782,10 +3785,9 @@ export default class Threads extends View {
     if (closed && side && ent?.k > 0 && ent.ids?.traj && this.me()) {
       const targets = Object.fromEntries(Object.values(ent.ids).filter((id) => id !== ent.ids.traj).map((id) => [id, ent.n[id]]));
       if (back?.pane === ent.ids.traj) targets[ent.ids.chat] = this.chatHome = back.px;
-      if (this.rowClose(ent.ids.traj, targets, cx)) { this.trajChatBack = null; return; }
+      if (this.rowClose(ent.ids.traj, targets, cx)) return;
     }
-    if (back && !panes().some((p) => p.pane === back.pane)) {
-      this.trajChatBack = null;
+    if (gone) {
       // Within 1 px of it already: only the weight below.
       const at = this.paneW != null ? Math.round(this.paneW) + PANE_FRAME : null;
       if (this.me() && !(at != null && Math.abs(at - back.px) <= 1)) { this.sizeTo(back.px); return; }
