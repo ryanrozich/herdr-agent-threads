@@ -79,8 +79,8 @@ import {
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
-  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, railLook, WIDTH_NAMES, widthChars, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  keySheet, fitHints, statusGroups, agentState, linkPieces, gutter, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, pasteLabel, weightLine, weightFor, weightNear,
+  thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -168,6 +168,9 @@ const FRAME_AIM_MS = 30;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
+// While a place is held, the probe measures this many rows below the top row with the rows
+// above it, and the rest of the rows below once it is let go.
+const PROBE_NEAR = 24;
 // Markdown split for TextView, kept for the texts drawn last (mdParts).
 const MD_MEMO = 400;
 // Rows can be rebuilt from inside a day band every BAND_MARK shown turns (keptFrom).
@@ -175,6 +178,20 @@ const BAND_MARK = 100;
 // One slice of a rows build: past this, buildRows stops at the next turn and the next frame
 // goes on (buildStep).
 const BUILD_MS = 10;
+// While the pane's width is changing (a drag), the column keeps the width it has and the
+// turns are laid out again once the pane has been still for ui.js REWRAP_PAUSE_MS. A width
+// change reshapes every turn and measures every reply again: at 2,000 turns that is 3.5 to
+// 13 s of redraws on the rig, at every step of a drag.
+// Column widths whose shapes, measures and kept rows stay with each turn and part, the
+// last used first: a drag that ends at a width seen before lays out in a few frames.
+const WIDTHS_KEPT = 3;
+// Rows left unsized at the end of a build slice that are sized in it anyway (buildStep).
+const SIZE_REST = 64;
+// The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
+// not kept, took more than this much of the pane's own draw time; before one has finished,
+// for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
+const HOLD_WORK_MS = 150;
+const HOLD_TURNS = 500;
 // The list ends in a blank row this tall. On screen, the view counts as at the bottom: new
 // content then keeps it pinned there, as a chat does (stickToBottom).
 const TAIL = 24;
@@ -266,7 +283,7 @@ const KEYS_COL_MIN = 520;
 const CARD_SECTIONS = [
   ["Messages", ["textSize", "userColor", "truncate", "time"]],
   ["Agent messages", ["agents", "agentRail", "agentColor", "senderRules"]],
-  ["Layout", ["width", "keepWidth", "railSide", "keyHints", "statusLine"]],
+  ["Layout", ["railSide", "keyHints", "statusLine"]],
   ["Links and keys", ["linkRules", "quoteKey"]],
   ["File", ["file"]],
 ];
@@ -282,13 +299,11 @@ const RING_OUT = 3;
 // A text button's size: the usual, and the card's, which is the height of its rows' controls.
 const BUTTON = { h: 26, px: 9, gap: 5, icon: 13 };
 const CARD_BUTTON = { h: 28, px: 10, gap: 6, icon: 14 };
-// The Width chooser's words.
-const WIDTH_WORDS = { comfortable: "Comfortable", wide: "Wide", full: "Full" };
 // The settings the card's controls set, which Reset to defaults puts back. viewerReply is the
 // image viewer's own switch (i), and quoteKey, links and senders are never reset.
 // The status line's height (statusRow).
 const STATUS_H = 24;
-const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime", "width", "readingWidth"];
+const CARD_KEYS = ["textSize", "railSide", "keyHints", "statusLine", "bubbleColor", "agentBubbleColor", "agentTurns", "agentRail", "truncate", "promptLines", "replyLines", "alwaysShowTime"];
 // A link rule's type (settings.js LINK_TYPES) and its icon on the Link rules page.
 const LINK_ICON = { custom: "regex", ticket: "ticket", "pull-request": "git-pull-request" };
 // The rule editor's fields: key, label, placeholder, the most it takes.
@@ -2460,6 +2475,7 @@ export default class Threads extends View {
   // fresh (an interrupted read, Retry): also shown as not loaded, with no error, so the
   // progress shows again.
   restart(s, fresh = false) {
+    this.dropAnchor();
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
@@ -2568,7 +2584,6 @@ export default class Threads extends View {
     if (!this.terminal || this.launcher) return;
     this.findSelf(cx);
     this.fitOnOpen();
-    this.keepWidth();
     this.settleSplit(cx);
     this.trajGiveBack();
     this.weighSoon();
@@ -2619,7 +2634,7 @@ export default class Threads extends View {
     const other = [
       this.filterText(), status,
       Math.round(this.width), Boolean(this.res.ended),
-      `${P.textSize}.${P.width}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === true ? 1 : 0}`, this.selecting ?? "",
+      `${P.textSize}.${this.chars()}.${P.promptLines}.${P.replyLines}.${P.truncate ? 1 : 0}.${P.agentTurns ? 1 : 0}.${P.agentRail === true ? 1 : 0}`, this.selecting ?? "",
       this.linksVer, this.sendersVer, this.repoSig(), this.detailsOpen ? 1 : 0, this.imgVer ?? 0, this.pinVisit ?? "", this.resumeAt() ?? "",
       this.view, this.view === "pinned" ? this.pinVer : "", dayKey(Date.now()), this.outlined() ? "outline" : "",
     ].join("|");
@@ -2645,7 +2660,7 @@ export default class Threads extends View {
     const gap = this.floating() ? TOP_BAND : 0;
     // The pane's height only moves the spacer under a short list: Herdr's banner changes it, and
     // as part of the rows' key it rebuilt every row after each stopped draw.
-    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}`;
+    const fit = `${key}|${lr?.kind}|${z}|${this.sizesVer ?? 0}|${gap}|${Math.round(this.listH)}|${this.landLift ?? 0}|${this.anchorLift ?? 0}|${this.anchorSlot ? `${this.anchorSlot.i}:${this.anchorSlot.h}` : ""}`;
     if (this.fitKey !== fit) {
       let rows = this.baseRows;
       let sizes = this.baseSizes;
@@ -2669,6 +2684,13 @@ export default class Threads extends View {
       // itself, as it scales what an item draws, so a slot of h design px holds h design px
       // at any zoom (seen in a drawn window at zoom 0.9: a 73 px row took 73 x 0.9 zoomed px).
       this.slotsMemo = sizes.map((h) => Math.ceil(h));
+      if (this.anchor && !this.anchor.end) this.holdPlace(rows, this.slotsMemo);
+      // A held place put back (letGo): row 0 lift px taller (or shorter) for the layout that
+      // lands it.
+      if (this.anchorLift && this.slotsMemo.length) this.slotsMemo[0] = Math.max(1, this.slotsMemo[0] + this.anchorLift);
+      // Or the row that crosses the bottom edge at the height that lands it, for that layout.
+      const slot = this.anchorSlot;
+      if (slot && slot.i < this.slotsMemo.length) this.slotsMemo[slot.i] = Math.max(1, slot.h);
       // A rail click's landing (landExact): the first row is lift px taller for the frame of
       // the scroll, far above the view, then its own height again.
       if (this.landLift > 0 && this.slotsMemo.length) this.slotsMemo[0] += Math.ceil(this.landLift);
@@ -2715,12 +2737,41 @@ export default class Threads extends View {
     this.buildStale = job.stale;
     job.frame = this.renders;
     const b0 = now();
+    const until = b0 + this.buildMax();
     const s0 = this.shapeSpent ?? 0;
-    const out = this.buildRows(status, job.from, b0 + this.buildMax());
+    // Rows the last slice built but had no time to size (below): sized first, then built on.
+    const left = job.sizing;
+    let out;
+    if (left) {
+      job.sizing = null;
+      out = left.out;
+      this.buildInfo = left.info;
+      this.buildRail = left.rail;
+      this.cachedH = left.cachedH;
+      this.cacheNew = left.cacheNew;
+    } else {
+      out = this.buildRows(status, job.from, until);
+      if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
+    }
+    // Each new row's height, inside the slice's time too: at a narrow width the heights of
+    // the 1,474 rows a 10 ms slice built took 39 ms more on the rig, and Herdr stopped the
+    // draw. While the rows on screen stay (a rebuild), the rest are sized in the next frame's
+    // slice, unless only a few are left (about 2 ms of heights). A first build sizes them all:
+    // with no rows yet, a pause would show the loading lines for a frame.
+    const pause = Boolean(this.baseRows?.length);
+    for (let i = job.sizes.length, n = 0; i < out.length; i++, n++) {
+      if (pause && (n & 31) === 31 && out.length - i > SIZE_REST && now() > until) {
+        job.sizing = { out, info: this.buildInfo, rail: this.buildRail, cachedH: this.cachedH, cacheNew: this.cacheNew };
+        this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
+        job.ms = (job.ms ?? 0) + (now() - b0);
+        this.buildsLeft = (this.buildsLeft ?? 0) + 1;
+        return;
+      }
+      job.sizes.push(this.cachedH.get(i) ?? this.height(out[i]));
+      job.index.set(out[i].key, i);
+    }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     job.ms = (job.ms ?? 0) + (now() - b0);
-    if (job.from?.before && job.from.dayRow != null && !this.buildInfo.resume) job.sizes[job.from.dayRow] = this.height(out[job.from.dayRow]);
-    for (let i = job.sizes.length; i < out.length; i++) { job.sizes.push(this.cachedH.get(i) ?? this.height(out[i])); job.index.set(out[i].key, i); }
     for (const e of this.cacheNew) e.sizes = e.rows.map((_, j) => job.sizes[e.at + j]);
     const res = this.buildInfo.resume;
     if (res) {
@@ -2733,6 +2784,8 @@ export default class Threads extends View {
     }
     this.rowJob = null;
     this.buildMs = job.ms;
+    // A new column width: the place on screen before these rows come in (holdPlace).
+    if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
@@ -2846,7 +2899,7 @@ export default class Threads extends View {
       // A closed turn of one row, shaped at last: kept for the next rebuild (closedCached), as
       // if the build had shaped it. Most rows of a long session are shaped this way.
       if (cg && !r.live && !r.last && !r.split && this.open.has(r.key) === false) {
-        (this.turnCache ??= new Map()).set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
+        this.keptFor().rows.set(r.key, { turn: r.turn, s: r.s, sig: this.closedSig(r.key, r.turn, r.si, cg), rows: [nr], sizes: [this.baseSizes[i]], at: i, shape: sh });
       }
     }
     this.staleRows = left;
@@ -2903,7 +2956,7 @@ export default class Threads extends View {
     const fromSi = from ? from.si ?? lastSi : 0;
     // What every closed row depends on besides its own turn; none while a search is on.
     const cg = this.closedLookNow();
-    if (!from && this.turnCache && this.turnCache.size > 2 * this.sessions.reduce((n, x) => n + x.turns.length, 0) + 100) this.turnCache.clear();
+    if (!from && cg && this.keptFor().rows.size > 2 * this.sessions.reduce((n, x) => n + x.turns.length, 0) + 100) this.keptFor().rows.clear();
     for (let si = fromSi; si < this.sessions.length; si++) {
       const s = this.sessions[si];
       const first = Boolean(from) && si === fromSi;
@@ -3096,18 +3149,22 @@ export default class Threads extends View {
   // A closed turn's rows from the last build that made them, while nothing they depend on
   // has changed: the turn (its version, turn.v, which the reader moves on every event that
   // touches it), what every closed row depends on (closedLook), its session's place, and the
-  // probe's measures of its parts (turnMeas). A click that opens one turn, or a new line
+  // probe's measures of its parts (keptFor). A click that opens one turn, or a new line
   // in the newest, then builds only the turns that changed, not every row of the session
   // (step 3 of the session model). Open, running and last turns are always built: they
   // ask for calls and editors as they build.
   closedCached(item, out, cg) {
     const { key, turn, s, si } = item;
     const sig = this.closedSig(key, turn, si, cg);
-    const tc = (this.turnCache ??= new Map());
+    const tc = this.keptFor().rows;
     const c = tc.get(key);
     // A turn sent back to be shaped again (shapeKey cleared) is built again too.
-    if (c && c.turn === turn && c.s === s && c.sig === sig && c.sizes && turn.shapeKey != null && c.shape === turn.shapeMemo) {
+    if (c && c.turn === turn && c.s === s && c.sig === sig && c.sizes && turn.shapeKey != null && c.shape === this.keptShape(turn)) {
       for (let j = 0; j < c.rows.length; j++) { this.cachedH.set(out.length, c.sizes[j]); out.push(c.rows[j]); }
+      // Kept for another width than the turn's last shape: that shape is the turn's again, and
+      // the newest kept, as shape() would make it.
+      const look = this.shapeLook();
+      if (turn.shapeFast.look !== look) this.recallShape(turn, look);
       return;
     }
     const at = out.length;
@@ -3118,7 +3175,24 @@ export default class Threads extends View {
     tc.set(key, e);
     this.cacheNew.push(e);
   }
-  closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.turnMeas?.get(key) ?? 0}|${turn.agent ? (this.foldState({ key, turn, si }) ?? "") : ""}`; }
+  closedSig(key, turn, si, cg) { return `${cg}|${si}|${turn.v}|${this.keptFor().meas.get(key) ?? 0}|${turn.agent ? (this.foldState({ key, turn, si }) ?? "") : ""}`; }
+  // Closed turns' kept rows (closedCached) and how often the probe has changed a measure of
+  // each turn's parts since (closedSig), per layout of the parts (sigBase: the width, zoom,
+  // font and text size), for the last WIDTHS_KEPT of them, the last used last. A drag back to
+  // a width seen before builds every closed turn from what was kept for it.
+  keptFor(base = this.sigBase()) {
+    const all = (this.keptBases ??= new Map());
+    let k = all.get(base);
+    if (k) {
+      if (this.keptLast !== base) { all.delete(base); all.set(base, k); this.keptLast = base; }
+      return k;
+    }
+    k = { rows: new Map(), meas: new Map() };
+    all.set(base, k);
+    this.keptLast = base;
+    if (all.size > WIDTHS_KEPT) all.delete(all.keys().next().value);
+    return k;
+  }
   // Whether the rows as built can be kept per turn: not while a search, the outline or the
   // Pinned view shapes them.
   closedLookNow() { return this.view === "pinned" || this.outlined() || this.filterText() ? null : this.closedLook(); }
@@ -3541,8 +3615,8 @@ export default class Threads extends View {
   // other panes give first, down to TERM_KEEP each (trajKeep), then the Chat, then the
   // Trajectory. With too little room even then, the new pane closes and the Trajectory shows
   // in the Chat's pane, as under TRAJ_SPLIT_MIN, so no pane is squeezed for it. A Chat
-  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless a
-  // reading width was chosen in the Chat while it was open.
+  // narrowed for it gets its width back when the Trajectory closes (trajGiveBack), unless w
+  // resized the Chat while it was open.
   settleTraj(a, cx) {
     // Closed while it was measured: nothing to fit, and the Chat stays as it is.
     if (!panes().some((p) => p.pane === a.made)) { this.splitAsk = null; return; }
@@ -3597,7 +3671,7 @@ export default class Threads extends View {
     if (hold !== kept.hold) setShared(TRAJ_W_KEY, { ...kept, hold });
   }
   // The Trajectory pane closed: a Chat narrowed to make room for it gets its width back,
-  // unless a reading width was chosen in the Chat since (sizeToWidth, fitToReading). Either
+  // unless w fitted the Chat since (fitToReading). Either
   // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
   // settles): it is at a px only while the Trajectory is open.
   trajGiveBack() {
@@ -3655,8 +3729,6 @@ export default class Threads extends View {
     const next = columnResize(w[col.pane] + PANE_FRAME, w[main.pane] + PANE_FRAME, d, traj ? TRAJ_MAX : 640);
     if (!next && traj) return true;
     if (!next) { this.say(d > 0 ? "The Pinned column is as wide as it goes" : "The Pinned column is as narrow as it goes", "info", cx); return true; }
-    // With readingWidth on, Threads stops at the reading width and the terminal takes the rest.
-    if (this.prefs.readingWidth && Number.isFinite(this.readingPx())) next.main = Math.min(next.main, this.readingPx());
     run("layout.resize", { id: col.pane, px: next.column });
     run("layout.resize", { id: main.pane, px: next.main });
     setShared(WIDTH_KEY, { ...w, [col.pane]: next.column - PANE_FRAME, [main.pane]: next.main - PANE_FRAME });
@@ -3747,7 +3819,10 @@ export default class Threads extends View {
     // rebuild cost 3 µs a turn, 18 ms at 6,000 turns.
     const look = this.shapeLook();
     const text = this.replyText(turn);
-    const f = turn.shapeFast;
+    let f = turn.shapeFast;
+    // Another width or text size than the shape's: the one kept for it (keepShape), if any.
+    // The checks below still see whether the turn changed since.
+    if (f && f.look !== look) f = this.recallShape(turn, look) ?? f;
     this.shapeStale = false;
     if (f && turn.shapeKey === f.key && f.look === look && f.p === turn.prompt.length && f.t === text.length && f.live === live && f.tools === turn.tools
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
@@ -3757,9 +3832,9 @@ export default class Threads extends View {
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
-    const key = `${Math.round(this.width)}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
+    const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
-    if (turn.shapeKey === key) { turn.shapeFast = fast; return turn.shapeMemo; }
+    if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
     // Out of time for this draw: the shape it had (a row never shaped yet, as when agent
     // messages are turned on, a blank one-line row), and the next frame reshapes it.
     if ((this.shapeSpent ?? 0) > this.shapeMax()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
@@ -3768,8 +3843,33 @@ export default class Threads extends View {
     turn.shapeKey = key;
     turn.shapeMemo = sh;
     turn.shapeFast = fast;
+    this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
     return sh;
+  }
+  // A turn's shape kept under its look, for the last WIDTHS_KEPT looks it was shaped at, the
+  // last used last: a drag back to a width seen before reshapes nothing. A turn that changed
+  // fails shape()'s checks and is shaped again; a new session's turns start with none.
+  // The shape a turn has for the current look, without shaping it: the last one, or one kept.
+  keptShape(turn) {
+    const look = this.shapeLook();
+    return turn.shapeFast?.look === look ? turn.shapeMemo : turn.shapesKept?.get(look)?.memo;
+  }
+  recallShape(turn, look) {
+    const k = turn.shapesKept?.get(look);
+    if (!k) return null;
+    turn.shapeKey = k.key;
+    turn.shapeMemo = k.memo;
+    turn.shapeFast = k.fast;
+    this.keepShape(turn);
+    return k.fast;
+  }
+  keepShape(turn) {
+    const m = (turn.shapesKept ??= new Map());
+    const look = turn.shapeFast.look;
+    m.delete(look);
+    m.set(look, { key: turn.shapeKey, memo: turn.shapeMemo, fast: turn.shapeFast });
+    if (m.size > WIDTHS_KEPT) m.delete(m.keys().next().value);
   }
   // What every row's shape depends on besides its turn, as one string kept while they stay.
   shapeLook() {
@@ -3777,15 +3877,15 @@ export default class Threads extends View {
     const q = this.filterText();
     const w = Math.round(this.width);
     const m = this.lookMemo;
-    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === P.width && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
-    const s = `${w}|${P.textSize}|${P.width}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
-    this.lookMemo = { w, q, a: P.textSize, b: P.width, c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
+    if (m && m.w === w && m.q === q && m.a === P.textSize && m.b === this.chars() && m.c === P.truncate && m.d === P.promptLines && m.e === P.replyLines && m.f === P.agentTurns) return m.s;
+    const s = `${w}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${P.agentTurns ? 1 : 0}`;
+    this.lookMemo = { w, q, a: P.textSize, b: this.chars(), c: P.truncate, d: P.promptLines, e: P.replyLines, f: P.agentTurns, s };
     return s;
   }
   // A row's shape for the frame or two before it is shaped: one empty line of prompt and of
   // reply at the pane's width and text size.
   blankShape() {
-    const k = `${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}`;
+    const k = `${Math.round(this.width)}|${this.prefs.textSize}|${this.chars()}`;
     if (this.blankMemo?.k !== k) {
       const sh = rowShape({ prompt: " ", reply: " ", width: this.width, promptLines: 1, replyLines: 1, size: this.prefs.textSize, chars: this.chars() });
       this.blankMemo = { k, sh: { ...sh, tone: "reply", cmd: null, blank: true } };
@@ -4121,6 +4221,124 @@ export default class Threads extends View {
     if (this.view !== "pinned" && this.newestSig() !== before) this.unseen = "pending";
   }
 
+  // The list's scroll offset (listOff, in the list's px), which Herdr gives no read of: the
+  // pane's own scroll since the last layout, then the rows this layout draws (ui.js
+  // listOffset). A wheel moves it too (listWheel).
+  trackOff(slots, range) {
+    const ask = this.scrollAsk;
+    this.scrollAsk = null;
+    this.listOff = listOffset(this.slotPre(slots), this.listOff ?? 0, this.listH, ask, range.start, range.end);
+  }
+  // The rows' tops in a list's heights, and its end: made once for each set of heights.
+  slotPre(slots) {
+    if (this.preOf === slots) return this.preArr;
+    const pre = new Float64Array(slots.length + 1);
+    for (let i = 0; i < slots.length; i++) pre[i + 1] = pre[i] + slots[i];
+    this.preOf = slots;
+    this.preArr = pre;
+    return pre;
+  }
+  // Every scroll the pane asks of the list, so trackOff knows where it lands.
+  askScroll(i, how) { this.scrollAsk = { i, how }; this.scroll.scroll_to_item(i, how); }
+  askEnd() { this.scrollAsk = { end: true }; this.scroll.scroll_to_bottom(); }
+
+  // The place on screen just before a re-wrap's rows come in (buildStep): the row at the top
+  // edge, the share of its height above the edge, and the heights the list has for the rows
+  // above it. A reader at the end (following, the end on screen) is kept at the end instead.
+  // None while a landing's lift is on, or in a list that fits the pane.
+  takeAnchor() {
+    const rows = this.rowsMemo;
+    const slots = this.slotsMemo;
+    if (!rows?.length || !slots?.length || !(this.listH > 0) || rows[0].kind === "spacer") return null;
+    // The reader's wheel count when the place is taken: a wheel after it lets the place go.
+    const wheels = this.wheelN ?? 0;
+    if (this.follow && this.bottomShown && this.view !== "pinned" && !this.outlined()) return { end: true, wheels };
+    if (this.landLift > 0 || this.anchorLift || this.anchorSlot) return null;
+    const off = this.listOff ?? 0;
+    const p = placeAt(this.slotPre(slots), off);
+    const held = new Map();
+    for (let i = 0; i < p.i; i++) held.set(rows[i].key, slots[i]);
+    return { key: rows[p.i].key, turn: rowTurnKey(rows[p.i]), share: p.share, off, held, wheels };
+  }
+  // While a place is held: the rows above the anchor keep the heights the list had for them,
+  // so the measures the probe brings in over the next frames move nothing on screen. The list
+  // keeps its offset in px, and the px those rows lack or have over (taken from or given to
+  // the nearest of them, all off screen) put the anchor's top where the same share of its new
+  // height is above the edge. That place is set once, from the first rows that have it.
+  holdPlace(rows, slots) {
+    const A = this.anchor;
+    let a = rows[A.a]?.key === A.key ? A.a : rows.findIndex((r) => r.key === A.key);
+    // The row is gone (its reply was parted anew): its turn's first row, from its top.
+    if (a < 0 && A.turn) {
+      a = rows.findIndex((r) => rowTurnKey(r) === A.turn);
+      if (a >= 0) { A.key = rows[a].key; A.share = 0; A.pre = null; }
+    }
+    if (a < 0) { this.anchor = null; return; }
+    A.a = a;
+    let sum = 0;
+    for (let i = 0; i < a; i++) {
+      const h = A.held.get(rows[i].key);
+      if (h != null) slots[i] = h;
+      sum += slots[i];
+    }
+    A.pre ??= Math.round(A.off - A.share * slots[a]);
+    let c = A.pre - sum;
+    for (let i = a - 1; i >= 0 && c !== 0; i--) {
+      const h = Math.max(1, slots[i] + c);
+      c -= h - slots[i];
+      slots[i] = h;
+    }
+  }
+  // The sessions start over (a pick, a session read again from the top): row keys are a
+  // session's index and a turn's number, so a held place could match a turn in the new rows.
+  dropAnchor() {
+    if (this.anchor || this.anchorDue) this.fitKey = null;
+    this.anchor = null;
+    this.anchorDue = false;
+  }
+  // Why a held place is let go now (letGo), or null:
+  // - a jump, which puts the view somewhere new;
+  // - the person's scroll (a wheel event since the place was taken);
+  // - the rows built and shaped, and the probe with nothing left above the anchor (the whole
+  //   list, at the end).
+  // Nothing else: no time limit. The probe ends, since each part is drawn in it for three
+  // frames at most (probeDue), and while it goes on the place is held and costs a fraction of
+  // a ms a frame. Let go any sooner, the measures still to come above the place would move it.
+  holdDone() {
+    const A = this.anchor;
+    if (!A) return null;
+    if (this.scrollTo || (this.toBottom && !A.end)) return "jump";
+    if ((this.wheelN ?? 0) > A.wheels) return "scroll";
+    // The probe's word is for this place only from a walk made while it was held.
+    if (this.rowJob || this.staleRows?.length || this.shapeLeft > 0 || this.probeFor !== A) return null;
+    return this.probeLeft === 0 || (!A.end && this.probeAbove) ? "settled" : null;
+  }
+  // A held place let go: the rows above the anchor take the heights they have now. In this
+  // frame the list goes back to the same place: the row at the top edge, at the same share of
+  // its height (ui.js anchorPlan; its lift is taken away in the next frame). A jump puts the
+  // view where it goes itself; a reader kept at the end is put at the end once more.
+  letGo(why, cx) {
+    const A = this.anchor;
+    this.anchor = null;
+    this.fitKey = null;
+    if (A.end) { if (why !== "scroll" && this.follow) this.askEnd(); return; }
+    if (why === "jump" || !this.rowsMemo?.length || !this.slotsMemo?.length) return;
+    const at = placeAt(this.slotPre(this.slotsMemo), this.listOff ?? 0);
+    const key = this.rowsMemo[at.i]?.key;
+    const rows = this.rows();
+    const slots = this.slotsMemo;
+    const i = rows[at.i]?.key === key ? at.i : rows.findIndex((r) => r.key === key);
+    if (i < 0) return;
+    const pre = this.slotPre(slots);
+    const room = Math.max(0, pre[slots.length] - this.listH);
+    const want = Math.max(0, Math.min(pre[i] + at.share * slots[i], room));
+    const p = anchorPlan(pre, want, Math.min(this.listOff ?? 0, room), this.listH);
+    if (!p) return;
+    if (p.end) { this.askEnd(); return; }
+    if (p.lift || p.slot) { this.anchorLift = p.lift; this.anchorSlot = p.slot ?? null; this.fitKey = null; cx.timer.after(0, (cx) => cx.notify()); }
+    this.askScroll(p.j, p.how);
+  }
+
   // Stick to the bottom, from what each frame draws (listItems; it may not change the view,
   // so it leaves a step for render and asks the 120 ms timer for a frame). The list's end
   // (the tail row) on screen is the bottom. The person scrolled when the top row moved with
@@ -4158,9 +4376,14 @@ export default class Threads extends View {
   // list keeps the event to itself.
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
-    if (!dy || this.view === "pinned") return;
+    if (!dy) return;
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
+    // The list has moved by it (trackOff): delta is in the window's px, the offset in the
+    // list's, which Herdr scales by zoom.
+    this.listOff = (this.listOff ?? 0) - dy / this.zoom();
+    this.wheelN = (this.wheelN ?? 0) + 1;
+    if (this.view === "pinned") return;
     this.scrolledBy(dy, Date.now());
     this.scrollSeenAt = Date.now();
     if (dy > 0 && this.follow) { this.follow = false; this.toBottom = false; this.pinningUntil = 0; }
@@ -5376,11 +5599,8 @@ export default class Threads extends View {
       case "narrower": return this.resizeColumn(-PIN_STEP, cx);
       case "wider": return this.resizeColumn(PIN_STEP, cx);
       case "fit": return this.fitToReading(cx);
-      case "widthStep": return this.stepWidth(cx);
       case "keyHints": this.changePrefs({ keyHints: !this.prefs.keyHints }, cx); return true;
       case "statusLine": this.changePrefs({ statusLine: !this.prefs.statusLine }, cx); return true;
-      // Turned on, a pane wider than the width is sized to it first (keepWidth), then weighed.
-      case "keepWidth": this.changePrefs({ readingWidth: !this.prefs.readingWidth }, cx); this.capAsked = null; this.keepWidth(); this.toWeight(); return true;
       case "alwaysTime": this.changePrefs({ alwaysShowTime: !this.prefs.alwaysShowTime }, cx); return true;
       case "railSide:left": case "railSide:right": this.railHover = null; this.changePrefs({ railSide: name.slice(9) }, cx); return true;
       case "truncate": this.changePrefs({ truncate: !this.prefs.truncate }, cx); return true;
@@ -5420,7 +5640,7 @@ export default class Threads extends View {
       case "settings": if (!this.settingsOpen) cardKeys.ask(cx, "open"); return this.setSettings(!this.settingsOpen);
       case "keys": this.keysOpen = !this.keysOpen; if (this.keysOpen) { this.closeSettings(); this.detailsOpen = false; this.quietRail(); } return true;
       // Every control on the settings card back to its default; link rules, sender rules and the quote key stay.
-      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.sizeToWidth(); return true;
+      case "resetSettings": this.changePrefs(Object.fromEntries(CARD_KEYS.map((k) => [k, DEFAULTS[k]])), cx); this.fitColumn(); return true;
       // The card's keys as commands (for key bindings, and for a window no keys reach).
       case "settingsScroll:down": case "settingsScroll:up": case "settingsScroll:pagedown": case "settingsScroll:pageup":
       case "settingsScroll:home": case "settingsScroll:end":
@@ -5464,8 +5684,6 @@ export default class Threads extends View {
       this.pick(c, cx);
       return true;
     }
-    // "width:wide": the reading width (settings width), for every pane.
-    if (name.startsWith("width:")) return this.chooseWidth(name.slice(6), cx);
     // "bubbleColor:teal", "agentBubbleColor:#715C91": a preset name or #rrggbb.
     const bc = name.match(/^(bubbleColor|agentBubbleColor):(.+)$/);
     if (bc) {
@@ -5578,6 +5796,7 @@ export default class Threads extends View {
     this.pinned = c.path;
     this.pinnedVia = "picked";
     this.choosing = false;
+    this.dropAnchor();
     this.sessions = [];
     this.senderHits = null;
     this.open.clear();
@@ -6072,6 +6291,9 @@ export default class Threads extends View {
   // mark): the next CUT_MS draw without reshaping or measuring, so the pane gets a frame.
   render(cx) {
     if (this.drawingRow) this.rowCut(this.drawingRow);
+    // A placement's lift (letGo) is for the one layout that lands it, gone before anything in
+    // this frame builds the list's heights.
+    if (this.anchorLift || this.anchorSlot) { this.anchorLift = 0; this.anchorSlot = null; this.fitKey = null; }
     if (this.renderOpen) {
       this.renderOpen = false;
       this.cutUntil = now() + CUT_MS;
@@ -6097,6 +6319,14 @@ export default class Threads extends View {
     let out;
     try { out = this.frame(cx, light); } catch (e) { this.renderOpen = false; throw e; }
     this.renderOpen = false;
+    const rw = this.rewrap;
+    if (rw) {
+      rw.ms += now() - this.renderAt;
+      if (!this.rowJob && !(this.shapeLeft > 0) && !this.staleRows?.length && !(this.probeLeft > 0)) {
+        if (rw.full) this.rewrapMs = rw.ms;
+        this.rewrap = null;
+      }
+    }
     // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
     this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
     return out;
@@ -6127,6 +6357,11 @@ export default class Threads extends View {
     this.monoFont = null;
     if (this.stickStep) this.applyStick();
     this.fitColumn();
+    // A column held through a drag (fitColumn): a draw once the pane has been still.
+    if (this.widthHeld && !this.holdNext) {
+      this.holdNext = true;
+      cx.timer.after(Math.max(0, REWRAP_PAUSE_MS - (Date.now() - (this.sizeAt ?? 0))) + 5, (cx) => { this.holdNext = false; cx.notify(); });
+    }
     this.react(cx);
     // Here and not in rows(): the timing report changes the selection for a moment.
     if (this.pinVisit && this.sel !== this.pinVisit) this.pinVisit = null;
@@ -6240,15 +6475,35 @@ export default class Threads extends View {
   pw() { return this.paneW ?? this.width; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
-    const w = columnWidth(this.paneW, this.prefs.textSize, this.chars());
-    if (Math.abs(w - this.width) > 0.5) this.width = w;
+    const step = this.paneStep();
+    const w = columnWidth(this.paneW, this.prefs.textSize, step);
+    if (Math.abs(w - this.width) <= 0.5 && step === this.colStep) { this.widthHeld = false; return; }
+    // The pane resized less than REWRAP_PAUSE_MS ago: the column keeps its width, centred in a
+    // wider pane and cut off on the right in a narrower one, until it is still (frame asks
+    // for a draw then). The first width the pane measures is taken at once.
+    if (this.colFit && this.baseRows && Date.now() - (this.sizeAt ?? 0) < REWRAP_PAUSE_MS && this.rewrapCostly()) { this.widthHeld = true; return; }
+    const first = !this.colFit;
+    this.width = w;
+    this.colStep = step;
+    this.colFit = true;
+    this.widthHeld = false;
+    // The re-wrap's draw time is counted (render) until nothing is left to build, shape or
+    // measure. A full one: no layout kept for this width.
+    if (!first) this.rewrap = { ms: 0, full: !this.keptBases?.has(this.sigBase()) };
+    // The place on screen is kept across the rows built for it (buildStep, takeAnchor).
+    if (!first) this.anchorDue = true;
+  }
+  rewrapCostly() {
+    if (this.rewrap && this.rewrap.ms > HOLD_WORK_MS) return true;
+    if (this.rewrapMs != null) return this.rewrapMs > HOLD_WORK_MS;
+    return this.sessions.reduce((n, x) => n + x.turns.length, 0) > HOLD_TURNS;
   }
   // How far the column sits in from the pane's left edge.
   colLeft() { return Math.max(0, (this.pw() - this.width) / 2); }
   // From the pane's edge to the text: the side gutter.
   side() { return this.colLeft() + ROW.PAD_X; }
   // Opened by Cmd-Shift-T: once the pane and the settings are read, a pane wider than the
-  // reading width shrinks to it. A narrower one keeps what it was given.
+  // reading width (its step's, readingPx) shrinks to it. A narrower one keeps what it was given.
   fitOnOpen() {
     if (this.paneW == null || !this.prefsLoaded) return;
     const me = this.me();
@@ -6261,40 +6516,29 @@ export default class Threads extends View {
     const sib = this.rowSibling(me);
     this.openRow = sib ? { sib, room: 2 * (this.paneW + PANE_FRAME) } : null;
     const px = this.readingPx();
-    if (Number.isFinite(px) && this.paneW > px + 2) { this.capAsked = Math.round(this.paneW); this.sizeTo(px); }
+    if (this.paneW > px + 2) this.sizeTo(px);
     else this.toWeight();
   }
-  // Herdr has no maximum width for a pane a split made (a layout file's min/max applies to its
-  // own nodes only), so with readingWidth on (the default) the pane keeps itself there: wider
-  // than the reading width, from a drag, a restart or an older layout, it asks Herdr once to
-  // resize it, and the terminal gets the room. One ask per width, so a pane Herdr cannot
-  // resize (alone in its tab, or zoomed) is not asked again and again.
-  // The width's column (settings width): Infinity for Full, which has no limit.
-  readingPx() { return fitWidth(this.prefs.textSize, this.chars()); }
-  chars() { return widthChars(this.prefs.width); }
-  keepWidth() {
-    if (this.sideKey() || !this.prefs.readingWidth || this.paneW == null || !this.prefsLoaded || this.weighing || this.weighAfter) return;
-    const me = this.me();
-    if (!me || me.zoomed) return;
-    const px = this.readingPx();
-    if (!Number.isFinite(px) || this.paneW <= px + 2) { this.capAsked = null; return; }
-    const w = Math.round(this.paneW);
-    if (this.capAsked === w) return;
-    this.capAsked = w;
-    this.sizeTo(px);
-  }
+  // The column's step (ui.js columnStep), from the pane's px size (its measured width and the
+  // frame, as Herdr and a person count it): the step the pane wants now (paneStep), and the
+  // one the column shows (chars), which follows it in fitColumn, held through a drag as the
+  // width is. 70 until the pane has measured itself.
+  paneStep() { return columnStep(this.paneW == null ? NaN : this.paneW + PANE_FRAME, this.prefs.textSize, this.colStep ?? null); }
+  chars() { return this.colStep ?? STEPS[0]; }
+  // The width of the column's step, its line and the widest gutters (ui.js fitWidth): what w
+  // and the fit button size the pane to, and what Cmd-Shift-T opens it at.
+  readingPx() { return fitWidth(this.prefs.textSize, this.colStep ?? this.paneStep()); }
   // Herdr 0.1.16 drags a divider by setting the px of the pane beside it that has a px size
   // (window.rs drag_to), and the panes sized by weight share what is left, those past the
   // other edge too: a Threads pane at a px width grows or shrinks from both edges, whichever
   // one is dragged. A pane at a weight moves only the divider dragged, and changes with the
-  // window. So after each px resize this pane asks for (sizeTo), and when a width is chosen,
-  // the switch is turned, Threads opens, a split fails or the Pinned column closes, the main
-  // pane goes to a weight that keeps its width (toWeight). Never on a size change alone,
-  // which may be a drag still going on, but for keepWidth's cap: a drag past the reading
-  // width snaps back to it (sizeTo), and the weight follows once the pane has been still for
-  // 300 ms. Not in the Pinned or the Trajectory pane, not with either open beside it (- and =
-  // keep both at px; it converts when that pane closes), and not zoomed (it converts once
-  // unzoomed).
+  // window. So after each px resize this pane asks for (sizeTo), and when Threads opens, a
+  // split fails or the Pinned column closes, the main pane goes to a weight that keeps its
+  // width (toWeight), once the pane has been still for 300 ms. Never on a size change alone,
+  // which may be a drag still going on: after a drag the pane never resizes itself, and its
+  // column steps with it (fitColumn). Not in the Pinned or the Trajectory pane, not with
+  // either open beside it (- and = keep both at px; it converts when that pane closes), and
+  // not zoomed (it converts once unzoomed).
   sizeTo(px) {
     const me = this.me();
     if (!me) return;
@@ -6387,47 +6631,12 @@ export default class Threads extends View {
     g.w = w;
     this.askWeight();
   }
-  // Choosing a width: with "Keep the pane at this width" on, the pane grows or shrinks to the
-  // new column and the terminal gives or takes the room. Full has no column, so it leaves the
-  // pane as it is; the switch stays as the person set it, so Comfortable after Full resizes again.
-  chooseWidth(w, cx) {
-    if (!WIDTH_NAMES.includes(w)) return false;
-    this.changePrefs({ width: w }, cx);
-    this.sizeToWidth();
-    this.toWeight();
-    return true;
-  }
-  // The pane to the chosen width's column, when the switch keeps it there (Full has none).
-  sizeToWidth() {
-    this.fitColumn();
-    this.capAsked = null;
-    const me = this.me();
-    if (this.prefs.width !== "full" && this.prefs.readingWidth && !this.sideKey() && me && !me.zoomed && this.paneW != null) {
-      const px = this.readingPx();
-      if (Number.isFinite(px) && Math.abs(this.paneW - px) > 2) { this.capAsked = Math.round(this.paneW); this.trajChatBack = null; this.sizeTo(px); }
-    }
-  }
-  // Shift w: the next width, Comfortable to Wide to Full and round again, with the toast that
-  // names all three, the one now on in the full text color. A second press inside its two
-  // seconds changes the words in place. In a pane too narrow for the list to change, and
-  // with the pane not kept at the width, it adds that it is too narrow here to show.
-  stepWidth(cx) {
-    const next = WIDTH_NAMES[(WIDTH_NAMES.indexOf(this.prefs.width) + 1) % WIDTH_NAMES.length];
-    this.chooseWidth(next, cx);
-    const pw = this.pw();
-    const sz = this.prefs.textSize;
-    const same = Math.abs(columnWidth(pw, sz, widthChars("comfortable")) - columnWidth(pw, sz, Infinity)) < 1;
-    this.say(`Width: ${WIDTH_WORDS[next]}`, `width-${next}`, cx);
-    this.toast.widths = { cur: next, tight: same && !this.prefs.readingWidth };
-    return true;
-  }
-  // w, or the header's fit button: Threads to the reading width, and an open Pinned column to
-  // its own width for that, wider or narrower than they are now.
+  // w, or the header's fit button: Threads to its column's step's width (readingPx), and an
+  // open Pinned column to its own width for that, wider or narrower than they are now.
   fitToReading(cx) {
     const main = this.pinnedPane ? this.mainPane() : this.me();
     if (!main) return false;
     const px = this.readingPx();
-    if (!Number.isFinite(px)) { this.say("Full has no reading width to fit to", "fold-horizontal", cx); return true; }
     if (this.pinnedPane) run("layout.resize", { id: main.pane, px });
     else { this.trajChatBack = null; this.sizeTo(px); }
     const col = this.pinnedPane ? this.me() : this.pinnedPaneOpen();
@@ -6435,7 +6644,6 @@ export default class Threads extends View {
       setShared(PIN_W_KEY, { ...(shared(PIN_W_KEY) ?? {}), hold: Date.now() + 1500 });
       run("layout.resize", { id: col.pane, px: pinColumn(px, this.keptPinWidth()) ?? PIN_COL[0] });
     }
-    this.capAsked = null;
     this.say(`Threads at the reading width, ${px} px`, "fold-horizontal", cx);
     return true;
   }
@@ -7250,12 +7458,6 @@ export default class Threads extends View {
         () => (P.truncate ? this.cardCol(v_flex().pl(16).gap(4), 4, 0, [() => stepper("promptLines", "Prompt lines"), () => stepper("replyLines", "Reply lines")]) : null),
       ]),
       time: () => [sw("th-set-time", "Always show time", Boolean(P.alwaysShowTime), "alwaysTime")],
-      width: () => new CardParts([
-        () => row("Width", choose("th-width", P.width, WIDTH_NAMES.map((k) => [k, WIDTH_WORDS[k], `width-${k}`]), "width")),
-        () => this.widthRuler(t, w),
-        () => note(this.widthNote()),
-      ]),
-      keepWidth: () => [sw("th-set-width", "Keep the pane at this width", P.readingWidth !== false, "keepWidth")],
       railSide: () => [row("Rail side", choose("th-rail", this.railLeft() ? "left" : "right", [["left", "Left", "panel-left"], ["right", "Right", "panel-right"]], "railSide"))],
       keyHints: () => [sw("th-set-hints", "Key hints at the bottom", Boolean(P.keyHints), "keyHints")],
       statusLine: () => [sw("th-set-status", "Chat stats at the bottom", P.statusLine !== false, "statusLine")],
@@ -7292,27 +7494,6 @@ export default class Threads extends View {
   senderRulesEntry(t) {
     const bad = (this.senderList ?? []).filter((r) => r.why).length;
     return this.pageEntry(t, "th-set-senders", "senders", "Sender rules", this.senderCount ?? 0, bad);
-  }
-
-  // Under Width: the pane as a thin line and the reading column as its dark part, at their
-  // real proportions in this pane.
-  widthRuler(t, w) {
-    const pw = this.pw();
-    const room = Math.max(1, pw - 2 * gutter(pw));
-    const want = this.prefs.width === "full" ? room : readType(this.prefs.textSize, this.chars()).measure;
-    // The line fills its row, so it ends on the controls' right edge; the column is placed in
-    // the row's width, the card less its 1 px border and the inset on each side.
-    const inner = w - 2 - 2 * cardPad(w);
-    const col = Math.max(4, Math.round((Math.min(want, room) / Math.max(1, pw)) * inner));
-    return div().id("th-set-ruler").relative().w_full().h(4).rounded(2).bg(t.border).tooltip("The pane, and the reading column in it")
-      .child(div().absolute().top(0).h(4).rounded(2).left(Math.round((inner - col) / 2)).w(col).bg(t.muted));
-  }
-  widthNote() {
-    const w = this.prefs.width;
-    if (w === "full") return "Text runs the whole pane.";
-    const pw = this.pw();
-    const tight = readType(this.prefs.textSize, this.chars()).measure > pw - 2 * gutter(pw);
-    return `Up to ${widthChars(w)} characters a line.${tight ? " This pane has room for less, so it looks like Full here." : ""}`;
   }
 
   // A message color: its name, then a dot for each preset (ui.js BUBBLES) and, when the file
@@ -8011,6 +8192,8 @@ export default class Threads extends View {
     if (s && !s.loaded && s.turns.length === 0)
       return this.loading(t, `Reading session${s.size && harnessOfFile(s.file) !== "opencode" ? ` (${fmtBytes(s.size)})` : ""}…`, this.readPct(s));
     if (s?.loaded && this.sessions.length === 1 && s.turns.length === 0) return noTurns();
+    const why = this.holdDone();
+    if (why) this.letGo(why, cx);
     const rows = this.rows();
     // The first rows of a session still being built, in slices over several frames (buildStep):
     // no row yet, and no empty state either, which would say there is nothing while the turns
@@ -8037,6 +8220,9 @@ export default class Threads extends View {
     // row has its new shape (SHAPE_MS): the list keeps its offset in px, so a scroll worked out
     // from old heights lands away from its row once the rows above it are reshaped. The next
     // frame is already asked for (render).
+    // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
+    // the place is let go (holdDone).
+    if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
@@ -8052,7 +8238,7 @@ export default class Threads extends View {
       // were stopped through a load and the rows never settled.
       if (bottomHeld && rows.length) {
         this.pinningUntil = Date.now() + 1000;
-        this.scroll.scroll_to_bottom();
+        this.askEnd();
       }
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
@@ -8063,7 +8249,7 @@ export default class Threads extends View {
       const holds = this.holds ?? 0;
       cx.timer.after(16, (cx) => {
         if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
-        this.scroll.scroll_to_bottom();
+        this.askEnd();
         cx.notify();
       });
     } else if (this.scrollTo?.until && due.length && Date.now() < this.scrollTo.until) {
@@ -8114,8 +8300,8 @@ export default class Threads extends View {
         let top = lead(i);
         if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
         if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
-        cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
+        cx.timer.after(48, (cx) => { this.askScroll(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
         // scroll_to_item only brings an item to the nearest edge, so a place below the view
         // would land at the bottom. An item a pane further down first, then the place, which
@@ -8133,17 +8319,17 @@ export default class Threads extends View {
         if (!p || p.y < minTop) p = landExact(slots, i, Math.round(Math.max(minTop, st.at ?? minTop)));
         const lift = p.lift ?? 0;
         this.landed = { key: rows[i]?.key ?? null, ...p };
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(j, "top"); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => {
           if (lift > 0) { this.landLift = lift; this.fitKey = null; }
-          this.scroll.scroll_to_item(p.j, p.how);
+          this.askScroll(p.j, p.how);
           cx.notify();
         });
         if (lift > 0) cx.timer.after(120, (cx) => { this.landLift = 0; this.fitKey = null; cx.notify(); });
       } else if (i >= 0) {
         const top = lead(i);
-        cx.timer.after(16, (cx) => { this.scroll.scroll_to_item(i, how); cx.notify(); });
-        if (top !== i) cx.timer.after(48, (cx) => { this.scroll.scroll_to_item(top, how); cx.notify(); });
+        cx.timer.after(16, (cx) => { this.askScroll(i, how); cx.notify(); });
+        if (top !== i) cx.timer.after(48, (cx) => { this.askScroll(top, how); cx.notify(); });
       }
     }
     const dim = Boolean(this.res.ended);
@@ -8632,7 +8818,7 @@ export default class Threads extends View {
     // MATCHED BY RULE", 11.5 px capitals, about 7.5 px each, after an 11 px icon and a 5 px
     // gap), up to the bubble's limit.
     const head = r.turn.agent ? Math.ceil(this.youLabel(r.turn).length * 7.5) + 16 + 2 * ROW.BUBBLE_PX : 0;
-    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.prefs.width}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}|${head}`;
+    const sig = `${r.full ? 1 : 0}${r.all ? 1 : 0}|${this.perLine()}|${Math.round(this.width)}|${this.prefs.textSize}|${this.chars()}|${this.linksVer}|${this.repoSig()}|${src.length}|${hl ? q : ""}|${plain ? 1 : 0}|${head}`;
     if (r.turn.youMemo?.sig === sig) return r.turn.youMemo.v;
     const c = this.youText(r);
     // Show all reads up to 200,000 characters of the prompt, and says what it leaves out.
@@ -8800,9 +8986,9 @@ export default class Threads extends View {
   sigBase() {
     const r = this.renders ?? 0, w = Math.round(this.width), P = this.prefs;
     const m = this.sigMemo;
-    if (m && m.r === r && m.w === w && m.ts === P.textSize && m.pw === P.width) return m.v;
-    const v = `${w}|${this.zoom()}|${settings()?.ui_font ?? ""}|${P.textSize}|${P.width}`;
-    this.sigMemo = { r, w, ts: P.textSize, pw: P.width, v };
+    if (m && m.r === r && m.w === w && m.ts === P.textSize && m.pw === this.chars()) return m.v;
+    const v = `${w}|${this.zoom()}|${settings()?.ui_font ?? ""}|${P.textSize}|${this.chars()}`;
+    this.sigMemo = { r, w, ts: P.textSize, pw: this.chars(), v };
     return v;
   }
   partSig(r, base = this.sigBase()) {
@@ -8824,8 +9010,32 @@ export default class Threads extends View {
 
   // The measured height of a part for its current layout, or null.
   measured(r) {
-    const m = this.meas?.get(r.key);
-    return m && m.h > 0 && m.sig === this.partSig(r) ? m.h : null;
+    const h = this.measOf(r.key, this.partSig(r));
+    return h > 0 ? h : null;
+  }
+  // A part's measure for a layout (sig): the last one taken, or one of the WIDTHS_KEPT - 1
+  // before it (old), so a width seen before needs no probe. The part's text changing makes
+  // a new sig, and its old measures go out as new ones come in.
+  measOf(key, sig) {
+    const m = this.meas?.get(key);
+    if (!m) return null;
+    if (m.sig === sig) return m.h;
+    const o = m.old?.find((x) => x.sig === sig);
+    return o ? o.h : null;
+  }
+  measPut(key, sig, h) {
+    const was = this.meas.get(key);
+    const all = was ? [{ sig: was.sig, h: was.h }, ...(was.old ?? [])].filter((x) => x.sig !== sig) : [];
+    const old = all.slice(0, WIDTHS_KEPT - 1);
+    this.meas.set(key, old.length ? { sig, h, old } : { sig, h });
+    // A layout that lost a measure: rows the probe found measured there are looked at again
+    // (probeDue's stamp).
+    for (const x of all.slice(WIDTHS_KEPT - 1)) {
+      const d = (this.measDrops ??= new Map());
+      if (d.size >= 64) { d.clear(); this.dropEpoch = (this.dropEpoch ?? 0) + 1; }
+      const b = x.sig.split("|", 5).join("|");
+      d.set(b, (d.get(b) ?? 0) + 1);
+    }
   }
 
   // A probe entry reported its size: keep it, and update only that part's list size.
@@ -8843,13 +9053,12 @@ export default class Threads extends View {
       cx.notify();
       return;
     }
-    const was = this.meas.get(key);
-    if (was?.sig === sig && was.h === h) return;
+    if (this.measOf(key, sig) === h) return;
     // Every closed row's reply block is measured: a cap under the turns a long session has
     // made the probe measure the same parts again and again.
     // PR 81 (kept rows' sizes) and PR 83 (the probe's walk) each start over when measures go.
     if (this.meas.size > 20000) { this.meas.clear(); this.measEpoch = (this.measEpoch ?? 0) + 1; this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
-    this.meas.set(key, { sig, h });
+    this.measPut(key, sig, h);
     this.measVer = (this.measVer ?? 0) + 1;
     const rowKey = key.startsWith("cmd:") ? key.slice(4) : key.startsWith("wyou:") ? key.slice(5) : key;
     const i = this.baseIndex?.get(rowKey);
@@ -8858,7 +9067,18 @@ export default class Threads extends View {
       this.baseSizes[i] = this.height(r);
       this.sizesVer = (this.sizesVer ?? 0) + 1;
       // The turn's kept rows (closedCached) have the old size: built again next time.
-      if (r.turn && r.si != null) { const tk = `${r.si}:${r.turn.n}`; (this.turnMeas ??= new Map()).set(tk, (this.turnMeas.get(tk) ?? 0) + 1); }
+      // A row kept for this layout gets the new size too, so a drag back to this width builds
+      // it from what was kept. Measured at another layout (a width the pane has just left),
+      // the turn's rows kept for that one are built again next time (closedSig's count).
+      const base = sig.split("|", 5).join("|");
+      const kept = r.turn && r.si != null ? this.keptBases?.get(base) : null;
+      if (kept) {
+        const tk = `${r.si}:${r.turn.n}`;
+        const e = kept.rows.get(tk);
+        const j = e?.sizes && base === this.sigBase() ? e.rows.indexOf(r) : -1;
+        if (j >= 0) e.sizes[j] = this.baseSizes[i];
+        else kept.meas.set(tk, (kept.meas.get(tk) ?? 0) + 1);
+      }
     }
     cx.notify();
   }
@@ -8871,36 +9091,50 @@ export default class Threads extends View {
   // were measured). probeLeft is above 0 while parts may be left.
   probeDue() {
     const want = [];
+    this.probeFor = this.anchor ?? null;
     this.probeTries ??= new Map();
     const base = this.sigBase();
     // Nothing was due and nothing it depends on changed: every part was measured, or tried.
     const qm = this.probeQuiet;
     if (qm && qm.ver === (this.probeVer ?? 0) && qm.base === base && qm.mv === (this.measVer ?? 0) && qm.broken === (this.mdBroken?.size ?? 0)) { this.probeLeft = 0; return want; }
+    // Rows being built for a new layout: the ones shown now are about to go. The walk waits
+    // for the new ones (a draw that builds rows has no time for it as well).
+    if (this.rowJob && this.baseRows?.length) { this.probeLeft = 1; return want; }
     const rows = this.baseRows ?? [];
     const n = rows.length;
+    // A closed turn's reply block found measured in this layout, pane width and rail, with no
+    // measure dropped since, is passed over at once (stamped below): a column width seen
+    // before is not walked again, part by part. 2,000 turns took 150 to 190 ms of frames.
+    const stamp = `${base}|${Math.round(this.pw())}|${this.railShown() ? 1 : 0}|${this.measEpoch ?? 0}|${this.dropEpoch ?? 0}|${this.measDrops?.get(base) ?? 0}`;
     const top = Math.min(Math.max(0, (this.topKey != null && this.baseIndex?.get(this.topKey)) || 0), Math.max(0, n - 1));
     // Within the clean radius of the top row nothing was due, and while the rows, their
     // layout and the top stay, a new measure only settles parts: the walk starts there.
     // Measures and tries cleared (probeEpoch) start it from the top again.
-    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}`;
+    // A measure dropped for this layout (stamp) starts it again too.
+    // While a place is held (holdPlace), the rows above the top row, and only the few below it:
+    // the place is let go once the rows above are measured. The rest below come after.
+    const up = this.anchor && !this.anchor.end;
+    const wk = `${this.probeVer ?? 0}|${base}|${this.mdBroken?.size ?? 0}|${top}|${this.probeEpoch ?? 0}|${stamp}|${up ? 1 : 0}`;
     const d0 = this.probeWalk?.key === wk ? this.probeWalk.clean : 0;
     const visit = (r) => {
+      if (r.probeOk === stamp && r.kind === "turn") return 0;
       const part = PROBED.has(r.kind) ? r : r.kind === "turn" && r.shape?.md != null ? this.cmdFor(r)
         : r.live && (r.kind === "working" || r.kind === "wrow") ? this.workYou(r) : null;
-      if (!part) return;
+      if (!part) return 1;
       const sig = this.partSig(part, base);
-      const m = this.meas?.get(part.key);
-      if (m && m.h > 0 && m.sig === sig) return;
+      if (this.measOf(part.key, sig) > 0) { if (r.kind === "turn") r.probeOk = stamp; return 1; }
       const k = `${part.key}|${sig}`;
-      if ((this.probeTries.get(k) ?? 0) >= 3) return;
+      if ((this.probeTries.get(k) ?? 0) >= 3) return 1;
       want.push([part, sig, k]);
+      return 1;
     };
     let d = d0;
     let clean = d0;
     let seen = 0;
     for (; d < n && seen < PROBE_WALK; d++) {
-      if (top + d < n) { visit(rows[top + d]); seen++; }
-      if (d > 0 && top - d >= 0) { visit(rows[top - d]); seen++; }
+      if (up && d > PROBE_NEAR && top - d < 0) break;
+      if (top + d < n && !(up && d > PROBE_NEAR)) seen += visit(rows[top + d]);
+      if (d > 0 && top - d >= 0) seen += visit(rows[top - d]);
       if (!want.length) clean = d + 1;
       if (want.length >= PROBE_MAX) break;
     }
@@ -8908,7 +9142,9 @@ export default class Threads extends View {
     const out = want.slice(0, PROBE_MAX);
     for (const [, , k] of out) this.probeTries.set(k, (this.probeTries.get(k) ?? 0) + 1);
     // Nothing due anywhere: quiet. Otherwise parts wait, or rows are not looked at yet.
-    const done = top + clean >= n && top - clean < 0;
+    // Rows below left out while a place is held are not done.
+    const done = !up && top + clean >= n && top - clean < 0;
+    this.probeAbove = top - clean < 0;
     this.probeLeft = done ? 0 : 1;
     this.probeQuiet = done ? { ver: this.probeVer ?? 0, base, mv: this.measVer ?? 0, broken: this.mdBroken?.size ?? 0 } : null;
     if (this.probeTries.size > 4000) { this.probeTries.clear(); this.probeEpoch = (this.probeEpoch ?? 0) + 1; }
@@ -8968,6 +9204,7 @@ export default class Threads extends View {
     // gpui also asks for item 0 alone, to measure the list's width. That is not the top of
     // the pane, and taking it as the top would move a pin's place to the first row.
     if (!(range.start === 0 && range.end === 1 && rows.length > 1)) {
+      this.trackOff(slots, range);
       this.topKey = rows[range.start]?.key ?? null;
       try { this.trackPlace(); this.noteTopDay(); } catch (e) { this.drawFailed(e, null); }
       // The end of the list on screen clears the latest button's dot; a new turn or reply
@@ -10855,7 +11092,7 @@ export default class Threads extends View {
   // on screen are brighter, the selected turn's tick is longer, a pinned turn's takes the
   // accent colour and the running turn's pulses. A search dims the turns it leaves out. A
   // click brings the turn level with its tick (railJump).
-  // A pane too narrow for a whole Comfortable line hides the rail (ui.js railRoom), as Codex
+  // A pane too narrow for a whole 70 character line hides the rail (ui.js railRoom), as Codex
   // hides its side rail.
   railShown() {
     return this.view !== "pinned" && !this.pinnedPane && !this.outlined() && (this.railTurns?.length ?? 0) > 1 && railRoom(this.pw(), this.prefs.textSize);
@@ -11224,13 +11461,6 @@ export default class Threads extends View {
       .child(h_flex().min_h(32).max_w(Math.max(120, this.width - 24)).px(12).py(6).gap(7).items_center().rounded(8).bg(this.solidFill(t)).border_1().border_color(t.border).shadow_md()
         .text_size(12.5).text_color(t.foreground)
         .child(svg(ICON(this.toast.icon ?? "check")).size(13).flex_none().text_color(this.toast.icon === "circle-x" ? t.blocked : this.toast.icon === "check" ? t.ansi2 : t.muted))
-        .when(!this.toast.widths, (el) => el.child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)))
-        // Shift w: the three widths, the one now on strong.
-        .when(Boolean(this.toast.widths), (el) => el
-          .child(h_flex().id("th-toast-widths").flex_none().gap(10).items_center().children(WIDTH_NAMES.map((k) => {
-            const on = k === this.toast.widths.cur;
-            return div().flex_none().whitespace_nowrap().text_color(on ? t.foreground : t.dim).when(on, (x) => x.font_semibold()).child(WIDTH_WORDS[k]);
-          })))
-          .when(this.toast.widths.tight && this.pw() >= 420, (x) => x.child(div().flex_none().whitespace_nowrap().text_size(11.5).text_color(t.dim).child("too narrow here to show")))));
+        .child(div().min_w(0).max_h(44).overflow_hidden().child(this.toast.text)));
   }
 }
