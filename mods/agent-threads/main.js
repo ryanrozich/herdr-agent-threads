@@ -139,6 +139,8 @@ const SLICE_MS = 8; // synchronous work before read() yields to the app
 // goes straight to it, and paints nothing before; a longer one shows the loading state
 // (openView). OPEN_PEEK: the bytes at the file's end read once for the newest prompt.
 const OPEN_QUIET_MS = 300;
+// The loading state's figures held at their peak (openInfo).
+const OPEN_PEAKS = ["offset", "size", "turns", "prompts", "tools", "tokens"];
 const OPEN_PEEK = 2 * 1024 * 1024;
 const COUNT_MS = 6; // a sender rule's count in the editor, a draw at most (senderMatches)
 // Reshaping collapsed rows (shape) in one draw: a change of Reply lines, Prompt lines, text
@@ -2480,6 +2482,7 @@ export default class Threads extends View {
           s.loaded = true;
           s.error = null;
           this.readStalls = 0;
+          if (this.openActive() && this.opening.list === this.sessions) this.openStat(s, cx);
           // Following the newest turn (nothing moved the selection away): keep it on the newest.
           // Following, a read that grew the running reply keeps the view at the bottom too
           // (newestSig does not change while a reply grows; see stickCheck).
@@ -5219,7 +5222,7 @@ export default class Threads extends View {
     // each wheel while parts wait (the rows above the new top keep the heights they had).
     if (this.probeLeft > 0 && (this.openHold || this.anchor?.open) && !this.follow) {
       this.openHold = false;
-      this.anchor = null;
+      this.dropAnchor();
       const a = this.takeAnchor();
       if (a) { a.open = true; this.anchor = a; }
       this.fitKey = null;
@@ -9028,7 +9031,17 @@ export default class Threads extends View {
     return this.bannerSpecs(t).map(([color, icon, title, body, buttons]) => this.banner(t, color, icon, title, body, buttons()));
   }
 
+  // The pane's content. The opening ends with any other state than its own draws (openCover,
+  // openOver) once the session is read, failed or gone: "No turns yet", "No user messages
+  // yet", a read error, no session found. Left on, it would say Reading and drop every key.
   body(t, focusedPanel, cx) {
+    this.openDrew = false;
+    const out = this.bodyNow(t, focusedPanel, cx);
+    const s = this.current();
+    if (this.openActive() && !this.openDrew && (!s || s.loaded || s.error)) this.openFinish();
+    return out;
+  }
+  bodyNow(t, focusedPanel, cx) {
     const r = this.res;
     const s = this.current();
     if (this.choosing) return this.chooser(t);
@@ -9283,6 +9296,7 @@ export default class Threads extends View {
   // then the loading state.
   openCover(t, s, cx) {
     const o = this.opening;
+    this.openDrew = true;
     if (!o.painted && Date.now() - o.at < OPEN_QUIET_MS) { this.openTick(cx); return v_flex().flex_1().min_h(0).bg(t.background); }
     o.painted = true;
     return this.openView(t, s);
@@ -9299,6 +9313,7 @@ export default class Threads extends View {
   openOver(t, s, body, rows, cx) {
     const o = this.opening;
     if (this.openReady(rows)) { this.openFinish(); return body; }
+    this.openDrew = true;
     this.follow = true;
     if (!this.bottomShown) this.toBottom = true;
     if (!o.next) { o.next = true; cx.timer.after(16, (cx) => { o.next = false; cx.notify(); }); }
@@ -9351,7 +9366,7 @@ export default class Threads extends View {
     o.peek = true;
     const h = harnessOfFile(s.file);
     if (h === "opencode") return;
-    listMtimes([s.file]).then((m) => { if (this.opening === o && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
+    this.openStat(s, cx);
     if (h === "cursor" || !(s.size > CHUNK)) return;
     const from = Math.max(0, s.size - OPEN_PEEK);
     cx.spawn(async (cx) => {
@@ -9371,6 +9386,12 @@ export default class Threads extends View {
         // No preview: the line stays empty.
       }
     });
+  }
+  // The file's last write, for "last active": at the first chunk, and again once it is read.
+  openStat(s, cx) {
+    const o = this.opening;
+    if (harnessOfFile(s.file) === "opencode") return;
+    listMtimes([s.file]).then((m) => { if (this.opening === o && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
   }
   // What the loading state shows now (ui.js openLines). The counts are summed again only when
   // the session changed, as the status line's are (statusStats, whose tokens these are).
@@ -9392,13 +9413,18 @@ export default class Threads extends View {
     const h = harnessOfFile(s.file);
     const read = s.offset > 0 || s.loaded;
     const si = this.sessions.indexOf(s);
-    return {
+    const info = {
       offset: s.offset, size: s.size, pct: o.pct, units: h === "opencode" ? "turns" : "bytes", turns: s.turns.length, loaded: Boolean(s.loaded),
       agent: h === "claude" ? "Claude Code" : this.agent().name, model: o.stats.model, start: s.turns[0]?.ts ?? null, active: o.mtime,
       working: Boolean(s.loaded && s.turns.length && this.isLive(s, si, s.turns.length - 1)),
       prompts: read ? o.stats.prompts : null, tools: read ? o.stats.tools : null, tokens: read ? o.stats.tokens : null, pins: o.stats.pins,
       newest: (s.loaded ? newestPrompt(s.turns) : null) ?? o.newest, now: Date.now(),
     };
+    // Every figure holds its peak, as the bar does: a read started over part way (a stall,
+    // a replaced file) counts up from the top again under what was already shown.
+    const peak = (o.peak ??= {});
+    for (const k of OPEN_PEAKS) if (info[k] != null || peak[k] != null) info[k] = peak[k] = Math.max(peak[k] ?? 0, info[k] ?? 0);
+    return info;
   }
   // The loading state, at the list's column: what is read and found so far, then what is known
   // of the session. Every line keeps its row from the first paint (ui.js openLines), and each
