@@ -1316,6 +1316,7 @@ export default class Threads extends View {
     if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
     this.trajPrefs = x.trajectory;
+    this.trajNotes = x.trajNotes;
     this.linkNotes = x.linkNotes;
     this.senderNotes = x.senderNotes;
     this.setLinks(x.links, x.linkList, x.linkCount);
@@ -1622,7 +1623,8 @@ export default class Threads extends View {
       this.linkNotes = l.notes;
       this.setLinks(l.rules, l.list, raw.length);
     }
-    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...(this.linkNotes ?? []), ...(this.senderNotes ?? [])];
+    // The file's other notes stand: the quote key's, and the Trajectory object's (TRD-24).
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...(this.linkNotes ?? []), ...(this.senderNotes ?? []), ...(this.trajNotes ?? [])];
   }
   // Applies a changed list at once, then writes it under its kind (settings.js keeps the
   // rest). The save writes it only over the list it was made from: when the file's list

@@ -281,7 +281,9 @@ test("the trajectory object: where y docks it and the bottom height, read with d
     expect(r.notes).toEqual([`trajectory.dock ${JSON.stringify(d)} is not "right" or "bottom"; using "right"`]);
   }
   for (const t of ["bottom", 3, ["bottom"]]) expect(parseTrajectory(t)).toEqual({ dock: "right", height: null, notes: ["trajectory is not an object; using its defaults"] });
-  // Its notes join the file's other notes.
+  // Its notes join the file's other notes, and are given apart too (the card's rule edits rebuild the rest).
+  expect(parseExtras('{"trajectory": {"height": "x"}}').trajNotes).toEqual(['trajectory.height "x" is not a px height; using the default']);
+  expect(parseExtras("{}").trajNotes).toEqual([]);
   const text = JSON.stringify({ quoteKey: "j", trajectory: { dock: "top" } });
   expect(parseExtras(text).notes).toEqual([expect.stringContaining("quoteKey"), 'trajectory.dock "top" is not "right" or "bottom"; using "right"']);
   // Not a chat setting: a chat save keeps the object as written, unknown keys and all.

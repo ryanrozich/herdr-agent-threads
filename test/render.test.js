@@ -20081,3 +20081,22 @@ test("TRD-24: a Trajectory pane opened along the bottom says so in its map entry
   b.shareWidth();
   expect(state.shared["threads.trajWidth"]).toEqual({ px: 1402 });
 });
+
+test("TRD-24: a Trajectory settings note stays when a link or sender rule changes, and the report keeps it", async () => {
+  const { v, cx } = await pane(fixture("--extra", "3"));
+  const note = 'trajectory.dock "top" is not "right" or "bottom"; using "right"';
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "top", height: 120 } }));
+  const both = [note, "trajectory.height 120 is under 270 px; using 270"];
+  expect(v.prefsNotes).toEqual(both);
+  // A link rule list and a sender rule list applied from the card rebuild the notes.
+  v.useRules("links", [{ name: "Issue", pattern: "\\bACME-(\\d+)\\b", url: "https://example.com/$1" }], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.useRules("senders", [], cx);
+  expect(v.prefsNotes).toEqual(both);
+  v.report();
+  expect(state.shared["threads.debug"].t4.settingsNotes).toEqual(both);
+  // Fixed in the file: gone.
+  v.applyExtras(JSON.stringify({ trajectory: { dock: "bottom" } }));
+  v.useRules("links", [], cx);
+  expect(v.prefsNotes).toEqual([]);
+});

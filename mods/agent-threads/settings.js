@@ -592,7 +592,7 @@ export function parseExtras(text) {
   const traj = parseTrajectory(raw.trajectory);
   return {
     quoteKey: quote.key, quoteNote: quote.note, links: links.rules, linkList: links.list, senders: senders.rules, senderList: senders.list,
-    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes, ...traj.notes], linkNotes: links.notes, senderNotes: senders.notes,
+    notes: [...(quote.note ? [quote.note] : []), ...links.notes, ...senders.notes, ...traj.notes], linkNotes: links.notes, senderNotes: senders.notes, trajNotes: traj.notes,
     trajectory: { dock: traj.dock, height: traj.height },
     linkCount: Array.isArray(raw.links) ? raw.links.length : 0,
     senderCount: Array.isArray(raw.senders) ? raw.senders.length : 0,
