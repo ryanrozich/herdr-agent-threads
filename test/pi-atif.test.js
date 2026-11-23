@@ -87,9 +87,11 @@ test("pi: the ATIF export gives a completed call its output, a failed one its er
 test("pi: a result with no isError keeps its output and end time, leaves the flag out, and is not marked as having no result", () => {
   const file = session([
     user("Count the widgets", 1),
-    said([call("call_000011", "bash", { command: "wc -l widgets.txt" }), call("call_000012", "read", { path: "widgets.txt" })], "toolUse", 2),
+    said([call("call_000011", "bash", { command: "wc -l widgets.txt" }), call("call_000012", "read", { path: "widgets.txt" }), call("call_000013", "read", { path: "widgets.txt" })], "toolUse", 2),
     result("call_000011", "bash", "3 widgets.txt", undefined, 3),
     result("call_000012", "read", "plum\npear", undefined, 4),
+    // Neither an outcome nor a time: the result still has its text, so it is not marked.
+    result("call_000013", "read", "plum", undefined, null),
     said([text("Three.")], "stop", 5),
   ]);
   const got = resultsOf(exportOf(file));
@@ -97,36 +99,43 @@ test("pi: a result with no isError keeps its output and end time, leaves the fla
   expect(got.call_000011.r.extra).toEqual({ result_ts: at(3) });
   expect(got.call_000012.r.content).toBe("plum\npear");
   expect(got.call_000012.r.extra).toEqual({ result_ts: at(4) });
+  expect(got.call_000013.r.content).toBe("plum");
+  expect(Object.hasOwn(got.call_000013.r, "extra")).toBe(false);
 });
 
-test("pi: an end time of 0, one that is not a time, one missing, or one before the call's start gives no result_ts, and the outcome stays", () => {
+test("pi: an end time of 0, one that is not a time, one missing, or one before the call's start gives no result_ts, and the outcome stays; one at the start counts", () => {
   const file = session([
     user("Count the widgets", 1),
-    said([10, 11, 12, 13, 14].map((i) => call(`call_0000${i + 11}`, "read", { path: "widgets.txt" })), "toolUse", 20),
+    said([10, 11, 12, 13, 14, 15].map((i) => call(`call_0000${i + 11}`, "read", { path: "widgets.txt" })), "toolUse", 20),
     result("call_000021", "read", "widgets", false, 21),
     result("call_000022", "read", "widgets", false, "1970-01-01T00:00:00.000Z"),
     result("call_000023", "read", "widgets", true, "soon"),
     result("call_000024", "read", "widgets", false, null),
     result("call_000025", "read", "widgets", true, 19),
+    result("call_000026", "read", "widgets", false, 20),
     said([text("Done.")], "stop", 30),
   ]);
   const got = resultsOf(exportOf(file));
   expect(got.call_000021.r.extra).toEqual({ result_ts: at(21), tool_result_is_error: false });
+  expect(got.call_000026.r.extra).toEqual({ result_ts: at(20), tool_result_is_error: false });
   for (const [id, failed] of [["call_000022", false], ["call_000023", true], ["call_000024", false], ["call_000025", true]]) {
     expect([id, got[id].r.content, got[id].r.extra]).toEqual([id, "widgets", { tool_result_is_error: failed }]);
   }
 });
 
-test("pi: with no call time to compare it with, or one that is not a time, a result's own end time still counts", () => {
+test("pi: with no call time to compare it with, or one that is not a time, a result's own end time still counts, but not an end of 0", () => {
   const file = session([
     user("Count the widgets", 1),
     said([call("call_000031", "read", { path: "widgets.txt" })], "toolUse", null),
     result("call_000031", "read", "widgets", false, 3),
     said([call("call_000032", "read", { path: "widgets.txt" })], "toolUse", "early"),
     result("call_000032", "read", "widgets", false, 4),
+    said([call("call_000033", "read", { path: "widgets.txt" })], "toolUse", null),
+    result("call_000033", "read", "widgets", false, "1970-01-01T00:00:00.000Z"),
     said([text("Done.")], "stop", 5),
   ]);
   const got = resultsOf(exportOf(file));
   expect(got.call_000031.r.extra).toEqual({ result_ts: at(3), tool_result_is_error: false });
   expect(got.call_000032.r.extra).toEqual({ result_ts: at(4), tool_result_is_error: false });
+  expect(got.call_000033.r.extra).toEqual({ tool_result_is_error: false });
 });

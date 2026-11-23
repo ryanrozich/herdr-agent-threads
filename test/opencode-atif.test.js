@@ -199,6 +199,7 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
       { id: "call_000017", tool: "read", status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 2 }, start: 500, end: 600 },
       run("call_000018", { exit: -1 }, "killed"),
       { id: "call_000019", tool: "read", status: "error", input: { filePath: "widgets.txt" }, error: "File not found: widgets.txt", metadata: { exit: 0 }, start: 500, end: 600 },
+      { id: "call_000020", tool: undefined, status: "completed", input: { filePath: "widgets.txt" }, output: "widgets", metadata: { exit: 3 }, start: 500, end: 600 },
     ]);
     expect(got.call_000011.r.content).toBe("gadget");
     expect(got.call_000011.r.extra).toEqual({ result_ts: at(400), tool_result_is_error: false });
@@ -216,6 +217,8 @@ for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
     expect(got.call_000016.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000017.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
     expect(got.call_000019.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: true });
+    // A call with no tool name is not the shell either.
+    expect(got.call_000020.r.extra).toEqual({ result_ts: at(600), tool_result_is_error: false });
   });
 
   test(`opencode ${version}: a completed shell call with no exit code and no end time that counts keeps its output and is not marked as having no result`, () => {
