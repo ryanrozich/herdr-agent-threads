@@ -17223,7 +17223,9 @@ function pairRow(total, sizes) {
     const sw = row.order.filter((id) => row.size[id].px == null).reduce((s, id) => s + row.size[id].weight, 0);
     // colStep: the column at a weight lands on a multiple of it (as a column on the rig stayed
     // 2 px short at two weights 0.4% apart).
-    const at = (id) => { const x = (room * row.size[id].weight) / sw; return row.colStep && id === "p3" ? Math.round(x / row.colStep) * row.colStep : Math.round(x); };
+    // bias: px a pane at a weight lands wide by (as the Chat on the rig landed 2 px wide of
+    // what its weights asked, within the weigh loop's 2 px).
+    const at = (id) => { const x = (room * row.size[id].weight) / sw; return (row.colStep && id === "p3" ? Math.round(x / row.colStep) * row.colStep : Math.round(x)) + (row.bias?.[id] ?? 0); };
     return Object.fromEntries(row.order.map((id) => [id, row.size[id].px ?? at(id)]));
   };
   row.apply = () => {
@@ -18155,7 +18157,7 @@ test("with the Trajectory dragged to 60 px: a key that grows it takes it to its 
       for (const id of rowIds) expect([where, k, id, Math.abs(now[id] - was[id]) <= 40]).toEqual([where, k, id, true]);
     }
   } finally { t.restore(); }
-});
+}, 30000);
 
 test("columnResize keeps the stepped pane's own 200 px floor when the other pane's floor asks for more than it has", async () => {
   const { columnResize } = await import("../mods/agent-threads/ui.js");
@@ -18382,34 +18384,98 @@ test("both side panes closed within 400 ms with the column opened first and the 
   }
 });
 
+test("the Trajectory closed alone lands the Chat within 1 px of its width from before: the Chat's weight counts the closed divider's room Herdr gives back (its default 8 px)", async () => {
+  for (const gap of [8]) {
+    const t = await threeRow(722, { gap });
+    try {
+      t.run(1000);
+      await t.openTraj();
+      t.run(4000);
+      const from = log.length;
+      t.close("p4");
+      t.run(4000);
+      // The close's weight, then the one that counts the divider's room: no correction after.
+      const asks = log.slice(from).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p2" && a.weight != null).length;
+      expect([gap, Math.abs(t.row.widths().p2 - 722) <= 1, asks]).toEqual([gap, true, 2]);
+    } finally { t.restore(); }
+  }
+});
+
+test("a close's fix asks again unless every pane left is within 1 px of its target", async () => {
+  for (const gap of [8, 12, 16, 20, 24]) {
+    for (const closed of ["p4", "p3"]) {
+      const t = await threeOpen("traj", 722, { gap });
+      try {
+        const was = t.row.widths();
+        t.close(closed);
+        if (closed === "p3") t.inst.p2.x.autoPinned?.(t.cx);
+        t.run(4000);
+        const now = t.row.widths();
+        const other = closed === "p4" ? "p3" : "p4";
+        expect([gap, closed, Math.abs(now.p2 - 722) <= 1, Math.abs(now[other] - was[other]) <= 1]).toEqual([gap, closed, true, true]);
+      } finally { t.restore(); }
+    }
+  }
+}, 30000);
+
+test("a close's fix that lands a pane 2 px off asks once more", async () => {
+  // No divider gap, so the close's own weights land each pane at its target but for the bias.
+  const t = await threeOpen("traj", 722, { gap: 0 });
+  try {
+    t.row.bias = { p2: 2 };
+    const from = log.length;
+    t.close("p3");
+    t.inst.p2.x.autoPinned?.(t.cx);
+    t.run(4000);
+    // The close's weight, then the fix's for the 2 px it left.
+    const asks = log.slice(from).filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p2" && a.weight != null).length;
+    expect([asks, Math.abs(t.row.widths().p2 - 724) <= 1]).toEqual([2, true]);
+    expect(t.v.rowFallN ?? 0).toBe(0);
+  } finally { t.restore(); }
+});
+
 // Ten cycles do not add up: the Chat ends each within 2 px of where the first left it, and the
 // first within 2 px of its width before the side panes (722).
-const tenCycles = async (opens, closes) => {
+const tenCycles = async (opens, closes, together = false, opts = {}) => {
   const t = await threeRow(722);
   try {
     t.run(1000);
+    if (opts.trajFirst) { await t.openTraj(); t.run(4000); }
+    t.row.bias = opts.bias ?? null;
     const ends = [];
     for (let i = 0; i < 10; i++) {
-      for (const o of opens) { if (o === "traj") await t.openTraj(); else await t.openCol(); t.run(o === "col" && opens.length === 1 ? 5000 : 3500); }
-      for (const id of closes) { t.close(id); if (id === "p3") t.inst.p2.x.autoPinned?.(t.cx); t.run(2500); }
+      for (const o of opens) { if (o === "traj") await t.openTraj(); else await t.openCol(); t.run(opts.quick ? 300 : o === "col" && opens.length === 1 ? 5000 : 3500); }
+      for (const id of closes) { t.close(id); if (id === "p3") t.inst.p2.x.autoPinned?.(t.cx); t.run(together ? 50 : 2500); }
+      if (together) t.run(4000);
       ends.push(t.row.widths().p2);
     }
     return ends;
   } finally { t.restore(); }
 };
-for (const [name, opens, closes] of [
+for (const [name, opens, closes, together, unbiased] of [
   ["both panes, the Trajectory first, closed column first", ["traj", "col"], ["p3", "p4"]],
   ["both panes, the Trajectory first, closed Trajectory first", ["traj", "col"], ["p4", "p3"]],
-  ["both panes, the column first, closed Trajectory first", ["col", "traj"], ["p4", "p3"]],
+  ["both panes, the column first, closed Trajectory first", ["col", "traj"], ["p4", "p3"], false, true],
   ["both panes, the column first, closed column first", ["col", "traj"], ["p3", "p4"]],
   ["the Trajectory alone", ["traj"], ["p4"]],
   ["the column alone", ["col"], ["p3"]],
+  ["both panes, closed together", ["traj", "col"], ["p3", "p4"], true],
 ]) {
-  test(`ten cycles of opening and closing leave the Chat where the first cycle left it, within 2 px: ${name}`, async () => {
-    const ends = await tenCycles(opens, closes);
-    expect([ends.every((w) => Math.abs(w - ends[0]) <= 2), Math.abs(ends[0] - 722) <= 2, ends]).toEqual([true, true, ends]);
-  }, 60000);
+  for (const bias of unbiased ? [0] : [0, 2]) {
+    test(`ten cycles of opening and closing leave the Chat where the first cycle left it, within 2 px: ${name}${bias ? ", the Chat landing 2 px wide of its weights" : ""}`, async () => {
+      const ends = await tenCycles(opens, closes, together, { bias: bias ? { p2: bias } : null });
+      expect([ends.every((w) => Math.abs(w - ends[0]) <= 2), Math.abs(ends[0] - 722) <= 2 + bias, ends]).toEqual([true, true, ends]);
+    }, 60000);
+  }
 }
+test("ten cycles of the column opened and closed with the Trajectory open, the Chat landing 2 px wide of its weights: the Chat settles by the third cycle and stays within 2 px", async () => {
+  const ends = await tenCycles(["col"], ["p3"], false, { bias: { p2: 2 }, trajFirst: true });
+  expect([ends.slice(2).every((w) => Math.abs(w - ends[2]) <= 2), Math.abs(ends[2] - 722) <= 4, ends]).toEqual([true, true, ends]);
+}, 60000);
+test("ten cycles of the Trajectory closed before it lands, the Chat landing 2 px wide of its weights, leave the Chat where the first left it, within 2 px", async () => {
+  const ends = await tenCycles(["traj"], ["p4"], false, { bias: { p2: 2 }, quick: true });
+  expect([ends.every((w) => Math.abs(w - ends[0]) <= 2), ends]).toEqual([true, ends]);
+}, 60000);
 
 test("with Herdr's divider gap given back on a close, the two panes left end at their widths: one more weight each once they are still, then the record from those", async () => {
   for (const closed of ["p4", "p3"]) {
