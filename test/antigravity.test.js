@@ -196,6 +196,28 @@ test("calls.sh: a step still RUNNING prints no out line, and a failed step with 
   expect(got.filter((x) => x.k === "in").map((x) => x.id)).toEqual(["s1.0", "s1.1"]);
 });
 
+test("calls.sh: a FAILED step failed, as an ERROR one does, and keeps its error; a status it does not know says nothing", () => {
+  step = 0;
+  const body = [
+    user("Sort the widgets", 0),
+    line({ step_index: step++, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(1), input_tokens: 10, output_tokens: 1, cache_read_tokens: 0,
+      tool_calls: [{ name: "run_command", args: { CommandLine: "sort widgets.txt" } }, { name: "view_file", args: { AbsolutePath: "/home/dev/plinth/gizmo.txt" } }, { name: "run_command", args: { CommandLine: "wc -l widgets.txt" } }] }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "FAILED", created_at: at(2),
+      content: "Created At: 2026-01-05T09:07:02-06:00\nCompleted At: 2026-01-05T09:07:04-06:00\nsort: widgets.txt: Permission denied" }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "FAILED", created_at: at(5), error: "no such file: gizmo.txt",
+      content: "Created At: 2026-01-05T09:07:05-06:00\nCompleted At: 2026-01-05T09:07:05-06:00" }),
+    line({ step_index: step++, source: "MODEL", type: "GENERIC", status: "CANCELED", created_at: at(6), error: "stray error text",
+      content: "Created At: 2026-01-05T09:07:06-06:00\nCompleted At: 2026-01-05T09:07:06-06:00\nCommand output:\n3 widgets.txt" }),
+  ].join("");
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), file(body), "antigravity", "s1.0", "s1.1", "s1.2"], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.ts])).toEqual([
+    ["s1.0", true, "sort: widgets.txt: Permission denied", "2026-01-05T09:07:04-06:00"],
+    ["s1.1", true, "no such file: gizmo.txt", "2026-01-05T09:07:05-06:00"],
+    ["s1.2", null, "Command output:\n3 widgets.txt", "2026-01-05T09:07:06-06:00"],
+  ]);
+});
+
 test("level 3: a call is named by its planner step and place, and calls.sh reads it and the result step after it", () => {
   step = 0;
   const body = [

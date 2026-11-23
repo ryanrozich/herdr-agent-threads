@@ -106,6 +106,19 @@ test("antigravity: a failed step with no text keeps its error; a DONE step with 
   expect(got["s1.1"].r.extra).toEqual({ result_ts: "2026-01-05T15:07:03.000Z" });
 });
 
+test("antigravity: a FAILED call failed, as an ERROR one does; a call whose status the export does not know leaves the flag out", () => {
+  const file = transcript([
+    user("Count the widgets", 0),
+    plan(1, [["run_command", { CommandLine: "sort widgets.txt" }], ["run_command", { CommandLine: "wc -l widgets.txt" }]]),
+    out(2, "FAILED", at(1), at(2), "sort: widgets.txt: Permission denied"),
+    out(3, "CANCELED", at(2), at(3), "Command output:\n3 widgets.txt"),
+    plan(4, [], "No sort."),
+  ]);
+  const got = resultsOf(exportOf(file));
+  expect([got["s1.0"].r.content, got["s1.0"].r.extra]).toEqual(["sort: widgets.txt: Permission denied", { result_ts: "2026-01-05T15:07:02.000Z", tool_result_is_error: true }]);
+  expect([got["s1.1"].r.content, got["s1.1"].r.extra]).toEqual(["Command output:\n3 widgets.txt", { result_ts: "2026-01-05T15:07:03.000Z" }]);
+});
+
 test("antigravity: an end of 0, one that is not a time, none at all, or one before the call gives no result_ts, and the outcome stays; one at the call counts", () => {
   const file = transcript([
     user("Count the widgets", 0),

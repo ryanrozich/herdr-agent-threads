@@ -140,9 +140,9 @@ case $harness in
     # Antigravity: calls have no ids. "s<step>.<i>" is the planner step's i-th tool call, and
     # its result is the GENERIC step at <step> + 1 + i, whose text starts with "Created At:" and
     # "Completed At:" lines (the times; left out of the output). A step still RUNNING is no
-    # result yet: it prints no out line. A step with status ERROR failed (err true), and keeps
-    # its error when it has no text. Any other status leaves err null: a DONE step does not say
-    # whether its command exited 0, so unknown, not false.
+    # result yet: it prints no out line. A step with status ERROR or FAILED failed (err true),
+    # and keeps its error when it has no text. Any other status leaves err null: a DONE step
+    # does not say whether its command exited 0, so unknown, not false.
     lines < "$file" | jq -c --arg ids "$ids" "$outcap"'
       def head($k): [.[] | select(startswith($k + " At: ")) | .[($k | length) + 5:]];
       ($ids | split(" ") | map(select(. != "") | match("^s([0-9]+)\\.([0-9]+)$") | .captures | {id: "s\(.[0].string).\(.[1].string)", s: (.[0].string | tonumber), i: (.[1].string | tonumber)})) as $want
@@ -156,11 +156,12 @@ case $harness in
             (select($ENV.THREADS_ARGS == "1") | {id: $w.id, k: "args", args: ((.args // {}) | if type == "object" then . else {value: .} end)})
         elif $l.type == "GENERIC" and $l.status != "RUNNING" then
           ($results[$l.step_index | tostring] // [])[] | . as $w
+          | ($l.status == "ERROR" or $l.status == "FAILED") as $failed
           | (($l.content // "") | tostring | split("\n")) as $lines
           | ([$lines | to_entries[] | select(.value | test("^(Created|Completed) At: ") | not) | .key] | first // ($lines | length)) as $body
-          | ($lines[$body:] | join("\n") | if . == "" and $l.status == "ERROR" then ($l.error // "" | tostring) else . end) as $o
+          | ($lines[$body:] | join("\n") | if . == "" and $failed then ($l.error // "" | tostring) else . end) as $o
           | {id: $w.id, k: "out", ts: (($lines[:$body] | head("Completed") | last) // $l.created_at),
-             err: (if $l.status == "ERROR" then true else null end), out: ($o | outcap), lines: ($o | split("\n") | length)}
+             err: (if $failed then true else null end), out: ($o | outcap), lines: ($o | split("\n") | length)}
         else empty end' -n
     ;;
   *) echo "not read for $harness yet" >&2; exit 4 ;;

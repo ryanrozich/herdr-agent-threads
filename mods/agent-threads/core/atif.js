@@ -20,7 +20,7 @@
 //   false when the reader knows, left out when it does not). OpenCode's, Pi's and Antigravity's
 //   readers give no result events, so for those three the command line takes both from calls.sh
 //   (OpenCode: a call's error state or a shell call's non-zero exit code; Pi: the result's
-//   isError; Antigravity: true for an ERROR step, else left out; and the result's end time,
+//   isError; Antigravity: true for an ERROR or FAILED step, else left out; and the end time,
 //   when it is not before the call's start). The panel's reader keeps no arguments, so
 //   arguments is {} unless the caller read them (the command line does, from calls.sh); a
 //   call whose input was not JSON, or was not read, keeps {} and says so
