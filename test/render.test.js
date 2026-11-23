@@ -2,13 +2,13 @@
 // error in render() fails here instead of in a window. Every element method returns the same
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
-import { test, expect, mock, setSystemTime } from "bun:test";
+import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
@@ -85,7 +85,7 @@ let herdrSettings = { font_family: "Mono" };
 // What Herdr's window() reports as the platform (round 6 face).
 let hostPlatform = "linux";
 // updates().app.version: Herdr's version.
-let herdrVersion = "0.1.13";
+let herdrVersion = "0.1.17";
 // Reads of Herdr's settings, panes and terminals, for the draw-time guard.
 const hostReads = { settings: 0, panes: 0, terminals: 0 };
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
@@ -17246,6 +17246,19 @@ function pairRow(total, sizes) {
       row.size[right] = { weight: (s * (w[right] - dx)) / (w[left] + w[right]) };
     }
   };
+  // A drag as Herdr pull request 1365 would make it: the two panes beside the divider set
+  // (each keeping its kind, px rounded), and every other visible weight pane's weight set to
+  // its width in px, so after it every weight in the row is in px units.
+  row.drag1365 = (left, dx) => {
+    const right = row.order[row.order.indexOf(left) + 1];
+    const w = row.widths();
+    const to = { [left]: w[left] + dx, [right]: w[right] - dx };
+    for (const id of row.order) {
+      const px = to[id] ?? w[id];
+      if (row.size[id].px != null) { if (id in to) row.size[id] = { px: Math.round(px) }; }
+      else row.size[id] = { weight: px };
+    }
+  };
   return row;
 }
 // The Chat (v, p2) and its Pinned column (w, p3) beside the terminal (p1), on a clock the
@@ -17321,6 +17334,103 @@ async function pairPanes(chat = 722, opts = {}) {
   return t;
 }
 const pairSum = (f) => f.p2 + f.p3;
+
+// The Herdr version gate (ui.js weightHerdr): only on a version whose drag is checked to keep
+// weight units does the pair go on weights.
+const pairWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null);
+const withHerdr = async (version, fn) => {
+  const was = herdrVersion;
+  const said = spyOn(console, "log");
+  herdrVersion = version;
+  try { await fn(said); } finally { herdrVersion = was; said.mockRestore(); }
+};
+test("the version gate: only a listed Herdr version, exactly as written, takes weights", () => {
+  expect(["0.1.16", "0.1.17"].map(weightHerdrOf)).toEqual([true, true]);
+  expect(["0.1.15", "0.1.18", "0.2.0", "v0.1.17", "0.1.17-dev", "0.1", "", null, undefined, 17, {}].map(weightHerdrOf)).toEqual(Array(11).fill(false));
+});
+test("on a listed Herdr version the Pinned pair goes on weights", async () => {
+  await withHerdr("0.1.16", async () => {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      expect([t.row.size.p2.weight > 0, t.row.size.p3.weight > 0, state.shared["threads.pinPair"]?.t4?.k > 0]).toEqual([true, true, true]);
+    } finally { t.restore(); }
+  });
+});
+for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "v0.1.17-dev"]]) {
+  test(`on ${name} the Pinned pair stays at px through an opening, a drag, a key and a close, says so once in the debug log, and asks no weight for the column`, async () => {
+    await withHerdr(version, async (said) => {
+      const t = await pairPanes();
+      try {
+        t.run(4000);
+        expect([t.row.size.p2.px, t.row.size.p3.px, t.row.widths().p2]).toEqual([722, 380, 722]);
+        t.row.drag("p2", -60);
+        t.run(2000);
+        t.w.key(keyEv("="), t.cxw);
+        t.run(2000);
+        expect([t.row.size.p2.px > 0, t.row.size.p3.px > 0]).toEqual([true, true]);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+        const lines = said.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("the Pinned pair stays at px"));
+        expect(lines.length).toBeGreaterThan(0);
+        expect(new Set(lines).size).toBe(1);
+        expect(lines[0]).toContain(JSON.stringify(version === null ? null : version));
+        t.row.close("p3");
+        state.panes = state.panes.filter((p) => p.pane !== "p3");
+        t.w = null;
+        t.run(3000);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(t.row.widths().p2).toBeGreaterThan(600);
+      } finally { t.restore(); }
+    });
+  });
+}
+test("the Herdr version changing under a pair on weights puts it back to px where it is, and it stays there", async () => {
+  await withHerdr("0.1.17", async (said) => {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      expect(state.shared["threads.pinPair"]?.t4?.k).toBeGreaterThan(0);
+      const was = t.row.widths();
+      herdrVersion = "0.1.18";
+      t.run(3000);
+      const now = t.row.widths();
+      expect([t.row.size.p2.px, t.row.size.p3.px]).toEqual([now.p2, now.p3]);
+      expect([Math.abs(now.p2 - was.p2) <= 1, Math.abs(now.p3 - was.p3) <= 1]).toEqual([true, true]);
+      expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+      const from = log.length;
+      t.run(4000);
+      expect(log.slice(from).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.weight != null)).toBe(false);
+      expect(said.mock.calls.some((c) => String(c[0]).includes('Herdr "0.1.18"'))).toBe(true);
+    } finally { t.restore(); }
+  });
+});
+// Herdr pull request 1365's drag (row.drag1365) on a version the gate does not list: no weight
+// is sent for the column, from a record or otherwise, and no pane collapses.
+const no1365Collapse = (t) => Object.values(t.row.widths()).every((px) => px >= 150);
+for (const [name, after] of [
+  ["a key", (t) => { t.w.key(keyEv("-"), t.cxw); t.run(2000); }],
+  ["a close", (t) => { t.row.close("p3"); state.panes = state.panes.filter((p) => p.pane !== "p3"); t.w = null; t.run(3000); }],
+  ["a window resize", (t) => { t.row.total = Math.round(t.row.total * 1.2); t.run(2000); }],
+  ["y", (t) => { t.v.openTraj(); t.row.apply(); t.run(2000); }],
+]) {
+  test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the pair stays at px, no weight for the column, no pane collapses`, async () => {
+    await withHerdr("0.1.18", async () => {
+      const t = await pairPanes();
+      try {
+        t.run(4000);
+        t.row.drag1365("p1", 80);
+        t.run(1500);
+        t.row.drag1365("p2", -40);
+        t.run(1500);
+        after(t);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+        expect([no1365Collapse(t), t.row.widths()]).toEqual([true, t.row.widths()]);
+      } finally { t.restore(); }
+    });
+  });
+}
 
 test("the Pinned column opens at px and the pair then goes on weights that keep both widths: the Chat never moves, the terminal keeps the rest", async () => {
   const t = await pairPanes();

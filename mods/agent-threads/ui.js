@@ -2806,6 +2806,19 @@ export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
 // and "divider" (the divider between them dragged: their sum held) keep k; "scale" (both
 // grew or shrank by one factor: the window, or a pane opened or closed in the row) changes k
 // by that factor; "stale" is anything else, more than one change between measures.
+// The Herdr versions whose divider drag keeps the units of every weight in the row, so a
+// record of px per weight (k) and the terminals' weights (S) still holds after a drag. Only
+// on these do the pair (and the row) go on weights; any other version, or one that cannot be
+// read, stays at px as before. Before a version is added, check in its source that drag_to
+// (src/window.rs; move_divider, if Herdr PR 1365 is in it) changes only the two panes beside
+// the divider and leaves every other weight in the row as it was: 1365 sets each other
+// visible weight pane's weight to its width in px, which puts a stored k out by hundreds.
+export const WEIGHT_HERDR = ["0.1.16", "0.1.17"];
+// Whether this Herdr's version (updates().app.version) is one WEIGHT_HERDR lists, exactly.
+export function weightHerdr(version) {
+  return typeof version === "string" && WEIGHT_HERDR.includes(version);
+}
+
 export function pairEvent(was, now) {
   const dm = now.m - was.m;
   const dp = now.p - was.p;

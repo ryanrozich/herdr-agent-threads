@@ -80,7 +80,7 @@ import {
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
   thumbSize, tileRow, TILE_GAP, mdPreview, mdChunks, escapeDollars, cutMd, rowHeight, pinColumn, PIN_COL, PIN_SPLIT_MIN, galleryBox, headerButtonWidth, fitWidth, columnWidth, columnStep, STEPS, railLook, columnResize, PIN_STEP, PIN_ROW, pinRowShape, pinPromptText, trajColumn, trajFit, TERM_KEEP, TRAJ_MIN,
-  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit,
+  REWRAP_PAUSE_MS, keySheet, fitHints, statusGroups, agentState, linkPieces, outlineText, outlineHeight, outlineNumW, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, cardKey, cardMarks, cardScroll, cardReveal, fencedBlock, mix, RAIL, railWindow, railSwell, railDay, toolKind, groupText, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, OUT, splitTables, tableNeed, tableCells, htmlChunks, MONO_EM, cutPath, wrapCap, codeRows, railRoom, landPlan, landExact, listOffset, placeAt, anchorPlan, pasteLabel, weightLine, weightFor, weightNear, pairEvent, pairAlone, pinFit, weightHerdr,
 } from "./ui.js";
 import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pinState, partOf, partKeys, NOT_A_PLACE, placeAtTop, placeItem, byTime } from "./pins.js";
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
@@ -2598,6 +2598,7 @@ export default class Threads extends View {
     this.weighStep();
     this.autoPinned(cx);
     this.pairCloseStep();
+    this.weightsGate(cx);
     this.pairPoll(cx);
     if (this.syncSel()) this.selMoved = true;
     this.lookRepo(cx);
@@ -3782,6 +3783,31 @@ export default class Threads extends View {
     const f = pinFit(m, px, R - m, TERM_KEEP * others);
     return f ? { chat: f.chat === m ? null : f.chat, col: f.col, R, S } : null;
   }
+  // Whether the pair may go on weights on this Herdr (ui.js weightHerdr), read when the pane
+  // starts and again whenever the version read differs from the last. A version not listed
+  // (or none) keeps the pair at px, with one line in the debug log for each version seen; a
+  // pair already on weights, or a probe under way, goes back to px where it is.
+  weightsGate(cx) {
+    let v = null;
+    try { v = updates().app.version; } catch { v = null; }
+    if (typeof v !== "string") v = null;
+    if (this.weightsOk != null && v === this.herdrSeen) return;
+    this.herdrSeen = v;
+    this.weightsOk = weightHerdr(v);
+    if (this.weightsOk) return;
+    console.log(`agent-threads: Herdr ${JSON.stringify(v)} is not one whose drag is checked to keep weight units: the Pinned pair stays at px`);
+    if (!this.pinnedPane) return;
+    const main = this.mainPane();
+    const w = shared(WIDTH_KEY) ?? {};
+    const was = shared(PAIR_KEY)?.[this.terminal];
+    const g = this.pairing;
+    this.pairing = null;
+    if (!(was?.k > 0) && !g) return;
+    if (g && !(was?.k > 0)) { const me = this.me(); if (me) run("layout.resize", { id: me.pane, px: was?.probe > 0 ? was.probe : g.p }); }
+    else this.pairPx(0);
+    if (main && Number.isFinite(w[main.pane])) run("layout.resize", { id: main.pane, px: Math.round(w[main.pane]) + PANE_FRAME });
+    if (was?.probe) this.pairPatch((r) => { const rest = { ...r }; delete rest.probe; return rest; }, cx);
+  }
   // The pair back to px, as the Trajectory's split and the px resizes (w, - and = with no
   // pair) need: the column at its width (when send), and no new pair for hold ms. The Chat's
   // px is the caller's.
@@ -3804,7 +3830,7 @@ export default class Threads extends View {
   // are still, and its weights kept up to date after that. Not while the Trajectory is open
   // (its fit works in px), zoomed, or held (pairPx).
   pairPoll(cx) {
-    if (!this.pinnedPane) return;
+    if (!this.pinnedPane || !this.weightsOk) return;
     const me = this.me();
     const main = this.mainPane();
     const w = shared(WIDTH_KEY) ?? {};
