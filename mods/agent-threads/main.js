@@ -134,9 +134,10 @@ const IMG_DIR = `data/${MOD}/images`;
 // Bytes per extractor call. A 6.7 MB busy transcript reads in 4 calls, so the header's
 // percentage moves, and each call's parse and apply run in slices (read()).
 // A read's first extractor call takes CHUNK, so the first figures (and the opening's newest
-// prompt) come at once; each later call of that read takes READ_CHUNK. A call starts about a
-// dozen processes whatever its size, two thirds of a 2 MiB call's time, so fewer, larger calls
-// read a long transcript several times as fast. A read of new bytes starts at CHUNK again.
+// prompt) come at once; each later call of that read takes twice the last, up to READ_CHUNK
+// (2, 4, 8, 16 MiB), so a short session's bar still steps. A call starts about a dozen
+// processes whatever its size, two thirds of a 2 MiB call's time, so fewer, larger calls read
+// a long transcript several times as fast. A read of new bytes starts at CHUNK again.
 const CHUNK = 2 * 1024 * 1024;
 const READ_CHUNK = 16 * 1024 * 1024;
 const SLICE_MS = 8; // synchronous work before read() yields to the app
@@ -2481,7 +2482,7 @@ export default class Threads extends View {
             s.offset += c.used;
             s.partial = false;
             if (s.offset < s.size) cap = readCap(cap, c.used, chunk, CHUNK);
-            chunk = nextChunk(s, c.used, chunk, cap);
+            chunk = nextChunk(s, c.used, chunk, Math.min(cap, chunk * 2));
             if (!s.loaded) cx.notify();
             // Once a session (peek holds the session peeked): another one on the list is
             // statted and peeked again.
