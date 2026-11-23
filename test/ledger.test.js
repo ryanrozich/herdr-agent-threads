@@ -533,6 +533,10 @@ test("trajLayout: the bottom dock's detail side and widths, and the list's colum
       const side = w >= 900 ? "right" : "under";
       expect([L.side, L.detailW, L.listW]).toEqual([side, side === "right" ? 300 : null, side === "right" ? w - 300 : w]);
       expect(L.cols).toEqual(ledgerCols(w));
+      // The detail closed: the list takes the pane's width at every width.
+      const shut = trajLayout(w, dock, false);
+      expect([shut.side, shut.detailW, shut.listW]).toEqual([side, side === "right" ? 300 : null, w]);
+      expect(shut.cols).toEqual(ledgerCols(w));
     }
   }
   expect(trajLayout(Number.NaN, "bottom").side).toBe("none");

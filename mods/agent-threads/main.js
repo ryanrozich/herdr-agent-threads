@@ -11464,6 +11464,10 @@ export default class Threads extends View {
   // The pane's layout for its dock and width (ledger.js trajLayout), the list as wide as the
   // detail leaves it when open. The Trajectory in the Chat's own pane lays out as on the right.
   trajShape(open = this.detailOpen()) { return trajLayout(this.pw(), this.trajPane ? this.trajDock : "right", open); }
+  // The width the list's rows size their figures by (headParts, compactRow): along the bottom
+  // the list's, so a 340 px list beside the detail shows what a 340 px right pane shows; on the
+  // right, and in the Chat's own pane, the pane's, as before.
+  rowW() { return this.trajPane && this.trajDock === "bottom" ? this.trajShape().listW : this.pw(); }
   // Whether the detail shows: as the person last left it, or by the layout until then (open at
   // its right, closed under the ledger). Along the bottom under 700 px there is none.
   detailOpen() {
@@ -11722,7 +11726,8 @@ export default class Threads extends View {
       return h_flex().id(r.key).h(LEDGER_ROW).px(10).items_center().text_size(11.5).text_color(t.dim)
         .child(div().truncate().child(`New session${r.ts ? ` · ${fmtTime(r.ts)}` : ""}`));
     }
-    const c = compactRow(r, this.trajPx(), this.pw());
+    const rw = this.rowW();
+    const c = compactRow(r, Math.round(rw) + PANE_FRAME, rw);
     if (c && r.kind !== "sess") return this.ledgerCompact(t, r, on, inks, c);
     if (r.kind === "trh") return this.ledgerHead(t, r, on, inks);
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
@@ -11826,7 +11831,7 @@ export default class Threads extends View {
   // recorded event, and that end is one LINE_SLANT px slant.
   ledgerHead(t, r, on, inks) {
     const mono = this.mono();
-    const p = headParts(r, this.pw());
+    const p = headParts(r, this.rowW());
     const dot = " · ";
     const parts = [p.calls, p.failed ? "failed" : null, p.tokens, p.total].filter(Boolean);
     const line = r.line;

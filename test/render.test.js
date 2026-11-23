@@ -20268,6 +20268,11 @@ test("TRD-24: the right dock keeps its own layout at every width: the detail 300
     }
     expect(b.trajReport().layout.side).toBe(side);
     expect(b.trajReport().cols).toEqual({ start: true, bar: true, filters: true, detailRight: side === "right" });
+    // The report's list width follows the detail: the pane's less 300 px open at the right, the
+    // pane's when closed or under the list.
+    expect(b.trajReport().layout.listW).toBe(side === "right" && b.detailOpen() ? w - 300 : w);
+    b.tdetail = !b.detailOpen();
+    expect(b.trajReport().layout).toEqual({ side, detailW: side === "right" ? 300 : null, listW: side === "right" && b.detailOpen() ? w - 300 : w });
   }
 });
 
@@ -20289,4 +20294,29 @@ test("TRD-24: the list box measures its height, and the report says how many row
     handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1480, height: 200 }, cb);
     expect([b.trajReport().listH, b.trajReport().rowsLeft]).toEqual([100, 4]);
   } finally { herdrSettings = { font_family: "Mono" }; }
+});
+
+test("TRD-24: along the bottom a turn's heading drops its figures by the list's width, as a right pane of that width does; on the right they go by the pane's width, as before", async () => {
+  // The list's words: the detail, built after it, shows a turn's figures at any width.
+  const listWords = (c) => { const i = c.findIndex((e) => e[0] === "id" && e[1] === "th-traj-detail"); return wordsOf(i < 0 ? c : c.slice(0, i)); };
+  const headTok = (c) => listWords(c).filter((s) => /^[\d.]+[km]? tok$/.test(s)).length;
+  const headCalls = (c) => listWords(c).filter((s) => /^\d+ calls?$/.test(s)).length;
+  const heads = (b) => b.ledgerRows().filter((r) => r.kind === "trh" && r.tokens && r.calls).length;
+  // [dock, pane px, detail open, tokens shown, calls shown]
+  for (const [dock, w, open, tok, calls] of [
+    ["bottom", 700, true, false, true], ["bottom", 760, true, false, true], ["bottom", 780, true, true, true],
+    ["bottom", 700, false, true, true], ["bottom", 650, true, true, true],
+    ["right", 340, false, false, true], ["right", 400, false, false, true], ["right", 1000, true, true, true],
+  ]) {
+    const { b, cb } = await bottomPane(w, 400, dock);
+    b.tdetail = open;
+    expect(heads(b)).toBeGreaterThan(0);
+    const c = frame(b, cb);
+    expect([dock, w, open, headTok(c) > 0, headCalls(c) > 0]).toEqual([dock, w, open, tok, calls]);
+  }
+  // A right pane as wide as the bottom list draws the same heading figures.
+  const { b: r, cb: rc } = await bottomPane(340, 400, "right");
+  const { b: d, cb: dc } = await bottomPane(700, 400);
+  d.tdetail = true;
+  expect([headTok(frame(d, dc)), headCalls(frame(d, dc)) > 0]).toEqual([headTok(frame(r, rc)), headCalls(frame(r, rc)) > 0]);
 });
