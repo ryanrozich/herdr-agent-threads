@@ -2,13 +2,13 @@
 // error in render() fails here instead of in a window. Every element method returns the same
 // chainable stub; .when() and .hover() run their callbacks, and the virtual list draws every
 // item. The pane reads synthetic fixtures through the real extractor (exec runs it).
-import { test, expect, mock, setSystemTime } from "bun:test";
+import { test, expect, mock, setSystemTime, spyOn } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, utimesSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sessionStatsForTest, ruleSender } from "../mods/agent-threads/core/turns.js";
 import { join } from "node:path";
-import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS } from "../mods/agent-threads/ui.js";
+import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
 import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf } from "../mods/agent-threads/ledger.js";
 
@@ -85,7 +85,7 @@ let herdrSettings = { font_family: "Mono" };
 // What Herdr's window() reports as the platform (round 6 face).
 let hostPlatform = "linux";
 // updates().app.version: Herdr's version.
-let herdrVersion = "0.1.13";
+let herdrVersion = "0.1.17";
 // Reads of Herdr's settings, panes and terminals, for the draw-time guard.
 const hostReads = { settings: 0, panes: 0, terminals: 0 };
 mock.module("gpui-kit", () => ({ View: class {}, div: () => el, svg: (p) => { if (rec) rec.push(["svg", p]); return el; }, image: () => el }));
@@ -2123,16 +2123,19 @@ test("the footer is one row of the most-used keys with q quote for a local termi
 });
 
 test("before Herdr 0.1.13 the first click on a formatted reply says how to select, once", async () => {
+  const was = herdrVersion;
   herdrVersion = "0.1.12";
-  const { v, cx } = await quotePane();
-  v.replySelectable();
-  herdrVersion = "0.1.13";
-  const md = v.rows().find((r) => r.kind === "md");
-  v.click(md.key, cx);
-  expect(v.toast.text).toBe("Press s to select text in this reply");
-  v.toast = null;
-  v.click(md.key, cx);
-  expect(v.toast).toBe(null);
+  try {
+    const { v, cx } = await quotePane();
+    v.replySelectable();
+    herdrVersion = "0.1.13";
+    const md = v.rows().find((r) => r.kind === "md");
+    v.click(md.key, cx);
+    expect(v.toast.text).toBe("Press s to select text in this reply");
+    v.toast = null;
+    v.click(md.key, cx);
+    expect(v.toast).toBe(null);
+  } finally { herdrVersion = was; }
 });
 
 test("the formatted reply is selectable from Herdr 0.1.13, and a click there says nothing", async () => {
@@ -2146,11 +2149,14 @@ test("the formatted reply is selectable from Herdr 0.1.13, and a click there say
   expect(selectable(v)).toBe(true);
   v.click(v.rows().find((r) => r.kind === "md").key, cx);
   expect(v.toast).toBe(null);
+  const was = herdrVersion;
   herdrVersion = "0.1.12";
-  const old = await quotePane();
-  old.v.replySelectable();
-  herdrVersion = "0.1.13";
-  expect(selectable(old.v)).toBe(false);
+  try {
+    const old = await quotePane();
+    old.v.replySelectable();
+    herdrVersion = "0.1.13";
+    expect(selectable(old.v)).toBe(false);
+  } finally { herdrVersion = was; }
 });
 
 test("after ⌘C on the formatted reply q quotes what it copied, as long as the clipboard holds it", async () => {
@@ -16867,6 +16873,38 @@ test("while a place is held the probe measures the rows above it and only a few 
   } finally { listWindow = null; }
 });
 
+test("a held place ends with parts that never report and over 4,000 tries kept: the tries are not cleared while it is held, and are after", async () => {
+  const { v, cx } = await wrapSession(400);
+  v.debug = false;
+  v.listH = 600;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 650);
+    sim.wheel(sim.off * 0.5);
+    probeFrame(v, cx);
+    // Tries from other layouts, past the 4,000 at which they are cleared.
+    for (let i = 0; i < 4001; i++) v.probeTries.set(`old${i}|x`, 3);
+    stillAt(v, 750);
+    settleRows(v, cx);
+    expect(Boolean(v.anchor) && !v.anchor.end).toBe(true);
+    // Frames in which no part reports its size: each is tried 3 times, then passed.
+    let frames = 0;
+    let least = Infinity;
+    for (; frames < 300 && v.anchor; frames++) {
+      draw(v, cx);
+      cx.flush(120, 3);
+      dropTimers(v, cx);
+      if (v.anchor) least = Math.min(least, v.probeTries.size);
+    }
+    expect(v.anchor).toBe(null);
+    expect(frames).toBeLessThan(300);
+    expect(least).toBeGreaterThan(4000);
+    // Let go, the next walk clears them.
+    for (let k = 0; k < 5; k++) { draw(v, cx); cx.flush(120, 3); dropTimers(v, cx); }
+    expect(v.probeTries.size).toBeLessThan(4000);
+  } finally { listWindow = null; }
+});
+
 test("a column step crossed at the top of the chat keeps the start at the top, both ways", async () => {
   const { v, cx } = await wrapSession(300);
   v.debug = false;
@@ -17165,4 +17203,909 @@ test("inside a step nothing is held or moved: 720 to 800 px and back takes no pl
       expect([v.anchor ?? null, v.anchorDue ?? false, sim.asks]).toEqual([null, false, asks]);
     }
   } finally { listWindow = null; }
+});
+
+// ---- the Pinned pair on weights (TRD-75) ------------------------------------------------
+
+// Herdr's row as the pair meets it: px panes take their px, weight panes share what is left
+// by weight; layout.resize from the log is applied at each step. Widths are Herdr px (the
+// measured width and the 2 px frame). A drag is drag_to's rule: beside a px pane only that
+// pane's px is set (the left one's when both are px); two weights trade weight with each
+// other alone.
+function pairRow(total, sizes) {
+  const row = { total, order: Object.keys(sizes), size: { ...sizes }, seen: 0 };
+  row.widths = () => {
+    const px = row.order.filter((id) => row.size[id].px != null);
+    const room = row.total - px.reduce((s, id) => s + row.size[id].px, 0);
+    const sw = row.order.filter((id) => row.size[id].px == null).reduce((s, id) => s + row.size[id].weight, 0);
+    // colStep: the column at a weight lands on a multiple of it (as a column on the rig stayed
+    // 2 px short at two weights 0.4% apart).
+    const at = (id) => { const x = (room * row.size[id].weight) / sw; return row.colStep && id === "p3" ? Math.round(x / row.colStep) * row.colStep : Math.round(x); };
+    return Object.fromEntries(row.order.map((id) => [id, row.size[id].px ?? at(id)]));
+  };
+  row.apply = () => {
+    for (; row.seen < log.length; row.seen++) {
+      const [kind, name, a] = log[row.seen];
+      if (kind !== "run" || name !== "layout.resize" || !row.size[a.id]) continue;
+      row.size[a.id] = a.px != null ? { px: a.px } : { weight: a.weight };
+    }
+  };
+  // Herdr closes a pane: its weight goes to the pane before it.
+  row.close = (id) => {
+    const i = row.order.indexOf(id);
+    const before = row.order[i - 1];
+    if (row.size[id].weight != null && row.size[before]?.weight != null) row.size[before] = { weight: row.size[before].weight + row.size[id].weight };
+    row.order.splice(i, 1);
+    delete row.size[id];
+  };
+  row.drag = (left, dx) => {
+    const i = row.order.indexOf(left);
+    const right = row.order[i + 1];
+    const w = row.widths();
+    const L = row.size[left];
+    const R = row.size[right];
+    if (L.px != null) row.size[left] = { px: w[left] + dx };
+    else if (R.px != null) row.size[right] = { px: w[right] - dx };
+    else {
+      const s = L.weight + R.weight;
+      row.size[left] = { weight: (s * (w[left] + dx)) / (w[left] + w[right]) };
+      row.size[right] = { weight: (s * (w[right] - dx)) / (w[left] + w[right]) };
+    }
+  };
+  // A drag as Herdr pull request 1365 would make it: the two panes beside the divider set
+  // (each keeping its kind, px rounded), and every other visible weight pane's weight set to
+  // its width in px, so after it every weight in the row is in px units.
+  row.drag1365 = (left, dx) => {
+    const right = row.order[row.order.indexOf(left) + 1];
+    const w = row.widths();
+    const to = { [left]: w[left] + dx, [right]: w[right] - dx };
+    for (const id of row.order) {
+      const px = to[id] ?? w[id];
+      if (row.size[id].px != null) { if (id in to) row.size[id] = { px: Math.round(px) }; }
+      else row.size[id] = { weight: px };
+    }
+  };
+  return row;
+}
+// The Chat (v, p2) and its Pinned column (w, p3) beside the terminal (p1), on a clock the
+// test moves. step(ms): Herdr applies the asks, lays the row out, each pane hears its width
+// (as on_size_change) and draws; deferred writes run.
+// opts.total: the row's width; opts.weighed: the Chat on a weight it set, with its row's line
+// known (as after the mod's own sizing), in place of px. opts.zoom: Herdr's zoom, with each
+// pane hearing its width through its own on_size_change in zoomed px. The row itself is in
+// layout.resize px, the unit the mod sends: Herdr 0.1.16 keeps a px span unzoomed and draws
+// it at zoom times px (window.rs sized), and its drag works in the same unzoomed px, so these
+// are the design px the mod measures (size.width / zoom).
+async function pairPanes(chat = 722, opts = {}) {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.debug = false;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  let now = 1_000_000;
+  const real = Date.now;
+  Date.now = () => now;
+  const total = opts.total ?? 1806;
+  const row = pairRow(total, { p1: { weight: 0.5 }, p2: { px: chat } });
+  if (opts.weighed) {
+    const wc = (0.5 * chat) / (total - chat);
+    row.size.p2 = { weight: wc };
+    v.weightNow = wc;
+    v.weighLine = { a: 1 / total, b: 0.5 / total };
+  }
+  const panesSeen = [];
+  const z = opts.zoom ?? 1;
+  if (z !== 1) herdrSettings = { font_family: "Mono", zoom: z };
+  let heard = 0;
+  const onSize = new Map();
+  const hear = (x, c, id) => {
+    const wd = row.widths()[id] - 2;
+    // Herdr calls the size handler of the last frame drawn, then draws the next.
+    const h = z !== 1 ? onSize.get(x) : null;
+    if (h) { heard++; h({ width: wd * z, height: 800 * z }, c); }
+    else if (Math.abs(wd - (x.paneW ?? -9)) > 1) { x.paneW = wd; x.sizeAt = now; x.fitColumn(); x.shareWidth(); }
+    if (z !== 1) rec = [];
+    draw(x, c);
+    if (z !== 1) { onSize.set(x, handlerAfterId(rec, "threads-root", "on_size_change")); rec = null; }
+    c.flush(0);
+  };
+  const t = { v, cx, row, w: null, cxw: null, frames: panesSeen, now: () => now, heard: () => heard, restore: () => { Date.now = real; herdrSettings = { font_family: "Mono" }; } };
+  t.step = (ms = 100) => {
+    now += ms;
+    row.apply();
+    hear(v, cx, "p2");
+    if (t.w && row.size.p3) hear(t.w, t.cxw, "p3");
+    row.apply();
+    panesSeen.push({ at: now, ...row.widths(), sizes: JSON.parse(JSON.stringify(row.size)) });
+  };
+  t.run = (ms, every = 100) => { for (let s = 0; s < ms; s += every) t.step(every); };
+  hear(v, cx, "p2");
+  // v opens the column: the split applies, the new pane goes in at the column's px.
+  log = [];
+  v.key(keyEv("v"), cx);
+  row.apply();
+  row.order.push("p3");
+  row.size.p3 = { weight: 0.5 };
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  v.settleSplit(cx);
+  row.apply();
+  const props = state.props;
+  state.props = { ...props, view: "pinned" };
+  const w = new Threads();
+  const cxw = makeCx();
+  w.init(state.props, cxw);
+  await settle(w);
+  w.debug = false;
+  state.props = props;
+  t.w = w;
+  t.cxw = cxw;
+  return t;
+}
+const pairSum = (f) => f.p2 + f.p3;
+
+// The Herdr version gate (ui.js weightHerdr): only on a version whose drag is checked to keep
+// weight units does the pair go on weights.
+const pairWeightAsks = () => log.filter(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null);
+const withHerdr = async (version, fn) => {
+  const was = herdrVersion;
+  const said = spyOn(console, "log");
+  herdrVersion = version;
+  try { await fn(said); } finally { herdrVersion = was; said.mockRestore(); }
+};
+test("the version gate: only a listed Herdr version, exactly as written, takes weights", () => {
+  expect(["0.1.16", "0.1.17"].map(weightHerdrOf)).toEqual([true, true]);
+  expect(["0.1.15", "0.1.18", "0.2.0", "v0.1.17", "0.1.17-dev", "0.1", "", null, undefined, 17, {}].map(weightHerdrOf)).toEqual(Array(11).fill(false));
+});
+test("on a listed Herdr version the Pinned pair goes on weights", async () => {
+  await withHerdr("0.1.16", async () => {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      expect([t.row.size.p2.weight > 0, t.row.size.p3.weight > 0, state.shared["threads.pinPair"]?.t4?.k > 0]).toEqual([true, true, true]);
+    } finally { t.restore(); }
+  });
+});
+for (const [name, version] of [["an unlisted version", "0.1.18"], ["a version that cannot be read", null], ["a garbled version", "v0.1.17-dev"]]) {
+  test(`on ${name} the Pinned pair stays at px through an opening, a drag, a key and a close, says so once in the debug log, and asks no weight for the column`, async () => {
+    await withHerdr(version, async (said) => {
+      const t = await pairPanes();
+      try {
+        t.run(4000);
+        expect([t.row.size.p2.px, t.row.size.p3.px, t.row.widths().p2]).toEqual([722, 380, 722]);
+        t.row.drag("p2", -60);
+        t.run(2000);
+        t.w.key(keyEv("="), t.cxw);
+        t.run(2000);
+        expect([t.row.size.p2.px > 0, t.row.size.p3.px > 0]).toEqual([true, true]);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+        const lines = said.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("the Pinned pair stays at px"));
+        expect(lines.length).toBeGreaterThan(0);
+        expect(new Set(lines).size).toBe(1);
+        expect(lines[0]).toContain(JSON.stringify(version === null ? null : version));
+        t.row.close("p3");
+        state.panes = state.panes.filter((p) => p.pane !== "p3");
+        t.w = null;
+        t.run(3000);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(t.row.widths().p2).toBeGreaterThan(600);
+      } finally { t.restore(); }
+    });
+  });
+}
+test("the Herdr version changing under a pair on weights puts it back to px where it is, and it stays there", async () => {
+  await withHerdr("0.1.17", async (said) => {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      expect(state.shared["threads.pinPair"]?.t4?.k).toBeGreaterThan(0);
+      const was = t.row.widths();
+      herdrVersion = "0.1.18";
+      t.run(3000);
+      const now = t.row.widths();
+      expect([t.row.size.p2.px, t.row.size.p3.px]).toEqual([now.p2, now.p3]);
+      expect([Math.abs(now.p2 - was.p2) <= 1, Math.abs(now.p3 - was.p3) <= 1]).toEqual([true, true]);
+      expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+      const from = log.length;
+      t.run(4000);
+      expect(log.slice(from).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.weight != null)).toBe(false);
+      expect(said.mock.calls.some((c) => String(c[0]).includes('Herdr "0.1.18"'))).toBe(true);
+    } finally { t.restore(); }
+  });
+});
+// Herdr pull request 1365's drag (row.drag1365) on a version the gate does not list: no weight
+// is sent for the column, from a record or otherwise, and no pane collapses.
+const no1365Collapse = (t) => Object.values(t.row.widths()).every((px) => px >= 150);
+for (const [name, after] of [
+  ["a key", (t) => { t.w.key(keyEv("-"), t.cxw); t.run(2000); }],
+  ["a close", (t) => { t.row.close("p3"); state.panes = state.panes.filter((p) => p.pane !== "p3"); t.w = null; t.run(3000); }],
+  ["a window resize", (t) => { t.row.total = Math.round(t.row.total * 1.2); t.run(2000); }],
+  ["y", (t) => { t.v.openTraj(); t.row.apply(); t.run(2000); }],
+]) {
+  test(`Herdr pull request 1365's drag, then ${name}, on an unlisted version: the pair stays at px, no weight for the column, no pane collapses`, async () => {
+    await withHerdr("0.1.18", async () => {
+      const t = await pairPanes();
+      try {
+        t.run(4000);
+        t.row.drag1365("p1", 80);
+        t.run(1500);
+        t.row.drag1365("p2", -40);
+        t.run(1500);
+        after(t);
+        expect(pairWeightAsks()).toEqual([]);
+        expect(state.shared["threads.pinPair"]?.t4?.k ?? null).toBe(null);
+        expect([no1365Collapse(t), t.row.widths()]).toEqual([true, t.row.widths()]);
+      } finally { t.restore(); }
+    });
+  });
+}
+
+test("the Pinned column opens at px and the pair then goes on weights that keep both widths: the Chat never moves, the terminal keeps the rest", async () => {
+  const t = await pairPanes();
+  try {
+    const at = t.row.widths();
+    expect(at).toEqual({ p1: 1806 - 722 - 380, p2: 722, p3: 380 });
+    t.run(4000);
+    // Every frame on the way: the Chat at 722, never half of it.
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    // Both on weights, the terminal's weight as it was (the mod never resizes it), the widths
+    // as they were.
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.row.size.p1).toEqual({ weight: 0.5 });
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+    const end = t.row.widths();
+    expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(1);
+    // The probe lands within 2 px.
+    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(2);
+    expect(Math.abs(end.p1 - at.p1)).toBeLessThanOrEqual(3);
+    const pair = state.shared["threads.pinPair"].t4;
+    // The probe's S, from two rounded widths: a first guess for later, near the terminal's 0.5.
+    expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.06);
+    expect(Math.abs(pair.k - 722 / t.row.size.p2.weight)).toBeLessThan(0.01);
+    // The probe's widths were not taken as the owner's column width.
+    expect(state.shared["threads.pinWidth"]?.px ?? 380).toBe(380);
+  } finally { t.restore(); }
+});
+
+test("at zoom 1.25, with each pane hearing its width in zoomed px, the pair goes on weights that keep both widths and a divider drag moves only its two panes", async () => {
+  const t = await pairPanes(722, { zoom: 1.25 });
+  try {
+    expect(t.v.zoom()).toBe(1.25);
+    t.run(4000);
+    // Each width came through the pane's own size handler, divided by the zoom.
+    expect(t.heard()).toBeGreaterThan(10);
+    expect(t.v.paneW).toBeCloseTo(720, 6);
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+    const end = t.row.widths();
+    expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(1);
+    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(2);
+    const was = t.row.widths();
+    t.row.drag("p2", -100);
+    t.run(1000);
+    const now = t.row.widths();
+    expect(now.p2).toBe(was.p2 - 100);
+    expect(Math.abs(now.p3 - (was.p3 + 100))).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p1 - was.p1)).toBeLessThanOrEqual(1);
+    const pair = state.shared["threads.pinPair"].t4;
+    expect(pair.m).toBe(now.p2);
+    expect(pair.p).toBe(now.p3);
+  } finally { t.restore(); }
+});
+
+test("with the pair on weights each divider moves with the pointer: only its two panes change, their sum holds, and the far panes stay", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const check = (left, dx) => {
+      const was = t.row.widths();
+      t.row.drag(left, dx);
+      t.run(1000);
+      const now = t.row.widths();
+      const i = t.row.order.indexOf(left);
+      const [a, b] = [left, t.row.order[i + 1]];
+      expect(now[a]).toBe(was[a] + dx);
+      expect(Math.abs(now[b] - (was[b] - dx))).toBeLessThanOrEqual(1);
+      for (const id of t.row.order) if (id !== a && id !== b) expect(Math.abs(now[id] - was[id])).toBeLessThanOrEqual(1);
+      return now;
+    };
+    // The column's left edge, 100 px left and back: 722 / 380 to 622 / 480, the terminal as it was.
+    let f = check("p2", -100);
+    expect(f.p2).toBe(622);
+    f = check("p2", 100);
+    // The pane's outer left edge (the terminal|Chat divider), both ways.
+    check("p1", -100);
+    check("p1", 100);
+    // The weights stayed current through each: k as it was, the widths as they are now.
+    const pair = state.shared["threads.pinPair"].t4;
+    expect(pair.m).toBe(t.row.widths().p2);
+    expect(pair.p).toBe(t.row.widths().p3);
+    expect(Math.abs(pair.k - t.row.widths().p2 / t.row.size.p2.weight)).toBeLessThan(0.5);
+  } finally { t.restore(); }
+});
+
+test("- and = with the pair on weights move weight inside the pair with the sum held: the terminal never moves, from either pane", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const was = t.row.widths();
+    log = [];
+    t.row.seen = 0;
+    t.v.key(keyEv("="), t.cx);
+    expect(log.filter(([, n]) => n === "layout.resize").map((x) => Object.keys(x[2]).sort().join())).toEqual(["id,weight", "id,weight"]);
+    t.run(1000);
+    let now = t.row.widths();
+    expect(Math.abs(now.p3 - (was.p3 + 40))).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p2 - (was.p2 - 40))).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p1 - was.p1)).toBeLessThanOrEqual(1);
+    // - in the column's own pane takes it back.
+    log = [];
+    t.row.seen = 0;
+    t.w.key(keyEv("-"), t.cxw);
+    t.run(1000);
+    now = t.row.widths();
+    expect(Math.abs(now.p3 - was.p3)).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p2 - was.p2)).toBeLessThanOrEqual(1);
+    expect(Math.abs(now.p1 - was.p1)).toBeLessThanOrEqual(1);
+    expect(t.frames.slice(-10).every((f) => Math.abs(f.p1 - was.p1) <= 1)).toBe(true);
+  } finally { t.restore(); }
+});
+
+test("the pair's weights follow a window resize (both scale), and two changes between measures make the pair again from px with the Chat still", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const k0 = state.shared["threads.pinPair"].t4.k;
+    // The window 10% wider: every weight pane grows by that, k with them.
+    t.row.total = Math.round(1806 * 1.1);
+    t.run(1000);
+    const k1 = state.shared["threads.pinPair"].t4.k;
+    expect(k1 / k0).toBeCloseTo(t.row.widths().p2 / 722, 2);
+    // = still holds the terminal.
+    const was = t.row.widths();
+    t.v.key(keyEv("="), t.cx);
+    t.run(1000);
+    expect(Math.abs(t.row.widths().p1 - was.p1)).toBeLessThanOrEqual(1);
+    // A drag of the outer edge and the window back, with no still frame between: the weights
+    // cannot be told, so the pair is made again. The Chat stays where it is through it.
+    t.row.drag("p1", -60);
+    t.row.total = 1806;
+    t.step(100);
+    const m = t.row.widths().p2;
+    t.run(5000);
+    const after = t.frames.slice(-45);
+    expect(after.every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+    const pair = state.shared["threads.pinPair"].t4;
+    expect(pair.k).toBeGreaterThan(0);
+    expect(Math.abs(pair.k - t.row.widths().p2 / t.row.size.p2.weight)).toBeLessThan(0.5);
+  } finally { t.restore(); }
+});
+
+// Steps until the column's pane starts the probe (its pairing set); the frames before it.
+function untilProbe(t, max = 4000) {
+  for (let s = 0; s < max && !t.w.pairing; s += 100) t.step(100);
+  expect(Boolean(t.w.pairing)).toBe(true);
+}
+
+test("with the row known when the column opens (the Chat on its own weight), the probe's first weight lands the column at its width: no jump, and the owner's column width untouched", async () => {
+  // A terminal much wider than the Chat, so a guess from the Chat's width alone is far off.
+  const t = await pairPanes(722, { total: 2200, weighed: true });
+  try {
+    const pins = [];
+    for (let s = 0; s < 4000; s += 100) { t.step(100); pins.push(state.shared["threads.pinWidth"]?.px ?? null); }
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    // The column within 2 px of 380 in every frame, the first weight's included.
+    expect(Math.max(...t.frames.map((f) => Math.abs(f.p3 - 380)))).toBeLessThanOrEqual(2);
+    expect(pins.every((x) => x == null || x === 380)).toBe(true);
+  } finally { t.restore(); }
+  // With the Chat at px (the row not known) the first guess takes the terminal as wide as the
+  // Chat: the column jumps on the first weight, and back on the next. The owner's column
+  // width is not taken from the probe's widths.
+  const u = await pairPanes(722, { total: 2200 });
+  try {
+    const pins = [];
+    for (let s = 0; s < 4000; s += 100) { u.step(100); pins.push(state.shared["threads.pinWidth"]?.px ?? null); }
+    const jump = Math.max(...u.frames.map((f) => Math.abs(f.p3 - 380)));
+    expect(jump).toBeGreaterThan(50);
+    expect(Math.abs(u.row.widths().p3 - 380)).toBeLessThanOrEqual(2);
+    expect(pins.every((x) => x == null || x === 380)).toBe(true);
+  } finally { u.restore(); }
+});
+
+test("a column that cannot land exactly at its width on a weight (2 px off at best) is paired within 2 px, on the first probe", async () => {
+  const t = await pairPanes(722, { total: 2200, weighed: true });
+  try {
+    // Opened at 380; at a weight it lands on a multiple of 6: 378 or 384.
+    t.row.colStep = 6;
+    t.run(4000);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(Math.abs(t.row.widths().p3 - 380)).toBeLessThanOrEqual(2);
+    expect(t.w.pairTries ?? 0).toBe(0);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("the probe stops when the Chat moves under it (the column left on its trial weight for the next probe), or after three weights Herdr does not answer (the column back at its px)", async () => {
+  const t = await pairPanes();
+  try {
+    untilProbe(t);
+    // The owner drags the Chat's left edge while the probe waits.
+    log = [];
+    t.row.seen = 0;
+    t.row.size.p2 = { px: 680 };
+    t.step(100);
+    expect(t.w.pairing).toBe(null);
+    expect(log.filter(([, n, a]) => n === "layout.resize" && a.id === "p3").map((x) => x[2])).toEqual([]);
+  } finally { t.restore(); }
+  const u = await pairPanes();
+  try {
+    untilProbe(u);
+    // Herdr drops the column's weights from here on (the first one landed).
+    const apply = u.row.apply;
+    u.row.apply = () => { for (; u.row.seen < log.length; u.row.seen++) { const [k, n, a] = log[u.row.seen]; if (k === "run" && n === "layout.resize" && a.id === "p3" && a.weight != null) continue; if (k === "run" && n === "layout.resize" && u.row.size[a.id]) u.row.size[a.id] = a.px != null ? { px: a.px } : { weight: a.weight }; } };
+    let s = 0;
+    for (; s < 4000 && u.w.pairing; s += 100) u.step(100);
+    // Each weight with no change is a measure after 400 ms; the third ends it.
+    expect(u.w.pairing).toBe(null);
+    expect(s).toBeGreaterThanOrEqual(800);
+    expect(log.filter(([, n, a]) => n === "layout.resize" && a.id === "p3").at(-1)[2]).toEqual({ id: "p3", px: 380 });
+    expect(u.row.widths().p3).toBe(380);
+    u.row.apply = apply;
+  } finally { u.restore(); }
+});
+
+test("three probes the Chat moves under end with the column back at its px and no fourth probe while the column stays open", async () => {
+  const t = await pairPanes();
+  try {
+    for (const px of [700, 680, 660]) {
+      untilProbe(t);
+      t.row.size.p2 = { px };
+      t.step(100);
+      expect(t.w.pairing).toBe(null);
+    }
+    t.row.apply();
+    // The cap: the column at the px it had, no record of a probe, and no trial weight left.
+    expect(t.w.pairTries).toBe(3);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    // Still for a long while: no fourth probe, nothing asked of either pane.
+    log = [];
+    t.row.seen = 0;
+    t.run(6000);
+    expect(t.w.pairing).toBe(null);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2).toEqual({ px: 660 });
+  } finally { t.restore(); }
+});
+
+test("three probes whose final check finds the column moved end with both back at px and no fourth probe", async () => {
+  const t = await pairPanes();
+  try {
+    // Each time the Chat's weight lands, something other than the mod moves 10 px of weight
+    // from the column to the terminal, the Chat's width held: the column misses its width.
+    const apply = t.row.apply;
+    t.row.apply = () => {
+      const from = t.row.seen;
+      apply();
+      const chatWeight = log.slice(from, t.row.seen).some(([k, n, a]) => k === "run" && n === "layout.resize" && a.id === "p2" && a.weight != null);
+      if (!chatWeight || t.row.size.p3.weight == null) return;
+      const k = t.row.widths().p2 / t.row.size.p2.weight;
+      t.row.size.p3 = { weight: t.row.size.p3.weight - 10 / k };
+      t.row.size.p1 = { weight: t.row.size.p1.weight + 10 / k };
+    };
+    for (let s = 0; s < 20000 && (t.w.pairTries ?? 0) < 3; s += 100) t.step(100);
+    expect(t.w.pairTries).toBe(3);
+    t.run(3000);
+    t.row.apply = apply;
+    t.row.apply();
+    // The cap: the column at the px it had before the first probe, the Chat at px where it is.
+    expect(t.w.pairing).toBe(null);
+    expect(state.shared["threads.pinPair"].t4.k ?? null).toBe(null);
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2.px).toBeGreaterThan(0);
+    log = [];
+    t.row.seen = 0;
+    t.run(6000);
+    expect(log.filter(([, n]) => n === "layout.resize")).toEqual([]);
+  } finally { t.restore(); }
+});
+
+test("the probe waits for the row to be still: while the Chat's edge is being dragged no weight is asked, then one probe", async () => {
+  const t = await pairPanes();
+  try {
+    log = [];
+    t.row.seen = 0;
+    // A drag of the terminal|Chat edge, 10 px every 200 ms for 4 s.
+    for (let s = 0; s < 4000; s += 200) { t.row.drag("p1", -10); t.step(100); t.step(100); }
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.weight != null)).toBe(false);
+    t.run(4000);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("w with the pair on weights puts both back to px and drops the pair at once; the pair is made again once still", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    t.v.fitToReading(t.cx);
+    expect(state.shared["threads.pinPair"].t4.k).toBeUndefined();
+    t.run(6000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("a drag of the pane's outer edge keeps the terminals' weight up to date with the pair", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    for (const dx of [-100, 60]) {
+      t.row.drag("p1", dx);
+      t.run(1000);
+      expect(Math.abs(state.shared["threads.pinPair"].t4.S - t.row.size.p1.weight)).toBeLessThan(0.04);
+    }
+  } finally { t.restore(); }
+});
+
+test("the column closing with the pair on weights: the Chat goes back to its width in one weight when the terminals' weights are known, within the probe's error and then exact when they were measured", async () => {
+  for (const [exact, early] of [[true, false], [false, false], [true, true]]) {
+    const t = await pairPanes();
+    try {
+      t.run(4000);
+      const m = t.row.widths().p2;
+      const pair = state.shared["threads.pinPair"].t4;
+      // The probe measured the terminal's weight from two widths in whole px: near 0.5, not
+      // on it. Exact, as from a known row, the one weight lands the Chat.
+      expect(Math.abs(pair.S - 0.5)).toBeLessThan(0.05);
+      if (exact) state.shared["threads.pinPair"] = { t4: { ...pair, S: t.row.size.p1.weight } };
+      // Herdr closes the column: its room goes to the weights left, the Chat's among them.
+      // early: the pane list shows it gone a frame before the Chat hears its new width (as on
+      // the rig), so the Chat's first frame after it is at its old width.
+      state.panes = state.panes.filter((p) => p.pane !== "p3");
+      log = [];
+      t.row.seen = 0;
+      if (early) {
+        t.w = null;
+        t.step(16);
+        expect(log.filter(([, n2]) => n2 === "layout.resize")).toEqual([]);
+      }
+      t.row.close("p3");
+      t.w = null;
+      const n = t.frames.length;
+      t.run(1500);
+      const asks = log.filter(([, n2, a]) => n2 === "layout.resize" && a.id === "p2").map((x) => Object.keys(x[2]).sort().join());
+      // Herdr draws the Chat wide until the ask lands, between these frames; each frame here
+      // is after it.
+      const off = t.frames.slice(n).filter((f) => Math.abs(f.p2 - m) > 1);
+      if (exact) {
+        expect(asks).toEqual(["id,weight"]);
+        expect(off.length).toBe(0);
+      } else {
+        // Within 2% in the first frame, then one more weight from that measure, and exact.
+        expect(asks).toEqual(["id,weight", "id,weight"]);
+        expect(off.length).toBeLessThanOrEqual(1);
+        for (const f of off) expect(Math.abs(f.p2 - m)).toBeLessThanOrEqual(0.02 * m);
+      }
+      expect(t.row.size.p2.weight).toBeGreaterThan(0);
+      expect(Math.abs(t.row.widths().p2 - m)).toBeLessThanOrEqual(1);
+      expect(t.frames.slice(-5).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+      expect(state.shared["threads.pinPair"]?.t4).toBeUndefined();
+    } finally { t.restore(); }
+  }
+  // The column's room to the terminal (a column moved left of the Chat): the Chat keeps its
+  // width on its weight, and nothing is asked.
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const m = t.row.widths().p2;
+    const wp = t.row.size.p3.weight;
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    t.row.order = t.row.order.filter((id) => id !== "p3");
+    delete t.row.size.p3;
+    t.row.size.p1 = { weight: t.row.size.p1.weight + wp };
+    t.w = null;
+    log = [];
+    t.row.seen = 0;
+    t.run(1500);
+    expect(log.filter(([, n2]) => n2 === "layout.resize")).toEqual([]);
+    expect(t.frames.slice(-15).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+    expect(t.v.pairCloseDue ?? null).toBe(null);
+  } finally { t.restore(); }
+});
+
+test("the Trajectory opened with the column open puts the pair back to px for its life; closed, the pair goes back on weights", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    const was = t.row.widths();
+    log = [];
+    t.row.seen = 0;
+    t.v.openTraj();
+    const resized = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+    expect(resized).toEqual(expect.arrayContaining([{ id: "p3", px: was.p3 }, { id: "p2", px: was.p2 }]));
+    expect(log.some(([, n]) => n === "pane.split")).toBe(true);
+    t.row.apply();
+    expect(t.row.size.p2).toEqual({ px: was.p2 });
+    expect(t.row.size.p3).toEqual({ px: was.p3 });
+    // The Trajectory's pane is there (its own fit is not run here): no pair while it is open.
+    t.v.splitAsk = null;
+    state.panes.push({ pane: "p4", tab: "A", terminal: null, mod: "agent-threads" });
+    state.shared["threads.trajByTerminal"] = { t4: { pane: "p4" } };
+    t.run(8000);
+    expect(t.row.size.p2.px).toBe(was.p2);
+    expect(t.row.size.p3.px).toBe(was.p3);
+    // It closes: once both are still, the pair is made again, the Chat not moving.
+    state.panes = state.panes.filter((p) => p.pane !== "p4");
+    delete state.shared["threads.trajByTerminal"].t4;
+    const n = t.frames.length;
+    // Not for 1.5 s: the Trajectory's close gives the Chat its width back first.
+    log = [];
+    t.row.seen = 0;
+    t.run(1400);
+    expect(log.some(([, n2, a]) => n2 === "layout.resize" && a.weight != null)).toBe(false);
+    t.run(3600);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    // The Chat within 1 px (the Chat's weight comes from the column's width in whole px).
+    expect(t.frames.slice(n).every((f) => Math.abs(f.p2 - was.p2) <= 1)).toBe(true);
+    // The pair made again from the row as the last pair had it: the column's first weight
+    // lands it within 2 px, no jump.
+    expect(Math.max(...t.frames.slice(n).map((f) => Math.abs(f.p3 - was.p3)))).toBeLessThanOrEqual(2);
+  } finally { t.restore(); }
+});
+
+test("y pressed while the column is on a probe's trial weight, or left on one by a dropped probe, puts the column back at its px for the Trajectory", async () => {
+  // Mid-probe: the column on its first trial weight, no pair yet.
+  const t = await pairPanes();
+  try {
+    untilProbe(t);
+    t.row.apply();
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(state.shared["threads.pinPair"].t4.k ?? null).toBe(null);
+    log = [];
+    t.row.seen = 0;
+    t.v.openTraj();
+    t.row.apply();
+    expect(t.row.size.p3).toEqual({ px: 380 });
+    expect(t.row.size.p2.px).toBeGreaterThan(0);
+    // The record no longer keeps the probe's px: the pair is held, made again after.
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+  } finally { t.restore(); }
+  // A probe dropped because the Chat moved leaves the column on its trial weight: y still
+  // puts it back at the px it had.
+  const u = await pairPanes();
+  try {
+    untilProbe(u);
+    u.row.size.p2 = { px: 680 };
+    u.step(100);
+    expect(u.w.pairing).toBe(null);
+    u.row.apply();
+    expect(u.row.size.p3.weight).toBeGreaterThan(0);
+    log = [];
+    u.row.seen = 0;
+    u.v.openTraj();
+    u.row.apply();
+    expect(u.row.size.p3).toEqual({ px: 380 });
+  } finally { u.restore(); }
+  // - and = at px after a dropped probe: the kept px no longer holds, so y sends the column
+  // nothing of the probe's.
+  const x = await pairPanes();
+  try {
+    untilProbe(x);
+    x.row.size.p2 = { px: 680 };
+    x.step(100);
+    x.v.key(keyEv("="), x.cx);
+    x.row.apply();
+    expect(state.shared["threads.pinPair"].t4.probe ?? null).toBe(null);
+    log = [];
+    x.row.seen = 0;
+    x.v.openTraj();
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p3")).toBe(false);
+  } finally { x.restore(); }
+});
+
+test("the pair's arithmetic: what moved, the Chat alone, and the column's keep", async () => {
+  const { pairEvent, pairAlone, pinFit } = await import("../mods/agent-threads/ui.js");
+  // What moved.
+  const was = { m: 722, p: 380 };
+  expect(pairEvent(was, { m: 723, p: 379 })).toBe("same");
+  expect(pairEvent(was, { m: 822, p: 380 })).toBe("chat");
+  expect(pairEvent(was, { m: 622, p: 480 })).toBe("divider");
+  expect(pairEvent(was, { m: 794, p: 418 })).toBe("scale");
+  expect(pairEvent(was, { m: 800, p: 330 })).toBe("stale");
+  // The column closed: the Chat's weight keeps 722 beside the terminal (S 1, k 704): the
+  // terminal and the column's old room are 704 + 380.
+  expect(pairAlone({ k: 704, m: 722, p: 380, S: 1 })).toBeCloseTo(722 / 1084, 4);
+  expect(pairAlone({ k: 704, m: 722, p: 380, S: 0 })).toBe(null);
+  expect(pairAlone({ k: 0, m: 722, p: 380, S: 1 })).toBe(null);
+  // The column's keep, as the Trajectory's fit: the terminals give down to keep, then the
+  // Chat down to 240, then the column down to 240; past that, none.
+  expect(pinFit(722, 380, 800, 200)).toEqual({ chat: 722, col: 380 });
+  expect(pinFit(722, 380, 500, 200)).toEqual({ chat: 642, col: 380 });
+  expect(pinFit(300, 380, 400, 200)).toEqual({ chat: 240, col: 260 });
+  expect(pinFit(250, 380, 300, 200)).toBe(null);
+  // The Trajectory would take 210 here; the column's floor is 240.
+  expect(pinFit(250, 380, 400, 200)).toBe(null);
+});
+
+test("the column's opening keeps the terminal's 200 px when the row's room is known: narrower, the Chat giving, or Pinned in the pane", async () => {
+  const { v, cx } = await pinPane("--extra", "6");
+  v.debug = false;
+  state.shared["threads.byTerminal"] = { t4: { pane: "p2" } };
+  v.paneW = 720;
+  v.width = 720;
+  // On a weight of 1 beside a terminal at 1 (the weight line), so the weights share twice
+  // the pane: the terminal has 722.
+  v.weightNow = 1;
+  v.weighLine = { a: 1 / 1444, b: 1 / 1444 };
+  // With the room the weights share (R) and the terminals' weights (S) for the pair.
+  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380, R: 1444, S: 1 });
+  // The terminal at 522: 380 of it would leave 142, so the Chat gives 58.
+  v.weighLine = { a: 1 / 1244, b: 0.7230 / 1244 };
+  const fit = v.pinKeep(v.me(), 380);
+  expect(fit.col).toBe(380);
+  expect(fit.chat).toBeLessThan(722);
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(log.filter(([, n]) => n === "layout.resize")[0][2]).toEqual({ id: "p2", px: fit.chat });
+  // A Chat as wide as the Chat gives always fits (down to 240 and the column to 240 beside
+  // it). At 480 with the terminal at 48 px it does not: Pinned shows in the pane, and says
+  // why.
+  v.splitAsk = null;
+  v.paneW = 480;
+  v.width = 480;
+  v.weightNow = 1;
+  v.weighLine = { a: 1 / 530, b: 0.1 / 530 };
+  log = [];
+  v.key(keyEv("v"), cx);
+  expect(log.filter(([, n]) => n === "pane.split")).toEqual([]);
+  expect(v.view).toBe("pinned");
+  expect(v.toast?.text).toBe("Pinned shows here: the row has no room for the Pinned column");
+  // No line, but the last pair's S: the room from it.
+  v.splitAsk = null;
+  v.paneW = 720;
+  v.width = 720;
+  v.weightNow = 1;
+  v.weighLine = null;
+  state.shared["threads.pinPair"] = { t4: { S: 1 } };
+  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380, R: 1444, S: 1 });
+  // Nothing known about the row: the column as asked, as before.
+  delete state.shared["threads.pinPair"];
+  expect(v.pinKeep(v.me(), 380)).toEqual({ chat: null, col: 380 });
+});
+
+test("with no terminal in the row the pair goes on weights in the ratio of their widths: one ask to each pane, the Chat at its width", async () => {
+  const t = await pairPanes();
+  try {
+    // The terminal gone from the tab and the row: the Chat and the column share it all.
+    state.panes = state.panes.filter((p) => p.pane !== "p1");
+    t.row.order = t.row.order.filter((id) => id !== "p1");
+    delete t.row.size.p1;
+    t.row.total = 722 + 380;
+    log = [];
+    t.row.seen = 0;
+    untilProbe(t);
+    const asks = log.filter(([, n]) => n === "layout.resize").map((x) => x[2]);
+    expect(asks).toEqual([{ id: "p2", weight: 722 }, { id: "p3", weight: 380 }]);
+    t.run(3000);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+    expect(t.row.widths()).toEqual({ p2: 722, p3: 380 });
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+  } finally { t.restore(); }
+});
+
+test("with a second terminal in the tab the pair is made from two measures of the column, the Chat still at its width", async () => {
+  const t = await pairPanes();
+  try {
+    // Before the pair: another terminal in the row, so the terminals' weights are not known.
+    state.panes.push({ pane: "p0", tab: "A", terminal: null });
+    t.row.order.unshift("p0");
+    t.row.size.p0 = { weight: 0.3 };
+    t.row.total += 400;
+    t.run(5000);
+    expect(t.frames.every((f) => f.p2 === 722)).toBe(true);
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    expect(t.row.size.p0).toEqual({ weight: 0.3 });
+    const end = t.row.widths();
+    expect(Math.abs(end.p2 - 722)).toBeLessThanOrEqual(2);
+    expect(Math.abs(end.p3 - 380)).toBeLessThanOrEqual(2);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("with the pair on weights, a drag that takes the Chat across 704 px and a window resize that scales it across re-wrap once each, after the 1.2 s pause", async () => {
+  const t = await pairPanes();
+  try {
+    t.run(4000);
+    t.v.rewrapMs = 151;
+    expect(t.v.chars()).toBe(90);
+    // The divider dragged 48 px left in 8 px moves, a frame apart: 722 to 674.
+    const widths = [];
+    const track = () => { if (widths.at(-1) !== t.v.width) widths.push(t.v.width); };
+    track();
+    for (let i = 0; i < 6; i++) {
+      t.row.drag("p2", -8);
+      t.step(50);
+      track();
+      expect(t.v.chars()).toBe(90);
+    }
+    expect(t.row.widths().p2).toBe(674);
+    t.run(1100, 100);
+    track();
+    expect(t.v.chars()).toBe(90);
+    t.run(400, 100);
+    track();
+    expect(t.v.chars()).toBe(70);
+    expect(widths.length).toBe(2);
+    // The column's sum held and the terminal still.
+    const f = t.row.widths();
+    expect(Math.abs(pairSum(f) - (722 + 380))).toBeLessThanOrEqual(2);
+    // The window 8% wider: the Chat back past 704 by the weights alone, then one re-wrap
+    // (the re-wrap just done was quick here; one that took long holds again).
+    t.v.rewrapMs = 151;
+    t.row.total = Math.round(1806 * 1.08);
+    t.step(100);
+    expect(t.row.widths().p2).toBeGreaterThanOrEqual(704);
+    expect(t.v.chars()).toBe(70);
+    widths.length = 0;
+    track();
+    t.run(1500, 100);
+    track();
+    expect(t.v.chars()).toBe(90);
+    expect(widths.length).toBe(2);
+    expect(state.shared["threads.pinPair"].t4.k).toBeGreaterThan(0);
+  } finally { t.restore(); }
+});
+
+test("a terminal at px beside the pair is never resized: its width holds through the opening, both drags of the column's edge, and - and =", async () => {
+  const t = await pairPanes();
+  try {
+    // The terminal at px before the pair is made: the column is then the one pane on a weight.
+    t.row.size.p1 = { px: 704 };
+    t.run(5000);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+    expect(t.frames.every((f) => f.p1 === 704 && f.p2 === 722)).toBe(true);
+    expect(t.row.size.p1).toEqual({ px: 704 });
+    expect(t.row.size.p2.weight).toBeGreaterThan(0);
+    expect(t.row.size.p3.weight).toBeGreaterThan(0);
+    // The column landed at its width on the first weight: one measure does not tell the
+    // terminals' weights, so none is kept (a close then sizes the Chat in px).
+    expect(state.shared["threads.pinPair"].t4.S).toBe(null);
+    for (const dx of [-100, 100]) {
+      const was = t.row.widths();
+      t.row.drag("p2", dx);
+      t.run(1000);
+      const now = t.row.widths();
+      expect(now.p2).toBe(was.p2 + dx);
+      expect(Math.abs(now.p3 - (was.p3 - dx))).toBeLessThanOrEqual(1);
+      expect(now.p1).toBe(704);
+    }
+    const was = t.row.widths();
+    t.v.key(keyEv("="), t.cx);
+    t.run(1000);
+    expect(Math.abs(t.row.widths().p3 - (was.p3 + 40))).toBeLessThanOrEqual(1);
+    expect(t.row.widths().p1).toBe(704);
+    // The column closed: the Chat back to its width in px, the terminal untouched. The
+    // weight after it finds the Chat alone on a weight (the same width at two weights), so
+    // the Chat stays at px.
+    const m = t.row.widths().p2;
+    state.panes = state.panes.filter((p) => p.pane !== "p3");
+    t.row.close("p3");
+    t.w = null;
+    t.run(3000);
+    expect(Math.abs(t.row.widths().p2 - m)).toBeLessThanOrEqual(1);
+    expect(t.row.size.p2).toEqual({ px: m });
+    expect(t.frames.slice(-5).every((f) => Math.abs(f.p2 - m) <= 1)).toBe(true);
+    expect(t.row.widths().p1).toBe(704);
+    expect(log.some(([, n, a]) => n === "layout.resize" && a.id === "p1")).toBe(false);
+  } finally { t.restore(); }
 });

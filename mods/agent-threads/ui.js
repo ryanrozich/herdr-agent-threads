@@ -2552,21 +2552,19 @@ export function placeAt(pre, off) {
   return { i: lo, share: h > 0 ? Math.max(0, Math.min(1, (off - pre[lo]) / h)) : 0 };
 }
 // How to bring the offset from off to want in one layout, when Herdr can only bring a row to
-// the near edge or put its middle at the middle. The pane can change row 0's height by lift
-// px for that layout and put it back at the next. The offset stays in px, so everything below
-// row 0 then moves by lift. Row 0 can be made taller, or shorter while it keeps 1 px and is
-// above the view. The options, each with the rows on both sides of the edge:
-// - a row's top at the top edge, when want is above off;
-// - a row's bottom at the bottom edge, when want is below off (its top must not be above
-//   the top edge, or it would go to the top);
-// - a row's middle at the middle.
-// The one with the smallest lift wins: the frame with it shows the place that many px off.
-// Down (want below off) there is a landing with nothing off, tried first: the row k that will
-// cross the bottom edge, given for that layout a height (slot) that puts its bottom at the
-// bottom edge, below the view: what it shows is its top part, which does not move. With its
-// top at or below off, the near edge brings that bottom to the bottom edge; with its top above
-// off (so above want too: a row taller than the view), its middle at the middle does, its
-// bottom still below the edge. Only the rows below it move when its height comes back.
+// the near edge or put its middle at the middle.
+// - Down (want below off) there is a landing with nothing off: the row k that will cross the
+//   bottom edge, given for that layout a height (slot) that puts its bottom at the bottom
+//   edge, below the view. What it shows is its top part, which does not move. With its top at
+//   or below off, the near edge brings that bottom to the bottom edge; with its top above off
+//   (so above want too: a row taller than the view), its middle at the middle does, its
+//   bottom still below the edge. Only the rows below it move when its height comes back.
+// - Up, the pane changes row 0's height by lift px for that layout and puts it back at the
+//   next. The offset stays in px, so everything below row 0 then moves by lift. Row 0 can be
+//   made taller, or shorter while it keeps 1 px and is above the view. The options, each with
+//   the rows on both sides of the edge: a row's top at the top edge, or a row's middle at the
+//   middle. The one with the smallest lift wins: the frame with it shows the place that many
+//   px off.
 // Returns { j, how, lift, slot? }, { end } for the end of the list, or null when the offset is
 // at want already.
 export function anchorPlan(pre, want, off, H) {
@@ -2585,22 +2583,13 @@ export function anchorPlan(pre, want, off, H) {
     if (j < 1 || j >= n || lift < short || (lift < 0 && want < pre[1] + lift) || want > pre[n] + lift - H) return;
     if (!best || Math.abs(lift) < Math.abs(best.lift)) best = { j, how, lift: Math.round(lift) };
   };
-  // Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
-  if (want < off) {
-    const t = placeAt(pre, want).i;
-    for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
-  }
-  if (want > off) {
-    const b = placeAt(pre, want + H).i;
-    for (const k of [b - 1, b]) {
-      const lift = want + H - pre[k + 1];
-      if (pre[k] + lift >= off) take(k, "top", lift);
-    }
-  }
+  // Up. Lifted, row j >= 1 has its top at pre[j] + lift. Row 0's top stays at 0.
+  const t = placeAt(pre, want).i;
+  for (const j of [t, t + 1]) take(j, "top", want - pre[j]);
   const c = placeAt(pre, want + H / 2).i;
   for (const j of [c - 1, c, c + 1]) if (j >= 0 && j < n) take(j, "center", want + H / 2 - (pre[j] + pre[j + 1]) / 2);
   // Near the start with no option: the start at the top.
-  return best ?? (want < off ? { j: 0, how: "top", lift: 0 } : null);
+  return best ?? { j: 0, how: "top", lift: 0 };
 }
 // The rail shows only in a pane that holds a whole 70 character reading line (MEASURE
 // characters at the text size) inside its gutters: a narrower pane is already squeezing the
@@ -2804,6 +2793,58 @@ export function weightNear(line, [w1, n1], n0) {
   return k > 0 ? w5(S / k) : null;
 }
 export const keepingWeight = (p1, p2, n0) => weightFor(weightLine(p1, p2), n0);
+
+// ---- the Pinned pair on weights (TRD-75) ----
+// Herdr drags a divider beside a px pane by setting that pane's px alone, so with the Chat
+// and the Pinned column both at px a drag on the divider between them moves the Chat's far
+// edge instead (Herdr issue 1332). Two panes on weights trade width with each other alone.
+// So once the column's split has applied at px, the pair goes to weights that keep both
+// widths. All widths here are Herdr px (the measured width and the frame).
+// What moved between two measures of the pair, the Chat at m and the column at p. Every pane
+// on a weight gets the same px for each unit of weight (k), so the weights follow from the
+// widths as long as k is known: "chat" (the Chat's left edge dragged, the column as it was)
+// and "divider" (the divider between them dragged: their sum held) keep k; "scale" (both
+// grew or shrank by one factor: the window, or a pane opened or closed in the row) changes k
+// by that factor; "stale" is anything else, more than one change between measures.
+// The Herdr versions whose divider drag keeps the units of every weight in the row, so a
+// record of px per weight (k) and the terminals' weights (S) still holds after a drag. Only
+// on these do the pair (and the row) go on weights; any other version, or one that cannot be
+// read, stays at px as before. Before a version is added, check in its source that drag_to
+// (src/window.rs; move_divider, if Herdr PR 1365 is in it) changes only the two panes beside
+// the divider and leaves every other weight in the row as it was: 1365 sets each other
+// visible weight pane's weight to its width in px, which puts a stored k out by hundreds.
+export const WEIGHT_HERDR = ["0.1.16", "0.1.17"];
+// Whether this Herdr's version (updates().app.version) is one WEIGHT_HERDR lists, exactly.
+export function weightHerdr(version) {
+  return typeof version === "string" && WEIGHT_HERDR.includes(version);
+}
+
+export function pairEvent(was, now) {
+  const dm = now.m - was.m;
+  const dp = now.p - was.p;
+  if (Math.abs(dm) <= 1 && Math.abs(dp) <= 1) return "same";
+  if (Math.abs(dp) <= 1) return "chat";
+  if (Math.abs(dm + dp) <= 2) return "divider";
+  if (Math.abs(now.m / was.m - now.p / was.p) <= 0.01) return "scale";
+  return "stale";
+}
+// The column closed with the pair on weights: Herdr gives a closed pane's weight to the pane
+// before it, so the Chat takes the column's room. The weight that keeps it at m beside the
+// other weight panes (weights S): the row was k px a unit over S + wc + wp, so those panes and
+// the column's old room are k S + p. null with no other weights known (S 0: the Chat is the
+// one pane on a weight, and any weight fills the room).
+export function pairAlone({ k, m, p, S }) {
+  return k > 0 && m > 0 && S > 0 ? w5((m * S) / (k * S + p)) : null;
+}
+// The Pinned column's opening with the terminals' keep, as the Trajectory's fit takes it
+// (trajFit): want is the column's width, room what the terminals have now, keep what they
+// keep (TERM_KEEP each). The room comes from the terminals down to keep, then from the Chat
+// down to PIN_MAIN_MIN, then from the column down to PIN_COL[0]. { chat, col }, or null when
+// even that does not fit.
+export function pinFit(chat, want, room, keep) {
+  const f = trajFit(chat, want, room, keep);
+  return f && f.traj >= Math.min(want, PIN_COL[0]) ? { chat: f.chat, col: f.traj } : null;
+}
 
 // The Pinned column that v (or the first pin) splits off a Threads pane: 40% of the pane
 // and a step (PIN_STEP) more, 380 to 440 px (PIN_COL_WANT), so a compact row shows about 48
