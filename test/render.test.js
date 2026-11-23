@@ -9735,6 +9735,52 @@ test("level 3: an Antigravity call whose step is still RUNNING shows no result, 
   ]);
 });
 
+test("level 3: an Antigravity FAILED step is failed and shows its error; a step rewritten from ERROR to DONE shows as DONE; a PENDING one shows no result", async () => {
+  // Synthetic transcript, made-up words.
+  const { mkdirSync } = await import("node:fs");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const ID = "00000000-0000-4000-8000-000000000099";
+  const dir = join(mkdtempSync(join(tmpdir(), "threads-calls-agy-")), "brain", ID, ".system_generated", "logs");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "transcript_full.jsonl");
+  const ts = (s) => `2026-01-05T15:07:${String(s).padStart(2, "0")}Z`;
+  const run = (CommandLine) => ({ name: "run_command", args: { CommandLine } });
+  writeFileSync(file, `${[
+    { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: ts(0), content: "<USER_REQUEST>\nSort the widgets\n</USER_REQUEST>" },
+    { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: ts(1), tool_calls: [run("sort gadget.txt"), run("sort widgets.txt"), run("wc -l widgets.txt")] },
+    { step_index: 2, source: "MODEL", type: "GENERIC", status: "FAILED", created_at: ts(2), error: "no such file: gadget.txt", content: `Created At: ${ts(1)}\nCompleted At: ${ts(2)}` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "ERROR", created_at: ts(3), error: "busy", content: `Created At: ${ts(2)}\nCompleted At: ${ts(3)}\nEncountered error in step execution: busy` },
+    { step_index: 3, source: "MODEL", type: "GENERIC", status: "DONE", created_at: ts(5), content: `Created At: ${ts(2)}\nCompleted At: ${ts(5)}\nCommand output:\nsorted` },
+    { step_index: 4, source: "MODEL", type: "GENERIC", status: "PENDING", created_at: ts(8), content: `Created At: ${ts(5)}\nWaiting for approval` },
+  ].map((l) => JSON.stringify(l)).join("\n")}\n`);
+  const { v, cx } = await pane(fixture("--only", "1"));
+  const s = newSession(ID, file);
+  for (const e of [{ k: "p", o: "human", t: "Sort the widgets", ts: ts(0) },
+    { k: "u", n: "run_command", id: "s1.0" }, { k: "u", n: "run_command", id: "s1.1" }, { k: "u", n: "run_command", id: "s1.2" }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+  s.loaded = true;
+  v.sessions = [s];
+  cx.pending = [];
+  const a = "0:1";
+  const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+  v.sel = a;
+  v.action("deeper", cx);
+  await settled();
+  v.action("deeper", cx);
+  await settled();
+  for (const c of [0, 1, 2]) v.toggleCall(`${a}:0:${c}`);
+  await settled();
+  expect(v.rows().filter((r) => /^(gp|cl|co):/.test(r.key ?? "")).map((r) => [r.key, v.rowDetail(r)])).toEqual([
+    [`gp:${a}:0`, "grp#1 Ran 3 commands · 1 failed [failed] [open]"],
+    [`cl:${a}:0:0`, "call#1 sort gadget.txt · 1s [failed] [open]"],
+    [`co:${a}:0:0`, "cout#1 ok lines 1/1 plain h38 | no such file: gadget.txt"],
+    [`cl:${a}:0:1`, "call#1 sort widgets.txt · 4s [open]"],
+    [`co:${a}:0:1`, "cout#1 ok lines 2/2 plain h54 | Command output: ⏎ sorted"],
+    [`cl:${a}:0:2`, "call#1 wc -l widgets.txt [open]"],
+    [`co:${a}:0:2`, "cout#1 ok lines 0/0 plain h38"],
+  ]);
+  draw(v, cx);
+});
+
 test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
   // Two groups: one with a failed command, one where every call worked.
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));

@@ -218,6 +218,22 @@ test("calls.sh: a FAILED step failed, as an ERROR one does, and keeps its error;
   ]);
 });
 
+test("calls.sh: a step left PENDING is no result, as RUNNING is, and a status is read without regard to case", () => {
+  step = 0;
+  const statuses = ["PENDING", "running", "pending", "Running", "error", "Failed", "done", "Done"];
+  const body = [
+    user("Sort the widgets", 0),
+    line({ step_index: step++, source: "MODEL", type: "PLANNER_RESPONSE", status: "DONE", created_at: at(1), input_tokens: 10, output_tokens: 1, cache_read_tokens: 0,
+      tool_calls: statuses.map(() => ({ name: "run_command", args: { CommandLine: "sort widgets.txt" } })) }),
+    ...statuses.map((status) => line({ step_index: step++, source: "MODEL", type: "GENERIC", status, created_at: at(2),
+      content: "Created At: 2026-01-05T09:07:02-06:00\nCompleted At: 2026-01-05T09:07:03-06:00\nwidgets" })),
+  ].join("");
+  const ids = statuses.map((_, i) => `s1.${i}`);
+  const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), file(body), "antigravity", ...ids], { encoding: "utf8" })
+    .split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err])).toEqual([["s1.4", true], ["s1.5", true], ["s1.6", null], ["s1.7", null]]);
+});
+
 test("level 3: a call is named by its planner step and place, and calls.sh reads it and the result step after it", () => {
   step = 0;
   const body = [
