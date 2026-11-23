@@ -17,7 +17,9 @@
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
 //   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
-//   false when the reader knows, left out when it does not). The panel's reader keeps no
+//   false when the reader knows, left out when it does not). OpenCode's reader gives no
+//   result events, so for OpenCode the command line takes both from calls.sh (a call's
+//   completed or error state, and its end time). The panel's reader keeps no
 //   arguments, so arguments is {} unless the caller read them (the command line does, from
 //   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
 //   (extra.arguments_unread).
@@ -54,7 +56,11 @@ export const ATIF_VERSION = "ATIF-v1.7";
 // Harbor's agent names (AgentName) for the readers' harness names.
 export const AGENT_NAMES = { claude: "claude-code", codex: "codex", opencode: "opencode", pi: "pi", cursor: "cursor-cli", antigravity: "antigravity-cli" };
 
-const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : undefined);
+// A time as ISO 8601: from milliseconds (the reader's) or an ISO string (calls.sh's).
+const iso = (t) => {
+  const ms = typeof t === "string" ? Date.parse(t) : t;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+};
 
 // The object without its undefined and null fields, as Harbor writes them (exclude_none);
 // null when nothing is left.
@@ -81,8 +87,10 @@ function turnMetrics(turn) {
 
 // One turn's steps, numbered from `next`. results: an optional Map from call id to what the
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
-// that its input is not JSON (unread); and for a subagent call its trajectory (sub) or that
-// its transcript was not found (subMissing).
+// that its input is not JSON (unread); for OpenCode, whose reader gives no result events,
+// whether the call failed (failed) and when it ended (end); and for a subagent call its
+// trajectory (sub) or that its transcript was not found (subMissing). The reader's outcome
+// comes first: failed and end only fill in what it does not know.
 function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
   const steps = [];
   // Harbor marks every Claude step (claudeSteps): is_sidechain true, with agent_id, on a
@@ -144,9 +152,9 @@ function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
           subagent_transcript: got?.subMissing ? "not found" : undefined,
           subagent_reason: got?.subMissing && got.subReason ? got.subReason : undefined,
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
-          result_ts: iso(c.result?.end),
-          tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : undefined,
-          no_result: c.result?.end == null && c.result?.failed == null ? true : undefined,
+          result_ts: iso(c.result?.end ?? got?.end),
+          tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : typeof got?.failed === "boolean" ? got.failed : undefined,
+          no_result: c.result?.end == null && c.result?.failed == null && got?.end == null && got?.failed == null ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
       }));
@@ -344,7 +352,15 @@ async function main(argv) {
         try { x = l ? JSON.parse(l) : null; } catch { x = null; }
         if (typeof x?.id !== "string") continue;
         const r = results.get(x.id) ?? {};
-        if (x.k === "out") r.out = x.out;
+        if (x.k === "out") {
+          r.out = x.out;
+          // OpenCode's reader gives no result events, so its calls' outcome and end time are
+          // these. Every other agent's come from its reader's result events, as before.
+          if (agent === "opencode") {
+            if (typeof x.err === "boolean") r.failed = x.err;
+            if (typeof x.ts === "string") r.end = x.ts;
+          }
+        }
         else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; if (Object.hasOwn(x, "raw")) r.raw = x.raw; }
         results.set(x.id, r);
       }
