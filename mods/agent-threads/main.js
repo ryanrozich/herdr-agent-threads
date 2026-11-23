@@ -6776,7 +6776,8 @@ export default class Threads extends View {
   // reports no status and the transcript cannot tell.
   agentStateNow() {
     const s = this.current();
-    if (!s?.loaded || this.res.kind === "unsupported" || this.res.kind === "remote") return null;
+    // None while the opening covers the list: a Done above "Reading this session" read as over.
+    if (!s?.loaded || this.openActive() || this.res.kind === "unsupported" || this.res.kind === "remote") return null;
     return agentState({ ended: this.res.ended, status: this.status(), reports: this.agent().key === "claude", newest: s.turns[s.turns.length - 1] ?? null });
   }
   stateTip(st) {
@@ -6884,7 +6885,10 @@ export default class Threads extends View {
     if (!s && (this.res.kind === "none" || this.res.kind === "gone")) return "No session";
     if (!s && this.res.kind === "pending") return "0 turns";
     if (!s) return this.res.kind === "resolving" ? "Finding…" : "";
-    if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null ? ` ${this.readPct(s)}%` : ""}`;
+    if (!s.loaded) return s.error ? "Read failed" : `Reading…${this.readPct(s) != null && !this.openActive() ? ` ${this.readPct(s)}%` : ""}`;
+    // Read, and the list still drawn hidden under the opening's loading state (which says how
+    // much is read, so neither repeats the percentage).
+    if (this.openActive()) return "Reading…";
     // The Pinned view: "3 of 5", after the Pinned heading (pinnedHeading).
     if (this.view === "pinned") return `${this.pinnedList().length} of ${PIN_LIMIT}`;
     const c = this.counts();
@@ -6960,7 +6964,7 @@ export default class Threads extends View {
   floatState(t) {
     const st = this.agentStateNow();
     const s = this.current();
-    const text = st ? null : s?.loaded ? null : this.headerText() || null;
+    const text = st ? null : s?.loaded && !this.openActive() ? null : this.headerText() || null;
     if (!st && !text) return div();
     const color = st ? t[st.tone] ?? t.dim : null;
     const title = s?.title ? `"${s.title}"` : null;

@@ -17234,6 +17234,9 @@ test("the opening: while the session is read there are no rows and no scrolling,
   expect(lastList).toBeNull();
   expect(said).toContain("Reading this session");
   expect(said.join("|")).not.toMatch(/No reply yet|Working|Running/);
+  // The status row says Reading, with no percentage: the loading state below says how much.
+  expect(v.headerText()).toBe("Reading…");
+  expect(said.filter((x) => /^Reading…/.test(x))).toEqual(["Reading…"]);
   // A wheel, a key and a press change nothing while it reads.
   const sel = v.sel;
   v.listWheel({ delta: { y: 120 } });
@@ -17261,16 +17264,25 @@ test("the opening: the list shows at its end, still, with every row shaped (no e
     const asked = [];
     v.scroll = { scroll_to_bottom() { bottoms++; }, scroll_to_item() {} };
     const frames = [];
+    const states = [];
     while (v.openActive() && frames.length < 300) {
       cx.flush(16);
       const b0 = bottoms;
+      const hidden = v.current().loaded;
       frames.push(frame(v, cx));
       asked.push(bottoms > b0);
+      // Read but not shown yet: still Reading, and no Done (nor any state) before the list.
+      if (hidden && v.openActive()) states.push([v.headerText(), v.agentStateNow(), drawnText(frames.at(-1)).includes("Done"), drawnText(frames.at(-1)).includes("Reading…")]);
       v.report();
     }
+    expect(states.length).toBeGreaterThan(0);
+    for (const x of states) expect(x).toEqual(["Reading…", null, false, true]);
     expect(v.openActive()).toBe(false);
     // The end is asked for in every frame drawn hidden, and in the one that shows the list.
     expect(asked.every(Boolean)).toBe(true);
+    // Shown: the state is the agent's again.
+    expect(v.agentStateNow()?.word).toBe("Done");
+    expect(v.headerText()).not.toBe("Reading…");
     // Every frame before was the list hidden under the loading state.
     for (const f of frames.slice(0, -1)) expect(drawnText(f)).toContain("Reading this session");
     // Shown: built, shaped, at the end, with no blank shape anywhere in the list.
