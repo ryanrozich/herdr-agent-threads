@@ -23,7 +23,6 @@ export function writePi(dir, events) {
 }
 // A case's files: Harbor's events (a function of nothing, so each run gets fresh objects).
 const session = (events) => (dir) => ({ main: writePi(dir, events()) });
-const agentSteps = (t) => t.steps.filter((step) => step.source === "agent");
 // base64 of b"png bytes", as Harbor's test computes it.
 const IMAGE = Buffer.from("png bytes").toString("base64");
 
