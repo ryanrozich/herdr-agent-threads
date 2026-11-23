@@ -153,6 +153,18 @@ test("atif: the command line reads a transcript the way the panel does and adds 
   expect(code).toBe(2);
 });
 
+test("atif: the OpenCode command line takes each call's output, outcome and end time from calls.sh, as the golden file has it", () => {
+  const t = JSON.parse(execFileSync("bun", [join(core, "atif.js"), oc, "opencode"], { encoding: "utf8" }));
+  expect(problems(t)).toEqual([]);
+  const results = t.steps.flatMap((st) => st.observation?.results ?? []);
+  expect(results.map((r) => [r.source_call_id, r.content, r.extra])).toEqual([
+    ["call_000001", "14 files match", { result_ts: "2026-11-01T09:10:01.400Z", tool_result_is_error: false }],
+    ["call_000002", "Edit applied.", { result_ts: "2026-11-01T09:10:02.300Z", tool_result_is_error: false }],
+    ["call_000003", "Edit applied.", { result_ts: "2026-11-01T09:11:36.000Z", tool_result_is_error: false }],
+  ]);
+  same("opencode-cli.json", t);
+});
+
 test("atif: the check above refuses what Harbor's models refuse: a field ATIF lacks, a step out of order, a result for a call outside its step", () => {
   const t = atif(readFile(codex, "codex"), { agent: "codex" });
   expect(problems(t)).toEqual([]);

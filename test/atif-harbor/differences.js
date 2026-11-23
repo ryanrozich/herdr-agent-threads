@@ -1,5 +1,6 @@
 // Adapted from harbor-framework/harbor, tests/unit/agents/installed/test_claude_code_trajectory.py
-// and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0).
+// and tests/unit/agents/installed/test_codex_trajectory.py at 110c71b32c268e1d113c3856869202842f8e37a6 (0.26.0),
+// with tests/unit/agents/installed/test_opencode.py and test_opencode_v2.py at the same commit.
 // Copyright the Harbor authors. Apache-2.0; see LICENSE. Ported cases are named in the case tables.
 // Changed from Harbor's original: only the item ids are Harbor's; the differences, reasons and omissions are ours.
 import { expect } from "bun:test";
@@ -14,7 +15,11 @@ import { problems } from "../atif-schema.js";
 // fields · R9 a Codex web_search_call loses its id · R10 a lone Codex subagent rollout keeps
 // its own prompt as a step · R11 cache writes are kept per turn as
 // cache_creation_input_tokens, with no cache_write_input_tokens and no session total · R12 a
-// task notification after a finished turn is a turn of its own with an empty user message.
+// task notification after a finished turn is a turn of its own with an empty user message ·
+// R13 OpenCode reasoning is not read · R14 a failed call says so in
+// extra.tool_result_is_error, with its error text as content, not in extra.error · R15
+// OpenCode call arguments are not read · R16 one agent name, opencode, for both OpenCode
+// versions.
 export const EXPECTED_DIFFERENCES = [
   { id: "claude: agent_steps_carry_llm_call_count", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count; token totals go on the turn's last step." },
   { id: "claude: byte_faithful_property_across_inputs[0]", reason: "R3", kind: "by design", note: "An empty prompt makes no turn in Agent Threads." },
@@ -80,6 +85,34 @@ export const EXPECTED_DIFFERENCES = [
   { id: "codex: unstorable_images_are_omitted[1]", reason: "R5a", kind: "not handled", note: "The unstorable image leaves no [image omitted] marker in the tool output text." },
   { id: "codex: unstorable_images_are_omitted[2]", reason: "R5a", kind: "not handled", note: "The unstorable image leaves no [image omitted] marker in the tool output text." },
   { id: "codex: user_messages_are_never_grouped", reason: "R6", kind: "not handled", note: "Agent Threads never writes llm_call_count on a step." },
+  { id: "opencode: cache_tokens_in_metrics", reason: "R11", kind: "not handled", note: "The 200 cache-write tokens are in prompt_tokens (705, not 505) and kept as metrics.extra.cache_creation_input_tokens with the turn's scope, not as cache_write_tokens." },
+  { id: "opencode: multiple_reasoning_events_are_joined", reason: "R13", kind: "not handled", note: "Agent Threads does not read OpenCode's reasoning parts, so the step has no reasoning_content." },
+  { id: "opencode: multiple_turns", reason: "R8", kind: "not handled", note: "Steps and token totals match; Agent Threads writes no total_cost_usd." },
+  { id: "opencode: no_user_step_without_instruction_or_event", reason: "R3", kind: "by design", note: "Without a prompt the session has no turn, so the export prints no trajectory; Harbor writes the agent step alone." },
+  { id: "opencode: reasoning_content_is_captured", reason: "R13", kind: "not handled", note: "Agent Threads does not read OpenCode's reasoning parts, so the step has no reasoning_content." },
+  { id: "opencode: text_only_turn", reason: "R8", kind: "not handled", note: "The step and its tokens match; Agent Threads writes no cost_usd." },
+  { id: "opencode: tool_call_turn", reason: "R15", kind: "not handled", note: "The call, its id and its result match, but OpenCode's calls.sh prints no arguments, so arguments is {} with extra.arguments_unread." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[0]", reason: "R14", kind: "by design", note: "The failed call (a text error, no output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[1]", reason: "R14", kind: "by design", note: "The failed call (a text error, no output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[2]", reason: "R14", kind: "by design", note: "The failed call (an error object, no output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success. Its content is the error's message, not Python's text of the object." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[3]", reason: "R14", kind: "by design", note: "The failed call (an error object, no output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success. Its content is the error's message, not Python's text of the object." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[4]", reason: "R14", kind: "by design", note: "The failed call (an empty error, no output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[5]", reason: "R14", kind: "by design", note: "The failed call (an empty error, no output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[6]", reason: "R14", kind: "by design", note: "The failed call (a text error, partial output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[7]", reason: "R14", kind: "by design", note: "The failed call (a text error, partial output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[8]", reason: "R14", kind: "by design", note: "The failed call (an error object, partial output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[9]", reason: "R14", kind: "by design", note: "The failed call (an error object, partial output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[10]", reason: "R14", kind: "by design", note: "The failed call (an empty error, partial output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[11]", reason: "R14", kind: "by design", note: "The failed call (an empty error, partial output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[12]", reason: "R14", kind: "by design", note: "The failed call (a text error, empty output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[13]", reason: "R14", kind: "by design", note: "The failed call (a text error, empty output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[14]", reason: "R14", kind: "by design", note: "The failed call (an error object, empty output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[15]", reason: "R14", kind: "by design", note: "The failed call (an error object, empty output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[16]", reason: "R14", kind: "by design", note: "The failed call (an empty error, empty output; a 1.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: failed_tool_is_an_observation_with_error_metadata[17]", reason: "R14", kind: "by design", note: "The failed call (an empty error, empty output; a 2.x database) has tool_result_is_error true and the successful one false, where Harbor writes extra.error on the failure and no extra on the success." },
+  { id: "opencode-v2: trajectory_keeps_tool_observations_and_native_usage", reason: "R16", kind: "by design", note: "The call, its result and the token totals match; the agent is named opencode for both OpenCode versions, not opencode-v2." },
+  { id: "opencode-v2: trajectory_retains_a_final_turn_without_step_finish", reason: "R16", kind: "by design", note: "The steps match; the agent is named opencode for both OpenCode versions, not opencode-v2." },
+  { id: "opencode-v2: unfinished_tool_does_not_get_a_fabricated_observation", reason: "R7", kind: "by design", note: "Agent Threads retains a marked observation for a call that has no result." },
   { id: "codex: web_search_calls_preserve_native_ids_and_get_unique_fallbacks", reason: "R9", kind: "not handled", note: "Agent Threads gives each web_search_call a generated id and no observation; Harbor keeps native ids and results." },
 ];
 
@@ -103,7 +136,11 @@ export function checkCase(item, trajectory, control) {
 
 // Source inventory: every remaining pytest item is explicit; parameter indexes follow source
 // order. Left-out items are Harbor's own plumbing: 8 litellm price mocks, 7 logs-folder
-// discovery or root-selection tests, 1 agent-object reuse test and 1 Hypothesis property.
+// discovery or root-selection tests, 1 agent-object reuse test and 1 Hypothesis property. For
+// OpenCode the inventory is the trajectory items of test_opencode.py (TestOpenCodeMillisToIso,
+// TestOpenCodeParseStdout, TestOpenCodeConvertEvents, TestOpenCodePopulateContextPostRun) and of
+// test_opencode_v2.py (the seven functions from test_trajectory_retains_a_final_turn_without_step_finish
+// on); the left-out ones test Harbor's stdout reader, time helper and run() plumbing.
 export const LEFT_OUT = [
   { id: "claude: user_message_byte_faithful_property_hypothesis", reason: "Harbor's Hypothesis property test needs Python's generator; the fixed corpus test in claude.test.js covers the same inputs." },
   { id: "claude: repeated_trajectory_conversions_do_not_leak_state", reason: "Harbor reuses one agent object across conversions to prove no state leaks; Agent Threads runs a fresh command-line process per export, so leaked state cannot carry over." },
@@ -122,6 +159,20 @@ export const LEFT_OUT = [
   { id: "codex: mixed_context_calls_sum_each_calls_pricing_tier", reason: "Harbor mocks litellm's price table; Agent Threads has none and writes no cost." },
   { id: "codex: incomplete_rollout_does_not_replace_valid_root[0]", reason: "Harbor tests which rollout file it picks as root from a logs folder; Agent Threads exports one named rollout file." },
   { id: "codex: incomplete_rollout_does_not_replace_valid_root[1]", reason: "Harbor tests which rollout file it picks as root from a logs folder; Agent Threads exports one named rollout file." },
+  { id: "opencode: converts_millis_timestamp", reason: "Harbor tests its own time helper; the export's times are checked by test/opencode-atif.test.js." },
+  { id: "opencode: returns_none_for_none", reason: "Harbor tests its own time helper; the export's times are checked by test/opencode-atif.test.js." },
+  { id: "opencode: handles_invalid_timestamp", reason: "Harbor tests its own time helper; the export's bad end times (0, not a number, before the start) are checked by test/opencode-atif.test.js." },
+  { id: "opencode: reads_utf8_with_non_utf8_default_encoding", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "opencode: rejects_invalid_utf8", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "opencode: parses_json_lines", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "opencode: returns_empty_when_no_file", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "opencode: skips_non_json_lines", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
+  { id: "opencode: populates_context_and_writes_trajectory", reason: "Harbor fills its run context and writes trajectory.json; Agent Threads prints the export and fills no context." },
+  { id: "opencode: noop_when_no_output_file", reason: "Harbor fills its run context and writes trajectory.json; Agent Threads prints the export and fills no context." },
+  { id: "opencode: noop_when_output_has_no_valid_events", reason: "Harbor fills its run context and writes trajectory.json; Agent Threads prints the export and fills no context." },
+  { id: "opencode-v2: failed_tool_does_not_turn_a_recovered_run_into_a_provider_failure", reason: "Harbor runs its agent's run() with mocked execution and reads the trajectory.json it writes; the export's part, a failed call's text and the reply after it, is covered by failed_tool_is_an_observation_with_error_metadata." },
+  { id: "opencode-v2: context_does_not_invent_zero_usage_for_missing_metrics", reason: "Harbor fills its run context and writes trajectory.json; Agent Threads prints the export and fills no context." },
+  { id: "opencode-v2: stdout_skips_non_object_json", reason: "Harbor reads `opencode run --format json` output; Agent Threads reads OpenCode's database, so there are no JSON lines to read." },
 ];
 // Differences no ported Harbor item reaches: shapes our export writes that Harbor's converter
 // would most likely write another way. Each is checked by the test in claude.test.js named
@@ -129,4 +180,4 @@ export const LEFT_OUT = [
 export const OUR_DIFFERENCES = [
   { id: "ours: task_notification_after_a_finished_turn", reason: "R12", kind: "by design", note: "A task notification that wakes the agent after a turn has finished starts a turn of its own: a user step with message \"\" and extra.sender { kind: \"task-notification\" }, then the agent's steps. Agent Threads does not keep the notice's text (the <task-notification> block is the harness's, not a person's words, and the Chat shows only \"Background task finished\"); Harbor would most likely carry that text as the user message. A notice while a turn is open stays on that turn." },
 ];
-export const COUNTS = { items: { pass: 42, listed: 65, leftOut: 17, total: 124 }, functions: { claude: 52, codex: 30, total: 82 } };
+export const COUNTS = { items: { pass: 48, listed: 93, leftOut: 31, total: 172 }, functions: { claude: 52, codex: 30, opencode: 24, "opencode-v2": 7, total: 113 } };

@@ -27,12 +27,12 @@
    "message": "",
    "tool_calls": [
     {
-     "tool_call_id": "call_grep",
+     "tool_call_id": "call_000001",
      "function_name": "grep",
      "arguments": {}
     },
     {
-     "tool_call_id": "call_edit",
+     "tool_call_id": "call_000002",
      "function_name": "edit",
      "arguments": {}
     }
@@ -40,13 +40,13 @@
    "observation": {
     "results": [
      {
-      "source_call_id": "call_grep",
+      "source_call_id": "call_000001",
       "extra": {
        "no_result": true
       }
      },
      {
-      "source_call_id": "call_edit",
+      "source_call_id": "call_000002",
       "extra": {
        "no_result": true
       }
@@ -97,7 +97,7 @@
    "message": "",
    "tool_calls": [
     {
-     "tool_call_id": "call_edit",
+     "tool_call_id": "call_000003",
      "function_name": "edit",
      "arguments": {}
     }
@@ -105,7 +105,7 @@
    "observation": {
     "results": [
      {
-      "source_call_id": "call_edit",
+      "source_call_id": "call_000003",
       "extra": {
        "no_result": true
       }

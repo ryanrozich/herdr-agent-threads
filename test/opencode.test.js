@@ -256,7 +256,7 @@ test("1.x level 3: calls carry their callID, and calls.sh reads each one's input
   const o = open();
   user(o, "msg_u1", "Fix the cart total", 0);
   assistant(o, "msg_a1", "msg_u1", 100, { finish: "tool-calls" });
-  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "toolu_b1", state: { status: "completed", input: { command: "bun test cart" }, output: "1 fail\nexpected 3", title: "x", time: { start: T0 + 100, end: T0 + 2100 } } });
+  part(o, "msg_a1", { type: "tool", tool: "bash", callID: "toolu_b1", state: { status: "completed", input: { command: "bun test cart" }, output: "1 fail\nexpected 3", metadata: { exit: 1 }, title: "x", time: { start: T0 + 100, end: T0 + 2100 } } });
   part(o, "msg_a1", { type: "tool", tool: "webfetch", callID: "call_w1", state: { status: "error", input: { url: "https://example.com/docs" }, error: "fetch failed", time: { start: T0 + 2200, end: T0 + 2210 } } });
   part(o, "msg_a1", { type: "tool", tool: "bash", callID: "call_p1", state: { status: "running", input: { command: "bun run e2e" }, time: { start: T0 + 2300 } } });
   assistant(o, "msg_a2", "msg_u1", 3000);
@@ -267,8 +267,9 @@ test("1.x level 3: calls carry their callID, and calls.sh reads each one's input
   const got = execFileSync("sh", [join(root, "mods/agent-threads/core/calls.sh"), `${o.path}#${SID}`, "opencode", "toolu_b1", "call_w1", "call_p1"], { encoding: "utf8" })
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
   expect(got.filter((x) => x.k === "in").map((x) => x.in)).toEqual(["bun test cart", "https://example.com/docs", "bun run e2e"]);
-  // A call still running has its input and no output yet.
-  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["toolu_b1", false, "1 fail\nexpected 3", 2, 2000], ["call_w1", true, "fetch failed", 1, 10]]);
+  // A call still running has its input and no output yet. The shell call completed, but its
+  // command exited 1, so it failed.
+  expect(got.filter((x) => x.k === "out").map((x) => [x.id, x.err, x.out, x.lines, x.ms])).toEqual([["toolu_b1", true, "1 fail\nexpected 3", 2, 2000], ["call_w1", true, "fetch failed", 1, 10]]);
 });
 
 test("1.x: calls.sh gives the panel a result's first 24 KB, and the ATIF export (THREADS_WHOLE=1) the whole of it up to 4,194,304 characters, then a marker", () => {
