@@ -3,7 +3,7 @@
 // each call's outcome from calls.sh (opencode.sh calls): its output or error text, whether it
 // failed, and when it ended. A call still running keeps no content and extra.no_result.
 // Both versions: 1.x's part table and 2.x's session_message table, each built here by hand
-// with made-up words. The other agents' outcomes still come from their readers' result events.
+// with made-up words. The other agents' outcomes stay as their readers have them.
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
@@ -139,8 +139,8 @@ test("opencode: a result whose call has no end time still says whether it failed
 });
 
 // The other agents: each result's outcome and time in the command line's export are the
-// reader's, from its result events (Claude Code, Codex, Pi), or left out where the reader has
-// none (Antigravity), whatever calls.sh says. Cursor's export reads no calls.sh at all.
+// reader's, from its result events (Claude Code, Codex), or left out where the reader has none
+// (Pi and Antigravity), whatever calls.sh says. Cursor's export reads no calls.sh at all.
 test("the other agents' exported outcomes and result times are their readers', not calls.sh's", () => {
   const dir = mkdtempSync(join(tmpdir(), "threads-ocatif4-"));
   const claude = join(dir, "claude.jsonl");

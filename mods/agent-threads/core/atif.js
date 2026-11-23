@@ -355,7 +355,7 @@ async function main(argv) {
         if (x.k === "out") {
           r.out = x.out;
           // OpenCode's reader gives no result events, so its calls' outcome and end time are
-          // these. Every other agent's come from its reader's result events, as before.
+          // these. Every other agent's stay as its reader has them.
           if (agent === "opencode") {
             if (typeof x.err === "boolean") r.failed = x.err;
             if (typeof x.ts === "string") r.end = x.ts;
