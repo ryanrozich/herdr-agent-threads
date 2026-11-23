@@ -3034,7 +3034,8 @@ export function bubbleStyle(value, t, agent) {
 // included; the counts so far; the newest typed prompt's head and its text. A line whose
 // figure is not known yet is empty. Every figure is what the pane knows at that moment.
 export const OPEN_ROWS = 9;
-const OPEN_MB = 1024 * 1024;
+// Decimal megabytes, as a file listing shows them (fmtBytes too).
+const OPEN_MB = 1e6;
 const openN = (x) => x.toLocaleString();
 const openMany = (x, w) => `${openN(x)} ${w}${x === 1 ? "" : "s"}`;
 // The pane's own form for a time: the clock today, else the day and the clock.

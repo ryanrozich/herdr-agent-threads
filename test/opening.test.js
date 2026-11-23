@@ -2,9 +2,10 @@
 // pure. The pane's side is in render.test.js ("the opening: …").
 import { test, expect } from "bun:test";
 import { openLines, newestPrompt, fmtSpan, figRuns, openWhen, OPEN_ROWS } from "../mods/agent-threads/ui.js";
-import { fmtTokens } from "../mods/agent-threads/core/turns.js";
+import { fmtTokens, fmtBytes } from "../mods/agent-threads/core/turns.js";
 
-const MB = 1024 * 1024;
+// Decimal megabytes, as a file listing shows them.
+const MB = 1e6;
 const start = Date.UTC(2026, 10, 17, 8, 0);
 const base = { offset: 0, size: 518.2 * MB, pct: null, units: "bytes", turns: 0, loaded: false, agent: "Claude Code", model: null, start: null, active: null, working: false, prompts: null, tools: null, tokens: null, pins: 0, newest: null, now: start + 6 * 86400000 + 6 * 3600000 };
 
@@ -72,4 +73,19 @@ test("opening: figures are drawn a digit to a fixed cell (tabular), the rest as 
   expect(figRuns("1,912 turns so far")).toEqual([["1,912", true], [" turns so far", false]]);
   expect(figRuns("Reading this session")).toEqual([["Reading this session", false]]);
   expect(figRuns("")).toEqual([]);
+});
+
+test("opening: sizes are decimal MB, as a file listing shows them, in the loading state and in Reading session (size)", () => {
+  // A 499,185,946-byte file: 499.2 MB (it is 476.1 MiB), 29,100,000 bytes read of it.
+  const L = openLines({ ...base, size: 499185946, offset: 29100000, pct: 6 });
+  expect(L[1]).toBe("29.1 of 499.2 MB · 6%");
+  expect(openLines({ ...base, size: 499185946 })[1]).toBe("499.2 MB");
+  expect(fmtBytes(499185946)).toBe("499 MB");
+  expect(fmtBytes(180400000)).toBe("180 MB");
+  expect(fmtBytes(1000000)).toBe("1 MB");
+  expect(fmtBytes(999499)).toBe("999 KB");
+  // Never "1000 KB": what rounds to 1,000 KB is 1 MB.
+  expect(fmtBytes(999700)).toBe("1 MB");
+  expect(fmtBytes(1500)).toBe("2 KB");
+  expect(fmtBytes(200)).toBe("1 KB");
 });
