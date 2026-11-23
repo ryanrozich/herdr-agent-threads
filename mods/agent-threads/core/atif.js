@@ -373,12 +373,13 @@ async function main(argv) {
         results.set(x.id, r);
       }
     }
-    // An end counts when it is a time after 1970 and not before the call's start (when that is
-    // a time after 1970 too). Otherwise it is left out, and the outcome stays.
+    // An end counts when it is a time after 1970 and not before the call's start; a missing
+    // start, or one that is not a time, compares false. Otherwise the end is left out, and the
+    // outcome stays.
     for (const r of results.values()) {
       if (r.end === undefined) continue;
-      const end = Date.parse(r.end), start = Date.parse(r.start ?? "");
-      if (!(end > 0) || (start > 0 && end < start)) delete r.end;
+      const end = Date.parse(r.end);
+      if (!(end > 0) || end < Date.parse(r.start ?? "")) delete r.end;
     }
     return results;
   };
