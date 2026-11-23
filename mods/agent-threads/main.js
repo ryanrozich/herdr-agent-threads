@@ -9403,15 +9403,16 @@ export default class Threads extends View {
     if (harnessOfFile(s.file) === "opencode") return;
     listMtimes([s.file]).then((m) => { if (this.opening === o && this.current() === s && m.get(s.file)) { o.mtime = m.get(s.file); cx.notify(); } }).catch(() => {});
   }
-  // The last write and the newest prompt are one session's: another one on the list (a
-  // /clear, a restart while the first still loads) has neither until its own stat and peek,
-  // which its first chunk asks for (peek holds the session peeked, so it differs). Called
+  // The last write, the newest prompt and the summed figures are one session's: another one
+  // on the list (a /clear, a restart while the first still loads) has none of them until its
+  // own stat, peek and sums, which its first chunk asks for (peek holds the session peeked,
+  // so it differs). The figures' key has no session in it, so it is cleared here too. Called
   // before that chunk is read (read), and by the loading state while a read of the first
   // holds it.
   openSwitch(s) {
     const o = this.opening;
     if (!o || o.shows === s) return;
-    Object.assign(o, { shows: s, mtime: null, newest: null });
+    Object.assign(o, { shows: s, mtime: null, newest: null, v: null, stats: null });
   }
   // What the loading state shows now (ui.js openLines). The counts are summed again only when
   // the session changed, as the status line's are (statusStats, whose tokens these are).

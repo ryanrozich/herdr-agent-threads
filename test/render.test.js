@@ -20410,6 +20410,31 @@ test("the opening: a new session on the list while the first is read starts from
   go(() => false);
 });
 
+test("the opening: a new session on the list with the same version and turn count as the first sums its own figures, never keeps the first one's", async () => {
+  const { v, go } = await openingPane(busy(), (v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  go((v) => v.current()?.offset > 0 && v.current().turns.length > 3);
+  await until(() => v.current().offset > 0 && v.current().turns.length > 3, "the first chunks");
+  const first = v.current();
+  const stats = v.statusStats.bind(v);
+  v.statusStats = () => ({ ...stats(), tools: 7, tokens: 7000 });
+  const was = v.openInfo(first);
+  expect([was.tools, was.tokens]).toEqual([7, 7000]);
+  // A /clear part way: a new session whose version, turn count and read state match the
+  // first's, with its own model and figures.
+  const n = newSessionForTest("made-up-new", join(mkdtempSync(join(tmpdir(), "threads-open-")), "n.jsonl"));
+  n.turns = first.turns.map((t) => ({ ...t, model: "made-up-model-b" }));
+  n.version = first.version;
+  n.loaded = first.loaded;
+  n.offset = first.offset;
+  n.size = first.size;
+  v.sessions.push(n);
+  expect(v.current()).toBe(n);
+  v.statusStats = () => ({ ...stats(), tools: 3, tokens: 300 });
+  const now = v.openInfo(n);
+  expect([now.tools, now.tokens, now.model]).toEqual([3, 300, "made-up-model-b"]);
+  go(() => false);
+});
+
 test("the opening: a new session on the list while the first is read shows its own last write and newest prompt, never the first one's", async () => {
   const { openLines } = await import("../mods/agent-threads/ui.js");
   const { v, cx, go } = await openingPane(busy(), (v) => v.current()?.offset > 0);
