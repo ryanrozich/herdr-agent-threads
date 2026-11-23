@@ -58,7 +58,17 @@ export const ATIF_VERSION = "ATIF-v1.7";
 // Harbor's agent names (AgentName) for the readers' harness names.
 export const AGENT_NAMES = { claude: "claude-code", codex: "codex", opencode: "opencode", pi: "pi", cursor: "cursor-cli", antigravity: "antigravity-cli" };
 
-// A time as ISO 8601: from milliseconds (the reader's) or an ISO string (calls.sh's).
+// A time string's milliseconds, or NaN. Date.parse rolls a day its month lacks into the next
+// month (2026-02-30 reads as March 2), so a written date that does not exist is not a time.
+function timeOf(s) {
+  const d = /^(\d{4})-(\d\d)-(\d\d)/.exec(s);
+  // Day 0 of the next month is this month's last day.
+  if (d && Number(d[3]) > new Date(Date.UTC(Number(d[1]), Number(d[2]), 0)).getUTCDate()) return Number.NaN;
+  return Date.parse(s);
+}
+
+// A time as ISO 8601: from milliseconds (the reader's) or an ISO string (calls.sh's, which
+// the command line has checked with timeOf).
 const iso = (t) => {
   const ms = typeof t === "string" ? Date.parse(t) : t;
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
@@ -381,13 +391,13 @@ async function main(argv) {
         results.set(x.id, r);
       }
     }
-    // An end counts when it is a time after 1970 and not before the call's start; a missing
-    // start, or one that is not a time, compares false. Otherwise the end is left out, and the
+    // An end counts when it is a time after 1970, on a day that exists, and not before the
+    // call's start; a missing start, or one that is not a time, compares false. Otherwise the end is left out, and the
     // outcome stays.
     for (const r of results.values()) {
       if (r.end === undefined) continue;
-      const end = Date.parse(r.end);
-      if (!(end > 0) || end < Date.parse(r.start ?? "")) delete r.end;
+      const end = timeOf(r.end);
+      if (!(end > 0) || end < timeOf(r.start ?? "")) delete r.end;
     }
     return results;
   };

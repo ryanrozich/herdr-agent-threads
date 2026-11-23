@@ -170,6 +170,36 @@ test("antigravity: an end of 0, one that is not a time, none at all, or one befo
   }
 });
 
+test("antigravity: an end on a day that does not exist (Feb 30, Apr 31, Feb 29 of 2027) gives no result_ts, a real leap day does, and a start on such a day compares as no start", () => {
+  // Date.parse rolls a day the month lacks into the next month: 2026-02-30 would read as March 2.
+  const view = ["view_file", { AbsolutePath: "/home/dev/plinth/widgets.txt" }];
+  const file = transcript([
+    user("Count the widgets", "2026-02-01T15:07:00Z"),
+    plan("2026-02-01T15:07:01Z", [view, view, view, view, view]),
+    out(null, "ERROR", null, "2026-02-30T15:07:02Z", "widgets"),
+    out(null, "DONE", null, "2026-04-31T15:07:02Z", "widgets"),
+    out(null, "ERROR", null, "2027-02-29T15:07:02Z", "widgets"),
+    out(null, "DONE", null, "2028-02-29T15:07:02Z", "widgets"),
+    out(null, "DONE", null, "2026-02-28T15:07:02-06:00", "widgets"),
+    plan("2026-02-01T15:07:09Z", [], "Done."),
+    user("Count them again", "2026-03-01T15:07:00Z"),
+    // A start that does not exist: read, it would be March 2, after the call's real end.
+    plan("2026-02-30T15:07:01Z", [view]),
+    out(null, "DONE", null, "2026-03-01T15:07:02Z", "widgets"),
+    plan("2026-03-01T15:07:09Z", [], "Done."),
+  ]);
+  const got = resultsOf(exportOf(file));
+  const extras = Object.fromEntries(Object.entries(got).map(([id, { r }]) => [id, r.extra]));
+  expect(extras).toEqual({
+    "s1.0": { tool_result_is_error: true },
+    "s1.1": undefined,
+    "s1.2": { tool_result_is_error: true },
+    "s1.3": { result_ts: "2028-02-29T15:07:02.000Z" },
+    "s1.4": { result_ts: "2026-02-28T21:07:02.000Z" },
+    "s9.0": { result_ts: "2026-03-01T15:07:02.000Z" },
+  });
+});
+
 test("antigravity: with no planner time to compare it with, a result's own end still counts, but not an end of 0", () => {
   const file = transcript([
     user("Count the widgets", 0),
