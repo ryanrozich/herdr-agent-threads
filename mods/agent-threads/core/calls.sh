@@ -114,7 +114,9 @@ case $harness in
     ;;
   pi)
     # Pi: an assistant message's toolCall parts (id, name, arguments) and the toolResult
-    # message for each (toolCallId, isError, durationMs, text parts).
+    # message for each (toolCallId, isError, durationMs, text parts). isError is Pi's own
+    # outcome: true when a tool threw, and when the bash tool's command exited with a code
+    # other than 0. A result with no isError leaves err null: unknown, not false.
     if [ -n "$tail" ]; then tail -c 4194304 -- "$file"; else cat -- "$file"; fi |
       IDS=$ids perl -ne 'BEGIN { $re = join "|", map { quotemeta } split " ", $ENV{IDS}; $re = qr/$re/ } print if /$re/ && length($_) <= ($ENV{THREADS_LINE_MAX} || 9e18)' | lines | jq -c --arg ids "$ids" "$outcap"'
       def text: if type == "string" then . elif type == "array" then (map(select(type == "object" and .type == "text") | .text) | join("\n")) else "" end;
@@ -130,7 +132,7 @@ case $harness in
                  | if . == "\u0000unread" then {unread: true} elif type == "object" then {args: .} else {args: {value: .}} end))
         elif $m.role == "toolResult" and (($m.toolCallId // "") as $i | $want | index($i)) != null then
           ($m.content | text) as $o
-          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: ($m.isError == true), out: ($o | outcap), lines: ($o | split("\n") | length)}
+          | {id: $m.toolCallId, k: "out", ts: $l.timestamp, err: (if ($m.isError | type) == "boolean" then $m.isError else null end), out: ($o | outcap), lines: ($o | split("\n") | length)}
             + (if ($m.durationMs | type) == "number" then {ms: $m.durationMs} else {} end)
         else empty end'
     ;;

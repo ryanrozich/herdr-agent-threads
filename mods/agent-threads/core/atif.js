@@ -17,9 +17,10 @@
 // Where the reader has more than ATIF holds, it goes in extra:
 // - A step's end (end_ts), a call's input summary (tool_call.extra.input), a result's time
 //   (result_ts) and whether it failed, under Harbor's name tool_result_is_error (true or
-//   false when the reader knows, left out when it does not). OpenCode's reader gives no
-//   result events, so for OpenCode the command line takes both from calls.sh (a call's
-//   error state or a non-zero exit code, and its end time). The panel's reader keeps no
+//   false when the reader knows, left out when it does not). OpenCode's and Pi's readers give
+//   no result events, so for those two the command line takes both from calls.sh (OpenCode: a
+//   call's error state or a shell call's non-zero exit code; Pi: the result's isError; and
+//   the result's end time, when it is not before the call's start). The panel's reader keeps no
 //   arguments, so arguments is {} unless the caller read them (the command line does, from
 //   calls.sh); a call whose input was not JSON, or was not read, keeps {} and says so
 //   (extra.arguments_unread).
@@ -87,10 +88,11 @@ function turnMetrics(turn) {
 
 // One turn's steps, numbered from `next`. results: an optional Map from call id to what the
 // command line read from calls.sh: the result's text (out), the call's whole input (args), or
-// that its input is not JSON (unread); for OpenCode, whose reader gives no result events,
-// whether the call failed (failed) and when it ended (end); and for a subagent call its
-// trajectory (sub) or that its transcript was not found (subMissing). The reader's outcome
-// comes first: failed and end only fill in what it does not know.
+// that its input is not JSON (unread); for OpenCode and Pi, whose readers give no result
+// events, that the call has a result (ended), whether it failed (failed) and when it ended
+// (end); and for a subagent call its trajectory (sub) or that its transcript was not found
+// (subMissing). The reader's outcome comes first: ended, failed and end only fill in what it
+// does not know. A call with a result is never marked as having none, whatever is unknown.
 function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
   const steps = [];
   // Harbor marks every Claude step (claudeSteps): is_sidechain true, with agent_id, on a
@@ -154,7 +156,7 @@ function turnSteps(turn, tr, next, results, helperId, claudeSteps) {
           subagent_link: got?.sub && got.subLink ? got.subLink : undefined,
           result_ts: iso(c.result?.end ?? got?.end),
           tool_result_is_error: typeof c.result?.failed === "boolean" ? c.result.failed : typeof got?.failed === "boolean" ? got.failed : undefined,
-          no_result: c.result?.end == null && c.result?.failed == null && got?.end == null && got?.failed == null ? true : undefined,
+          no_result: c.result?.end == null && c.result?.failed == null && !got?.ended ? true : undefined,
           subagent: c.subagent ? clean(c.subagent) ?? undefined : undefined,
         }),
       }));
@@ -258,6 +260,9 @@ export function atif(s, { agent = "claude", version = "unknown", results = null,
 const SUB_DEPTH = 4;
 // Codex day folders searched for a thread's children: its own days and one either side.
 const CODEX_DAYS = 60;
+// The agents whose readers give no result events, so the export takes each call's outcome and
+// end time from calls.sh's out lines.
+const OUTCOME_FROM_CALLS = new Set(["opencode", "pi"]);
 
 async function main(argv) {
   // The model's reasoning is exported by default (Claude Code and Codex); --no-reasoning leaves
@@ -354,16 +359,26 @@ async function main(argv) {
         const r = results.get(x.id) ?? {};
         if (x.k === "out") {
           r.out = x.out;
-          // OpenCode's reader gives no result events, so its calls' outcome and end time are
-          // these. Every other agent's stay as its reader has them.
-          if (agent === "opencode") {
+          // OpenCode's and Pi's readers give no result events, so their calls' outcome and end
+          // time are these, and a call with an out line has a result. Every other agent's stay
+          // as its reader has them.
+          if (OUTCOME_FROM_CALLS.has(agent)) {
+            r.ended = true;
             if (typeof x.err === "boolean") r.failed = x.err;
             if (typeof x.ts === "string") r.end = x.ts;
           }
         }
+        else if (x.k === "in") { if (OUTCOME_FROM_CALLS.has(agent) && typeof x.ts === "string") r.start = x.ts; }
         else if (x.k === "args") { if (x.unread) r.unread = true; else r.args = x.args; if (Object.hasOwn(x, "raw")) r.raw = x.raw; }
         results.set(x.id, r);
       }
+    }
+    // An end counts when it is a time after 1970 and not before the call's start (when that is
+    // a time after 1970 too). Otherwise it is left out, and the outcome stays.
+    for (const r of results.values()) {
+      if (r.end === undefined) continue;
+      const end = Date.parse(r.end), start = Date.parse(r.start ?? "");
+      if (!(end > 0) || (start > 0 && end < start)) delete r.end;
     }
     return results;
   };
