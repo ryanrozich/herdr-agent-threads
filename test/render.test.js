@@ -9556,6 +9556,63 @@ test("level 3: an open group reads its calls from the transcript, in memory; a c
   draw(v, cx);
 });
 
+test("level 3: an OpenCode shell call that exits 1 is failed, in 1.x and 2.x; exit 0 and no exit code are not", async () => {
+  // OpenCode's shell tool ("bash" in 1.x, "shell" in 2.x) completes whatever its command exits
+  // with and keeps the exit code in state.metadata.exit. Synthetic databases, made-up words.
+  const { Database } = await import("bun:sqlite");
+  const { newSession, apply } = await import("../mods/agent-threads/core/turns.js");
+  const T0 = Date.UTC(2026, 10, 1, 9, 0, 0);
+  const ts = (s) => new Date(T0 + s * 1000).toISOString();
+  const SID = "ses_000001";
+  const calls = [["call_000001", { exit: 1 }, "No such file"], ["call_000002", { exit: 0 }, "gadget"], ["call_000003", {}, "stopped"]];
+  const build = (version, shell) => {
+    const dir = mkdtempSync(join(tmpdir(), "threads-calls-oc-"));
+    const path = join(dir, "opencode.db");
+    const db = new Database(path);
+    if (version === "1.x") {
+      db.run("create table session (id text primary key, parent_id text, directory text, title text, time_created integer, time_updated integer, time_archived integer)");
+      db.run("create table message (id text primary key, session_id text, time_created integer, data text)");
+      db.run("create table part (id text primary key, message_id text, session_id text, data text)");
+      db.run("insert into message values ('msg_000001', ?, ?, ?)", [SID, T0, JSON.stringify({ role: "user" })]);
+      db.run("insert into message values ('msg_000002', ?, ?, ?)", [SID, T0 + 1000, JSON.stringify({ role: "assistant", parentID: "msg_000001", finish: "stop", time: { created: T0 + 1000, completed: T0 + 9000 } })]);
+      calls.forEach(([id, metadata, output], i) => db.run("insert into part values (?, 'msg_000002', ?, ?)", [`prt_00000${i + 1}`, SID,
+        JSON.stringify({ type: "tool", tool: shell, callID: id, state: { status: "completed", input: { command: "cat gadget.txt" }, output, metadata, time: { start: T0 + (i + 1) * 1000, end: T0 + (i + 2) * 1000 } } })]));
+    } else {
+      db.run(`create table session_v2 (id text primary key, project_id text, parent_id text, directory text, title text,
+        time_created integer, time_updated integer, time_archived integer, time_busy integer, time_idle integer)`);
+      db.run("create table session_message (id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text)");
+      db.run("insert into session_message values ('msg_000001', ?, 'user', 1, ?, ?, ?)", [SID, T0, T0, JSON.stringify({ text: "Read the gadget" })]);
+      db.run("insert into session_message values ('msg_000002', ?, 'assistant', 2, ?, ?, ?)", [SID, T0 + 1000, T0 + 1000, JSON.stringify({ time: { created: T0 + 1000, completed: T0 + 9000 },
+        content: calls.map(([id, metadata, output], i) => ({ type: "tool", id, name: shell, state: { status: "completed", input: { command: "cat gadget.txt" }, content: [{ type: "text", text: output }], metadata }, time: { created: T0 + (i + 1) * 1000, completed: T0 + (i + 2) * 1000 } })) })]);
+    }
+    db.close();
+    return `${path}#${SID}`;
+  };
+  for (const [version, shell] of [["1.x", "bash"], ["2.x", "shell"]]) {
+    const file = build(version, shell);
+    const { v, cx } = await pane(fixture("--only", "1"));
+    const s = newSession(SID, file);
+    for (const e of [{ k: "p", o: "human", t: "Read the gadget", ts: ts(0) }, ...calls.map(([id]) => ({ k: "u", n: shell, id })),
+      { k: "t", t: "No gadget." }, { k: "d", ms: 9000, ts: ts(9) }]) apply(s, e);
+    s.loaded = true;
+    v.sessions = [s];
+    cx.pending = [];
+    const a = "0:1";
+    const settled = async () => { for (let i = 0; i < 6; i++) { draw(v, cx); cx.flush(0); await settleCx(cx); } };
+    v.sel = a;
+    v.action("deeper", cx);
+    await settled();
+    v.action("deeper", cx);
+    await settled();
+    const detail = (k) => v.rowDetail(v.rows().find((r) => r.key === k));
+    expect([version, detail(`cl:${a}:0:0`)]).toEqual([version, "call#1 cat gadget.txt · 1s [failed] [closed]"]);
+    expect([version, detail(`cl:${a}:0:1`)]).toEqual([version, "call#1 cat gadget.txt · 1s [closed]"]);
+    expect([version, detail(`cl:${a}:0:2`)]).toEqual([version, "call#1 cat gadget.txt · 1s [closed]"]);
+    expect([version, detail(`gp:${a}:0`)]).toEqual([version, "grp#1 Ran 3 commands · 1 failed [failed] [open]"]);
+    draw(v, cx);
+  }
+});
+
 test("level 3: a group claims no check or red mark until its calls are read; once read it keeps the check, or the red mark and how many failed", async () => {
   // Two groups: one with a failed command, one where every call worked.
   const dir = mkdtempSync(join(tmpdir(), "threads-calls-"));
