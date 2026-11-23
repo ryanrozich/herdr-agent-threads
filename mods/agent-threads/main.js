@@ -86,7 +86,7 @@ import { PIN_LIMIT, turnIds, parsePins, pinsText, mergeDirty, seenOf, newPin, pi
 import { DEFAULTS, RANGES, LOOK, parseSettings, parseExtras, parseQuoteKey, parseLinks, parseSenders, checkSender, ruleFault, templateHost, MAX_RULES, LINK_TEMPLATES, LINK_TYPES, DESCRIPTION_MAX, defaultLinks, settingsText, settingsDir, settingsPath, saveSettings, pinsPath, savePinsText, writable, NOT_SAVED, adoptPrevious, behindLook } from "./settings.js";
 import { MOD } from "./name.js";
 import {
-  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes,
+  LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerCols, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
   trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
   BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT,
 } from "./ledger.js";
@@ -7284,6 +7284,9 @@ export default class Threads extends View {
   // text, at most a reading line, with the side gutters left and right of it, centred. Before
   // the pane has measured itself (and in tests that set width) both are this.width.
   pw() { return this.paneW ?? this.width; }
+  // The pane's px as Herdr's layout gives it (the frame in), which the compact Trajectory goes
+  // by: rounded as everywhere else, so a 200 px pane at zoom 1.25 (199.99) is 200.
+  trajPx() { return Math.round(this.pw()) + PANE_FRAME; }
   fitColumn() {
     if (this.forcedWidth || this.paneW == null) return;
     const step = this.paneStep();
@@ -11536,7 +11539,11 @@ export default class Threads extends View {
         if (Math.abs(h - this.rootH) > 1) { this.rootH = h; cx.notify(); }
         const pw = size.width / this.zoom();
         this.measuredWidth = size.width;
-        if (!this.forcedWidth && Math.abs(pw - (this.paneW ?? -9)) > 1) { this.paneW = pw; this.shareWidth(); cx.notify(); }
+        // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact), or
+        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way.
+        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}`;
+        const cross = this.paneW != null && form(pw) !== form(this.paneW);
+        if (!this.forcedWidth && (cross || Math.abs(pw - (this.paneW ?? -9)) > 1)) { this.paneW = pw; this.shareWidth(); cx.notify(); }
       })
       .size_full().min_h(0).relative()
       .bg(t.background).text_color(t.foreground).text_size(13)
@@ -11558,6 +11565,25 @@ export default class Threads extends View {
   trajHeading(t, L, shown, i) {
     const fails = this.failCount(L, shown, i);
     const arrow = (id, icon, tip, name) => this.iconButton(t, id, icon, tip, (_e, cx) => { this.ledgerAction(name, cx); cx.notify(); });
+    // Below 200 px, the icon alone (ledger.js trajCompact), with a red dot at its corner when
+    // calls failed, and the count in its tooltip; f and Shift f still go through them.
+    // In the Chat's own pane (y in a Chat under 480 px) its way back stays: the settings and the
+    // Chat buttons as icons after it, the list icon given up for them when the three do not fit
+    // (HEAD_ICON_MIN inside the frame).
+    const form = trajCompact(this.trajPx());
+    if (form) {
+      const inChat = this.traj && !this.trajPane;
+      const icon = () => div().id("th-traj-icon").flex_none().relative().tooltip(fails ? `Trajectory · ${fails}` : "Trajectory")
+        .child(svg(ICON("list")).size(14).text_color(t.muted))
+        .when(Boolean(fails), (el) => el.child(div().id("th-traj-icon-fails").absolute().top(-2).right(-3).size(6).rounded(3).bg(t.blocked)));
+      const head = h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(COMPACT_PAD).gap(2).items_center().border_b(1).border_color(t.border);
+      if (!inChat) return head.justify_center().child(icon());
+      return head
+        .when(form === "line" && this.pw() >= HEAD_ICON_MIN, (el) => el.child(icon()).child(div().flex_1()))
+        .when(form !== "line" || this.pw() < HEAD_ICON_MIN, (el) => el.justify_center())
+        .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
+        .child(this.iconButton(t, "th-traj-chat", "messages", "Back to the Chat (y)", (_e, cx) => { this.leaveTraj(); cx.notify(); }));
+    }
     return h_flex().id("th-traj-heading").flex_none().h(LEDGER_HEAD).px(10).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg(ICON("list")).size(14).flex_none().text_color(t.muted))
       .child(div().flex_none().text_size(13.5).font_semibold().text_color(t.foreground).child("Trajectory"))
@@ -11637,6 +11663,8 @@ export default class Threads extends View {
       return h_flex().id(r.key).h(LEDGER_ROW).px(10).items_center().text_size(11.5).text_color(t.dim)
         .child(div().truncate().child(`New session${r.ts ? ` · ${fmtTime(r.ts)}` : ""}`));
     }
+    const c = compactRow(r, this.trajPx(), this.pw());
+    if (c && r.kind !== "sess") return this.ledgerCompact(t, r, on, inks, c);
     if (r.kind === "trh") return this.ledgerHead(t, r, on, inks);
     const k = LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
     const ink = inks[k.ink] ?? t.dim;
@@ -11658,6 +11686,30 @@ export default class Threads extends View {
         .text_color(r.failed ? t.foreground : r.lk === "running" ? t.working : t.dim).child(r.status)))
       .child(div().flex_none().w(52).font_family(mono).text_size(11.5).text_color(t.muted).text_right().child(dur))
       .when(cols.bar, (el) => el.child(this.ledgerBar(r, ink, inks)));
+  }
+
+  // Below 200 px (ledger.js compactRow), a row on one LEDGER_ROW line: a step's mark, its turn's
+  // number and its duration; a heading's number and total on its band, over its thin line;
+  // below 64 px, the mark alone. The label and the time are in the tooltip.
+  ledgerCompact(t, r, on, inks, c) {
+    const mono = this.mono();
+    const head = r.kind === "trh";
+    const k = head ? null : LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
+    const row = h_flex().h(head ? LEDGER_ROW - LINE_H : LEDGER_ROW).px(COMPACT_PAD).gap(COMPACT_PAD).items_center()
+      .when(c.mode === "icon", (el) => el.justify_center())
+      .when(Boolean(k), (el) => el.child(this.ledgerMark(t, k, inks[k.ink] ?? t.dim)))
+      .when(c.num != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5).text_color(head ? t.muted : t.dim).child(c.num)))
+      .when(c.mode === "line", (el) => el.child(div().flex_1()))
+      .when(c.dur != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5)
+        .text_color(r.failed ? t.blocked : head && r.going ? t.working : t.muted).text_right().child(c.dur)));
+    const box = div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer().tooltip(c.tip || " ")
+      .when(on || head, (el) => el.bg(on ? t.raised : alpha(t.foreground, 0.035))).hover((s) => s.bg(t.hover))
+      .child(row);
+    if (!head || !r.line) return box;
+    const seg = (key, list, col) => coarse(list ?? [], 12).map(([a, b], j) => div().id(`${r.key}-${key}-${j}`).absolute().top(0)
+      .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H).bg(col));
+    return box.child(div().id(`${r.key}-line`).absolute().left(COMPACT_PAD).right(COMPACT_PAD).bottom(0).h(LINE_H)
+      .children([...seg("tools", r.line.tools, inks.tools), ...seg("model", r.line.model, inks.model), ...seg("red", r.line.red, inks.failed)]));
   }
 
   // The kind's mark: an icon on a square tinted with its ink, or a drawn dot, ring or square.
