@@ -246,7 +246,7 @@ export function sessionHasEnds(s) {
   return false;
 }
 
-// A step's flags in a heading's tl (ledgerTurn).
+// A step's flags on the timeline (timeline.js itemBox), worked out from its row there.
 export const TL_TRACK = 1;
 export const TL_OPEN = 2;
 export const TL_FAILED = 4;
@@ -409,17 +409,8 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   const line = timed && span > 0
     ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span), open: stretches(open, t0, span), openSub: stretches(opens, t0, span) }
     : null;
-  // The turn's own counts, for the filter buttons and the status line, and its steps on the
-  // timeline (timeline.js): tl, one plain number array of three a step, in the rows' order:
-  // the start and end (ms from the turn's start, NaN for none: an instant has no end) and the
-  // flags (TL_TRACK: in the Tools lane it started while another call ran, drawn half height;
-  // TL_OPEN: a call with no result yet; TL_FAILED). Its key, kind, lane and ink are those of the
-  // row at the same index in stepRows (the turn's step rows, the array they are built in;
-  // timeline.js tlStep), so a long session keeps no object per step.
+  // The turn's own counts, for the filter buttons and the status line.
   const cnt = { steps: 0, input: 0, model: 0, tools: 0, failed: 0, user: 0, agent: 0 };
-  // Pushed in order, so it stays a dense array of numbers.
-  const tl = [];
-  let end0 = -Infinity;
   for (const r of rows) {
     const k = LEDGER_KINDS[r.lk];
     cnt.steps++;
@@ -427,16 +418,12 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     if (r.failed) cnt.failed++;
     if (r.lk === "you") cnt.user++;
     if (r.lk === "agent") cnt.agent++;
-    const a = r.start;
-    const openBar = Boolean(r.open);
-    const b = a != null && r.dur != null ? a + r.dur : null;
-    let track = 0;
-    if (k?.lane === "tools" && a != null) {
-      track = a < end0 ? 1 : 0;
-      if (track === 0) end0 = openBar ? Infinity : b ?? a;
-    }
-    tl.push(a ?? Number.NaN, b ?? Number.NaN, (track ? TL_TRACK : 0) | (openBar ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0));
   }
+  // The rows returned, heading first. The heading holds this same array (rows), so the
+  // timeline reads a turn's steps from its rows (timeline.js tlRow) and the turn keeps no
+  // second array of them and no number per step: a step's times and flags are its row's, its
+  // track worked out by the timeline for a turn it draws (timeline.js tlTracks).
+  const all = [null, ...rows];
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
@@ -444,11 +431,12 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
-    t0, span, cnt, stepRows: rows, tl,
+    t0, span, cnt, rows: all,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
   };
-  return { rows: [head, ...rows], fails, calls };
+  all[0] = head;
+  return { rows: all, fails, calls };
 }
 
 // The heading's numbers at the right: "10 calls · 1 failed · 48.2k tok · 9m 44s". When
