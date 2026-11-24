@@ -723,3 +723,23 @@ test("the opening: a jump during the drain onto costly rows keeps each draw's re
   const r = lastList.range;
   expect([v.sel, lastList.keys.slice(r.start, r.end).includes(aim), frames.slice(6).filter((f) => f.blank > 0).length]).toEqual([aim, true, 0]);
 }, 60000);
+
+// The draw's work before the walk takes 30, 34, 36 or 40 ms (a slow fit, or waited rows run
+// before the frame), with rows of 8 ms and the view scrolled up into rows still to reshape.
+// Before, past 35 ms the line let no reshape of the drain start: at 36 and 40 ms the rows on
+// screen stayed empty bubbles in every frame and the drain stopped. The draw's first reshape
+// goes past the line (up to HOST_MS), so every frame reshapes one row, the top row on screen
+// first, and the rows on screen fill by the third frame after the wheel, as at 30 and 34 ms.
+test("the opening: a draw that reaches its walk late still reshapes a row on screen in each frame, and the drain goes on", async () => {
+  // Per start: frames without exactly one reshape, frames from the third with a blank row on
+  // screen, and whether rows are still left after the 30.
+  const got = [];
+  for (const base of [30, 34, 36, 40]) {
+    const { v, frames } = await costlyWheel(8, base, 30);
+    got.push([base, frames.filter((f) => f.starts.length !== 1).length, frames.slice(2).filter((f) => f.blank > 0).length, v.staleRows.length > 400]);
+  }
+  expect(got).toEqual([30, 34, 36, 40].map((b) => [b, 0, 0, true]));
+  // Past Herdr's stop (HOST_MS) not even the first starts: the draw is stopped there anyway.
+  const { frames } = await costlyWheel(8, 52, 6);
+  expect(frames.flatMap((f) => f.starts)).toEqual([]);
+}, 120000);

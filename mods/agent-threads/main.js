@@ -177,10 +177,14 @@ const CUT_WATCH_MS = 250;
 // left of it, each down to its floor, so a machine where the rest of a draw is slow does
 // less of both per frame and stays clear of Herdr's 50 ms stop.
 const FRAME_AIM_MS = 30;
-// Past this long since a render began no reshape starts in it (pastLine), not even for a row
-// on screen: a draw that started late, with time left of its shaping budget, ran into Herdr's
-// 50 ms stop with one more pasted prompt (9 ms at 45 KB, 40 ms at 200 KB).
+// Past this long since a render began no reshape of the drain starts in it (pastLine), not
+// even for a row on screen: a draw that started late, with time left of its shaping budget,
+// ran into Herdr's 50 ms stop with one more pasted prompt (9 ms at 45 KB, 40 ms at 200 KB).
+// The draw's first reshape of the drain is let past it, up to HOST_MS: a frame whose work
+// before the walk passed the line otherwise left every row on screen as it was, every frame.
 const NEAR_CUT_MS = 35;
+// Herdr stops a draw at about 50 ms.
+const HOST_MS = 50;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
 const SCROLL_WAIT_MS = 2000;
@@ -2936,6 +2940,7 @@ export default class Threads extends View {
   // are. False when one changes what the row is made of (pasted images), for a full rebuild.
   reshapeStale(status) {
     this.lineOn = true;
+    this.lineFirst = true;
     try { return this.reshapeLeft(status); } finally { this.lineOn = false; }
   }
   reshapeLeft(status) {
@@ -4733,6 +4738,7 @@ export default class Threads extends View {
     // (pastLine): the shape it had (a row never shaped yet, as when agent messages are turned
     // on, a blank one-line row), and the next frame reshapes it.
     if ((this.shapeSpent ?? 0) > this.shapeMax() || this.pastLine()) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    if (this.lineOn) this.lineFirst = false;
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
     turn.shapeKey = key;
@@ -4821,8 +4827,13 @@ export default class Threads extends View {
     }
   }
   // The render that is drawing began more than NEAR_CUT_MS ago: no reshape of the drain
-  // (reshapeStale, lineOn) starts. A rows build has its own time (buildMax).
-  pastLine() { return Boolean(this.lineOn && this.renderOpen) && now() - (this.renderAt ?? 0) > NEAR_CUT_MS; }
+  // (reshapeStale, lineOn) starts, but its first (lineFirst, the top row on screen first, from
+  // shapeInView), which starts up to HOST_MS. A rows build has its own time (buildMax).
+  pastLine() {
+    if (!this.lineOn || !this.renderOpen) return false;
+    const t = now() - (this.renderAt ?? 0);
+    return t > (this.lineFirst ? HOST_MS : NEAR_CUT_MS);
+  }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
     // Long messages shortened (truncate) or, by default, shown whole. A search still shows the
