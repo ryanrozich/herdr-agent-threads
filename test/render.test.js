@@ -6732,16 +6732,20 @@ async function cardDone(v, key) {
 // timers the stopped render asked for still run (7 of 7 on the rig, on main and on a branch of
 // this work). stopAfter: the first renders that many are stopped after rows() as well, as by a
 // long draw of the list. scale: every price but the stop that many times over. onFrame(ms):
-// after each frame, with the time since the start.
-function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onFrame = null } = {}) {
+// after each frame, with the time since the start. stopAt(where, what): true stops the draw
+// there, before the work: "expanded" (an open turn's build, its item), "split" (a read of a
+// reply's split, its job), "link" (a part's links, its text) or "height" (a row sized, the row).
+function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onFrame = null, stopAt = null } = {}) {
   const P = P121;
   const real = performance.now, timer = cx.timer, notify = cx.notify;
   const STOP = new Error("stopped at the draw's time");
   let t = 1e7, at = null, stopped = false, linked = 0, splits = 0, readMost = 0;
   const t0 = t;
   const spend = (ms) => { t += ms * scale; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
-  const lo = v.linkOne, wr = v.wrapped;
-  v.linkOne = function (md) { if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
+  const hook = (where, what) => { if (at != null && stopAt?.(where, what)) { stopped = true; throw STOP; } };
+  const lo = v.linkOne, wr = v.wrapped, ex = v.expanded;
+  v.expanded = function (item, out) { hook("expanded", item); return ex.call(this, item, out); };
+  v.linkOne = function (md) { hook("link", md); if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
   // A read of the split is priced by the work it did, what it scanned and what it made; one
   // Herdr stopped is lost, as its state is written back only at its end (mdSplitOn).
@@ -6749,6 +6753,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
   // Where a read has got to in the text: a line being measured counts as far as it is.
   const pos = (job) => Math.min(job.at, job.text.length + 1) - (job.line != null ? job.line.length + 1 - job.lineScan : 0);
   v.splitSome = function (job) {
+    hook("split", job);
     const was = { ...job, cur: job.cur.slice(), chunk: job.chunk.slice() };
     const n0 = job.n, p0 = pos(job), w0 = job.work;
     if (!job.at) splits++;
@@ -6758,7 +6763,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     readMost = Math.max(readMost, units * P.unit * scale);
     try { spend(units * P.unit); } catch (e) { Object.assign(job, was); throw e; }
   };
-  v.height = function (r) { spend(P.row); return hi.call(this, r); };
+  v.height = function (r) { hook("height", r); spend(P.row); return hi.call(this, r); };
   performance.now = () => { if (stopped) throw STOP; return t; };
   let timers = cx.timers.map((x) => ({ due: t + x.ms, fn: x.fn }));
   let armed = [];
@@ -6802,7 +6807,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     cx.timer = timer;
     cx.notify = notify;
     cx.timers = timers.map((x) => ({ ms: Math.max(0, x.due - t), fn: x.fn }));
-    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height;
+    delete v.linkOne; delete v.wrapped; delete v.splitSome; delete v.height; delete v.expanded;
   }
   const ok = frames.filter((x) => x.ok);
   return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, settledMs, linked, splits, readMost: Math.round(readMost * 100) / 100, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
@@ -6875,6 +6880,99 @@ test("replies of long lines, long paragraphs or no blank line draw in time at th
   }
   expect(got).toEqual(got.map(([name, scale]) => [name, scale, 0, 1, true, true, true]));
 }, 120000);
+
+// Parts held through the light window after a stopped draw go on in the draw after it: a
+// timer asks for the open turns to be built again (againOpen), for the work left in them
+// (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
+// the window that has the request), and keeps the timers. The request must still stand, so
+// every part links with no command.
+async function heldThenStopped(texts, stopAt) {
+  const { v, cx, keys } = await openLong(texts);
+  // No size comes back to the probe here, as Herdr's would, so it would ask for a draw every
+  // 16 ms for good: it asks for none.
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  let hit = 0;
+  const at = (where, what) => {
+    if (hit || v.light || v.rowsKey !== "again" || !stopAt(where, what, keys)) return false;
+    hit++;
+    return true;
+  };
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { stopAfter: 1, stopAt: at });
+  const linkedParts = keys.map((k) => v.baseRows.filter((x) => x.key.startsWith(`md:${k}:`) && x.links > 0).length);
+  // Settled, no work is left in open turns: a count kept past its rebuild would have every
+  // later timer build them again.
+  expect([v.otherLeft ?? 0, v.againOpen ?? false]).toEqual([0, false]);
+  return { r, hit, linkedParts };
+}
+
+test("held parts link after a draw stopped as it builds the open turn again", async () => {
+  const { r, hit, linkedParts } = await heldThenStopped(shortParas(1900), (where, item, keys) => where === "expanded" && item.key === keys[0]);
+  costLog("35 parts, stopped in its build", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [35]]);
+}, 60000);
+
+test("held parts link after a draw stopped inside a capped reply's split", async () => {
+  const { r, hit, linkedParts } = await heldThenStopped(shortParas(4000), (where) => where === "split");
+  costLog("58 parts, stopped in its split", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [58]]);
+}, 60000);
+
+test("held parts link after a draw stopped inside one open card's split while another card's is kept", async () => {
+  // The newest turn is built first: a short reply whose split is kept, then the capped one.
+  let splits = 0;
+  const { r, hit, linkedParts } = await heldThenStopped([shortParas(4000), shortParas(150)], (where) => where === "split" && ++splits === 1);
+  costLog("58 and 3 parts, stopped in the first's split", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [58, 3]]);
+}, 60000);
+
+test("held parts link after a draw stopped as it links a part", async () => {
+  const { r, hit, linkedParts } = await heldThenStopped(shortParas(980), (where) => where === "link");
+  costLog("18 parts, stopped in its links", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [18]]);
+}, 60000);
+
+test("held parts link after a draw stopped in another open turn's build", async () => {
+  // The newest turn, a short reply with nothing left, is built first, and its build is stopped.
+  const { r, hit, linkedParts } = await heldThenStopped([shortParas(1900), shortParas(150)], (where, item, keys) => where === "expanded" && item.key === keys[1]);
+  costLog("35 and 3 parts, stopped in the other's build", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts]).toEqual([1, 2, true, [35, 3]]);
+}, 60000);
+
+// A frame's timer finds no work left in open turns and asks for closed rows to be reshaped
+// (reshapeDue). Before the next render a card opens and its rows are built, with parts held.
+// The reshape of closed rows leaves the open card's work left to its own builds.
+test("an open card's held parts are not dropped by a reshape of closed rows asked for before it opened", async () => {
+  const { v, cx, key } = await openLong(shortParas(1900), true);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  // Closed rows left to reshape, none in open turns: the frame asks for the next.
+  v.shapeLeft = 1;
+  v.otherLeft = 0;
+  v.render(cx);
+  const tm = cx.timers.find((x) => x.ms === 0);
+  expect(tm).toBeTruthy();
+  cx.timers = cx.timers.filter((x) => x !== tm);
+  tm.fn(cx);
+  expect([v.reshapeDue, v.againOpen ?? false]).toEqual([true, false]);
+  // The card opens, and an action builds its rows with no time to make any part.
+  v.toggle(key, cx);
+  v.shapeBudget = -1;
+  v.rows();
+  v.shapeBudget = null;
+  expect(v.otherLeft).toBeGreaterThan(0);
+  const r = costedFrames(v, cx, 400, await cardDone(v, key));
+  costLog("35 parts, opened after a reshape was asked for", r);
+  expect([r.stops, r.settled > 0]).toEqual([0, true]);
+  expect(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`) && x.links > 0).length).toBe(35);
+}, 60000);
+
+// The outside read's run: two 100 KB lines, the open's first draw stopped, and the draw after
+// the light window stopped in a read of the split as it builds the card again. The pane must
+// not go quiet with the card on its placeholder.
+test("held parts of a reply of two long lines link after a draw stopped in its split as it builds the card again", async () => {
+  const { r, hit, linkedParts } = await heldThenStopped(longLines(), (where) => where === "split");
+  costLog("two 100 KB lines, stopped in its split", r);
+  expect([hit, r.stops, r.settled > 0, linkedParts.map((n) => n > 0)]).toEqual([1, 2, true, [true]]);
+}, 60000);
 
 test("two capped replies open: no frame passes Herdr's time while both settle, and each is split once", async () => {
   const { v, cx, keys } = await openLong([0, 1].map((j) => shortParas(4000).replaceAll("Paragraph", `Card ${j}, paragraph`)), true);
