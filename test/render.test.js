@@ -21017,3 +21017,26 @@ test("past the cap, the later note at the list's end has the Jump to latest pill
   expect(last.key).toBe("pins:none");
   expect(v.sizesMemo.at(-1)).toBe(v.height(last));
 });
+
+test("past the cap, opening a card inside the items the cut keeps scrolls as under the cap: its last part, then its head, nothing at once", async () => {
+  const { v, cx } = await capSession(80, { max: 60 }, 40, 170);
+  v.open.add("0:41");
+  v.command("search:#41", cx);
+  frames(v, cx, 6);
+  const ends = () => [v.rows()[0].key, v.rows().at(-1).key];
+  const before = ends();
+  expect(before[1]).toBe("capped-later");
+  const asked = [];
+  v.scroll = { scroll_to_item(i, how) { asked.push([v.rowsMemo?.[i]?.key, how]); }, scroll_to_bottom() { asked.push(["end"]); } };
+  v.probeDue = () => [];
+  v.toggle("0:38", cx);
+  settleRows(v, cx);
+  cx.flush();
+  // The cut did not move: the card's rows are inside the items it keeps.
+  expect(ends()).toEqual(before);
+  const rows = v.rows();
+  let last = rows.findIndex((r) => r.key === "0:38");
+  while (!["turn", "head", "day"].includes(rows[last + 1].kind)) last++;
+  expect(rows[last].kind).toBe("copy");
+  expect(asked).toEqual([[rows[last].key, "top"], ["0:38", "top"]]);
+});
