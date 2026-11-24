@@ -5,7 +5,7 @@ import { test, expect } from "bun:test";
 import { segments } from "../mods/agent-threads/core/turns.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { dropTimers, fixture, pane, root, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, fixture, pane, root, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -779,4 +779,20 @@ test("while an open capped reply's parts come in, the parts shown keep their pla
     cx.flush(16);
     expect([v.toBottom, ends.length > 1, ends.at(-1)]).toEqual([false, true, false]);
   }
+}, 60000);
+
+// An open reply's parts are kept on its turn's record with their rows, so drawing them puts
+// nothing in the Markdown memo the closed rows share (mdMemo, the MD_MEMO texts used last). A
+// capped card's 58 parts, drawn into a full memo, pushed out 58 of the closed rows' texts.
+test("drawing an open capped reply's parts leaves the closed rows' Markdown memo as it was", async () => {
+  const { v, cx, key } = await openLong(shortParas(4000), true);
+  draw(v, cx);
+  for (let i = 0; (v.mdMemo?.size ?? 0) < 400; i++) v.mdParts(`Closed row ${i}`);
+  const before = [...v.mdMemo.keys()];
+  v.toggle(key, cx);
+  costedFrames(v, cx, 400, await cardDone(v, key));
+  draw(v, cx);
+  const parts = v.baseRows.filter((x) => x.kind === "md" && x.key.startsWith(`md:${key}:`)).map((x) => x.md);
+  const after = new Set(v.mdMemo.keys());
+  expect([parts.length, parts.filter((p) => after.has(p)).length, before.filter((k) => !after.has(k)).length]).toEqual([58, 0, 0]);
 }, 60000);
