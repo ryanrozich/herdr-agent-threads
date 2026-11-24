@@ -1162,6 +1162,30 @@ test("a wheel after a jump is taken, before the landing's own asks 16 and 48 ms 
   expect(Math.max(...lifts)).toBeGreaterThan(0);
 });
 
+// The held jumps above leave the landing's first ask out; a jump that did not wait has it.
+test("under a cut that does not move, a wheel after a rail jump is taken, before its landing's first ask 16 ms on, ends its asks: the view stays where the wheel put it", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  const ends = [v.rows()[0].key, v.rows().at(-1).key];
+  v.probeDue = () => [];
+  v.railJump("0:35", cx);
+  const asked = scrollsOf(v);
+  let held = false;
+  for (let k = 0; k < 4 && v.scrollTo; k++) { held ||= Boolean(v.scrollTo.held); draw(v, cx); }
+  expect([v.scrollTo, held, [v.rows()[0].key, v.rows().at(-1).key]]).toEqual([null, false, ends]);
+  sim.wheel(-300);
+  const at = Math.round(sim.off);
+  // Past the 48 ms ask, before a lift's 120 ms end.
+  cx.flush(60, 3);
+  expect([asked, v.landLift ?? 0]).toEqual([[], 0]);
+  cx.flush(120, 3);
+  dropTimers(v, cx);
+  delete v.probeDue;
+  expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+  H.listWindow = null;
+});
+
 test("latest while a jump waits for the rows to reshape shows the end in the next frame, and holds it", async () => {
   const { v, cx, sim } = await cutScene();
   slowRows(v, cx);
@@ -1327,6 +1351,49 @@ test("past the cap, a jump that waits to a turn with pasted images holds the sam
   settleList(v, cx, sim);
   expect(shownIn(v, sim.last())).toContain("imgs:0:65");
   expect(waiting).toEqual(Array(3).fill(Math.round(sim.last().off)));
+  H.listWindow = null;
+});
+
+// A held jump holds the item it lands on at the top (landTop): the item over the turn's row
+// comes along, so it is on screen in the held frames as in the landed one.
+test("past the cap, a jump that waits to an agent turn folded to its one line keeps that line on screen in every frame: a rail click and a pin's return", async () => {
+  const got = {};
+  for (const [name, go] of [
+    ["rail", (v, cx) => v.railJump("0:65", cx)],
+    ["pin", (v, cx) => { v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }]; v.goPin(0, cx); }],
+  ]) {
+    const { v, cx, sim } = await cutScene();
+    // A task's notice with no prompt of its own: its one line (afold) is over its row.
+    Object.assign(v.findTurn("0:65"), { sender: { kind: "task-notification", name: "Background task" }, prompt: "", shapeKey: null });
+    v.rowsKey = null;
+    settleList(v, cx, sim);
+    expect(v.allRows().find((r) => r.key === "af:0:65")?.turnKey).toBe("0:65");
+    go(v, cx);
+    const from = sim.frames.length;
+    settleList(v, cx, sim);
+    const ys = sim.frames.slice(from).map((f) => headY(f, "af:0:65"));
+    got[name] = ys.length > 1 && ys.every((y) => y != null && y >= 0 && y < v.listH) ? "on screen" : ys;
+    H.listWindow = null;
+  }
+  expect(got).toEqual({ rail: "on screen", pin: "on screen" });
+});
+
+test("past the cap, a pin's return to a turn the search hides keeps the note over its head on screen in every frame, held and landed", async () => {
+  const { v, cx, sim } = await cutScene();
+  // Every turn matches the search but #65; the open #41 keeps the list past the cap.
+  Object.assign(v.findTurn("0:65"), { prompt: "Prompt 64: left out.", shapeKey: null });
+  v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }];
+  v.action("search:check order", cx);
+  v.toList();
+  settleList(v, cx, sim);
+  expect([v.rows().some((r) => r.key === "0:65"), v.rows().at(-1).key]).toEqual([false, "capped-later"]);
+  v.goPin(0, cx);
+  const from = sim.frames.length;
+  settleList(v, cx, sim);
+  expect(v.pinVisit).toBe("0:65");
+  const ys = sim.frames.slice(from).map((f) => [headY(f, "visit:0:65"), headY(f, "0:65")]);
+  expect(ys.length).toBeGreaterThan(1);
+  expect(ys.filter(([note, head]) => !(note >= 0 && head > note && head < v.listH))).toEqual([]);
   H.listWindow = null;
 });
 
