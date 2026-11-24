@@ -66,6 +66,40 @@ test("up onto Show earlier and down onto Show later scroll to it, in a window ca
 });
 
 
+// A filter set, changed or cleared builds other rows, and the window was placed on them from
+// its old edges, or from the oldest rows when the filtered list had none: clearing a filter of
+// few matches left the selected turn outside the window, and with none selected (only a filter
+// with no match leaves none) the rows that were on screen before the filter. The window is
+// placed around the selected turn, or around what was on screen before the filter. Session of 300 short turns, the small window: "order 1" matches 111 prompts, more than the
+// window holds, "order 19" 11, and "zzz" none.
+test("a filter set, changed or cleared places the window around the selected turn, or around what was on screen when none is selected", async () => {
+  const got = [];
+  for (const none of [false, true]) {
+    const { v, cx } = await capSession(300, SMALL);
+    const sim = simList(v);
+    try {
+      openAt(v, cx, sim, 562);
+      v.action("first", cx);
+      settleList(v, cx, sim);
+      v.command(`search:#${none ? 150 : 13}`, cx);
+      v.command("escape", cx);
+      settleList(v, cx, sim);
+      if (none) v.sel = null;
+      const key = none ? "0:150" : null;
+      const look = (step) => got.push([step, v.sel, v.win.has(v.winList(), key ?? v.sel)]);
+      const steps = none ? [["set", "zzz"], ["cleared", ""]] : [["set", "order 1"], ["changed", "order 19"], ["cleared", ""]];
+      for (const [step, q] of steps) {
+        v.command(`search:${q}`, cx);
+        settleList(v, cx, sim);
+        look(step);
+      }
+    } finally {
+      H.listWindow = null;
+    }
+  }
+  expect(got).toEqual([["set", "0:13", true], ["changed", "0:200", true], ["cleared", "0:200", true], ["set", null, false], ["cleared", null, true]]);
+});
+
 // ---- the list's window: Herdr's v_virtual_list takes at most 10,000 item sizes ----
 
 // Turn i of a one-day session of short done turns, as the reader's events. long: a reply of
