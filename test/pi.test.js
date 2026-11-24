@@ -179,7 +179,11 @@ function clipSession(paths, tail) {
   ].join(""));
   return file;
 }
-const clip = (k) => `/tmp/pi-clipboard-00000000-0000-4000-8000-00000000000${k}`;
+// The mod reads only <temp folder>/pi-clipboard-<uuid>.<ext> with the temp folder /tmp or
+// macOS's /var/folders/../T (image.sh PI_CLIP), so the folder stays. The name is made unique to
+// this process, so two suites on one machine do not write and remove the same file.
+const run = process.pid.toString(16).padStart(8, "0").slice(-8);
+const clip = (k) => `/tmp/pi-clipboard-00000000-0000-4000-8000-${run}000${k}`;
 
 test("a Pi paste's temp path becomes [Image #N] and a thumbnail, and a gone file says so", () => {
   const png = `${clip(1)}.png`, missing = `${clip(2)}.png`, fake = `${clip(3)}.jpg`;
