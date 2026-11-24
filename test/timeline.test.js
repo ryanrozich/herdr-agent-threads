@@ -444,14 +444,14 @@ test("timeline spans: in a turn under 6 px wide, a call with no result keeps its
   expect(t.w).toBeGreaterThan(2);
   expect(t.w).toBeLessThan(6);
   expect(rowsOf(heads[10]).find((r) => r.lk === "noresult").open).toBe(true);
-  // The call's bar is the turn's last 6 px, past its start; the Read's bar starts later, so
-  // the span they make starts no later than the call's bar.
+  // The call's bar is the turn's last 6 px, past its start; the Read's bar starts later. The
+  // span they join holds the whole call's bar (here it reaches back over the turn before, and
+  // the turns after join it too, each call's bar reaching back over the break).
   const end = t.x + t.w;
   const list = L.spans.get("tools|tools|0");
-  const s = list.find((v) => Math.abs(v[1] - end) < 1e-9);
+  const s = list.find((v) => v[0] <= end - 6 + 1e-9 && v[1] >= end - 1e-9);
   expect(s).toBeTruthy();
   expect(s[2]).toBe(1);
-  expect(s[0]).toBeLessThanOrEqual(end - 6 + 1e-9);
   // The spans stay apart and in order.
   for (let i = 1; i < list.length; i++) expect(list[i][0]).toBeGreaterThan(list[i - 1][1] + 0.5);
 });
