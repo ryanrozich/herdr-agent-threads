@@ -6028,7 +6028,7 @@ export default class Threads extends View {
   splitOn(job) {
     // Parts a read made before Herdr stopped it (mdSplitOn) are not the job's.
     if (job.parts.length > job.n) job.parts.length = job.n;
-    const max = this.light ? SHAPE_MIN_MS : this.shapeMax();
+    const max = this.partMax();
     while (!job.done && (this.shapeSpent ?? 0) <= max) {
       const t0 = now();
       this.splitSome(job);
@@ -6043,40 +6043,55 @@ export default class Threads extends View {
   // One part's row of an open reply. It is kept on the turn's record (rows) with its height
   // (partHs, under the layout it was worked out for, partGeo), so a later build of the card
   // sizes only new parts: building and sizing the 2,086 rows of a reply of 1,040 short
-  // paragraphs and tables stopped every draw on the rig. A new row is made in this draw's
-  // reshaping time, or 2 ms of a light draw. Past it the row the part had stands in (new link
-  // rules, a new width), at its height or a rough one for the new layout; a part that had none
-  // gets null, and it and the parts after it wait in an mdrest row.
+  // paragraphs and tables stopped every draw on the rig. A new row is made and sized in this
+  // draw's reshaping time, or SHAPE_MIN_MS of a light draw. A part is shown only at a height
+  // worked out for this layout: a rough one (a text counted as one long line) is too short for
+  // short paragraphs, and the part was drawn cut off. Past the time the row the part had stands
+  // in: for new link rules at its height; for a new layout as "Laying out this part…" at a rough
+  // height, which has nothing to cut. A part with no height worked out gets null, and it and
+  // the parts after it wait in an mdrest row.
   partRow(pm, item, key, src, table, j, whole) {
     const lk = whole ?? this.partLinks(pm, src);
     const gap = j ? this.paraGap() : undefined;
     const old = pm.rows.get(key);
     const same = old && old.src === src && Boolean(old.table) === Boolean(table) && old.gap === gap && this.sameItem(old, item);
     const e = same ? this.partHs?.get(old) : null;
-    if (same && old.md === lk.md && old.links === lk.links && e?.geo === this.partGeo && e.sv === this.partSv && !e.rough) return old;
-    if ((this.shapeSpent ?? 0) > (this.light ? SHAPE_MIN_MS : this.shapeMax())) {
-      if (!same) return null;
+    if (same && old.md === lk.md && old.links === lk.links && e?.geo === this.partGeo && e.sv === this.partSv && !e.rough && !e.stale) return old;
+    if ((this.shapeSpent ?? 0) > this.partMax()) {
+      // Shown before at a height worked out for this layout: it stands in at that height, to
+      // be built again (stale). Never shown, or not on this layout: as said above.
+      const real = same && e && !e.rough;
+      if (!real) return null;
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       this.otherLeft = (this.otherLeft ?? 0) + 1;
-      const h = e?.geo === this.partGeo ? e.h : (gap ?? 6) + this.restHeight(src.length, 1);
-      this.partHs.set(old, { h, geo: this.partGeo, sv: this.partSv, rough: true });
-      return old;
+      if (e.geo === this.partGeo) {
+        this.partHs.set(old, { h: e.h, geo: this.partGeo, sv: this.partSv, stale: true });
+        return old;
+      }
+      return { ...old, kind: "mdrest", one: true, gap: gap ?? 6, h: (gap ?? 6) + this.restHeight(src.length, 1) };
     }
     const row = { ...item, kind: "md", key, md: lk.md, src, links: lk.links, ...(j ? { gap } : {}), ...(table ? { table: true } : {}) };
     const spent = this.shapeSpent ?? 0;
     const left = this.shapeLeft ?? 0;
     const t0 = now();
+    // A light draw's time for the row is its height's too (mdHeight reads shapeMax).
+    this.lightRoom = this.light ? SHAPE_MIN_MS : null;
     const h = this.height(row);
+    this.lightRoom = null;
     this.shapeSpent = spent + (now() - t0);
-    // A rough height (out of time) is worked out again at the next build.
-    (this.partHs ??= new WeakMap()).set(row, { h, geo: this.partGeo, sv: this.partSv, rough: (this.shapeLeft ?? 0) !== left });
+    // A rough height (out of time) is not shown, and is worked out at the next build.
+    const rough = (this.shapeLeft ?? 0) !== left;
+    (this.partHs ??= new WeakMap()).set(row, { h, geo: this.partGeo, sv: this.partSv, rough });
     pm.rows.set(key, row);
-    return row;
+    return rough ? null : row;
   }
-  // A part row's height kept for this layout (partRow), or null.
+  // The time a draw gives an open reply's split and its parts' rows: its reshaping time, or
+  // SHAPE_MIN_MS of a light draw.
+  partMax() { return this.light ? SHAPE_MIN_MS : this.shapeMax(); }
+  // A part row's height worked out for this layout (partRow), or null. Never a rough one.
   partH(r) {
     const e = this.partHs?.get(r);
-    return e && e.geo === this.partGeo && e.sv === this.partSv ? e.h : null;
+    return e && !e.rough && e.geo === this.partGeo && e.sv === this.partSv ? e.h : null;
   }
   // What a part row's height depends on besides its text: the layout (partGeo), and the link
   // rules, the repository (both in its measure's sig) and the probe's measures (partSv). A row
@@ -7287,9 +7302,10 @@ export default class Threads extends View {
     return out;
   }
 
-  // Reshaping time left for this draw: none while a stopped render is being recovered from.
+  // Reshaping time left for this draw: none while a stopped render is being recovered from,
+  // but SHAPE_MIN_MS for the height of an open reply's part (lightRoom, partRow).
   shapeMax() {
-    if (this.light) return -1;
+    if (this.light) return this.lightRoom ?? -1;
     if (this.shapeBudget != null) return this.shapeBudget;
     return Math.max(SHAPE_MIN_MS, Math.min(SHAPE_MS, this.frameRoom() / 2));
   }
@@ -7308,6 +7324,8 @@ export default class Threads extends View {
     if (this.outv) return this.outputView();
     if (this.launcher) return div();
     this.light = light;
+    // Set only while a part's row is sized (partRow); a draw stopped there leaves it set.
+    this.lightRoom = null;
     this.renders = (this.renders ?? 0) + 1;
     this.monoFont = null;
     if (this.stickStep) this.applyStick();
@@ -11127,7 +11145,7 @@ export default class Threads extends View {
       case "mview": return this.showAllRow(t, "View diagram", "panel-right");
       // The parts of a long reply not laid out yet: a quiet line in their place, at their rough
       // height, until the next frames bring them (partRow).
-      case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child("Laying out the rest of the reply…"));
+      case "mdrest": return v_flex().mt(r.gap ?? 6).h(Math.max(18, r.h - (r.gap ?? 6))).child(div().h(18).text_size(11.5).line_height("18px").text_color(t.dim).child(r.one ? "Laying out this part…" : "Laying out the rest of the reply…"));
       case "fold":
         // Quiet: no border or fill, so it reads as the end of the reply, not a button to find.
         return v_flex().mt(8)
