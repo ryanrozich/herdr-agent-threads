@@ -366,6 +366,12 @@ async function oneRun(text) {
   const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
   return { v, cx, card, last: card.at(-1) };
 }
+// The helpers that draw an open reply to its end read it whole: a reply of 58 parts takes more
+// than one build, and the next rebuild of an open turn is asked for by a timer.
+test("the helpers that draw an open reply to its end run its timers: a reply of 58 parts is read whole, with no placeholder left", async () => {
+  const { v, key, card } = await oneRun(shortParas(4000));
+  expect([card.length, card.every((x) => x.kind === "md"), v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`))]).toEqual([58, true, false]);
+}, 60000);
 test("a run with no break of 4,096 characters, a long URL, draws as one Markdown view of the whole run, and one of 4,097 as plain text", async () => {
   const url = (n) => `https://docs.example.com/spec/${"a1b2".repeat(n).slice(0, n - 30)}`;
   const seen = [];
