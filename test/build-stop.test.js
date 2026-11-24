@@ -112,3 +112,34 @@ test("a closed row's reshape that Herdr stops as it works out the height leaves 
   delete v.height;
   expect([j >= 0, armed, run.stops, v.baseRows[i].shape === real, v.baseSizes[i] === v.height(v.baseRows[i])]).toEqual([true, false, 1, true, true]);
 }, 60000);
+
+// A full build puts its rows, sizes and index in, then makes the record later builds start
+// from (probeList and the build record are calls, where Herdr's stop can fall), then the rows'
+// key. Stopped in between, the new rows stood under the old record and the old key, and the
+// next build trusted that record. The key is cleared before the rows go in: the build after
+// such a stop is of every row.
+test("a full build Herdr stops after its rows are in and before its record is made is followed by a build of every row", async () => {
+  const { v, cx, key, run } = await longReply(4);
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  let armed = true;
+  let keyAfter;
+  const probeList = v.probeList;
+  v.probeList = function (...a) { if (armed && this.rowJob == null) { armed = false; keyAfter = this.rowsKey; throw STOP; } return probeList.apply(this, a); };
+  // The open is built by a full build, not a splice.
+  v.spliceRows = () => false;
+  v.toggle(key, cx);
+  run.frame();
+  delete v.spliceRows;
+  delete v.probeList;
+  let full = 0;
+  const buildRows = v.buildRows;
+  v.buildRows = function (status, from, ...a) { if (!from) full++; return buildRows.call(this, status, from, ...a); };
+  settleRows(v, cx);
+  delete v.buildRows;
+  const got = v.baseRows.map((x) => x.key).join("\n");
+  const agree = v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i);
+  v.rowsKey = null;
+  settleRows(v, cx);
+  expect([armed, run.stops, keyAfter ?? null, full > 0, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, true, true, true]);
+}, 60000);
