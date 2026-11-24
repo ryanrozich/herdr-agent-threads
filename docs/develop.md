@@ -10,7 +10,7 @@ bun test test/atif-harbor                   # Harbor ATIF cases; expected differ
 sh test/harbor/run.sh                       # Harbor's own checker and tools on our exports (Python 3.12 via uv 0.13.5+, network; not part of bun test)
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. The test run also writes a JUnit report (`junit.xml`, ignored by git), which the next step sends to Mergify Test Engine with the job's own ID token; no secret is stored. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
+CI (`.github/workflows/ci.yml`) runs on every pull request and push to main: Biome lint (`biome.jsonc`; each rule turned off says why), a check that every file Biome lints is under its 1 MiB size limit (`test/lint-size.sh`: Biome skips a larger file with only a warning), shellcheck at warning level, a jq syntax check of `core/extract.jq`, `bun test` through `test/leftover-check.sh`, and gitleaks over the new commits. The test run also writes a JUnit report (`junit.xml`, ignored by git), which the next step sends to Mergify Test Engine with the job's own ID token; no secret is stored. `herdr-app check` and the private scan stay local: `./install.sh` runs the check, and the scan needs this machine's paths.
 
 A second workflow, `.github/workflows/harbor.yml`, runs Harbor's own code (harbor-framework/harbor 0.26.0, pinned to commit `110c71b`, installed from Harbor's lock file with uv and Python 3.12) on the command line's exports of three made-up sessions: Claude Code with two helpers, Codex with a child and a grandchild, and Codex with none. It runs `sh test/harbor/run.sh` on a push that changes `core/`, the tests it takes its exports from or the job itself, and on demand. The merge queue does not wait for it: it asks only for `check`, and Harbor is a large Python install. The report, in the run's summary and log, says whether Harbor's checker accepts each file, how many steps and tool calls Harbor's model holds in the main list and in all, and which Harbor tools read the helpers. At this pin the checker, the model and the usage summary read the nested helpers, while Harbor's session loader (`atif_to_native_trajectory`) and trace exporter (`extract_conversations_from_trajectory`) read only the main step list, so they leave the helpers' steps out. TRD-59 is the flat export that would put them inline. The job fails when the checker rejects a file or a file's helpers or helper links go missing, not for what those two tools leave out. Run it locally the same way; with a uv older than 0.13.5, `UV='uvx --from uv==0.13.9 uv' sh test/harbor/run.sh`. It writes only to a temp folder, which it removes. `ATIF_KEEP=<folder> bun test test/atif.test.js -t "the command line nests"` writes just the two nested exports.
 
@@ -18,6 +18,7 @@ Each `bun test` run keeps its temp files in one folder, `threads-run-<pid>-*` un
 
 ```sh
 bunx @biomejs/biome@2.6.4 lint
+sh test/lint-size.sh
 shellcheck -S warning $(git ls-files '*.sh')
 ```
 
