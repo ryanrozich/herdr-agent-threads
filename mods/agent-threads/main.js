@@ -2909,8 +2909,10 @@ export default class Threads extends View {
         this.buildsLeft = (this.buildsLeft ?? 0) + 1;
         return;
       }
-      job.sizes.push(this.cachedH.get(i) ?? this.partH(out[i]) ?? this.height(out[i]));
+      // Indexed before it is sized: the build goes on from its first row with no size, and a
+      // draw Herdr stopped between the two (its stop falls at any call) left this row in no index.
       job.index.set(out[i].key, i);
+      job.sizes.push(this.cachedH.get(i) ?? this.partH(out[i]) ?? this.height(out[i]));
     }
     this.buildSpent = (this.buildSpent ?? 0) + Math.max(0, now() - b0 - ((this.shapeSpent ?? 0) - s0));
     job.ms = (job.ms ?? 0) + (now() - b0);
