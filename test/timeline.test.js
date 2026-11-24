@@ -6,7 +6,7 @@
 // (timelineModel, tlGrow). Nothing here draws. The turns are made up in the reader's shape
 // (turns.js), as in test/ledger.test.js.
 import { test, expect } from "bun:test";
-import { ledgerTurn, slantPoints } from "../mods/agent-threads/ledger.js";
+import { ledgerTurn, slantPoints, TL_TRACK, TL_OPEN, TL_FAILED } from "../mods/agent-threads/ledger.js";
 // As a namespace, so a name the module lacks fails only the tests that use it.
 import * as TL from "../mods/agent-threads/timeline.js";
 
@@ -999,3 +999,147 @@ test("timeline span join (tlJoin): spans touch within half a pixel on either sid
   expect(run([[100, 110]], [50, 60, true])).toEqual([[50, 60, 1], [100, 110]]);
   expect(run([[100, 110, 1]], [50, 60])).toEqual([[50, 60], [100, 110, 1]]);
 });
+
+// A seeded session of mixed turns: about 1 in 25 long (10 to 50 minutes, notes and calls, some
+// run at once, some failed), the rest short (1 to 40 s: the prompt, maybe a note, maybe a reply,
+// up to 3 calls, some failed). At Fit most turns are under 2 px.
+function mixedSession(n, seed) {
+  let a = seed >>> 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const heads = [];
+  let at = T0;
+  for (let i = 0; i < n; i++) {
+    const long = rnd() < 0.04;
+    const len = long ? Math.round(600000 + rnd() * 2400000) : Math.round(1000 + rnd() * 39000);
+    const steps = [];
+    if (long) {
+      let t = 2000;
+      for (let k = 0; t < len - 20000 && k < 20; k++) {
+        if (rnd() < 0.3) steps.push("Looking.");
+        const d = Math.round(500 + rnd() * (len / 12));
+        const call = ["Bash", "x", t, Math.min(len - 1000, t + d), rnd() < 0.25];
+        if (rnd() < 0.3) steps.push([call, ["Read", "y", t + Math.round(d / 3), Math.min(len - 1000, t + Math.round(d / 2)), rnd() < 0.25]]);
+        else steps.push([call]);
+        t += d + Math.round(rnd() * 20000);
+      }
+    } else {
+      if (rnd() < 0.3) steps.push("Looking.");
+      const calls = Math.floor(rnd() * 4);
+      for (let k = 0; k < calls; k++) steps.push([["Read", "z", 200 + k * 200, Math.min(len - 100, 300 + k * 200), rnd() < 0.3]]);
+    }
+    const t = turn(i + 1, steps, { end: T0 + len, reply: rnd() < 0.5 ? null : "Done.", untimed: false });
+    heads.push({ ...head(t), t0: at });
+    at += len + Math.round(5000 + rnd() * 600000);
+  }
+  return heads;
+}
+// The failure marks two rules give, from each turn's failed bars' centres in order: turns
+// [{ narrow, x, w, cs }] (cs: a wide turn's failed bars' centres). by: "centre" (the rule),
+// "x" (a turn under 2 px gated and spaced by its x, as at d97a479a) or "own" (a wide turn's marks
+// not spaced from the turn before).
+function marksBy(turns, by) {
+  const out = [];
+  let end = -Infinity;
+  for (const t of turns) {
+    if (t.narrow) {
+      if (!t.cs.length) continue;
+      const g = by === "x" ? t.x : t.x + t.w / 2;
+      if (g >= end) { out.push(t.x + t.w / 2); end = g + 6; }
+    } else {
+      if (by === "own") end = -Infinity;
+      for (const c of [...t.cs].sort((p, q) => p - q)) if (c >= end) { out.push(c); end = c + 6; }
+    }
+  }
+  return out;
+}
+const breaksRule = (marks, centres) => marks.some((m, k) => k > 0 && m - marks[k - 1] < 6 - 1e-9) || centres.some((c) => !marks.some((m) => Math.abs(m - c) <= 6 + 1e-9));
+
+test("timeline seeded mixed turns: the failure marks keep both rules, and every press gets the bar drawn on top there, or the nearest of the turn drawn there", () => {
+  for (const [n, cw, seed] of [[1000, 1440, 3], [2500, 1440, 5], [700, 1143, 7]]) {
+    const heads = mixedSession(n, seed);
+    const L = timelineLayout(heads, cw, "clock", T0 + 1e12);
+    const T = L.turns;
+    const all = [];
+    const turns = T.map((t, ti) => {
+      const h = heads[ti];
+      const narrow = t.w < 2;
+      const wall = L.geo.walls[ti];
+      const len = tlLen(h);
+      const tk = narrow ? null : L.tracks.has(h) ? L.tracks.get(h) : tlTracks(h);
+      const cs = [];
+      const bars = [];
+      for (let i = 0; i < len; i++) {
+        const st = tlStep(h, i, tk);
+        if (!st.sk) continue;
+        const r = (narrow ? 0 : st.track) + (st.ink === "failed" ? 2 : 0);
+        const b = narrow ? { x0: t.x, x1: t.x + Math.max(t.w, 1) } : itemBox(st.a ?? Number.NaN, st.b ?? Number.NaN, (st.track ? TL_TRACK : 0) | (st.open ? TL_OPEN : 0) | (st.failed ? TL_FAILED : 0), i, t.x, t.w, wall, "clock", len);
+        if (!b) continue;
+        const bar = { ti, i, key: st.key, lane: st.lane, x0: b.x0, x1: b.x1, r, w: b.x1 - b.x0 };
+        bars.push(bar);
+        all.push(bar);
+        if (st.failed && !narrow) cs.push((b.x0 + b.x1) / 2);
+      }
+      if (narrow && h.cnt?.failed) cs.push(t.x + t.w / 2);
+      return { narrow, x: t.x, w: t.w, cs, bars };
+    });
+    // Marks: the layout's are the rule's, keep both rules, and the two old rules each break one
+    // on this session (so a mark rule turned back is seen).
+    const centres = turns.flatMap((t) => t.cs);
+    const want = marksBy(turns, "centre");
+    expect([n, L.fails.length]).toEqual([n, want.length]);
+    L.fails.forEach((m, k) => expect(m).toBeCloseTo(want[k], 9));
+    expect([n, breaksRule(L.fails, centres)]).toEqual([n, false]);
+    expect([n, breaksRule(marksBy(turns, "x"), centres), breaksRule(marksBy(turns, "own"), centres)]).toEqual([n, true, true]);
+    // The press, at every 0.13 px of the strip in each lane, against all bars.
+    const byPx = new Map();
+    for (const b of all) for (let p = Math.floor(b.x0) - 4; p <= Math.floor(b.x1) + 4; p++) { if (!byPx.has(p)) byPx.set(p, []); byPx.get(p).push(b); }
+    const drawnAt = (fx, wide) => {
+      let lo = 0;
+      while (lo + 1 < T.length && T[lo + 1].x <= fx) lo++;
+      const end = T[lo].x + (wide || T[lo].w >= 2 ? T[lo].w : Math.max(T[lo].w, 1));
+      return fx > end && T[lo + 1] && T[lo + 1].x - fx < fx - end ? lo + 1 : lo;
+    };
+    let covered = 0;
+    let thin = 0;
+    let moved = 0;
+    let lo0 = 0;
+    for (let x = 0; x < cw; x += 0.13) {
+      while (lo0 + 1 < T.length && T[lo0 + 1].x <= x) lo0++;
+      for (const lane of ["input", "model", "tools"]) {
+        const near = (byPx.get(Math.floor(x)) ?? []).filter((b) => b.lane === lane);
+        const on = near.filter((b) => b.x0 <= x && x <= b.x1);
+        const got = timelineHit(L, heads, x, lane, T0 + 1e12);
+        if (on.length) {
+          covered++;
+          const top = on.reduce((m, b) => (b.r > m.r || (b.r === m.r && b.w < m.w) ? b : m));
+          const ok = on.filter((b) => b.r === top.r && b.w === top.w).map((b) => b.key);
+          if (on.some((b) => b.ti < lo0)) thin++;
+          if (!ok.includes(got.key)) expect([n, x, lane, got.key]).toEqual([n, x, lane, ok]);
+        } else {
+          // No bar under it: the turn drawn there, as wide as drawn (at least 1 px under 2 px),
+          // or the nearer one in a break; its nearest bar within 4 px, else its heading.
+          const D = drawnAt(x, false);
+          if (D !== drawnAt(x, true)) moved++;
+          let best = null;
+          for (const b of turns[D].bars) {
+            if (b.lane !== lane) continue;
+            const d = x < b.x0 ? b.x0 - x : x - b.x1;
+            if (d < 4 && (!best || d < best.d)) best = { d, key: b.key };
+          }
+          const want = { turn: heads[D].key, key: best ? best.key : heads[D].key };
+          if (got.turn !== want.turn || got.key !== want.key) expect([n, x, lane, got]).toEqual([n, x, lane, want]);
+        }
+      }
+    }
+    // The session holds the cases: presses on a span of a turn before the one starting under
+    // the press, and presses past a narrow turn's own width but inside its drawn 1 px, nearer
+    // the next turn.
+    expect([n, covered > 1000, thin > 20, moved > 20]).toEqual([n, true, true, true]);
+  }
+}, 120000);
