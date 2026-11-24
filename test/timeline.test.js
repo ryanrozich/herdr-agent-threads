@@ -383,10 +383,12 @@ test("timeline tracks: worked out in the layout pass, only for a turn drawn wide
   expect(L.tracks.get(a)).toEqual([0, 0, 1, 0]);
   expect(L.tracks.get(b)).toBe(null);
   // A press reads them from the layout: no pass.
-  p = TL_MADE.tracks;
+  const grepKey = stepsOf(a).find((it) => it.track === 1).key;
   const [grep] = L.spans.get("tools|tools|1");
-  expect(timelineHit(L, [a, b], (grep[0] + grep[1]) / 2, "tools").key).toBe(stepsOf(a).find((it) => it.track === 1).key);
+  p = TL_MADE.tracks;
+  const hit = timelineHit(L, [a, b], (grep[0] + grep[1]) / 2, "tools");
   expect(TL_MADE.tracks - p).toBe(0);
+  expect(hit.key).toBe(grepKey);
   // The ledger built again (a new heads array): the finished turns keep their headings, so only
   // the running turn, whose heading is new, is worked out again; a draw with nothing new, none.
   const t3 = (calls) => head(turn(3, [calls], { done: false, end: null, reply: null }), true);
