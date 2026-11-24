@@ -14,7 +14,6 @@ import {
   handlerAfterId,
   itemWords,
   keyEv,
-  listWindow,
   ownOf,
   pane,
   pinPane,
@@ -192,12 +191,12 @@ test("the Pinned column: a press through the list never unpins, wherever it land
   v.sel = null;
   press(b, mid);
   kept();
-  listWindow = (n) => ({ start: 1, end: n });
+  H.listWindow = (n) => ({ start: 1, end: n });
   try {
     v.sel = null;
     press(b, mid);
     kept();
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
   // A wheel, a narrower list and a banner above it: still a selection.
   v.sel = null;
   v.listWheel({ delta: { x: 0, y: -40 } });
@@ -295,19 +294,19 @@ test("the Pinned column: no unpin buttons where a row's place on screen is not k
   // The list drew only its first two items (the day band and pin 1): pins 2 and 3 have none.
   // A change in the rows drawn asks for another frame (the 120 ms timer), so the buttons
   // follow it.
-  listWindow = () => ({ start: 0, end: 2 });
+  H.listWindow = () => ({ start: 0, end: 2 });
   try {
     expect(unpinLayer(v, cx).rows).toEqual([1]);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
   // The day band scrolled off (all three pins still drawn, the list's end still on screen):
   // only the change in the rows drawn asks for the frame; the same rows again do not.
-  listWindow = (n) => ({ start: 1, end: n });
+  H.listWindow = (n) => ({ start: 1, end: n });
   try {
     frame(v, cx);
     v.stickyDue = false;
     frame(v, cx);
     expect(v.stickyDue).toBe(false);
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
   v.stickyDue = false;
   expect(unpinLayer(v, cx).rows).toEqual([1, 2, 3]);
   expect(v.stickyDue).toBe(true);
@@ -417,13 +416,13 @@ test("the undo notice and the Jump to latest pill take the click: it stops on th
   expect(ownOf(h, "th-pin").some((e) => e[0] === "on_mouse_down")).toBe(false);
   // The pill, in the list's own view.
   const p = await pinPane("--extra", "6");
-  listWindow = (n) => ({ start: 0, end: n - 1 }); // the list's end off screen
+  H.listWindow = (n) => ({ start: 0, end: n - 1 }); // the list's end off screen
   let pill;
   try {
     frame(p.v, p.cx);
     expect(p.v.pillShown()).toBe(true);
     pill = ownOf(frame(p.v, p.cx), "th-latest-pill");
-  } finally { listWindow = null; }
+  } finally { H.listWindow = null; }
   expect(pill.some((e) => e[0] === "on_mouse_down")).toBe(false);
   let s2 = 0;
   pill.find((e) => e[0] === "on_click").at(-1)({ position: { x: 0, y: 0 } }, { ...p.cx, stop_propagation() { s2++; } });
