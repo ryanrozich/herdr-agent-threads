@@ -20264,6 +20264,19 @@ test("the opening: a jump away from the end while the rows above drain lands on 
   }
 }, 120000);
 
+// A drag of the scroll bar while the rows above drain is pulled back to the end in every frame,
+// as before this change (196 frames of 196 while 2,364 rows drained, at the base commit and on
+// main). Each frame asks for the end before the draw that would show the drag, and stickCheck,
+// which tells a drag by the rows drawn, returns while the end is held and needs the rows
+// unchanged since the frame before, which each reshape breaks. A fix needs Herdr to report a
+// drag, or the end asked for only in frames where it moved: left for a follow-up.
+test.skip("the opening: a drag of the scroll bar while the rows above drain stays where it is put", async () => {
+  const { frames } = await leaveDuringDrain((_v, _cx, key, _step, host) => {
+    host.off = lastList.sizes.slice(0, lastList.keys.indexOf(key)).reduce((x, y) => x + y, 0);
+  });
+  expect(frames.filter((f) => f[2] >= f[8] - 1)).toEqual([]);
+}, 30000);
+
 // What the jump's fix must leave alone: a reader who stays at the end (j at the newest turn
 // selects it again, with a scroll to it) and Jump to latest just after a jump, while it lands.
 // Both keep the end in every frame to the end of the drain, and the rows above drain in each.
