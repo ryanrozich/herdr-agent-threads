@@ -2,7 +2,7 @@
 // process and loads test/render-harness.js once, so a setting one file leaves behind would
 // reach the next file that uses the harness; setup() puts them all back.
 import { test, expect } from "bun:test";
-import { closed, editors, hostReads, keyBinds, lacking, mdSources, overlays, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
+import { closed, editors, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
 
 const DEFAULTS = {
   calls: 0,
@@ -56,4 +56,21 @@ test("setup() puts every harness setting back to its default and empties every s
     keyBinds.pop();
     setup();
   }
+});
+
+test("heldClock holds performance.now where it was while fn runs, returns fn's value, and puts the real clock back, also when fn throws", () => {
+  const real = performance.now;
+  const before = performance.now();
+  const seen = heldClock(() => {
+    const a = performance.now();
+    const until = Date.now() + 5;
+    while (Date.now() < until);
+    return [a, performance.now()];
+  });
+  expect(seen[0]).toBe(seen[1]);
+  expect(seen[0]).toBeGreaterThanOrEqual(before);
+  expect(performance.now).toBe(real);
+  expect(performance.now()).toBeGreaterThan(seen[0]);
+  expect(() => heldClock(() => { throw new Error("made-up"); })).toThrow("made-up");
+  expect(performance.now).toBe(real);
 });

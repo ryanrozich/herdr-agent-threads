@@ -290,13 +290,31 @@ export async function settle(v, tries = 200) {
   throw new Error("the pane never finished reading");
 }
 
-export async function pane(file) {
+// The pane cuts its row build and its shaping into slices by the clock (buildMax and
+// shapeMax, in ms of performance.now). A test pane takes each to its end in one slice, so
+// rows() or a frame right after any change sees every row and every shape on any machine:
+// on the real clock a busy machine cut the slices short, and a test read part of the rows.
+// What is built, and in what order, is the same. Only the clock's part is replaced: a light
+// frame still shapes nothing, and a budget a test sets (shapeBudget, or its own buildMax)
+// still holds. pane() and paneWith() give such a pane. The opt-out, for a test about the
+// slices themselves or one that times the pane's work: pane(file, { sliced: true }), or
+// sliced(v) before the pane's first rows are built.
+const WHOLE_SLICE_MS = 1e9;
+export function unsliced(v) {
+  const shapeMax = Object.getPrototypeOf(v).shapeMax;
+  v.buildMax = () => WHOLE_SLICE_MS;
+  v.shapeMax = function () { return this.light || this.shapeBudget != null ? shapeMax.call(this) : WHOLE_SLICE_MS; };
+  return v;
+}
+export function sliced(v) { delete v.buildMax; delete v.shapeMax; return v; }
+
+export async function pane(file, { sliced: keep = false } = {}) {
   state = {
     terminals: [{ address: "t4", status: "idle", name: "claude" }],
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: file, debug: true }, shared: {},
   };
-  const v = new Threads();
+  const v = keep ? new Threads() : unsliced(new Threads());
   const cx = makeCx();
   v.init(state.props, cx);
   await settle(v);
@@ -321,6 +339,17 @@ export function dropTimers(v, cx) { cx.timers = []; v.shapeNext = false; v.build
 // Draws until the rows are built and shaped. Rows left waiting are reshaped in the frame the
 // 0 ms timer asks for (reshapeDue), as Herdr runs it: a draw alone never takes them up.
 export function settleRows(v, cx) { draw(v, cx); for (let k = 0; k < 400 && (v.rowJob || v.staleRows?.length || v.shapeLeft > 0); k++) { cx.flush(0); draw(v, cx); } }
+// Runs fn, which must not await, with performance.now held where it was, then puts the real
+// clock back. The slices a draw cuts by now() (BUILD_MS, SHAPE_MS) then never run out, so each
+// frame fn draws does all the work it has, and fn draws the same frames on any machine,
+// however busy. A held clock never runs ahead of the real one, so no time the pane keeps from
+// inside fn is in its future afterwards.
+export function heldClock(fn) {
+  const real = performance.now;
+  const t = real.call(performance);
+  performance.now = () => t;
+  try { return fn(); } finally { performance.now = real; }
+}
 
 // Herdr's v_virtual_list as the pane meets it: an offset in px that new heights do not move,
 // held to the list at each layout; scroll_to_item to the near edge or the middle, and
