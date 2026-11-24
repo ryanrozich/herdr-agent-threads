@@ -1009,14 +1009,19 @@ async function cutScene() {
   return r;
 }
 // The frames after a jump until it settles: each shows the row it goes to, never the old view
-// or a third place.
+// or a third place. Every frame drawn counts, the ones between the landing's timed asks too
+// (drawBetweenAsks), not only each call's last.
 function noThirdPlace(v, cx, sim, key, n = 8, then = () => {}) {
-  const seen = [];
-  for (let k = 0; k < n; k++) { probeFrame(v, cx); seen.push(shownIn(v, sim.last())); }
-  then();
-  settleList(v, cx, sim);
-  seen.push(shownIn(v, sim.last()));
-  for (const [k, s] of seen.entries()) if (!s.includes(key)) throw new Error(`frame ${k + 1} shows ${s.join(", ")}`);
+  const from = sim.frames.length;
+  H.drawBetweenAsks = true;
+  try {
+    for (let k = 0; k < n; k++) probeFrame(v, cx);
+    then();
+    settleList(v, cx, sim);
+  } finally { H.drawBetweenAsks = false; }
+  const seen = sim.frames.slice(from).map((f) => shownIn(v, f));
+  expect(seen.length).toBeGreaterThan(n);
+  for (const [k, s] of seen.entries()) if (!s.includes(key)) throw new Error(`frame ${k + 1} of ${seen.length} shows ${s.join(", ")}`);
 }
 
 test("past the cap, a pin's return past the cut, which waits for the card's measures, never shows a third place while it waits", async () => {
