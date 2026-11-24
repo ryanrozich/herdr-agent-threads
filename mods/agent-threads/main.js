@@ -7341,10 +7341,11 @@ export default class Threads extends View {
       // A scroll the stopped render took on (the jump to the newest turn, a return to a pin)
       // is asked for again: it was taken before the list was drawn. Not after the reader's
       // wheel since that render, which dropped it (listWheel) and is the newer word, as for
-      // the landing's timed asks.
+      // the landing's timed asks; and not the end under a jump made since (a key, the rail, a
+      // pin), which would lose to it.
       const want = this.renderWant;
       if (want && (this.wheelN ?? 0) === (want.wheels ?? 0)) {
-        if (want.toBottom) this.toBottom = true;
+        if (want.toBottom && !this.scrollTo) this.toBottom = true;
         if (want.scrollTo && !this.scrollTo) this.scrollTo = want.scrollTo;
       }
       // Counted at once: a render that is stopped too would never reach the end of the frame.
