@@ -84,3 +84,31 @@ test("a draw Herdr stops halfway through putting an opened card's rows in leaves
   const left = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
   expect([armed, run.stops, parts > 0, agree, made.includes(true), left, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]).toEqual([false, 1, true, true, true, 0, true]);
 }, 60000);
+
+// A closed row built with an old shape is reshaped where it is (reshapeStale): its new row,
+// then its height, which is a call, where Herdr's stop can fall. Stopped there, the row had its
+// new shape and its old height, and the next pass, finding the shape already new, left the
+// height as it was: the row drew at the wrong height for good. The height is worked out before
+// the row changes.
+test("a closed row's reshape that Herdr stops as it works out the height leaves the row to be reshaped, and it ends at its new height", async () => {
+  const { v, cx, run } = await longReply(4);
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const rows = v.baseRows;
+  const i = rows.findIndex((x) => x.kind === "turn" && x.turn && !x.live && !x.last);
+  const j = rows.findIndex((x, k) => x.kind === "turn" && k !== i && v.height(x) !== v.height(rows[i]));
+  const key = rows[i].key;
+  const real = rows[i].shape;
+  // The row as a build out of time leaves it: another row's shape, at that shape's height.
+  rows[i] = { ...rows[i], shape: rows[j].shape };
+  v.baseSizes[i] = v.height(rows[i]);
+  v.staleRows = [i];
+  v.reshapeDue = true;
+  v.fitKey = null;
+  let armed = true;
+  const height = v.height;
+  v.height = function (r) { if (armed && r?.key === key && r.kind === "turn" && r.shape === real) { armed = false; throw STOP; } return height.call(this, r); };
+  for (let k = 0; k < 20; k++) { run.frame(); cx.flush?.(0); }
+  delete v.height;
+  expect([j >= 0, armed, run.stops, v.baseRows[i].shape === real, v.baseSizes[i] === v.height(v.baseRows[i])]).toEqual([true, false, 1, true, true]);
+}, 60000);
