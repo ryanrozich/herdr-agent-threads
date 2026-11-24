@@ -7126,6 +7126,19 @@ test("through the light window after a stopped draw the pane draws only a few ti
   costLog("capped, the light window's draws", { ...r, light: inLight });
   // And the window's end brings the next draw that does the work.
   expect([inLight.length <= 10, light.some(([ms, l]) => !l && ms >= 5000)]).toEqual([true, true]);
+  // A stop after the probe's step left it one part to measure (probeLeft 1): a light draw
+  // measures none and asks for no frame for it (on main: 149 draws 33.3 ms apart, on the rig).
+  // With the open's scroll dropped, three light draws: the one after the stop, the one for the
+  // probe's timer the stopped draw had set, and the day pill's. The probe finishes after.
+  const o = await openLong(shortParas(4000));
+  o.v.scrollTo = null;
+  let asks = 0;
+  o.v.probeDue = function () { this.probeLeft = asks++ ? 0 : 1; return []; };
+  const seen = [];
+  const r2 = costedFrames(o.v, o.cx, 3000, () => false, { stopAfter: 1, secs: 7, onFrame: () => seen.push([o.v.light, o.v.probeLeft]) });
+  const lit = seen.filter(([l]) => l);
+  costLog("a stop after the probe, the light draws", { ...r2, n: lit.length, seen: seen.slice(0, 8) });
+  expect([lit.length <= 3, lit.every(([, p]) => p === 1), seen.at(-1)[1]]).toEqual([true, true, 0]);
 }, 60000);
 
 // Parts held through the light window after a stopped draw go on in the draw after it: a
