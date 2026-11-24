@@ -293,12 +293,12 @@ test("with one 200,000-character word at twice the price every light draw return
   expect([r.frames[0].ok, lit.length > 0, lit.filter((f) => !f.ok).length, Math.max(...lit.map((f) => f.ms)) < 25, r.stops <= 7]).toEqual([false, true, 0, true, true]);
 }, 60000);
 
-// A part longer than 4,000 characters is a run with no space, line break or Japanese or Chinese
+// A part longer than 4,096 characters is a run with no space, line break or Japanese or Chinese
 // sentence or clause mark (a word longer than MD_MAX), past what Herdr draws as one Markdown
 // view, and at twice the price its height alone ran past Herdr's time in every full draw that
-// sized it, for good. It shows as plain text: its first 4,000 characters under a dim line
-// saying so, at a height counted from its length, with no link rules on it. c copies all of it.
-test("a reply of one 200,000-character word shows its start as plain text under a line saying so, draws in time at the price and twice it, and c copies all of it", async () => {
+// sized it, for good. It shows whole as plain text under main's line for a part Herdr could not
+// draw as Markdown, at a height counted from its length, with no link rules on it. c copies it.
+test("a reply of one 200,000-character word shows whole as plain text under main's line, draws in time at the price and twice it, and c copies all of it", async () => {
   const word = "z".repeat(200000);
   for (const scale of PRICE_SCALES) {
     const { v, cx, key } = await openLong(word);
@@ -306,9 +306,9 @@ test("a reply of one 200,000-character word shows its start as plain text under 
     const part = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`));
     const r = costedFrames(v, cx, 400, () => Boolean(v.rowsKey && !v.rowJob && part() && !v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`))), { scale });
     costLog(`one 200,000-character word, at ${scale}x`, r);
-    expect([scale, r.stops, r.settled > 0, part()?.kind, part()?.shown?.length]).toEqual([scale, 0, true, "mdlong", 4000]);
+    expect([scale, r.stops, r.settled > 0, part()?.kind, part()?.src?.length]).toEqual([scale, 0, true, "mdlong", 200000]);
     const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-    expect([text.includes("This part is 200,000 characters with no place to break it; only its start is shown. Copy (c) copies all of it."), text.includes(word.slice(0, 4000)), text.some((x) => x.length > 4000)]).toEqual([true, true, false]);
+    expect([text.includes("Herdr could not draw this part as Markdown, so it shows as plain text."), text.includes(word), text.some((x) => x.includes("only its start is shown"))]).toEqual([true, true, false]);
     // c, on the selected turn.
     v.sel = key;
     cx.clip = null;
@@ -339,7 +339,7 @@ test("a word of 3,800 or 4,096 characters, its sizing stopped by Herdr, is sized
 
 // Herdr's Markdown view holds 4,096 characters (MD_VIEW_CHARS). A run with no place to split it
 // (a long URL, in practice) of up to that draws as on main, one Markdown view of the whole run,
-// selectable; past it, it is plain text, its start under the dim line.
+// selectable; past it, it is plain text, all of it, under main's line (brokenPlain).
 async function oneRun(text) {
   const { v, cx, key } = await openLong(text);
   v.probeDue = function () { this.probeLeft = 0; return []; };
@@ -352,10 +352,27 @@ test("a run with no break of 4,096 characters, a long URL, draws as one Markdown
   const url = (n) => `https://docs.example.com/spec/${"a1b2".repeat(n).slice(0, n - 30)}`;
   const seen = [];
   for (const n of [4096, 4097]) {
-    const { v, last } = await oneRun(url(n));
-    seen.push([url(n).length, last.kind, last.kind === "md" ? v.partViews(last).join("") === url(n) && v.partViews(last).length : last.shown.length]);
+    const { v, cx, last } = await oneRun(url(n));
+    // A Markdown part: its views; a plain-text one: how much of the run is drawn.
+    const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    seen.push([url(n).length, last.kind, last.kind === "md" ? v.partViews(last).join("") === url(n) && v.partViews(last).length : Math.max(...drawn.filter((x) => url(n).startsWith(x)).map((x) => x.length))]);
   }
-  expect(seen).toEqual([[4096, "md", 1], [4097, "mdlong", 4000]]);
+  expect(seen).toEqual([[4096, "md", 1], [4097, "mdlong", 4097]]);
+}, 60000);
+
+// Plain text needs no Markdown view, so a run with no place to split it past one view shows
+// whole, under main's line for a part Herdr could not draw as Markdown. Nothing is cut, so no
+// line says that only its start is shown.
+test("a run with no break of 4,097, 20,000 or 200,000 characters shows whole as plain text under main's line, with no line saying only its start is shown", async () => {
+  const run = (n) => `${Array.from({ length: Math.ceil(n / 6) + 1 }, (_, i) => `x${String(i * 6).padStart(5, "0")}`).join("").slice(0, n - 8)}ENDOFRUN`;
+  const seen = [];
+  for (const n of [4097, 20000, 200000]) {
+    const text = run(n);
+    const { v, cx, card, last } = await oneRun(text);
+    const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    seen.push([text.length, card.length, last.kind, drawn.includes(text), drawn.includes("Herdr could not draw this part as Markdown, so it shows as plain text."), drawn.some((x) => x.includes("only its start is shown"))]);
+  }
+  expect(seen).toEqual([[4097, 1, "mdlong", true, true, false], [20000, 1, "mdlong", true, true, false], [200000, 1, "mdlong", true, true, false]]);
 }, 60000);
 
 // The link rules lengthen a part ("ACME-1" becomes a Markdown link 41 characters longer). A run
@@ -371,17 +388,17 @@ test("a run with no break under 4,096 characters that its links would take past 
   expect(seen).toEqual([[4000, "md", 1, false, false], [4060, "md", 0, true, false]]);
 }, 60000);
 
-// The dim line says only a part's start is shown, so it shows only when text is left out. A run
-// with no break of 4,000 characters fits one view as written, but its dollar escapes take it to
-// 6,000, so it is plain text: all of it shown, with no line. Past 4,000 the line stays.
-test("a plain-text part shown whole, a 4,000-character run its dollar escapes take past one view, has no line saying only its start is shown", async () => {
+// A plain-text part is never cut. A run with no break of 4,000 characters fits one view as
+// written, but its dollar escapes take it to 6,000, so it is plain text; one of 5,000 is past a
+// view as it is. Both show whole, with no line saying only the start is shown.
+test("a plain-text part, a 4,000-character run its dollar escapes take past one view or a 5,000-character run, shows whole with no line saying only its start is shown", async () => {
   const seen = [];
   for (const text of ["a$".repeat(2000), "z".repeat(5000)]) {
     const { v, cx, last } = await oneRun(text);
     const lines = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-    seen.push([text.length, last.kind, last.shown.length, lines.some((x) => x.includes("only its start is shown"))]);
+    seen.push([text.length, last.kind, lines.includes(text), lines.some((x) => x.includes("only its start is shown"))]);
   }
-  expect(seen).toEqual([[4000, "mdlong", 4000, false], [5000, "mdlong", 4000, true]]);
+  expect(seen).toEqual([[4000, "mdlong", true, false], [5000, "mdlong", true, false]]);
 }, 60000);
 
 // Whether a part fits one view (partFits) is kept per open turn, by the part's text. A change of
@@ -413,14 +430,13 @@ test("the open turn's record of which parts fit one view stays its parts' size t
 
 // A part of at most one view's 4,096 characters is never cut. Its dollar escapes ("$" drawn as
 // "\\$") can take it past a view as Markdown, and then it shows whole as plain text under main's
-// own line for a part Herdr could not draw as Markdown. The line that only its start is shown
-// is for a part with text left out.
+// own line for a part Herdr could not draw as Markdown.
 test("a part of 3,900 or 4,050 characters with dollar signs, past one view only by its escapes, shows whole as plain text under the line that Herdr could not draw it as Markdown", async () => {
   const seen = [];
   for (const text of [`${"a$".repeat(1800)}${"b".repeat(300)}`, `${"x".repeat(3900)}${"$".repeat(150)}`]) {
     const { v, cx, last } = await oneRun(text);
     const lines = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-    seen.push([text.length, last.kind, last.shown?.length ?? null, lines.some((x) => x.startsWith("Herdr could not draw this part as Markdown")), lines.some((x) => x.includes("only its start is shown"))]);
+    seen.push([text.length, last.kind, lines.includes(text) ? text.length : null, lines.some((x) => x.startsWith("Herdr could not draw this part as Markdown")), lines.some((x) => x.includes("only its start is shown"))]);
   }
   expect(seen).toEqual([[3900, "mdlong", 3900, true, false], [4050, "mdlong", 4050, true, false]]);
 }, 60000);
@@ -446,8 +462,8 @@ test("a part shown whole as plain text under main's line is counted at the heigh
     const note = drawn.find((x) => x.startsWith("Herdr could not draw this part as Markdown"));
     // MD_CHAR in main.js (6.1 px, a character of 13 px prose) at the line's 11.5 px.
     const noteLines = v.wrapped(note, v.prose(), (v.charW(6.1) * 11.5) / 13);
-    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(r.shown.length, 1);
-    seen.push([w, drawn.includes(r.shown), noteLines > 1, v.height(r) === held]);
+    const held = (r.gap ?? 6) + 18 * noteLines + 4 + v.restHeight(r.src.length, 1);
+    seen.push([w, drawn.includes(r.src), noteLines > 1, v.height(r) === held]);
   }
   expect(seen).toEqual([[640, true, false, true], [300, true, true, true]]);
 }, 60000);
@@ -1086,4 +1102,14 @@ test("a paragraph of Japanese or Chinese prose over 4,000 characters on commas, 
   const para = cjkProse(["倉庫の在庫を午後に数え直し、", "配送ルートの確認を朝のうちに終え、", "仓库的订单按线路分配给每一位司机，", "明天的路线表在中午之前发出，"]);
   expect(/[。！？]/.test(para)).toBe(false);
   expect(await shownWhole(para)).toEqual([true, false, false, [], para, false]);
+}, 60000);
+
+// Thai is written with no space between words and has none of the marks the split breaks
+// after, so a long paragraph of it is one run with no place to split it, past one view. It shows
+// whole as plain text under main's line, as on main. Made-up prose.
+test("a paragraph of Thai prose of 5,000 characters with no space shows whole as plain text under main's line", async () => {
+  const para = cjkProse(["การจัดส่งสินค้าตามเส้นทางของวันนี้เสร็จแล้ว", "คลังสินค้าจะนับสต็อกใหม่ในช่วงบ่าย"]).slice(0, 5000);
+  const { v, cx, card, last } = await oneRun(para);
+  const drawn = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+  expect([para.length, /[ \n]/.test(para), card.length, last.kind, drawn.includes(para), drawn.includes("Herdr could not draw this part as Markdown, so it shows as plain text."), drawn.some((x) => x.includes("only its start is shown"))]).toEqual([5000, false, 1, "mdlong", true, true, false]);
 }, 60000);
