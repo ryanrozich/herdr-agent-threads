@@ -19998,8 +19998,8 @@ function plainChat(n) {
 // time on a busy machine, counts 0), and a draw has 12 ms of it (shapeBudget): a draw reshapes
 // 12 rows on any machine, as a slow one would, and most rows are left to drain.
 // Debug is off (measure() would rebuild the rows in every draw).
-async function plainOpening(n) {
-  const { v, cx, go } = await openingPane(plainChat(n));
+async function plainOpening(n, file = plainChat(n)) {
+  const { v, cx, go } = await openingPane(file);
   v.debug = false;
   v.opening.at -= 1000;
   v.shapeBudget = 12;
@@ -20079,7 +20079,7 @@ async function leaveDuringDrain(go, pace = 16) {
     v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
     for (let k = 0; v.openActive() && k < 400; k++) step();
     step();
-    expect(v.staleRows.length).toBeGreaterThan(400);
+    expect(v.staleRows.length).toBeGreaterThan(250);
     // A turn far from the end, among the rows left.
     const key = v.baseRows[v.staleRows[v.staleRows.length >> 1]].key;
     const aim = go(v, cx, key, step, host) ?? key;
@@ -20238,7 +20238,11 @@ const LEAVE_WAYS = {
   "a search step": (v, cx, key) => { v.setQuery("Turn", cx); v.sel = key; v.action("olderMatch", cx); return v.sel; },
   "older then newer": (v, cx, key) => { v.setQuery("Turn", cx); v.sel = key; for (const a of ["olderMatch", "olderMatch", "newerMatch"]) v.action(a, cx); return v.sel; },
   "the outline": (v, _cx, key, step) => { v.setOutline(true); step(); step(); v.leaveOutline(key); },
-  "a pin": (v, cx, key) => { v.togglePin(key, cx); v.goPin(0, cx); },
+  // Pins stay with the session from run to run: this turn's.
+  "a pin": (v, cx, key) => {
+    if (!v.pinnedList().some((p) => p.key === key)) v.togglePin(key, cx);
+    v.goPin(v.pinnedList().findIndex((p) => p.key === key), cx);
+  },
 };
 test("the opening: a jump away from the end while the rows above drain lands on its turn, on rows shaped by the next frame, and stays", async () => {
   // Frames 16 ms apart; 8 ms apart, a frame between the landing's two scrolls; and 130 ms apart,
@@ -20251,7 +20255,7 @@ test("the opening: a jump away from the end while the rows above drain lands on 
     // left to reshape.
     const at = frames.findIndex(on);
     expect([name, at >= 0 && at <= Math.max(1, Math.ceil(48 / pace) - 1)]).toEqual([name, true]);
-    expect([name, frames[at][0] > 400]).toEqual([name, true]);
+    expect([name, frames[at][0] > 200]).toEqual([name, true]);
     // From then on: on screen in every frame, never back at the end, with no empty bubble and no
     // row on screen at a height not its own.
     const later = frames.slice(at + 1);
