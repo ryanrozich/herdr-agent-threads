@@ -110,6 +110,10 @@ export let keepSettings = false;
 // With settingsStale set, a settings write whose expected text is not what the file holds is
 // rejected, as Herdr rejects a stale snapshot.
 export let settingsStale = false;
+// With drawBetweenAsks set, probeFrame draws again after each group of timers due before the
+// next frame, in the order of their delays (a scroll asked 16 ms on, then one 48 ms on), as
+// Herdr draws about every 16 ms between them. Off, they all run before the next frame's draw.
+export let drawBetweenAsks = false;
 // A script that has not ended in 4 s is killed with everything it started, and the call fails
 // with a line naming it: a hung child ends before bun's 5 s test limit kills it as a dangling
 // process, which says nothing of which call it was (once in CI). The script runs in a process
@@ -199,6 +203,7 @@ export function reset() {
   extractHook = null;
   keepSettings = false;
   settingsStale = false;
+  drawBetweenAsks = false;
   lacking.clear();
   stubHas.clear();
   for (const list of [mdSources, overlays, closed, views, editors, scrollHandles, settingsWrites]) list.length = 0;
@@ -376,6 +381,11 @@ export function probeFrame(v, cx) {
   try { draw(v, cx); } finally { delete v.probeDue; }
   // The timers due before the next frame run, as Herdr runs them between frames (a scroll
   // asked 16 or 48 ms on); the frame marks they would clear are cleared.
+  if (drawBetweenAsks) {
+    const first = cx.timers.filter((x) => x.ms <= 120).sort((a, b) => a.ms - b.ms);
+    cx.timers = cx.timers.filter((x) => x.ms > 120);
+    for (const [k, x] of first.entries()) { x.fn(cx); if (first[k + 1]?.ms !== x.ms) draw(v, cx); }
+  }
   cx.flush(120, 3);
   dropTimers(v, cx);
   for (const [p, sig] of due) v.probed(p.key, sig, { width: 300, height: fakeH(p) * v.zoom() }, cx);
@@ -445,6 +455,8 @@ export const H = {
   set keepSettings(x) { keepSettings = x; },
   get settingsStale() { return settingsStale; },
   set settingsStale(x) { settingsStale = x; },
+  get drawBetweenAsks() { return drawBetweenAsks; },
+  set drawBetweenAsks(x) { drawBetweenAsks = x; },
 };
 
 // Helpers the render tests share: render.test.js and the topic files on this harness.

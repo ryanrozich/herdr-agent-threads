@@ -24,6 +24,7 @@ const DEFAULTS = {
   extractHook: null,
   keepSettings: false,
   settingsStale: false,
+  drawBetweenAsks: false,
 };
 const LISTS = { closed, editors, mdSources, overlays, scrollHandles, settingsWrites, views };
 
