@@ -2507,6 +2507,8 @@ export default class Threads extends View {
   // progress shows again.
   restart(s, fresh = false) {
     this.dropAnchor();
+    // The open replies' records hold rows made from the old turns.
+    this.partTurns = null;
     Object.assign(s, newSession(s.id, s.file), { reason: s.reason, version: s.version + 1, partial: false, clock: s.clock, senders: s.senders });
     if (fresh) { s.loaded = false; s.error = null; s.missing = false; }
   }
@@ -5359,6 +5361,8 @@ export default class Threads extends View {
   toggle(key, cx) {
     if (this.open.has(key)) {
       this.open.delete(key);
+      // Its reply's record (partMemo): the split, the parts' links and rows.
+      this.partTurns?.delete(key);
       this.dropCode(`${key}:`);
       if (this.selecting === key) this.endSelect();
     } else {
@@ -6788,6 +6792,7 @@ export default class Threads extends View {
     this.sessions = [];
     this.senderHits = null;
     this.open.clear();
+    this.partTurns = null;
     this.full.clear();
     this.sel = null;
     this.res = { kind: "resolving" };
