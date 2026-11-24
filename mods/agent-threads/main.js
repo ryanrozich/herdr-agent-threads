@@ -9030,8 +9030,8 @@ export default class Threads extends View {
   // the field's count and place, its two steps, n / Shift n and a new search's first
   // selection read them, and a draw with nothing changed checks no turn. Not in the Pinned
   // view, whose matches are among its pins (matchKeys over its rows).
-  // The set: what it was found for (base, and each session, its version, turn count and
-  // loaded); at, a match's key to its place, and by, back: places run from bot (the oldest
+  // The set: what it was found for (base, and each session, its version, turn count, turns
+  // array and loaded; a session read again from the top, restart, has a new array); at, a match's key to its place, and by, back: places run from bot (the oldest
   // found) up to top - 1 (the newest); hidden, the matches among hidden agent messages:
   // hidOld of them in the older sessions, and hidL, their turn indexes in the newest; cur, the
   // next turn to check, going back from the newest, with bot, hidOld and the length of hidL
@@ -9055,6 +9055,7 @@ export default class Threads extends View {
       let older = false;
       let newest = false;
       for (let i = 0; i <= L; i++) {
+        if (S[i].turns !== h.arrs[i]) older = true;
         if (S[i].version === h.vers[i] && S[i].turns.length === h.lens[i] && Boolean(S[i].loaded) === h.loaded[i]) continue;
         if (i < L) older = true;
         else newest = true;
@@ -9065,6 +9066,7 @@ export default class Threads extends View {
       hidOld: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1, bot: 0, hidOld: 0, hidL: 0 }, done: false,
       get hidden() { return this.hidOld + this.hidL.length; } };
     h.vers = S.map((s) => s.version);
+    h.arrs = S.map((s) => s.turns);
     h.lens = S.map((s) => s.turns.length);
     h.loaded = S.map((s) => Boolean(s.loaded));
     // A new set's first slice, wherever it is first asked for (scanStep).
