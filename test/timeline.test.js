@@ -421,3 +421,57 @@ test("timeline tracks: worked out in the layout pass, only for a turn drawn wide
   expect(Z.tracks.size).toBeLessThan(10);
   expect(TL_MADE.tracks - p).toBe(Z.tracks.size);
 });
+
+test("timeline lane-less rows: an interrupted turn's Interrupted row is no bar, so no band or press finds it", () => {
+  const h = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 }));
+  const L = timelineLayout([h], 400, "clock", T0 + 100000);
+  const read = rowsOf(h).find((r) => r.lk === "tool");
+  expect(rowsOf(h).some((r) => r.lk === "stop")).toBe(true);
+  // The layout draws nothing at the turn's end: the prompt's bar and the Read's.
+  expect([...L.spans.values()].flat().every(([, b]) => b < 390)).toBe(true);
+  // Where the Interrupted row's box would be, at the turn's end: no band, and the heading.
+  expect(bandRows(L, [h], 396, 400)).toBe(null);
+  expect(timelineHit(L, [h], 398, null, T0 + 100000)).toEqual({ turn: h.key, key: h.key });
+  // A row with a lane is found as before: the Read's bar, 20 to 25 px.
+  expect(bandRows(L, [h], 18, 30)).toEqual({ a: read.key, b: read.key });
+  expect(timelineHit(L, [h], 22, null, T0 + 100000)).toEqual({ turn: h.key, key: read.key });
+});
+
+test("timeline spans: in a turn under 6 px wide, a call with no result keeps its 6 px when it joins the span before it", () => {
+  const heads = Array.from({ length: 100 }, (_, i) => head(turn(i + 1, [[["Read", "a", 2000, 2500], ["Bash", "bun test", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 })));
+  const L = timelineLayout(heads, 500, "clock", T0 + 100000);
+  const t = L.turns[10];
+  expect(t.w).toBeGreaterThan(2);
+  expect(t.w).toBeLessThan(6);
+  expect(rowsOf(heads[10]).find((r) => r.lk === "noresult").open).toBe(true);
+  // The call's bar is the turn's last 6 px, past its start; the Read's bar starts later, so
+  // the span they make starts no later than the call's bar.
+  const end = t.x + t.w;
+  const list = L.spans.get("tools|tools|0");
+  const s = list.find((v) => Math.abs(v[1] - end) < 1e-9);
+  expect(s).toBeTruthy();
+  expect(s[2]).toBe(1);
+  expect(s[0]).toBeLessThanOrEqual(end - 6 + 1e-9);
+  // The spans stay apart and in order.
+  for (let i = 1; i < list.length; i++) expect(list[i][0]).toBeGreaterThan(list[i - 1][1] + 0.5);
+});
+
+test("timeline press in a break: the nearer turn, and its step only within 4 px of the press itself", () => {
+  const heads = [head(turn(1, [[["Read", "a", 2000, 2500]]])), head(turn(2, [[["Read", "a", 2000, 2500]]]))];
+  const L = timelineLayout(heads, 600, "clock", T0 + 100000);
+  const [t1, t2] = L.turns;
+  expect(t1.x + t1.w).toBe(293);
+  expect(t2.x).toBe(307);
+  const [h1, h2] = heads;
+  const prompt = rowsOf(h2)[0].key;
+  const at = (x, lane = null) => timelineHit(L, heads, x, lane, T0 + 100000);
+  // 301 and 303: nearer the second turn, 6 and 4 px from its prompt's bar at 307: its heading.
+  expect(at(301)).toEqual({ turn: h2.key, key: h2.key });
+  expect(at(301, "input")).toEqual({ turn: h2.key, key: h2.key });
+  expect(at(303)).toEqual({ turn: h2.key, key: h2.key });
+  // 304: 3 px from it, the prompt.
+  expect(at(304)).toEqual({ turn: h2.key, key: prompt });
+  // Nearer the first turn, by the same rule: 3 px past its reply's bar, the reply; 6 px, the heading.
+  expect(at(296)).toEqual({ turn: h1.key, key: rowsOf(h1).find((r) => r.lk === "reply").key });
+  expect(at(299)).toEqual({ turn: h1.key, key: h1.key });
+});
