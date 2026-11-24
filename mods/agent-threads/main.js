@@ -2735,6 +2735,10 @@ export default class Threads extends View {
       const cap = capList(rows, sizes, this.win.cap.max, this.estimate({ kind: "note" }), at);
       this.capCut = cap.cut;
       if (cap.cut) { this.capFired++; rows = cap.rows; sizes = cap.sizes; }
+      // Where the cut starts, by the first item it keeps (each way of cutting starts at a place
+      // of its own): a cut that moved (or came or went) since the list was last laid out gives
+      // it other items under the offset in px it keeps (render, capLaid).
+      this.capSpan = cap.cut ? `${rows.find((r) => r.key !== "capped")?.key}` : "";
       this.rowsMemo = rows;
       // Cut by capList, the list's rows are found by key (rowIndex).
       this.indexedRows = cap.cut ? null : rows;
@@ -9225,6 +9229,11 @@ export default class Threads extends View {
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
       const lead = (k) => ((rows[k - 1]?.kind === "wtop" || rows[k - 1]?.kind === "afold") && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
+      // A list cut anew since its last layout holds other items at the offset it kept, which
+      // can be anywhere in them: the end of the session, for a turn after a long open one. So
+      // the row is also asked for at once, for this frame's layout, and the scroll below lands
+      // it from there.
+      if (i >= 0 && (this.capSpan ?? "") !== (this.capLaid ?? "")) this.askScroll(i, how === "center" ? "center" : "top");
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
@@ -9283,6 +9292,8 @@ export default class Threads extends View {
         if (top !== i) cx.timer.after(48, (cx) => { this.askScroll(top, how); cx.notify(); });
       }
     }
+    // The cut this frame lays out (capSpan).
+    this.capLaid = this.capSpan;
     const dim = Boolean(this.res.ended);
     const sticky = this.stickyDay();
     this.stickyShown = sticky?.key ?? null;

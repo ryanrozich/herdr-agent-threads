@@ -20650,6 +20650,9 @@ test("following, a newest turn whose rows run past the window shows from its hea
   frames(v, cx);
   expect([v.sel, v.follow]).toEqual(["0:150", true]);
   expect(asked[0]).toBe("0:150");
+  // Until following takes the end, every ask is for the head: the list still holds it when
+  // each is taken.
+  expect(asked.slice(0, asked.indexOf("end"))).toEqual(["0:150", "0:150"]);
   expect(v.rows().at(-1).kind).toBe("tail");
 });
 
@@ -20879,4 +20882,106 @@ test("past the cap, a press on a cut note brings the items it stands for in, to 
   frames(v, cx);
   expect(asked[0]).toBe(parts[parts.indexOf(first) - 1]);
   expect(inList(v, parts.at(-1))).toBe(false);
+});
+
+// The rows a simList frame shows, by key.
+function shownIn(v, f) {
+  const pre = [0];
+  for (const x of f.sizes) pre.push(pre[pre.length - 1] + x);
+  return f.keys.filter((_k, i) => pre[i + 1] > f.off && pre[i] < f.off + v.listH);
+}
+
+test("past the cap, down from an open turn cut below lands on the next turn in the first frame, though the list is cut anew around it", async () => {
+  // 80 turns, turn #41's reply of 40 paragraph and table pairs open: past a cap of 60 items
+  // the list holds #41's head and its first parts over a note, and #42 is past the note.
+  const ev = [];
+  for (let i = 0; i < 80; i++) {
+    const [p, t, d] = capTurn(i);
+    if (i === 40) t.t = Array.from({ length: 40 }, (_, j) => `Pair ${j}.\n\n| a | b |\n|---|---|\n| ${j} | x |`).join("\n\n");
+    ev.push(p, t, d);
+  }
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, max: 60 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  const sim = simList(v);
+  const shown = (f) => shownIn(v, f);
+  try {
+    openAt(v, cx, sim, 562);
+    v.command("search:#41", cx);
+    settleList(v, cx, sim);
+    v.action("open", cx);
+    v.action("open", cx);
+    settleList(v, cx, sim);
+    expect(v.rows().at(-1).key).toBe("capped-later");
+    expect(inList(v, "0:42")).toBe(false);
+    expect(shown(sim.last())).toContain("0:41");
+    v.action("next", cx);
+    probeFrame(v, cx);
+    expect(v.sel).toBe("0:42");
+    expect(v.rows()[0].key).toBe("capped");
+    expect(shown(sim.last())).toContain("0:42");
+    // Where it lands in that frame is where it stays: the scroll after it moves nothing.
+    const first = sim.last().off;
+    settleList(v, cx, sim);
+    expect(shown(sim.last())).toContain("0:42");
+    expect(sim.last().off).toBe(first);
+    // And back up: #41's head, in its own first frame too.
+    v.action("prev", cx);
+    probeFrame(v, cx);
+    expect(v.sel).toBe("0:41");
+    expect(shown(sim.last())).toContain("0:41");
+  } finally { listWindow = null; }
+});
+
+test("past the cap, each press on the later note shows the first item it brings in, in the first frame, as the cut moves on through the middle", async () => {
+  const { v, cx } = await capSession(150, { max: 30 }, 140, 80);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.open.add("0:141");
+    v.command("search:#141", cx);
+    settleList(v, cx, sim);
+    let middle = 0;
+    const note = () => v.rows().find((r) => r.key === "capped-later");
+    for (let k = 0; k < 10 && note(); k++) {
+      const go = note().go;
+      v.click("capped-later", cx);
+      probeFrame(v, cx);
+      expect(shownIn(v, sim.last())).toContain(go);
+      if (v.rows()[0].key === "capped" && v.rows().at(-1).key === "capped-later") middle++;
+      settleList(v, cx, sim);
+    }
+    // The cut moved from the middle to the middle at least once.
+    expect(middle).toBeGreaterThan(1);
+  } finally { listWindow = null; }
+});
+
+test("past the cap, a jump from a reader down in one cut turn to the next open turn shows it in the first frame, the cut moving from middle to middle", async () => {
+  const ev = [];
+  for (let i = 0; i < 150; i++) ev.push(...capTurn(i, i === 60 || i === 61, 40));
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, max: 60 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.open.add("0:61");
+    v.open.add("0:62");
+    v.command("search:#61", cx);
+    settleList(v, cx, sim);
+    // Down to the end of the items the cut keeps, in #61's reply.
+    sim.wheel(-1e6);
+    settleList(v, cx, sim);
+    const ends = () => [v.rows()[0].key, v.rows().at(-1).key];
+    expect(ends()).toEqual(["capped", "capped-later"]);
+    expect(shownIn(v, sim.last())).not.toContain("0:61");
+    expect(inList(v, "0:62")).toBe(false);
+    v.action("next", cx);
+    probeFrame(v, cx);
+    expect(v.sel).toBe("0:62");
+    expect(ends()).toEqual(["capped", "capped-later"]);
+    expect(shownIn(v, sim.last())).toContain("0:62");
+  } finally { listWindow = null; }
 });
