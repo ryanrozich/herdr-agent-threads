@@ -4926,7 +4926,15 @@ export default class Threads extends View {
       alone ||= this.owedRun === turn || this.neverFits(est);
     }
     if (alone) {
-      if ((this.unitsRun ?? 0) > 0 || spent > 0 || max < 0 || live || (!this.lineScreen && this.pastLine())) return true;
+      // Refused for the units this draw ran before it: a row on screen is owed and counted, as
+      // one the fit check refuses (lineCut), so the next draw tries it first (payOwed) and the
+      // release after a second OWED_DRAWS draws reaches it. Else a turn cut in company waited
+      // for a draw that reshaped nothing else, which a drain may not have for its whole length.
+      const after = (this.unitsRun ?? 0) > 0 || spent > 0;
+      if (after || max < 0 || live || (!this.lineScreen && this.pastLine())) {
+        if (after && this.lineScreen && max >= 0 && !live) { this.oweRow(); this.refuse(turn); }
+        return true;
+      }
       // Held by the time spent for a second OWED_DRAWS draws on screen: run all the same, as the
       // estimate may be too high and nothing else would teach it down. One stop at most.
       if (this.cutWhereNow(est) && (turn.refused?.n ?? 0) < 2 * OWED_DRAWS) {
