@@ -9712,7 +9712,20 @@ export default class Threads extends View {
     if ((this.shapeSpent ?? 0) > this.shapeMax()) {
       this.shapeLeft = (this.shapeLeft ?? 0) + 1;
       this.otherLeft = (this.otherLeft ?? 0) + 1;
-      return (Math.ceil((md.length * cw) / Math.max(w, 1)) + 1) * line;
+      // Rough, in one pass with no wrapping: each line at least one line and as many as its
+      // length fills, each blank line between paragraphs a gap. Counting the text as one long
+      // line was far too short for short paragraphs (a fifth of their height or less).
+      let h = line;
+      let gapped = true;
+      for (let at = 0; at <= md.length;) {
+        const end = md.indexOf("\n", at);
+        const n = (end < 0 ? md.length : end) - at;
+        if (n) { h += Math.max(1, Math.ceil((n * cw) / Math.max(w, 1))) * line; gapped = false; }
+        else if (!gapped) { h += gap; gapped = true; }
+        if (end < 0) break;
+        at = end + 1;
+      }
+      return h;
     }
     const t0 = now();
     let h = 0;
