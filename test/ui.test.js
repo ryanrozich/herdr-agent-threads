@@ -1102,6 +1102,17 @@ test("mdChunks: a paragraph of Japanese or Chinese prose that one view holds sta
   expect(seen).toEqual([[1200, 1, true, false], [4096, 1, true, false], [4097, 4, true, true]]);
 });
 
+// A word over a view is looked at for a mark in slices as it is measured, all of it: a word
+// whose first mark comes late (a long list with no mark, then a sentence) splits there too, in
+// one read and a step at a time.
+test("mdChunks: a word over a view whose only mark is in its last 256 characters splits after that mark", () => {
+  const md = `${"a".repeat(6000)}\u3002${"c".repeat(100)}`;
+  const job = mdSplit(md, MD_MAX);
+  for (let k = 0; k < 1e6 && !job.done; k++) mdSplitOn(job, 1, 1);
+  const lens = (parts) => parts.map((p) => (p.text ?? p).length);
+  expect([md.length - md.indexOf("\u3002") <= 256, lens(mdChunks(md, MD_MAX)), lens(job.parts)]).toEqual([true, [6001, 100], [6001, 100]]);
+});
+
 // With none of the seven marks, text splits as before at spaces alone (mdChunksBefore, the old
 // rule), the half-width , . : ; ! ? included: a word made of them is still one word.
 test("mdChunks: text with none of the full-width marks splits as before, half-width punctuation included", () => {
