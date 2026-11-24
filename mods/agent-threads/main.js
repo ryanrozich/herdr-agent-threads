@@ -96,7 +96,7 @@ import {
   BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
 import {
-  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, TL_MADE,
+  timelineModel, timelineHit, tlBox, tornPoints, polyRows, tlStrip, hatchLines, tlNumbers, tlBar, tlRow, tlPathOf, tlBuildStart, tlBuildGo, TL_MADE,
   TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
 } from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
@@ -202,6 +202,9 @@ const BAND_MARK = 100;
 // One slice of a rows build: past this, buildRows stops at the next turn and the next frame
 // goes on (buildStep).
 const BUILD_MS = 10;
+// The timeline's build from nothing, a draw (timeline.js tlBuildGo): at 5,600 turns the whole
+// build took 26 ms on the test machine, and it grows with the turns, so it goes on over draws.
+const TL_BUILD_MS = 8;
 // While the pane's width is changing (a drag), the column keeps the width it has and the
 // turns are laid out again once the pane has been still for ui.js REWRAP_PAUSE_MS. A width
 // change reshapes every turn and measures every reply again: at 2,000 turns that is 3.5 to
@@ -12091,10 +12094,10 @@ export default class Threads extends View {
     // has it, for the list's size callback (tlBase).
     const tlOn = this.tlShown();
     this.tlSlot = tlOn;
-    // A hidden strip keeps no model (about 452 B a turn at Fit, 2.5 MiB at 5,600 turns) and no
-    // painted paths: shown again, it places the turns anew.
-    if (!tlOn) { this.tlModel = null; this.tlKeep = null; this.tlHatch = null; this.tlFails = null; }
-    return v_flex()
+    // A hidden strip keeps no model (about 452 B a turn at Fit, 2.5 MiB at 5,600 turns), no
+    // build in progress and no painted paths: shown again, it places the turns anew.
+    if (!tlOn) { this.tlModel = null; this.tlJob = null; this.tlKeep = null; this.tlHatch = null; this.tlFails = null; }
+    const root = v_flex()
       .id("threads-root")
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
@@ -12125,6 +12128,12 @@ export default class Threads extends View {
       .when(this.keysOpen, (el) => el.child(this.keySheetView(t)))
       .when(this.settingsOpen, (el) => el.child(this.settingsCard(t)))
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
+    // A timeline build left for later draws (timelineView): the next draw goes on with it.
+    if (this.tlJob && !this.tlNext) {
+      this.tlNext = true;
+      cx.timer.after(0, (cx) => { this.tlNext = false; cx.notify(); });
+    }
+    return root;
   }
 
   // ---- the timeline (TRD-23 slice 1; round 7 and round 8) ----
@@ -12203,15 +12212,28 @@ export default class Threads extends View {
   timelineView(t, L, shown, i, inks) {
     const box = (el) => el.id("th-timeline").flex_none().w_full().h(TL_H).overflow_hidden().border_b(1).border_color(t.border)
       .bg(alpha(t.foreground, 0.025));
+    const waiting = () => box(h_flex()).items_center().pl(12)
+      .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child("The timeline shows once the whole session is read"));
     this.tlWait = this.ledgerHeld(L);
-    if (this.tlWait) {
-      return box(h_flex()).items_center().pl(12)
-        .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child("The timeline shows once the whole session is read"));
-    }
+    if (this.tlWait) return waiting();
     const cw = tlStrip(this.pw());
     const prev = this.tlModel;
     const t0 = now();
-    const M = timelineModel(prev, L.totals.heads, cw, "clock", Date.now(), null);
+    let M;
+    if (prev) M = timelineModel(prev, L.totals.heads, cw, "clock", Date.now(), null);
+    else {
+      // From nothing (opened, or shown again after a hidden strip dropped its model): placed and
+      // laid out over draws, TL_BUILD_MS a draw (timeline.js tlBuildGo), the waiting line
+      // meanwhile; trajFrame asks for the next draw. A job begun on other heads ends as it is,
+      // and the next draw's timelineModel takes it from there; a new width begins again.
+      if (!this.tlJob || this.tlJob.cw !== cw) this.tlJob = tlBuildStart(L.totals.heads, cw, "clock", Date.now(), null);
+      M = tlBuildGo(this.tlJob, t0 + TL_BUILD_MS, now);
+      if (!M) {
+        this.tlWait = true;
+        return waiting();
+      }
+      this.tlJob = null;
+    }
     this.tlModel = M;
     if (M.L !== prev?.L) this.tlMs = Math.round((now() - t0) * 10) / 10;
     const T = M.L;

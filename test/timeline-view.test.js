@@ -45,10 +45,13 @@ function listTall(b, cb, h) {
   const c = frame(b, cb);
   handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: b.paneW, height: h }, cb);
 }
-// A frame with the list measured tall enough for the timeline, so it shows.
+// A frame with the list measured tall enough for the timeline, so it shows, and the frames
+// after it while the strip's build from nothing goes on (a slow machine may need more than one).
 function shownFrame(b, cb, h = 400) {
   listTall(b, cb, h);
-  return frame(b, cb);
+  let c = frame(b, cb);
+  for (let k = 0; k < 50 && b.tlJob; k++) c = frame(b, cb);
+  return c;
 }
 // A step's bar on the drawn timeline: its turn's box and the bar's x0 and x1, in px of the strip.
 function barOf(b, key) {
@@ -716,7 +719,10 @@ test("timeline view: shown from nothing, the strip is placed and laid out over f
   try {
     b.key(keyEv("b"), cb);
     for (let k = 0; k < 400 && !b.tlModel; k++) {
-      cb.timers = [];
+      // The frame asked for runs, as Herdr runs it.
+      const due = cb.timers.filter((x) => x.ms === 0);
+      cb.timers = cb.timers.filter((x) => x.ms !== 0);
+      for (const x of due) x.fn(cb);
       const c = frame(b, cb);
       frames.push({ wait: own(c, "th-tl-wait") != null, lanes: own(c, "th-tl-lanes") != null, ran: b.tlJob?.ran ?? null, asked: cb.timers.some((x) => x.ms === 0), report: b.trajReport().timeline.waiting });
     }

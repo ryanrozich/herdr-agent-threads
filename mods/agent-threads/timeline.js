@@ -164,8 +164,20 @@ function roomOf(heads, scale, nowMs) {
   if (scale === "steps" || !h?.going || h.t0 == null) return 0;
   return liveRoom(Math.max(h.span ?? 0, nowMs - h.t0));
 }
-export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
+// A build stops after at most this many turns of one pass to look at the clock (tlBuildGo).
+export const TL_BUILD_CHUNK = 256;
+// Runs a build to its end: the whole build in one go.
+function runGen(g) {
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+  }
+}
+export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) { return runGen(geoGen(heads, cw, scale, nowMs)); }
+// timelineGeo's work, yielding the turns walked every TL_BUILD_CHUNK of a pass (tlBuildGo).
+function* geoGen(heads, cw, scale, nowMs) {
   TL_MADE.geo++;
+  const C = TL_BUILD_CHUNK;
   const n = heads.length;
   const geo = { cw, scale, turns: [], index: new Map(), walls: [], gap: 0, total: 0, steps: 0, live: -1, room: 0, m: 0, min: 0 };
   if (!n || !(cw > 0)) return geo;
@@ -174,44 +186,62 @@ export function timelineGeo(heads, cw, scale = "clock", nowMs = Date.now()) {
   const gap = n > 1 ? Math.min(GAP, (0.15 * cw) / (n - 1)) : 0;
   const min = Math.min(MIN, (0.3 * cw) / n);
   const target = Math.max(1, cw - gap * (n - 1));
-  const walls = heads.map(wallOf);
+  const walls = new Array(n);
+  for (let i = 0; i < n; i++) {
+    walls[i] = wallOf(heads[i]);
+    geo.steps += Math.max(1, stepN(heads[i]));
+    if ((i + 1) % C === 0) yield C;
+  }
+  yield n % C;
   const room = roomOf(heads, scale, nowMs);
   if (room > 0) { walls[n - 1] = room; geo.live = n - 1; geo.room = room; }
-  for (const h of heads) geo.steps += Math.max(1, stepN(h));
-  let widths;
+  // Each turn's width, by its index.
+  let widthOf;
   if (scale === "steps") {
     const sw = target / geo.steps;
-    widths = heads.map((h) => Math.max(1, stepN(h)) * sw);
+    widthOf = (ti) => Math.max(1, stepN(heads[ti])) * sw;
   } else {
     // The px per ms that fills the strip, each turn at least min wide: the turns held at min
     // and the px per ms for the rest found in turn until neither moves (a few passes; the
     // held set only grows as m falls). n * min is at most 30% of the strip, so it fits.
     let m = 0;
     let all = 0;
-    for (const w of walls) all += w;
+    for (let i = 0; i < n; i++) { all += walls[i]; if ((i + 1) % C === 0) yield C; }
+    yield n % C;
     if (all > 0) {
       m = target / all;
       for (let k = 0; k < 12; k++) {
         let held = 0;
         let rest = 0;
-        for (const w of walls) { if (w * m < min) held++; else rest += w; }
+        for (let i = 0; i < n; i++) {
+          const w = walls[i];
+          if (w * m < min) held++; else rest += w;
+          if ((i + 1) % C === 0) yield C;
+        }
+        yield n % C;
         const next = rest > 0 ? Math.max(0, target - held * min) / rest : 0;
         if (Math.abs(next - m) <= m * 1e-9) { m = next; break; }
         m = next;
       }
+      // The px per ms and the least width, for tlLastLength.
+      geo.m = m;
+      geo.min = min;
+      widthOf = (ti) => Math.max(min, walls[ti] * m);
+    } else {
+      // No turn has a length: each gets an even share.
+      widthOf = () => target / n;
     }
-    widths = walls.map((w) => Math.max(min, w * m));
-    // No turn has a length: each gets an even share.
-    if (!(all > 0)) widths = walls.map(() => target / n);
-    // The px per ms and the least width, for tlLastLength.
-    else { geo.m = m; geo.min = min; }
   }
   let x = 0;
-  heads.forEach((h, ti) => {
-    geo.turns.push({ x, w: widths[ti], key: h.key, n: h.n });
+  for (let ti = 0; ti < n; ti++) {
+    const h = heads[ti];
+    const w = widthOf(ti);
+    geo.turns.push({ x, w, key: h.key, n: h.n });
     geo.index.set(h.key, ti);
-    x += widths[ti] + (ti < n - 1 ? gap : 0);
-  });
+    x += w + (ti < n - 1 ? gap : 0);
+    if ((ti + 1) % C === 0) yield C;
+  }
+  yield n % C;
   geo.walls = walls;
   geo.gap = gap;
   geo.total = x;
@@ -428,8 +458,13 @@ function layTurn(S, ti) {
 // heading (a finished turn keeps its heading when the ledger is built again), so a finished
 // turn's tracks are worked out once while it stays drawn.
 export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), view = null, geo = null, range = null, kept = null) {
+  return runGen(layoutGen(heads, cw, scale, nowMs, view, geo, range, kept));
+}
+// timelineLayout's work (and the placing's, with no geo), yielding the turns walked every
+// TL_BUILD_CHUNK (tlBuildGo).
+function* layoutGen(heads, cw, scale, nowMs, view, geo, range, kept) {
   TL_MADE.layout++;
-  const G = geo ?? timelineGeo(heads, cw, scale, nowMs);
+  const G = geo ?? (yield* geoGen(heads, cw, scale, nowMs));
   const { z, x0 } = tlClamp(G, view);
   const out = { cw, scale, z, x0, geo: G, turns: G.turns, index: G.index, total: G.total, zmax: tlMaxZoom(G), gaps: [], spans: new Map(), labels: [], every: 1, ticks: [], fails: [], grow: [], tracks: new Map(), from: 0, to: -1 };
   const n = G.turns.length;
@@ -447,14 +482,41 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   out.from = lo;
   // The turns that could have a number (those starting before the strip's end) in nti, nx, nw.
   const S = { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept, failEnd: -Infinity, nti: [], nx: [], nw: [] };
+  let walked = 0;
   for (let ti = lo; ti < n; ti++) {
     // Before the last turn, what the layout holds so far, so a new heading of that turn alone
     // is laid out again from here (tlTail).
     if (ti === n - 1 && !range) out.cut = cutOf(S);
     if (!layTurn(S, ti)) break;
+    if (++walked === TL_BUILD_CHUNK) { yield walked; walked = 0; }
   }
+  yield walked;
   numbers(out, heads, S.nti, S.nx, S.nw);
   return out;
+}
+// A model built from nothing over several draws (opened, or shown again after the pane dropped
+// the model while hidden): the placing and the layout, TL_BUILD_CHUNK turns of a pass a step.
+// tlBuildGo(J, until, clock) takes steps until clock() reaches until, and gives the model (as
+// timelineModel(null, ...) makes it) once done, else null. J.ran: the turns walked in that
+// call; J.total: in all. At 5,600 turns the build took 26 ms on the test machine, and it grows
+// with the turns, so a draw does only part of it.
+export function tlBuildStart(heads, cw, scale = "clock", nowMs = Date.now(), view = null) {
+  return { heads, cw, scale, nowMs, vk: view ? `${view.z}|${view.x0}` : "", gen: layoutGen(heads, cw, scale, nowMs, view, null, null, null), ran: 0, total: 0, model: null };
+}
+export function tlBuildGo(J, until, clock) {
+  if (J.model) return J.model;
+  J.ran = 0;
+  for (;;) {
+    const r = J.gen.next();
+    if (r.done) {
+      const L = r.value;
+      J.model = { heads: J.heads, cw: J.cw, scale: J.scale, geo: L.geo, vk: J.vk, L, grow: tlGrow(L, J.nowMs) };
+      return J.model;
+    }
+    J.ran += r.value;
+    J.total += r.value;
+    if (clock() >= until) return null;
+  }
 }
 // The turns' numbers, 10.5 px: a number is TL_NUM_PAD px (its edge line and padding) and
 // TL_NUM_CH px a digit wide, and TL_NUM_GAP px clear of the next. A turn's length goes beside
