@@ -6769,6 +6769,10 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
   };
   v.height = function (r) { hook("height", r); spend(P.row); return hi.call(this, r); };
   performance.now = () => { if (stopped) throw STOP; return t; };
+  // The wall clock moves with it, from where it is now: the pane's waits on Date.now (a scroll's
+  // 2 s, a return's 400 ms) run on the priced time too.
+  const realDate = Date.now, d0 = realDate();
+  Date.now = () => d0 + (t - t0);
   let timers = cx.timers.map((x) => ({ due: t + x.ms, fn: x.fn }));
   let armed = [];
   cx.timer = { after: (ms, fn) => { armed.push({ due: t + ms, fn }); }, every: timer.every };
@@ -6808,6 +6812,7 @@ function costedFrames(v, cx, n, done, { secs = 40, stopAfter = 0, scale = 1, onF
     }
   } finally {
     performance.now = real;
+    Date.now = realDate;
     cx.timer = timer;
     cx.notify = notify;
     cx.timers = timers.map((x) => ({ ms: Math.max(0, x.due - t), fn: x.fn }));
@@ -6965,6 +6970,58 @@ test("a rough Markdown height counts lines and paragraph gaps, within a tenth of
     return [rough <= real, rough >= 0.9 * real];
   });
   expect(got).toEqual(texts.map(() => [true, true]));
+}, 60000);
+
+// The open's own scroll of the card (toggle: the card's last part to the near edge, then its
+// head) from the open until every opened card settles and no timer is left (the scrolls a
+// settled frame asks for 16 and 48 ms on among them), on a pane listH px tall: each scroll the
+// list is asked for, with the time since the open and the row's key. onFrame(i, v): after
+// frame i.
+async function openScrolls(texts, { listH = 600, onFrame, ...opts } = {}) {
+  const { v, cx, key, keys } = await openLong(texts);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  v.listH = listH;
+  const asks = [];
+  let at0 = 0;
+  v.scroll = { scroll_to_bottom() {}, scroll_to_item(i, how) { asks.push({ ms: Date.now() - at0, key: v.rowsMemo?.[i]?.key, how }); } };
+  let f = 0;
+  at0 = Date.now();
+  const r = costedFrames(v, cx, 400, await cardDone(v, keys), { ...opts, onFrame: (ms) => { if (f === 0) at0 = Date.now() - ms; onFrame?.(f++, v, cx); } });
+  return { v, cx, key, keys, r, asks };
+}
+// A reader who turns the wheel while the card comes in has taken the view: the open's scroll is
+// dropped, and nothing the open asked for moves the list after the wheel.
+test("a wheel while an opened card comes in drops the open's scroll of the card", async () => {
+  let wheelAt = -1;
+  const { v, r, asks } = await openScrolls(shortParas(4000), { onFrame: (i, v) => { if (i === 0) { v.listWheel({ delta: { y: 40 } }); wheelAt = Date.now(); } } });
+  costLog("58 parts, a wheel at the first frame", { ...r, asks });
+  expect([r.settled > 0, wheelAt > 0, asks.filter((a) => a.ms >= 0), v.scrollTo ?? null]).toEqual([true, true, [], null]);
+}, 60000);
+// A card taller than the pane lands with its head at the top at once: the rows above it are
+// settled, and its own parts coming in below do not move its head. A reader who starts reading
+// from there (a wheel down) is not moved again.
+test("an opened card taller than the pane lands with its head at the top at once, and a reader reading on from it is not moved as its parts come in", async () => {
+  const { key, r, asks } = await openScrolls(shortParas(4000), { onFrame: (i, v) => { if (i === 6) v.listWheel({ delta: { y: -30 } }); } });
+  costLog("58 parts, head at once", { ...r, asks });
+  // Asked within the first frames, well before the card settles (frame 14 at the rig's prices).
+  expect([r.settled > 6, asks.length, asks.at(-1)?.key, asks.every((a) => a.ms < 100)]).toEqual([true, 2, key, true]);
+}, 60000);
+// A card that fits the pane lands as before: once it has settled, its last part to the near
+// edge and then its head, so the whole card is on screen.
+test("an opened card that fits the pane lands once it settles, wholly on screen", async () => {
+  const { key, r, asks } = await openScrolls(shortParas(6), { listH: 3000 });
+  costLog("a short card that fits", { ...r, asks });
+  // Its last row (the strip under the reply), then its head.
+  expect([r.settled > 0, asks.map((a) => a.key)]).toEqual([true, [`cp:${key}`, key]]);
+}, 60000);
+// The scroll's wait has a limit (SCROLL_WAIT_MS): a card that fits, below a capped card still
+// held after a stopped draw, lands at the limit, though the pane asks for no frame then. Its
+// scrolls land on its own rows, though the card above gains rows between the frame that asks
+// and the scroll.
+test("an opened card's scroll that waits lands at its 2 s limit in a quiet pane", async () => {
+  const { key, r, asks } = await openScrolls([shortParas(4000), shortParas(6)], { listH: 3000, stopAfter: 1 });
+  costLog("a short card under a held capped one", { ...r, asks });
+  expect([asks.map((a) => a.key), asks[0]?.ms >= 2000 && asks[0]?.ms < 2400]).toEqual([[`cp:${key}`, key], true]);
 }, 60000);
 
 // Parts held through the light window after a stopped draw go on in the draw after it: a
