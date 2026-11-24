@@ -1,7 +1,8 @@
 // bun test: a search in a long session draws within Herdr's time (TRD-123). Herdr stops a
 // mod's draw that runs past about 50 ms and shows "This view could not be re-rendered" until
-// one fits. In a 2,000-turn session a search for "a", then "ar", then a word, stopped every
-// draw for 15.7 s on the owner's machine, in the search field's count and place.
+// one fits. On the test rig (Herdr 0.1.17, main at 635967f), in a 2,000-turn session, a
+// search for "a", then "ar", then a word, stopped every draw for 15.7 s, in the search field's
+// count and place. The owner first saw it on a long session.
 import { test, expect, spyOn } from "bun:test";
 import * as T from "../mods/agent-threads/core/turns.js";
 import { isShown, oneCharTest, searchable } from "../mods/agent-threads/ui.js";
@@ -12,16 +13,19 @@ setup();
 // ---- the clock ----
 // The draws here run on a clock that moves only by the work counted, at prices for Herdr's
 // interpreter, so a run does the same work in the same draws on any machine, however busy:
-// - checks: one threadMatches call, 4 µs. The owner's trace: a stopped draw reached 1,700 to
-//   2,600 turn keys of the place's scan in the 6 to 14 ms between entering it (49 ms) and
-//   the stop (55 to 63 ms), 3 to 7 µs a key. In bun with the JIT off it is 0.3 to 0.8 µs.
+// - checks: one threadMatches call, 4 µs. The rig's trace (Herdr 0.1.17): a stopped draw
+//   reached 1,700 to 2,600 turn keys of the place's scan in the 6 to 14 ms between entering
+//   it (49 ms) and the stop (55 to 63 ms), 3 to 7 µs a key. In bun with the JIT off it is 0.3
+//   to 0.8 µs.
 // - reshapes and built: a turn reshaped, and a turn's rows built, at the harness's prices
 //   (bun with the JIT off).
 // - frames: the rest of a draw, 20 ms each, a model. A still draw with no search fits, as the
-//   owner's 508 draws before the search did; on the trace the draws entered the place's scan
+//   trace's 508 draws before the search did; on the trace the draws entered the place's scan
 //   at 49 ms, after the count's scan (about 8 ms at 4 µs) and the rows' slices.
 // The rig moves to a newer Herdr, so the figures are also taken at twice these prices (X 2):
 // a check 8 µs, and reshapes and rows twice the harness's; the frame's model stays 20 ms.
+// That fixed 20 ms decides the figures at 3x and 4x more than the price does (each slice is
+// cut to what the draw has left): the rig's draws on Herdr 0.1.18 are the check, not these.
 const COST = { checks: 0.004, reshapes: PRICE.reshapes, built: PRICE.built, frames: 20 };
 const paid = { checks: 0, reshapes: 0, built: 0, frames: 0 };
 let X = 1;
