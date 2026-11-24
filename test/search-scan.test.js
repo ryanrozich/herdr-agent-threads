@@ -1174,12 +1174,19 @@ test("a step from a match in a long tail being checked again goes the way it is 
     r.texts = texts.filter((t) => !countingWords(t));
     // A turn comes in; Shift n, then n, from the selected turn, before the next draw.
     tailMore(s, 1);
-    r.placed = v.hitsNow().at.has(from);
+    const h = v.hitsNow();
+    r.placed = h.at.has(from);
+    // The nearest match each way among the places found: newer, none yet (the tail is
+    // checked again oldest first), so Shift n stays; older, the newest place before it.
+    const found = [];
+    for (let p = h.bot; p < h.top; p++) found.push(h.by.get(p));
+    const newer = found.find((k) => n(k) > n(from)) ?? from;
+    const older = found.findLast((k) => n(k) < n(from));
     v.action("newerMatch", cx);
-    r.newer = n(v.sel) >= n(from);
+    r.newer = v.sel === newer && newer === from;
     v.sel = from;
     v.action("olderMatch", cx);
-    r.older = n(v.sel) < n(from) && v.selMatches();
+    r.older = v.sel === older && v.selMatches();
     v.sel = from;
     for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
     r.back = v.matchPlace().at > 0;
