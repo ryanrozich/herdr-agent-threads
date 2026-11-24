@@ -895,6 +895,10 @@ for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and
         const d = drawOnce(v, cx);
         seen.push({ k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v), text: fieldText(v) });
       }
+      // A turn read in between draws: the count read before the next draw has the tail
+      // checked again already (its slice in hitsNow).
+      tailMore(s, 1);
+      seen.push({ k: 150, stopped: false, ms: true, counting: counting(v), text: fieldText(v) });
     });
   } finally { X = 1; }
   const first = seen.findIndex((d) => !d.counting);
@@ -942,6 +946,34 @@ for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply a
   expect(after != null && after <= 20).toBe(true);
   expect(places(v)).toEqual(want(v, "zqxjvk"));
   expect(fieldText(v)).toBe("No matches");
+}, 120000);
+
+// A reply comes in while a tail longer than a slice is checked again, and then a turn after it:
+// the turns of the tail not checked yet when the reply came are still checked, though the
+// reply makes them settled.
+test("a reply coming in while a 2,000-turn tail is checked again, then a turn after it, leaves the count and every place right", async () => {
+  const { v, cx, s } = await longPane(5600);
+  tailMore(s, 2000);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const ts = new Date(Date.UTC(2026, 10, 4, 10, 0)).toISOString();
+  let tail = null;
+  priced(v, () => {
+    v.action("search:look again", cx);
+    for (let k = 0; k < 3; k++) { tailMore(s, 1); drawOnce(v, cx); }
+    T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again, with a reply.`, ts });
+    T.apply(s, { k: "t", t: "Looked." });
+    T.apply(s, { k: "d", ms: 1000, ts });
+    drawOnce(v, cx);
+    tail = v.hitsNow().cur.tail;
+    tailMore(s, 1);
+    for (let k = 0; k < 40 && counting(v); k++) drawOnce(v, cx);
+  });
+  // The reply came while the tail was part checked.
+  expect(tail != null && tail.next < s.turns.length - 2).toBe(true);
+  expect(counting(v)).toBe(false);
+  expect(want(v, "look again").keys.length).toBe(2006);
+  expect(places(v)).toEqual(want(v, "look again"));
 }, 120000);
 
 // ---- a transcript replaced ----
