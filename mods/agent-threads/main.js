@@ -6485,6 +6485,8 @@ export default class Threads extends View {
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
+    // A key also calls off an older step going on by itself (stepHit); a step sets it again.
+    if (this.hits) this.hits.step = null;
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
@@ -6520,40 +6522,7 @@ export default class Threads extends View {
       case "olderMatch":
       case "newerMatch": {
         const h = this.hitsNow();
-        if (h) {
-          // The tail's pop stopped between its writes leaves top - 1 with no entry: top goes
-          // down to it, the pop's last write (hitsNow finishes the pop first; this is a guard).
-          while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
-          const older = name === "olderMatch";
-          const next = () => {
-            const p = h.at.get(this.sel);
-            if (p != null) return p + (older ? -1 : 1);
-            return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
-          };
-          // An older step from a match in a tail being checked again, not placed yet: the turns
-          // back from it to the tail's next turn, not checked again yet, are checked here, one
-          // slice at most (tailBack). It lands on the first match there. A slice that ends first
-          // leaves the selection where it is, and the next press goes on from where it stopped.
-          // Every match before the tail's next turn has its place, so hitNear is exact there.
-          const tail = h.cur.tail;
-          if (older && tail && !h.at.has(this.sel) && this.selMatches()) {
-            const [si, n] = this.sel.split(":").map(Number);
-            if (si === this.sessions.length - 1 && n - 1 > tail.next) {
-              const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
-              if (k === undefined) return true;
-              if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
-            }
-          }
-          let j = next();
-          // Past the oldest match found so far, while more can come: one slice, here.
-          if (older && j < h.bot && !h.done) { this.scanStep(); j = next(); }
-          if (h.top === h.bot) return !h.done;
-          if (j < h.bot || j >= h.top) return true;
-          this.sel = h.by.get(j);
-          this.follow = false;
-          this.scrollTo = { key: this.sel, how: "center" };
-          return true;
-        }
+        if (h) return this.stepHit(h, name === "olderMatch");
         const mk = this.matchKeys(keys);
         if (!mk.length) return false;
         const i = mk.indexOf(this.sel);
@@ -9190,8 +9159,16 @@ export default class Threads extends View {
     const was = this.hits;
     const h = this.hitsNow();
     if (!h) return h;
+    // An older step kept from a press whose slice ended first (stepHit): in a draw, its next
+    // slice, in place of the scan's, while the step's match is still selected. It keeps
+    // itself until it lands, so a stop in its slice leaves it for the next draw.
+    let stepped = false;
+    if (cx && h.step != null) {
+      if (h.step === this.sel) { stepped = true; this.stepHit(h, true); }
+      else h.step = null;
+    }
     // A set made just now has had its first slice (hitsNow).
-    if (h === was && !h.done) this.scanHits(h, t0 + this.scanMax());
+    if (h === was && !h.done && !stepped) this.scanHits(h, t0 + this.scanMax());
     if (this.renderOpen) this.scanSpent = (this.scanSpent ?? 0) + (now() - t0);
     // A new search's selection (setQuery): the newest match, once one is found, unless the
     // selection moved meanwhile. Not while a tail is checked again (oldest first): a newer
@@ -9343,6 +9320,46 @@ export default class Threads extends View {
     h.cur = { ...h.cur, ...(inTail ? { ti: safe - 1 } : {}), bot: h.bot, hidOld: h.hidOld, hidL: h.hidL.length, tail: { next: safe, top: h.top } };
     h.done = false;
     if (turns.length - safe <= HITS_TAIL) this.scanHits(h, Infinity, true);
+    return true;
+  }
+
+  // A step through the set's matches, older or newer (n and Shift n): the next match back in
+  // time or forward from the selected one. The tail's pop stopped between its writes leaves
+  // top - 1 with no entry: top goes down to it, the pop's last write (hitsNow finishes the pop
+  // first; this is a guard).
+  stepHit(h, older) {
+    while (h.top > h.bot && !h.by.has(h.top - 1)) h.top--;
+    const next = () => {
+      const p = h.at.get(this.sel);
+      if (p != null) return p + (older ? -1 : 1);
+      return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
+    };
+    // An older step from a match in a tail being checked again, not placed yet: the turns back
+    // from it to the tail's next turn, not checked again yet, are checked here, one slice at
+    // most (tailBack). It lands on the first match there. A slice that ends first leaves the
+    // selection where it is and keeps the step (h.step): each draw after it goes on with it,
+    // a slice each (scanStep), from where it stopped, until it lands. A key or a new selection
+    // calls it off. Every match before the tail's next turn has its place, so hitNear is exact
+    // there.
+    const tail = h.cur.tail;
+    if (older && tail && !h.at.has(this.sel) && this.selMatches()) {
+      const [si, n] = this.sel.split(":").map(Number);
+      if (si === this.sessions.length - 1 && n - 1 > tail.next) {
+        const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
+        if (k === undefined) { h.step = this.sel; return true; }
+        h.step = null;
+        if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
+      }
+    }
+    h.step = null;
+    let j = next();
+    // Past the oldest match found so far, while more can come: one slice, here.
+    if (older && j < h.bot && !h.done) { this.scanStep(); j = next(); }
+    if (h.top === h.bot) return !h.done;
+    if (j < h.bot || j >= h.top) return true;
+    this.sel = h.by.get(j);
+    this.follow = false;
+    this.scrollTo = { key: this.sel, how: "center" };
     return true;
   }
 
