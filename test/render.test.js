@@ -19916,6 +19916,17 @@ test("the opening: the loading state's tokens are the status line's, and the new
   const { newestPrompt } = await import("../mods/agent-threads/ui.js");
   expect(early).toEqual(newestPrompt(s.turns));
   const info = v.openInfo(s);
+  // Found once for each version of the session, not in every draw (a whole prompt's white
+  // space collapsed, a pasted one of 950 KB among them): a prompt changed under the same
+  // version shows as it was, and the next version shows it.
+  const you = s.turns.findLast((x) => x.sender?.kind === "you" && !x.cmd);
+  const was = you.prompt;
+  you.prompt = "a   changed\n prompt";
+  expect(v.openInfo(s).newest).toEqual(info.newest);
+  s.version++;
+  expect(v.openInfo(s).newest.text).toBe("a changed prompt");
+  you.prompt = was;
+  s.version++;
   expect(info.tokens).toBe(v.statusStats().tokens);
   expect(info.tokens).toBeGreaterThan(0);
   // The status line's own words for them, at a width that has room for its tokens.
