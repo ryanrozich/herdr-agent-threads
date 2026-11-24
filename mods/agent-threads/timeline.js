@@ -2,8 +2,9 @@
 // imports, tested under bun (test/timeline.test.js); main.js draws what this returns.
 // Carried from draft 107 (ledger.js there). The steps it reads are each heading's step rows
 // (h.steps, made by ledger.js ledgerTurn, which holds no way back to the heading): a step's
-// times and flags are its row's, and the tracks are worked out here, in the layout pass, only for a turn drawn wide
-// enough for its bars (tlTracks). The ledger keeps no array and no number per step for it.
+// times and flags are its row's, and the tracks are worked out here, in the layout pass, only
+// for a turn drawn wide enough for its bars (tlTracks). The ledger keeps no array and no
+// number per step for it.
 
 import { durText, startText, LEDGER_KINDS, spanKeys, TL_TRACK, TL_OPEN, TL_FAILED } from "./ledger.js";
 
@@ -220,6 +221,31 @@ export function bandRows(L, heads, lo, hi) {
   }
   return a == null ? null : { a, b };
 }
+// A span's right end b (torn: an unfinished call's) taken into span s: the rightmost end and
+// its torn mark; at equal ends the mark is kept when either is torn.
+const takeEnd = (s, b, torn) => {
+  if (b > s[1]) { s[1] = b; if (torn) s[2] = 1; else s.length = 2; }
+  else if (torn && b === s[1]) s[2] = 1;
+};
+// The span [a, b] put into list, one key's spans apart and in order: [x0, x1], or [x0, x1, 1]
+// when its right end is an unfinished call's (drawn torn). Spans join where they touch or
+// overlap, within half a pixel either way. They come in a turn's row order, which is not the
+// clock's (a note listed after a later one, a call on the second track, an unfinished call's
+// bar in a turn under 6 px, which starts left of the bars before it), so the span goes in its
+// place: after the last span that starts at or left of it, found from the end (one that comes
+// in order takes no step back). It joins that span when it starts within half a pixel of its
+// end, then the spans after it that it reaches; the spans it does not reach are left apart.
+export function tlJoin(list, a, b, torn = false) {
+  let i = list.length;
+  while (i > 0 && list[i - 1][0] > a) i--;
+  let s;
+  if (i > 0 && a <= list[i - 1][1] + 0.5) { i--; s = list[i]; takeEnd(s, b, torn); }
+  else { s = torn ? [a, b, 1] : [a, b]; list.splice(i, 0, s); }
+  // The list was apart, so of the spans s reaches the last ends rightmost.
+  let j = i + 1;
+  while (j < list.length && list[j][0] <= s[1] + 0.5) j++;
+  if (j > i + 1) { const e = list[j - 1]; takeEnd(s, e[1], e[2] === 1); list.splice(i + 1, j - i - 1); }
+}
 // range: the focus range as { ia, ib, pos } (the first and last row's place in the ledger's
 // rows, and every row's place): bars outside it get their own spans, with "|o" on the key.
 // The running turn's unfinished bars are not spans: each is in out.grow ({ k, x0, tx, w, wall,
@@ -236,30 +262,11 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
   const n = G.turns.length;
   if (!n) return out;
   const walls = G.walls;
-  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], joined where they touch. A
-  // span whose right end is an unfinished call's is [x0, x1, 1]: drawn with its torn end. A
-  // joined span is the union of both: in a turn under 6 px wide an unfinished call's bar starts
-  // left of the bars before it (itemBox), and may reach back over the span before, which it
-  // then joins too, so the spans stay apart and in order.
+  // Spans by lane, ink and track: "tools|failed|0" -> [[x0, x1]], apart and in order (tlJoin).
   const add = (k, a, b, torn = false) => {
     let list = out.spans.get(k);
     if (!list) { list = []; out.spans.set(k, list); }
-    let last = list[list.length - 1];
-    if (last && a <= last[1] + 0.5) {
-      if (a < last[0]) last[0] = a;
-      if (b > last[1]) { last[1] = b; if (torn) last[2] = 1; else last.length = 2; }
-      else if (torn && b === last[1]) last[2] = 1;
-      while (list.length > 1 && list[list.length - 2][1] + 0.5 >= last[0]) {
-        // The list was apart and in order, so last ends past p: p always takes last's end and torn mark (no equal ends).
-        const p = list[list.length - 2];
-        if (last[0] < p[0]) p[0] = last[0];
-        if (last[1] >= p[1]) { p[1] = last[1]; if (last[2]) p[2] = 1; else p.length = 2; }
-        list.pop();
-        last = p;
-      }
-      return;
-    }
-    list.push(torn ? [a, b, 1] : [a, b]);
+    tlJoin(list, a, b, torn);
   };
   // The turns in view, and a margin: the first found by halving, since turns are in order.
   const M = 40;

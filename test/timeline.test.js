@@ -628,10 +628,10 @@ test("timeline spans out of order: an unfinished call's torn end is kept, apart 
   expect(A.turns[0]).toMatchObject({ x: 0, w: 1440 });
   expect(rawBars(A, a, 0, "tools").slice(1)).toEqual([[480, 1440], [120, 144]]);
   expect(A.spans.get("tools|tools|1")).toEqual([[120, 144], [480, 1440, 1]]);
-  // Grep from 15 s to 21 s, at 360 to 504 px: it reaches the torn bar, so one span, still torn.
-  const b = mk(2, 15000, 21000);
+  // Grep from 15 s to 22.5 s, at 360 to 540 px: it reaches the torn bar, so one span, still torn.
+  const b = mk(2, 15000, 22500);
   const B = lay(b);
-  expect(rawBars(B, b, 0, "tools").slice(1)).toEqual([[480, 1440], [360, 504]]);
+  expect(rawBars(B, b, 0, "tools").slice(1)).toEqual([[480, 1440], [360, 540]]);
   expect(B.spans.get("tools|tools|1")).toEqual([[360, 1440, 1]]);
 });
 
