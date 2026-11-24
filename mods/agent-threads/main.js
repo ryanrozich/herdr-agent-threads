@@ -201,6 +201,8 @@ const TAIL = 24;
 // start stays and new rows join at its end until stop, then wait under a Show later item.
 // Show earlier and Show later move it a block. max is capList's cap, the last guard.
 const ROW_CAP = { slide: 9000, block: 1000, stop: 9900, max: LIST_MAX };
+// The list's own items, which stand for no row of the session: the cut's key skips them.
+const LIST_ITEMS = new Set(["gap", "spacer", "older", "newer", "tail", "capped", "capped-later"]);
 // The keys that act on the selected turn, which bring the list's window back to it.
 const SEL_KEYS = new Set(["prev", "next", "open", "pin", "copy", "select", "legend", "deeper", "shallower"]);
 // A read with no heartbeat for this long was interrupted (watchRead). Every step between
@@ -2739,10 +2741,12 @@ export default class Threads extends View {
       // list's end is not on screen): it takes the pill's room under its text. In the Pinned
       // view and the outline, which draw no pill, that is only room.
       if (rows.at(-1)?.key === "capped-later") sizes[sizes.length - 1] += PILL_H + PILL_GAP;
-      // Where the cut starts, by the first item it keeps (each way of cutting starts at a place
-      // of its own): a cut that moved (or came or went) since the list was last laid out gives
-      // it other items under the offset in px it keeps (render, capLaid).
-      this.capSpan = cap.cut ? `${rows.find((r) => r.key !== "capped")?.key}` : "";
+      // The cut, by the first of the session's rows it keeps, past the list's own items (a cut
+      // at the window's start keeps the same list items first over any window). Each way of
+      // cutting keeps a fixed count from a place of its own, so that row names the items, and
+      // the window's ends add nothing. A cut that moved (or came or went) since the list was
+      // last laid out gives it other items under the offset in px it keeps (render, capLaid).
+      this.capSpan = cap.cut ? `${rows.find((r) => !LIST_ITEMS.has(r.key))?.key}` : "";
       this.rowsMemo = rows;
       // Cut by capList, the list's rows are found by key (rowIndex).
       this.indexedRows = cap.cut ? null : rows;
@@ -5164,6 +5168,12 @@ export default class Threads extends View {
   }
   // Every scroll the pane asks of the list, so trackOff knows where it lands.
   askScroll(i, how) { this.scrollAsk = { i, how }; this.scroll.scroll_to_item(i, how); }
+  // The row a scroll (scrollTo) goes to in these rows, and how: its own key, else the next best
+  // (or, a pin's place that may be gone), else its turn's head, which a card's scroll takes.
+  scrollRow(st, rows) {
+    for (const k of [st.key, ...(st.or ?? [])]) { const i = rows.findIndex((x) => x.key === k); if (i >= 0) return { i, how: st.how }; }
+    return st.head ? { i: rows.findIndex((x) => x.key === st.head), how: "card" } : { i: -1, how: st.how };
+  }
   askEnd() { this.scrollAsk = { end: true }; this.scroll.scroll_to_bottom(); }
 
   // The place on screen just before a re-wrap's rows come in (buildStep): the row at the top
@@ -9182,6 +9192,17 @@ export default class Threads extends View {
     // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
     // the place is let go (holdDone).
     if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
+    // A list cut anew since its last layout holds other items at the offset in px it kept,
+    // which can be anywhere in them: the end of the session, for a turn after a long open one.
+    // So a scroll to come has its row asked for at once, for this frame's layout, whether it is
+    // taken below or waits (for the rows to settle, or for a card's measures), and again in
+    // each frame it waits (held), as rows reshaped above it move it: the reader sees its row,
+    // never other items, and the scroll then lands it from there.
+    const st0 = this.scrollTo;
+    if (st0 && (st0.held || (this.capSpan ?? "") !== (this.capLaid ?? ""))) {
+      const { i, how } = this.scrollRow(st0, rows);
+      if (i >= 0) { this.askScroll(i, how === "center" ? "center" : "top"); st0.held = true; }
+    }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
@@ -9221,10 +9242,7 @@ export default class Threads extends View {
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
-      let how = st.how;
-      let i = -1;
-      for (const k of [st.key, ...(st.or ?? [])]) { i = rows.findIndex((x) => x.key === k); if (i >= 0) break; }
-      if (i < 0 && st.head) { i = rows.findIndex((x) => x.key === st.head); how = "card"; }
+      let { i, how } = this.scrollRow(st, rows);
       this.scrollTo = null;
       // A jump the person asked for (a rail tick or card, a pin return, #n in the search, Go to
       // that reply) flashes the turn it lands on, after the scroll (a second press's follow-up
@@ -9233,11 +9251,6 @@ export default class Threads extends View {
       // A closed or running turn with pasted images has its tiles in the item over its row
       // (wtop): a scroll to the turn takes them along.
       const lead = (k) => ((rows[k - 1]?.kind === "wtop" || rows[k - 1]?.kind === "afold") && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
-      // A list cut anew since its last layout holds other items at the offset it kept, which
-      // can be anywhere in them: the end of the session, for a turn after a long open one. So
-      // the row is also asked for at once, for this frame's layout, and the scroll below lands
-      // it from there.
-      if (i >= 0 && (this.capSpan ?? "") !== (this.capLaid ?? "")) this.askScroll(i, how === "center" ? "center" : "top");
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {

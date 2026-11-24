@@ -21040,3 +21040,129 @@ test("past the cap, opening a card inside the items the cut keeps scrolls as und
   expect(rows[last].kind).toBe("copy");
   expect(asked).toEqual([[rows[last].key, "top"], ["0:38", "top"]]);
 });
+
+// Scene A of the cut's jumps: 80 turns under a cap of 60, #41's reply of 170 parts open and
+// cut below, the reader at #41's head.
+async function cutScene() {
+  const r = await capSession(80, { max: 60 }, 40, 170);
+  const { v, cx } = r;
+  r.sim = simList(v);
+  openAt(v, cx, r.sim, 562);
+  v.open.add("0:41");
+  v.command("search:#41", cx);
+  settleList(v, cx, r.sim);
+  expect(v.rows().at(-1).key).toBe("capped-later");
+  return r;
+}
+// The frames after a jump until it settles: each shows the view before it or the row it goes
+// to, never a third place; the last shows the row.
+function noThirdPlace(v, cx, sim, before, key, n = 8, then = () => {}) {
+  const seen = [];
+  for (let k = 0; k < n; k++) { probeFrame(v, cx); seen.push(shownIn(v, sim.last())); }
+  then();
+  settleList(v, cx, sim);
+  seen.push(shownIn(v, sim.last()));
+  for (const [k, s] of seen.entries()) if (!s.includes(key) && !s.some((x) => before.includes(x))) throw new Error(`frame ${k + 1} shows ${s.join(", ")}`);
+  expect(seen.at(-1)).toContain(key);
+}
+
+test("past the cap, a pin's return past the cut, which waits for the card's measures, never shows a third place while it waits", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65 }, s: v.current(), state: "done" }];
+  const before = shownIn(v, sim.last());
+  v.goPin(0, cx);
+  expect(v.scrollTo?.until).toBeGreaterThan(0);
+  noThirdPlace(v, cx, sim, before, "0:65");
+  listWindow = null;
+});
+
+test("past the cap, Enter from the outline on a turn past the cut, which waits, shows that turn from the first frame of the list", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.query = "";
+  v.action("outline:on", cx);
+  settleList(v, cx, sim);
+  v.sel = "0:65";
+  v.action("open", cx);
+  expect(v.outlined()).toBe(false);
+  expect(v.scrollTo?.until).toBeGreaterThan(0);
+  // The view before was the outline's, so every frame of the list shows the turn.
+  noThirdPlace(v, cx, sim, [], "0:65");
+  listWindow = null;
+});
+
+test("past the cap, a jump past the cut while the rows are still reshaping (the scroll's 2 s wait) never shows a third place", async () => {
+  const { v, cx, sim } = await cutScene();
+  const before = shownIn(v, sim.last());
+  // As in a slow draw: the rows are built and reshaped over many frames.
+  v.buildMax = () => 0;
+  v.shapeBudget = 0;
+  stillAt(v, 380);
+  probeFrame(v, cx);
+  expect(Boolean(v.shapeLeft > 0 || v.staleRows?.length || v.rowJob)).toBe(true);
+  v.sel = "0:41";
+  v.action("next", cx);
+  expect(v.sel).toBe("0:42");
+  noThirdPlace(v, cx, sim, before, "0:42", 4, () => { delete v.buildMax; v.shapeBudget = null; });
+  listWindow = null;
+});
+
+test("past the cap, a jump from one start cut to another over a different window shows its turn in the first frame", async () => {
+  const ev = [];
+  for (let i = 0; i < 150; i++) ev.push(...capTurn(i, i === 40 || i === 100, 170));
+  const { v, cx } = await scripted(ev);
+  v.debug = false;
+  v.win.cap = { ...v.win.cap, ...SMALL, max: 60 };
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.open.add("0:41");
+    v.open.add("0:101");
+    v.command("search:#41", cx);
+    settleList(v, cx, sim);
+    // A start cut: the window's first items kept over the later note.
+    const startCut = () => v.rows()[0].key !== "capped" && v.rows().at(-1).key === "capped-later";
+    expect(startCut()).toBe(true);
+    const was = v.win.from;
+    // Down to the end of the items the cut keeps.
+    sim.wheel(-1e6);
+    settleList(v, cx, sim);
+    v.command("search:#101", cx);
+    probeFrame(v, cx);
+    expect(v.win.from).not.toBe(was);
+    expect(startCut()).toBe(true);
+    expect(shownIn(v, sim.last())).toContain("0:101");
+  } finally { listWindow = null; }
+});
+
+test("under a cut that does not move, a jump is asked for after its frame, as with no cut: #35 from the first turn shows in the next frame", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  const before = shownIn(v, sim.last());
+  const ends = [v.rows()[0].key, v.rows().at(-1).key];
+  v.command("search:#35", cx);
+  probeFrame(v, cx);
+  expect([v.rows()[0].key, v.rows().at(-1).key]).toEqual(ends);
+  expect(shownIn(v, sim.last())).toEqual(before);
+  probeFrame(v, cx);
+  expect(shownIn(v, sim.last())).toContain("0:35");
+  listWindow = null;
+});
+
+test("under a cut that does not move, a rail jump keeps the view for its first frame, then lands by its own two asks", async () => {
+  const { v, cx, sim } = await cutScene();
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  const before = shownIn(v, sim.last());
+  const asked = scrollsOf(v);
+  v.railJump("0:35", cx);
+  probeFrame(v, cx);
+  expect(shownIn(v, sim.last())).toEqual(before);
+  settleList(v, cx, sim);
+  // No ask at once: the land path's first ask is a pane below the turn, its last the turn's
+  // own place (landPlan); where the stub's list then puts it is a rig question.
+  expect(asked.length).toBeGreaterThanOrEqual(2);
+  expect(asked[0]).not.toBe("0:35");
+  listWindow = null;
+});
