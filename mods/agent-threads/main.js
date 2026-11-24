@@ -5330,21 +5330,24 @@ export default class Threads extends View {
     const prevStart = this.stickStart;
     this.stickRows = rows;
     this.stickStart = start;
-    if (this.view === "pinned" || this.outlined() || !rows.length) return;
+    if (!rows.length) return;
     const now = Date.now();
-    if (this.toBottom || now < (this.pinningUntil ?? 0)) {
+    const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
+    const moved = same && prevStart != null && start !== prevStart;
+    // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
+    // too, in every view, the outline and the Pinned view as well: the wheel counted its own
+    // (listWheel). The pane's own scrolls (a scroll asked for or settling, the way down to the
+    // end, a pin's landing) do not count.
+    const wheeled = (this.wheelN ?? 0) !== (this.stickWheelN ?? 0);
+    this.stickWheelN = this.wheelN ?? 0;
+    const pinning = this.toBottom || now < (this.pinningUntil ?? 0);
+    if (moved && !busy && !pinning && !wheeled) this.readerMoved();
+    if (this.view === "pinned" || this.outlined()) return;
+    if (pinning) {
       if (this.bottomShown && !this.toBottom) this.pinningUntil = 0;
       return;
     }
-    const busy = Boolean(this.scrollTo) || now < (this.scrollBusyUntil ?? 0);
-    // A scroll of theirs with no wheel since the last frame (the list's own bar) moved the list
-    // too: the wheel counted its own (listWheel).
-    const wheeled = (this.wheelN ?? 0) !== (this.stickWheelN ?? 0);
-    this.stickWheelN = this.wheelN ?? 0;
-    if (same && prevStart != null && start !== prevStart && !busy) {
-      this.scrolledBy(start < prevStart ? 1 : -1, now);
-      if (!wheeled) this.readerMoved();
-    }
+    if (moved && !busy) this.scrolledBy(start < prevStart ? 1 : -1, now);
     const up = now - (this.upAt ?? 0) < 1000;
     const down = now - (this.downAt ?? 0) < 1000;
     let step = null;
@@ -5356,7 +5359,7 @@ export default class Threads extends View {
   // scroll does not pull the view back down. The frames catch it too (stickCheck), in case the
   // list keeps the event to itself.
   // The reader moved the list or left the view (a wheel, the rail, a pin, the outline, a search
-  // step, a session switch, the pane hidden): what a kept step or a card's scroll waits on is off.
+  // step, a session switch): what a kept step or a card's scroll waits on is off.
   readerMoved() { this.readerMoves = (this.readerMoves ?? 0) + 1; }
 
   listWheel(e) {
