@@ -558,10 +558,13 @@ function launch() {
 // shared("threads.byTerminal"): terminal -> its Threads pane, so the launcher focuses an
 // open one instead of splitting again, and a pane knows its own id. The Pinned and the
 // Trajectory panes are kept in their own maps (PIN_MAP_KEY, TRAJ_MAP_KEY).
-function remember(terminal, pane, key = MAP_KEY) {
+// extra: the rest of the entry, as the pane itself gives it ({ dock: "bottom" } for a bottom
+// Trajectory, {} for any other; trajBottomId). With none (the Chat settling its split) an
+// entry that already names this pane keeps the rest, so a dock the pane wrote first stands.
+function remember(terminal, pane, key = MAP_KEY, extra = null) {
   const map = { ...(shared(key) ?? {}) };
   for (const [k, v] of Object.entries(map)) if (!panes().some((p) => p.pane === v.pane)) delete map[k];
-  map[terminal] = { pane };
+  map[terminal] = extra ? { pane, ...extra } : map[terminal]?.pane === pane ? map[terminal] : { pane };
   setShared(key, map);
 }
 
@@ -921,6 +924,11 @@ export default class Threads extends View {
     // pane too narrow to split), until y, Esc or its Chat button.
     this.trajPane = p?.view === "trajectory";
     this.traj = this.trajPane;
+    // Its dock (TRD-24): props().dock "bottom", a pane along the bottom of the tab, under the
+    // Chat's row; else "right", beside the Chat in its row. Nothing opens a bottom pane yet.
+    this.trajDock = this.trajPane && p?.dock === "bottom" ? "bottom" : "right";
+    // settings.json "trajectory" (settings.js parseTrajectory): read and checked only, for now.
+    this.trajPrefs = { dock: "right", height: null };
     // The selected ledger row (a heading's key is its turn's; sel stays the turn that owns the
     // row), the filter buttons, and the detail: null until the person shows or hides it, so it
     // starts by the layout (closed under the ledger, open at its right from 900 px).
@@ -1154,7 +1162,7 @@ export default class Threads extends View {
       counts: this.sessions.length ? this.counts() : null,
       headerButtons: this.headerButtons().map((b) => `${b[0]}${b[6] ? `[${b[6]}]` : ""}${b[5] != null ? `(${b[5]})` : ""}${b[4] ? ":on" : ""}${b[7] ? ":dot" : ""}${b[8] ? ":off" : ""}|${b[2]}`),
       headerLayout: this.headerLayout(), badgeTip: this.badgeTip(),
-      settings: this.prefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys.answer, ...this.cardView() } : null, settingsFile: this.prefsRaw,
+      settings: this.prefs, trajPrefs: this.trajPrefs, settingsError: this.prefsError, settingsOpen: this.settingsOpen, settingsCard: this.settingsOpen ? { page: this.setPage, body: this.cardBody, ring: this.cardRing, keys: cardKeys.answer, ...this.cardView() } : null, settingsFile: this.prefsRaw,
       settingsPath: tilde(this.prefsPath()), settingsPoll: Boolean(this.prefsPoll),
       footer: this.footerHints().map(([k, l]) => `${k} ${l}`),
       statusLine: this.statusShown() ? this.statusGroupsShown().map((g) => g.text) : null,
@@ -1336,6 +1344,8 @@ export default class Threads extends View {
     // The card's field shows the key the file now holds, unless it is being typed in.
     if (this.quoteKey !== quoteWas && this.fieldFocused !== "quote") { this.quoteDraft = null; this.setQuoteField(this.quoteKey); }
     this.prefsNotes = x.notes;
+    this.trajPrefs = x.trajectory;
+    this.trajNotes = x.trajNotes;
     this.linkNotes = x.linkNotes;
     this.senderNotes = x.senderNotes;
     this.setLinks(x.links, x.linkList, x.linkCount);
@@ -1401,7 +1411,7 @@ export default class Threads extends View {
     this.setPrefs(next);
     this.prefsSaving = (this.prefsSaving ?? 0) + 1;
     // Not written: the pane shows the file as it is, and the card says why.
-    const refuse = (text, why) => { this.rulesPending = { links: null, senders: null }; this.applyPrefs(text); this.prefsError = why; };
+    const refuse = (text, why) => { this.rulesPending = { links: null, senders: null }; this.prefsMerged = false; this.applyPrefs(text); this.prefsError = why; };
     const chain = (this.prefsChain ?? Promise.resolve()).then(async () => {
       const why = writable(this.prefsRaw) ? fits?.(this.prefsRaw) : null;
       if (why) { refuse(this.prefsRaw, why); return; }
@@ -1413,7 +1423,7 @@ export default class Threads extends View {
         const text = await readTextFile(this.prefsPath()).catch(() => null);
         // The file holds a hand edit that does not parse: leave it, keep the change in the
         // pane only, and say so.
-        if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; return; }
+        if (!writable(text)) { this.prefsRaw = text; this.prefsError = NOT_SAVED; this.prefsMerged = false; return; }
         const late = fits?.(text);
         if (late) { refuse(text, late); return; }
         const merged = { ...parseSettings(text).values, ...patch };
@@ -1421,10 +1431,13 @@ export default class Threads extends View {
           await saveSettings(appHome(), merged, text, extra);
           this.prefsRaw = settingsText(merged, text, extra);
           this.prefsError = null;
-          this.setPrefs(parseSettings(this.prefsRaw).values);
+          // Applied when the queue is done (below): a save queued behind this one is live in
+          // the pane already, and may write over this text before then.
+          this.prefsMerged = true;
         } catch (e) {
           this.prefsRaw = text;
           this.prefsError = `Could not save settings.json: ${clean(String(e?.message ?? e))}`;
+          this.prefsMerged = false;
         }
       }
     });
@@ -1432,8 +1445,13 @@ export default class Threads extends View {
     cx.spawn(async (cx) => {
       await chain;
       this.prefsSaving--;
-      // An edit made in an editor while the save ran.
-      if (!this.prefsSaving) this.readPrefs(cx);
+      if (!this.prefsSaving) {
+        // A save written on top of a changed file, with none after it failed or refused: the
+        // pane takes what the file holds now, extras too.
+        if (this.prefsMerged) { this.prefsMerged = false; this.applyPrefs(this.prefsRaw, cx); }
+        // An edit made in an editor while the save ran.
+        this.readPrefs(cx);
+      }
       cx.notify();
     });
     return chain;
@@ -1645,7 +1663,8 @@ export default class Threads extends View {
       this.linkNotes = l.notes;
       this.setLinks(l.rules, l.list, raw.length);
     }
-    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...(this.linkNotes ?? []), ...(this.senderNotes ?? [])];
+    // The file's other notes stand: the quote key's, and the Trajectory object's (TRD-24).
+    this.prefsNotes = [...(this.quoteFileNote ? [this.quoteFileNote] : []), ...(this.linkNotes ?? []), ...(this.senderNotes ?? []), ...(this.trajNotes ?? [])];
   }
   // Applies a changed list at once, then writes it under its kind (settings.js keeps the
   // rest). The save writes it only over the list it was made from: when the file's list
@@ -2323,6 +2342,13 @@ export default class Threads extends View {
   mainPane() { const id = shared(MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   pinnedPaneOpen() { const id = shared(PIN_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
   trajPaneOpen() { const id = shared(TRAJ_MAP_KEY)?.[this.terminal]?.pane; return id ? panes().find((p) => p.pane === id) ?? null : null; }
+  // The Trajectory's dock (TRD-24). Only a Trajectory on the right is in the Chat's row: the
+  // row and the pair on weights, the room probe, v's split, - and =, and the kept right width
+  // go by trajRightOpen. A bottom pane sits in a split of its own under the row, so none of
+  // them counts it (trajBottomId), while y, the Trajectory button and the selection go by
+  // trajPaneOpen, either dock.
+  trajBottomId() { const e = shared(TRAJ_MAP_KEY)?.[this.terminal]; return e?.dock === "bottom" ? e.pane : null; }
+  trajRightOpen() { return this.trajBottomId() ? null : this.trajPaneOpen(); }
   status() { return this.pane()?.status ?? this.term()?.status ?? null; }
 
   resolve(cx) {
@@ -2644,7 +2670,10 @@ export default class Threads extends View {
     if (!mine) return;
     this.myPane = mine;
     const key = this.sideKey() ?? MAP_KEY;
-    if (shared(key)?.[this.terminal]?.pane !== mine) cx.timer.after(0, () => remember(this.terminal, mine, key));
+    // A bottom Trajectory pane says so in its entry, so the Chat leaves it out of its row.
+    const dock = this.trajPane && this.trajDock === "bottom" ? "bottom" : null;
+    const was = shared(key)?.[this.terminal];
+    if (was?.pane !== mine || (was?.dock ?? null) !== dock) cx.timer.after(0, () => remember(this.terminal, mine, key, dock ? { dock } : {}));
   }
 
   // Live data changed: a new turn or status in the terminal means look again.
@@ -3644,9 +3673,10 @@ export default class Threads extends View {
     if (open) { if (!auto) run("pane.focus", { pane: open.pane }); return true; }
     if (this.view === "pinned") { if (!auto) this.setView("all"); return true; }
     const me = this.me();
-    // With the Trajectory open the column splits off it, so the row is the Chat, the
-    // Trajectory, then the column, whichever opened first.
-    const traj = this.trajPaneOpen();
+    // With the Trajectory open on the right the column splits off it, so the row is the Chat,
+    // the Trajectory, then the column, whichever opened first. A bottom one is not in the row.
+    // (TRD-24 PR 3: v does nothing while a dock move is under way.)
+    const traj = this.trajRightOpen();
     // A close's weights under way: the panes it left to px at their targets first, before the
     // fit reads the widths the close is passing through. With no record left the column's
     // opening has no room to land with: the row stays at px.
@@ -3823,7 +3853,8 @@ export default class Threads extends View {
   // way the Chat goes back to a weight that keeps its width (sizeTo, or toWeight once the row
   // settles): it is at a px only while the Trajectory is open.
   trajGiveBack(cx) {
-    const open = Boolean(this.trajPaneOpen());
+    // A bottom pane took no width from the Chat: its close gives none back.
+    const open = Boolean(this.trajRightOpen());
     const closed = this.trajWasOpen && !open;
     this.trajWasOpen = open;
     const back = this.trajChatBack;
@@ -3866,7 +3897,8 @@ export default class Threads extends View {
     const map = shared(WIDTH_KEY) ?? {};
     if (Math.abs((map[me.pane] ?? -9) - this.paneW) > 1) setShared(WIDTH_KEY, { ...map, [me.pane]: Math.round(this.paneW) });
     // The Pinned column's and the Trajectory pane's width, each kept in its own key.
-    const wKey = this.pinnedPane ? PIN_W_KEY : this.trajPane ? TRAJ_W_KEY : null;
+    // A bottom Trajectory's width is the row's, not one the owner set: it keeps none.
+    const wKey = this.pinnedPane ? PIN_W_KEY : this.trajPane && this.trajDock !== "bottom" ? TRAJ_W_KEY : null;
     if (!wKey) return;
     const now = Date.now();
     this.firstSizeAt ??= now;
@@ -3899,7 +3931,7 @@ export default class Threads extends View {
   // column against the Trajectory when that is open (down to TRAJ_MIN), else the Chat. At the
   // Trajectory's limit it says nothing (no notice on a key in the Trajectory).
   resizeColumn(d, cx) {
-    const trajOpen = this.trajPane ? this.me() : this.trajPaneOpen();
+    const trajOpen = this.trajPane ? this.me() : this.trajRightOpen();
     let col;
     let main;
     let traj = false;
@@ -3956,7 +3988,8 @@ export default class Threads extends View {
     const w = this.weightNow;
     if (!(S > 0) || !(w > 0) || this.paneW == null) return { chat: null, col: px };
     const m = Math.round(this.paneW) + PANE_FRAME;
-    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane).length;
+    const under = this.trajBottomId();
+    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane && p.pane !== under).length;
     const R = Math.round((m * (w + S)) / w);
     const f = pinFit(m, px, R - m, TERM_KEEP * others);
     return f ? { chat: f.chat === m ? null : f.chat, col: f.col, R, S } : null;
@@ -4026,7 +4059,7 @@ export default class Threads extends View {
     if (this.pairSeen?.m !== m) this.pairSeen = { m, at: now };
     const ent = shared(PAIR_KEY)?.[this.terminal] ?? null;
     // The Trajectory closing gives the Chat its width back (trajGiveBack): 1.5 s for that.
-    if (this.trajPaneOpen()) this.pairTrajAt = now;
+    if (this.trajRightOpen()) this.pairTrajAt = now;
     // The Trajectory open, or closed less than 1.5 s ago (pairTrajAt is set while it is open).
     const blocked = Boolean(me.zoomed || main.zoomed) || now < (ent?.hold ?? 0) || now - (this.pairTrajAt ?? -1e9) < 1500;
     if (this.pairing) { this.pairProbe(m, p, blocked, cx); return; }
@@ -4044,7 +4077,8 @@ export default class Threads extends View {
   // so the others have R - m - p), else from the last pair's S with the others about as wide
   // as the Chat; then toward p from the measures (ui.js weightLine). The Chat does not move.
   pairBegin(me, main, m, p, ent, cx) {
-    const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane);
+    const under = this.trajBottomId();
+    const others = panes().filter((x) => x.tab === me.tab && x.pane !== me.pane && x.pane !== main.pane && x.pane !== under);
     this.pairTries = (this.pairTries ?? 0) + 1;
     // The column's px is kept in the record while it is on a trial weight, so the Trajectory
     // opening mid-probe puts it back at px from the Chat's pane (pairPx). After a dropped
@@ -4144,7 +4178,7 @@ export default class Threads extends View {
   rowPanes() {
     if (this.pinnedPane || this.trajPane) return null;
     const me = this.me();
-    const traj = this.trajPaneOpen();
+    const traj = this.trajRightOpen();
     if (!me || !traj) return null;
     const pin = this.pinnedPaneOpen();
     return { me, traj, pin, ids: { chat: me.pane, traj: traj.pane, ...(pin ? { pin: pin.pane } : {}) } };
@@ -4598,7 +4632,10 @@ export default class Threads extends View {
   autoPinned(cx) {
     if (this.pinnedPane || this.trajPane) {
       // The column goes with its Threads pane: once the main pane has been seen, its closing
-      // closes the column, so opening Threads again brings both back together.
+      // closes the column, so opening Threads again brings both back together. (TRD-24 PR 3:
+      // a dock move closes the Chat and opens it again, so a pane the move names must not
+      // close itself here while it is under way; and a move that stops halfway must still
+      // leave a Chat open.)
       const main = this.mainPane();
       if (main) this.mainSeen = true;
       else if (this.mainSeen && !this.closing) {
@@ -7480,7 +7517,8 @@ export default class Threads extends View {
   // The one other pane in this pane's tab, when there is exactly one: the terminal the split
   // came from, and with it the whole row. Else null.
   rowSibling(me) {
-    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane);
+    const under = this.trajBottomId();
+    const others = panes().filter((p) => p.tab === me.tab && p.pane !== me.pane && p.pane !== under);
     return others.length === 1 ? others[0].pane : null;
   }
   // The first weight of the probe after Threads opens: the row it measured at the split, and
@@ -7500,7 +7538,7 @@ export default class Threads extends View {
   // a weight, so there is nothing to do; force: the column was open, and its pane may have
   // set this one's px (- and =, w).
   toWeight(force = false) {
-    if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.sideKey() || this.paneW == null || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen()) return;
+    if ((this.weightNow != null && !force) || this.weighing || this.weighAfter || this.sideKey() || this.paneW == null || this.splitAsk || this.pinnedPaneOpen() || this.trajRightOpen()) return;
     const me = this.me();
     if (!me) return;
     if (me.zoomed) { this.weighZoomed = true; return; }
@@ -7529,7 +7567,7 @@ export default class Threads extends View {
     if (!g) return;
     const me = this.me();
     // Gone, zoomed, a column or the Trajectory opening, or no answer from Herdr: stop there.
-    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || this.trajPaneOpen() || Date.now() - g.asked > 3000) {
+    if (!me || me.pane !== g.pane || me.zoomed || this.splitAsk || this.pinnedPaneOpen() || this.trajRightOpen() || Date.now() - g.asked > 3000) {
       this.weighing = null;
       if (me?.zoomed) this.weighZoomed = true;
       return;
@@ -11642,7 +11680,7 @@ export default class Threads extends View {
     const i = this.ledgerSel(shown);
     const w = this.pw();
     return {
-      pane: this.trajPane, inPane: !this.trajPane, width: Math.round(w), cols: ledgerCols(w), going: L.going,
+      pane: this.trajPane, inPane: !this.trajPane, dock: this.trajPane ? this.trajDock : null, width: Math.round(w), cols: ledgerCols(w), going: L.going,
       rows: shown.length, sel: shown[i]?.key ?? null, fails: this.failCount(L, shown, i), filter: this.tfilter,
       detail: this.detailOpen() && shown[i] ? detailOf(shown[i]) : null,
       heads: L.totals.heads.slice(-5).map((h) => ({ n: h.n, total: headParts(h, w).total, stale: h.stale, lastAt: h.lastAt })),
@@ -11660,6 +11698,7 @@ export default class Threads extends View {
       return true;
     }
     if (this.traj) { this.leaveTraj(); return true; }
+    // TRD-24 PR 3: y does nothing while a dock move for this terminal is under way.
     const open = this.trajPaneOpen();
     if (open) { run("pane.focus", { pane: open.pane }); return true; }
     const me = this.me();
@@ -11922,8 +11961,9 @@ export default class Threads extends View {
       // The few of the Chat's actions the Trajectory means. Any other (a bound pin, copy, the
       // outline) would act on the Chat's selection, which the Trajectory does not show.
       case "focus": case "settings": case "keys": return this.action(name, cx);
-      // - and = step the Trajectory pane; shown in the Chat's own pane there is none to step.
-      case "narrower": case "wider": return this.trajPane ? this.action(name, cx) : false;
+      // - and = step the Trajectory pane on the right; shown in the Chat's own pane there is
+      // none to step, and a bottom pane's width is the row's.
+      case "narrower": case "wider": return this.trajPane && this.trajDock !== "bottom" ? this.action(name, cx) : false;
       default: return false;
     }
   }
@@ -12318,7 +12358,7 @@ export default class Threads extends View {
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
       .child(h_flex().flex_none().w(col).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
-    const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane, ledger: this.traj, inPane: this.traj && !this.trajPane });
+    const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane, ledger: this.traj, inPane: this.traj && !this.trajPane, bottom: this.trajPane && this.trajDock === "bottom" });
     const sheetH = this.keySheetH(groups);
     // Taller than its room: the list scrolls, and where Herdr has Scrollbar and its mode the bar
     // is drawn all the time, in a strip at the right edge, so the sheet shows there is more.
