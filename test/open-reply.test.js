@@ -478,12 +478,13 @@ test("a part of 3,900 or 4,050 characters with dollar signs, past one view only 
 // text size and line height. On a narrow pane it wraps to more than one line, and at 416 px only
 // because of the icon: a count at the reading line's full width gave it one line too few. At
 // 440 px it is one line at its 11.5 px; a count of its characters at the reading text's size
-// gave it two.
+// gave it two. At 424 px it is two lines beside the icon and its gap (17 px), and one beside the
+// icon alone (12 px).
 // The text below it is counted rough (restHeight), as the probe measures it after.
 const wrapAt = (text, cols) => { let n = 1, at = 0; for (const word of text.split(" ")) { const need = at ? at + 1 + word.length : word.length; if (need > cols && at) { n++; at = word.length; } else at = need; } return n; };
 test("a part shown whole as plain text under main's line is counted at the height of its draw: main's line beside its icon, at its drawn size and line height, on wide and narrow panes", async () => {
   const seen = [];
-  for (const [text, w] of [[`${"a$".repeat(1800)}${"b".repeat(300)}`, 640], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 300], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 416], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 440], ["z".repeat(20000), 640]]) {
+  for (const [text, w] of [[`${"a$".repeat(1800)}${"b".repeat(300)}`, 640], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 300], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 416], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 440], [`${"a$".repeat(1800)}${"b".repeat(300)}`, 424], ["z".repeat(20000), 640]]) {
     const { v, cx, key } = await openLong(text);
     v.probeDue = function () { this.probeLeft = 0; return []; };
     v.forcedWidth = w;
@@ -511,7 +512,7 @@ test("a part shown whole as plain text under main's line is counted at the heigh
     const held = top + (lineH ?? 0) * lines + below + v.restHeight(text.length, 1);
     seen.push([text.length, w, drawn.includes(text), lineH, lines, v.height(r) === held]);
   }
-  expect(seen).toEqual([[3900, 640, true, 18, 1, true], [3900, 300, true, 18, 2, true], [3900, 416, true, 18, 2, true], [3900, 440, true, 18, 1, true], [20000, 640, true, 18, 1, true]]);
+  expect(seen).toEqual([[3900, 640, true, 18, 1, true], [3900, 300, true, 18, 2, true], [3900, 416, true, 18, 2, true], [3900, 440, true, 18, 1, true], [3900, 424, true, 18, 2, true], [20000, 640, true, 18, 1, true]]);
 }, 60000);
 
 // A paragraph of Japanese or Chinese prose that one view holds is one Markdown part, as main
