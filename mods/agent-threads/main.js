@@ -75,7 +75,7 @@ import {
 import { claudePaths, slug, argvSession, recordSession, decide, dividerLabel, candidates } from "./session.js";
 import { HARNESS, harnessOf, harnessOfFile, idOfFile, dbOfFile, fileChanged, codexArgvSession, pickCodexDaemon, claudeAttach, opencodeAttach, opencodeArgv, etimeMs, pickOpenCode, openCodeLabel, quotePaste, piArgv, piFolder, piStartMs, cursorFolder, cursorStore, cursorArgv, cursorRoots, MARKS, agyBrain, agyArgv, agyFile, UNREAD, unreadOf } from "./harness.js";
 import {
-  keyAction, ringKey, nextStop, keyInstaller, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget, ledgerKey, TRAJ_MAX,
+  keyAction, ringKey, nextStop, keyInstaller, alpha, spans, around, langFor, clipPrompt, wrappedLines, dayKey, dayLabel, dayParts, jumpTarget, searchable, ledgerKey, TRAJ_MAX,
   rowLines, flattenMd, searchPreview, rowShape, rowTextWidth, replyWidth, readWidth, readType, bubbleMax, ROW, senderLabel, senderParts, senderOrigin, senderIcon, kindWords, noticeTurn, isShown, agentReplied, countLabel,
   focusTarget, contrast, labelColor, matchFill, middle, commandColor, clipYou, promptMd, promptLinks, linkLineRows, promptParts, hyphenBreaks, breakSpans, HYPHEN_BREAK, linkify, escapeMd,
   quoteText, inReply, atLeast, foreground, canQuote, parseRemote, repoFits, actsLayout, stripLayout, boxHit, infoBox, ICON_BOX, QUOTE_INSET, cardLabelColor, bandFill, over, bubbleStyle, bubbleValue, BUBBLES,
@@ -7963,7 +7963,8 @@ export default class Threads extends View {
     const n = jumpTarget(this.query);
     if (n != null) return !n ? "turn #" : this.jumpKey(n) ? `turn ${n}` : `no turn ${n}`;
     const q = this.filterText();
-    if (!q) return null;
+    // Less than a search: how much to type, in the count's place.
+    if (!q) return this.query.trim() ? (this.pw() < 420 ? "2 or more" : "Type 2 or more characters") : null;
     let hit = 0, hiddenHit = 0;
     // While the matches are counted (scanStep): "Counting…" with none found yet, and the total
     // so far with a "+"; the hidden ones, no match, and the first or only mention wait for
@@ -8964,8 +8965,13 @@ export default class Threads extends View {
     return out;
   }
 
-  // The text the list is filtered by: none while the field holds a "#12" jump.
-  filterText() { return jumpTarget(this.query) == null ? this.query.trim() : ""; }
+  // The text the list is filtered by: none while the field holds a "#12" jump, or less than a
+  // search (ui.js searchable).
+  filterText() {
+    if (jumpTarget(this.query) != null) return "";
+    const q = this.query.trim();
+    return searchable(q) ? q : "";
+  }
   // The keys of the turns the search matches, oldest first, from the list's turn keys: a
   // pin's visit can show a turn that does not match, which is not a match to step to.
   matchKeys(keys = this.turnKeys(this.rows())) {

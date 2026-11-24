@@ -511,7 +511,9 @@ test("under a search, the reply's own text decides flat or Markdown, and a hit a
   v.setQuery("code", cx);
   settleRows(v, cx);
   expect(row("0:1").shape.md).toBe(fence);
-  v.setQuery("·", cx);
+  // The flattening joins the list's items with " · "; the reply as written does not. (One
+  // "·" alone is less than a search, ui.js searchable.)
+  v.setQuery("one · two", cx);
   settleRows(v, cx);
   expect(row("0:1")).toBeUndefined();
   // M2: a hit past the first 2,400 characters, in a fence and in a link's address: flat around

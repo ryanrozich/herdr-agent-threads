@@ -50,7 +50,9 @@ function events(n, { bare = false } = {}) {
   }
   return ev;
 }
-const QUERIES = ["a", "ar", "rename", "zqxjvk"];
+// The searches: two letters, a word, and a query with no match. One letter is under the
+// search's minimum (minimum length, below): the list is not filtered and nothing is checked.
+const QUERIES = ["ar", "rename", "zqxjvk"];
 
 // A pane on a session of n such turns, every row built and shaped (on the real clock, with no
 // budget), its work counted from here on.
@@ -101,12 +103,13 @@ function drawOnce(v, cx) {
   return out;
 }
 
-// A search typed into a long session, draw by draw: the search command for the first query,
-// then each next query typed into the field, as the owner did. The figures for each query:
-// the handler's cost, the draws until the rows are built and the matches counted, and until
-// every row is shaped, at most 1,000 (the rows a search shows are shaped again for its
-// highlights, at most SHAPE_MS a draw: "a" at 5,600 turns is 5,600 reshapes, 1.2 s of them
-// at the harness's price, about 250 draws at 5 ms).
+// A search typed into a long session, draw by draw, as the owner did: the search command for
+// "a", one letter, under the minimum; then each query typed into the field. The figures for
+// the one letter: what it checks and whether the list stays as it was. For each query: the
+// handler's cost, the draws until the rows are built and the matches counted, and until every
+// row is shaped, at most 1,000 (the rows a search shows are shaped again for its highlights,
+// at most SHAPE_MS a draw: "ar" at 5,600 turns is 1,680 reshapes, 0.4 s of them at the
+// harness's price, about 75 draws at 5 ms).
 async function searchRun(n, x) {
   const { v, cx, s } = await longPane(n);
   const turns = s.turns;
@@ -119,11 +122,20 @@ async function searchRun(n, x) {
       const before = [];
       for (let k = 0; k < 3; k++) before.push(drawOnce(v, cx));
       out.beforeStops = before.filter((d) => d.stopped).length;
-      for (const [i, q] of QUERIES.entries()) {
+      // One letter: the command, then three draws.
+      const rows0 = v.rowsKey;
+      const n0 = v.baseRows.length;
+      const c1 = checks();
+      v.action("search:a", cx);
+      const oneTyped = checks() - c1;
+      const oneDraws = [drawOnce(v, cx), drawOnce(v, cx), drawOnce(v, cx)];
+      out.one = { typed: oneTyped, draws: oneDraws.map((d) => d.checks), stops: oneDraws.filter((d) => d.stopped).length,
+        sameRows: v.rowsKey === rows0 && v.baseRows.length === n0, text: fieldText(v) };
+      for (const q of QUERIES) {
         const t0 = clock();
         const c0 = checks();
-        if (i === 0) v.action(`search:${q}`, cx);
-        else { v.input.text = q; v.input.handlers.change(null, cx); }
+        v.input.text = q;
+        v.input.handlers.change(null, cx);
         const typed = { ms: clock() - t0, checks: checks() - c0 };
         const draws = [];
         let countedAt = null;
@@ -159,7 +171,11 @@ const HANDLER_MS = 6.5;
 
 for (const x of [1, 2]) for (const n of [2000, 5600]) {
   const at = `at ${n.toLocaleString()} turns${x === 1 ? "" : `, at ${x}x the prices`}`;
-  test(`search ${at}: "a", "ar", a word and a query with no match each draw inside Herdr's time from the first frame, and settle on the right count`, async () => {
+  test(`search ${at}: one letter checks no turn and leaves the list as it was`, async () => {
+    const r = await figures(n, x);
+    expect(r.one).toEqual({ typed: 0, draws: [0, 0, 0], stops: 0, sameRows: true, text: "Type 2 or more characters" });
+  }, 300000);
+  test(`search ${at}: "ar", a word and a query with no match each draw inside Herdr's time from the first frame, and settle on the right count`, async () => {
     const r = await figures(n, x);
     if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify(r));
     expect(r.turns).toBe(n);
@@ -875,4 +891,56 @@ test("the count asks for the draws it needs, with nothing else asking", async ()
   expect(draws).toBeGreaterThanOrEqual(5);
   expect(counting(v)).toBe(false);
   expect(fieldText(v)).toBe("1 of 560 · newest first");
+}, 120000);
+
+// ---- the minimum length ----
+// A search is two characters or more, or one in a script written without spaces between words
+// (Han, Hiragana, Katakana, Hangul, Thai, Lao, Khmer, Myanmar), where one character can be a
+// word. Under it the list is not filtered, nothing is checked, the field says how many to type,
+// the steps are gone, and n and Shift n pass on.
+test("a search needs two characters, or one in a script written without spaces", async () => {
+  const { v, cx } = await longPane(600);
+  const isSearch = (q) => { v.setQuery(q, cx); return v.filterText() !== ""; };
+  for (const q of ["a", "7", "é", "ー", "😀", "  a  "]) expect([q, isSearch(q)]).toEqual([q, false]);
+  for (const q of ["ar", "a7", "字", "𠀀", "あ", "カ", "한", "ก", "ລ", "ក", "က"]) expect([q, isSearch(q)]).toEqual([q, true]);
+});
+
+test("under the minimum the list is as it was, nothing is checked, and the field says to type more", async () => {
+  const { v, cx, s } = await longPane(5600);
+  v.sel = `0:${s.turns.length}`;
+  const rows0 = v.rowsKey;
+  const keys0 = v.baseRows.map((r) => r.key).join(",");
+  const r = priced(v, () => {
+    const c0 = checks();
+    v.action("search:a", cx);
+    const draws = [drawOnce(v, cx), drawOnce(v, cx)];
+    H.rec = [];
+    drawOnce(v, cx);
+    const calls = H.rec;
+    H.rec = null;
+    const older = v.action("olderMatch", cx);
+    const newer = v.action("newerMatch", cx);
+    return { checks: checks() - c0, stops: draws.filter((d) => d.stopped).length, calls, older, newer };
+  });
+  expect(r.checks).toBe(0);
+  expect(r.stops).toBe(0);
+  expect(v.rowsKey).toBe(rows0);
+  expect(v.baseRows.map((r2) => r2.key).join(",")).toBe(keys0);
+  expect(v.sel).toBe(`0:${s.turns.length}`);
+  // The hint in the count's place; no steps; n and Shift n are not taken.
+  expect(afterId(r.calls, "th-search-count")).toContainEqual(["child", "Type 2 or more characters"]);
+  expect(afterId(r.calls, "th-match-older")).toBeNull();
+  expect([r.older, r.newer]).toEqual([false, false]);
+  // Under 420 px, the short hint.
+  v.paneW = 400;
+  expect(fieldText(v)).toBe("2 or more");
+  v.paneW = 560;
+  // A second letter makes it a search; a jump is as before.
+  v.setQuery("ar", cx);
+  settleRows(v, cx);
+  expect(fieldText(v)).toBe(`1 of ${direct(v, "ar").length} · newest first`);
+  v.setQuery("#12", cx);
+  expect(fieldText(v)).toBe("turn 12");
+  v.setQuery("#", cx);
+  expect(fieldText(v)).toBe("turn #");
 }, 120000);

@@ -845,6 +845,16 @@ export function jumpTarget(q) {
   return m ? Number(m[1] || 0) : null;
 }
 
+// A search is two characters or more (code points), or one in a script written without spaces
+// between words, where one character can be a word: Han, Hiragana, Katakana, Hangul, Thai,
+// Lao, Khmer, Myanmar (by the Script property). One letter matched nearly every turn of a long
+// session, slowly, and found nothing worth the wait (the owner, 24 Nov).
+const ONE_CHAR_WORD = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]$/u;
+export function searchable(q) {
+  const n = [...q].length;
+  return n >= 2 || (n === 1 && ONE_CHAR_WORD.test(q));
+}
+
 // ---- collapsed rows -------------------------------------------------------------------
 
 // Width of one character in "average characters": East Asian wide characters and emoji
