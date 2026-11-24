@@ -309,7 +309,10 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       if (c.input) add(`${c.user ? "input|user|0" : c.agent ? "input|agent|0" : "input|context|0"}${o}`, x, x1);
       if (c.model) add(`model|model|0${o}`, x, x1);
       if (c.tools) add(`${c.failed ? "tools|failed|0" : "tools|tools|0"}${o}`, x, x1);
-      if (c.failed && x >= failEnd) { out.fails.push(x + w / 2); failEnd = x + 6; }
+      // A failure mark is drawn at its bar's centre, and spaced by it from the last, 6 px or
+      // more, across turns as inside one.
+      const fx = x + w / 2;
+      if (c.failed && fx >= failEnd) { out.fails.push(fx); failEnd = fx + 6; }
     } else {
       const live = ti === G.live;
       const len = stepN(h);
@@ -335,14 +338,15 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
         add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
         if (r.failed) {
           if (!marks) marks = [];
-          marks.push([b.x0, b.x1]);
+          marks.push((b.x0 + b.x1) / 2);
         }
       }
-      // The turn's failure marks left to right as drawn (a call run earlier can be listed after
-      // a later one), each 6 px or more from the last.
+      // The turn's failure marks left to right by their bars' centres, where they are drawn (a
+      // call run earlier can be listed after a later one), each 6 px or more from the last. So
+      // every failed bar has a mark within 6 px of its centre.
       if (marks) {
-        marks.sort((p, q) => p[0] - q[0]);
-        for (const [a, b] of marks) if (a >= failEnd) { out.fails.push((a + b) / 2); failEnd = a + 6; }
+        marks.sort((p, q) => p - q);
+        for (const fx of marks) if (fx >= failEnd) { out.fails.push(fx); failEnd = fx + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step
       // numbers. Only those in view.

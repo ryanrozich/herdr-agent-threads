@@ -206,7 +206,7 @@ test("timeline failure marks: across turns too, the marks are 6 px or more apart
 });
 
 test("timeline failure marks: every failed bar has a mark within 6 px of its centre; the marks go left to right by centre", () => {
-  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails;
+  const marks = (h) => timelineLayout([h], 600, "clock", T0 + 1e7).fails.map((x) => Math.round(x * 1000) / 1000);
   // A failed Read from 0 to 0.4 s (0 to 4 px, centre 2) and a failed Bash from 0.5 to 5.5 s
   // (5 to 55 px, centre 30): the Bash starts under 6 px from the Read but is centred 28 px
   // from it, so it has a mark of its own.
