@@ -1152,6 +1152,57 @@ test("latest while a jump waits for the rows to reshape shows the end in the nex
   H.listWindow = null;
 });
 
+// A render Herdr stopped leaves renderOpen set, and the next render asks again for the scroll
+// it took on (renderWant). A wheel or latest after it is the reader's newer word.
+test("after a render Herdr stopped, a wheel still drops the jump that waits and a wheel up the end it took on, and latest still holds the end", async () => {
+  const got = {};
+  const want = {};
+  {
+    const { v, cx, sim } = await cutScene();
+    slowRows(v, cx);
+    v.sel = "0:41";
+    v.action("next", cx);
+    probeFrame(v, cx);
+    expect(shownIn(v, sim.last())).toContain("0:42");
+    v.renderOpen = true;
+    const at = Math.round(sim.last().off) - 600;
+    sim.wheel(600);
+    got.jump = [...offs(v, cx, sim, 4), v.scrollTo?.key ?? null];
+    want.jump = [at, at, at, at, null];
+    fastRows(v);
+    H.listWindow = null;
+  }
+  {
+    const { v, cx, sim } = await cutScene();
+    slowRows(v, cx);
+    v.action("latest", cx);
+    probeFrame(v, cx);
+    expect([sim.last().end, v.toBottom]).toEqual([true, true]);
+    v.renderOpen = true;
+    const at = Math.round(sim.last().off) - 600;
+    sim.wheel(600);
+    got.end = [...offs(v, cx, sim, 4), v.follow];
+    want.end = [at, at, at, at, false];
+    fastRows(v);
+    H.listWindow = null;
+  }
+  {
+    const { v, cx, sim } = await cutScene();
+    slowRows(v, cx);
+    v.sel = "0:41";
+    v.action("next", cx);
+    probeFrame(v, cx);
+    v.renderOpen = true;
+    v.action("latest", cx);
+    got.latest = [];
+    for (let k = 0; k < 4; k++) { probeFrame(v, cx); got.latest.push([sim.last().end, v.scrollTo?.key ?? null]); }
+    want.latest = [[true, null], [true, null], [true, null], [true, null]];
+    fastRows(v);
+    H.listWindow = null;
+  }
+  expect(got).toEqual(want);
+});
+
 test("past the cap, a pin's place that is gone falls back to the turn's head while the return waits, under a moved cut", async () => {
   const { v, cx, sim } = await cutScene();
   v.pinnedList = () => [{ key: "0:65", turn: v.findTurn("0:65"), pin: { n: 65, anchor: ["md", "99.3"] }, s: v.current(), state: "done" }];
