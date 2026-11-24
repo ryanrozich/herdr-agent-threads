@@ -12228,8 +12228,12 @@ export default class Threads extends View {
     // trajFrame asks for the next draw while one is left. From nothing (opened, or shown again
     // after a hidden strip dropped its model) the waiting line shows meanwhile. Working off (or
     // on, past the slack), the strip keeps its places but for the last turn's, and is placed
-    // again by the build from the next draw on, drawn as it was meanwhile.
-    const D = tlDraw(prev, this.tlJob, L.totals.heads, cw, Date.now(), t0 + TL_BUILD_MS, now);
+    // again by the build from the next draw on, drawn as it was meanwhile. The build is taken
+    // off the pane before its step: Herdr's interrupt can stop the draw inside that step and
+    // close the build, and a closed build kept here would throw in every draw after.
+    const J0 = this.tlJob;
+    this.tlJob = null;
+    const D = tlDraw(prev, J0, L.totals.heads, cw, Date.now(), t0 + TL_BUILD_MS, now);
     this.tlJob = D.J;
     if (D.wait) {
       this.tlWait = true;
