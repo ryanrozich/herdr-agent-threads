@@ -1331,6 +1331,25 @@ test("an older step whose slice ends before it reaches a match goes on by itself
   expect(r.draws).toBeGreaterThan(0);
 }, 300000);
 
+// Herdr stops a draw going on with the step, inside the step's own slice (its first checks are
+// the step's: the rows are built and nothing changed since). The step is kept, and a later draw
+// lands it.
+test("a draw going on with an older step, stopped inside the step's slice, leaves the step to a later draw, which lands it", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = { stops: 0 };
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    plant = { at: checks() + 40 };
+    for (let k = 0; k < 40 && v.sel === last; k++) if (drawOnce(v, cx).stopped) r.stops++;
+    r.planted = plant === null;
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, planted: r.planted, stops: r.stops, landed: v.sel }).toEqual({ stayed: true, planted: true, stops: 1, landed: z.nearest });
+}, 300000);
+
 // A step going on by itself is called off by a key, here p (the selected turn pinned, the
 // selection left where it is), or by a new selection (a click on a turn): the draws after it
 // leave the selection where that put it.
