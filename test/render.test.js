@@ -7024,6 +7024,24 @@ test("an opened card's scroll that waits lands at its 2 s limit in a quiet pane"
   expect([asks.map((a) => a.key), asks[0]?.ms >= 2000 && asks[0]?.ms < 2400]).toEqual([[`cp:${key}`, key], true]);
 }, 60000);
 
+// An open reply's record (partTurns: its split, its parts' links and rows, about 0.5 to 1 MB a
+// capped card) lives only while its card is open: closing the card drops it, and a session read
+// again (restart) or another picked (pick) drops every one, as their rows hold the old turns.
+test("an open reply's part record goes when its card closes, when the session is read again, and when another is picked", async () => {
+  const records = (v) => v.partTurns?.size ?? 0;
+  const got = [];
+  for (const how of ["close", "restart", "pick"]) {
+    const { v, cx, key } = await openLong(shortParas(300));
+    costedFrames(v, cx, 400, await cardDone(v, key));
+    const before = records(v);
+    if (how === "close") v.toggle(key, cx);
+    else if (how === "restart") v.restart(v.current());
+    else v.pick({ path: v.current().file }, cx);
+    got.push([how, before, records(v)]);
+  }
+  expect(got).toEqual([["close", 1, 0], ["restart", 1, 0], ["pick", 1, 0]]);
+}, 60000);
+
 // Parts held through the light window after a stopped draw go on in the draw after it: a
 // timer asks for the open turns to be built again (againOpen), for the work left in them
 // (otherLeft). Herdr stops that draw inside the rebuild (stopAt, once, in the first draw after
