@@ -4892,9 +4892,10 @@ export default class Threads extends View {
         // the list draws only the items in view. Link rules run on the text shown; heights use
         // the text as written. A return to a pin lands at the start of its item.
         // A table is an item of its own ("table"), so it can run wider than the reading line.
-        const parts = mdChunks(md).flatMap((src) => splitTables(src));
+        let parts = pm.split.get(i);
+        if (!parts) pm.split.set(i, (parts = this.splitParts(md)));
         parts.forEach(({ text: src, table }, j) => {
-          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm, src);
+          const lk = parts.length === 1 && linked?.[i] && src === seg.text ? linked[i] : this.partLinks(pm.links, src);
           const sub = parts.length === 1 ? `${i}` : `${i}.${j}`;
           push({ ...item, kind: "md", key: `md:${key}:${sub}`, md: lk.md, src, links: lk.links, ...(j ? { gap: this.paraGap() } : {}), ...(table ? { table: true } : {}) });
         });
@@ -5970,22 +5971,26 @@ export default class Threads extends View {
   linkCtx() { return { repo: this.remote.repo, owner: this.remote.owner, host: this.remote.host ?? null }; }
   repoSig() { return this.remote.repo ? `${this.remote.host ?? ""}/${this.remote.repo}` : ""; }
   linkOne(md) { return this.links.length ? linkify(md, this.links, this.linkCtx()) : { md, links: 0 }; }
-  // The parts of an open reply with the link rules applied, kept per open turn until its reply,
-  // the rules or the repo change, and dropped once the turn is closed. Every part of a
-  // 200,000-character reply linked in one draw took longer than Herdr's time for a draw ("This
-  // view could not be re-rendered", interrupted), and each draw after that began them again.
-  // One memo for every open turn, emptied when full, did the same once the open cards held
-  // more parts than it kept. New parts share the reshaping time (SHAPE_MS) with the heights
-  // after them: past it a part shows as written, and the next frame links it.
+  // An open reply's parts, kept per open turn: its Markdown segments split into parts (split,
+  // until the reply changes) and the parts with the link rules applied (links, until the reply,
+  // the rules or the repo change). A closed turn's go at the next build of an open one. Every
+  // part of a 200,000-character reply linked in one draw took longer than Herdr's time for a
+  // draw ("This view could not be re-rendered", interrupted), and each draw after that began
+  // them again; one memo for every open turn, emptied when full, did the same once the open
+  // cards held more parts than it kept. Splitting the reply again on each of those draws cost
+  // about half as much as linking it. New parts share the reshaping time (SHAPE_MS) with the
+  // heights after them: past it a part shows as written, and the next frame links it.
   partMemo(key, text) {
     const ver = `${this.linksVer}|${this.links.length}|${this.repoSig()}|${this.remote.owner ?? ""}`;
-    if (this.partLinked?.ver !== ver) this.partLinked = { ver, turns: new Map() };
-    const turns = this.partLinked.turns;
+    const turns = (this.partTurns ??= new Map());
     if (turns.size > this.open.size) for (const k of turns.keys()) if (!this.open.has(k)) turns.delete(k);
     let m = turns.get(key);
-    if (m?.text !== text) turns.set(key, (m = { text, map: new Map() }));
-    return m.map;
+    if (m?.text !== text) turns.set(key, (m = { text, ver, links: new Map(), split: new Map() }));
+    else if (m.ver !== ver) { m.ver = ver; m.links = new Map(); }
+    return m;
   }
+  // An open reply's Markdown segment split into its parts: chunks within MD_MAX, tables apart.
+  splitParts(md) { return mdChunks(md).flatMap((src) => splitTables(src)); }
   partLinks(memo, src) {
     if (!this.links.length) return { md: src, links: 0 };
     const known = memo.get(src);

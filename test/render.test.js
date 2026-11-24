@@ -6673,11 +6673,11 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
 // of a draw. On the rig 26 parts of short paragraphs never drew: 67 of 73 stopped draws died in
 // the link pass. Mixed Markdown of 16 to 96 KB drew in 20 to 38.5 ms. Past P121.stop ms Herdr
 // stops a draw and keeps what it wrote: no catch runs, so the next render finds renderOpen set.
-const P121 = { line: 0.033, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
+const P121 = { line: 0.033, split: 0.008, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
 const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
 const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim(); const out = []; for (let i = 1; out.join("\n\n").length < kb * 1024; i++) out.push(one, `Copy ${i} is filed as ACME-${i}.`); return out.join("\n\n"); };
-// One reply, or several on the last turns, every one opened.
-async function openLong(text) {
+// One reply, or several on the last turns, every one opened (unless shut).
+async function openLong(text, shut = false) {
   const texts = [].concat(text);
   const { v, cx } = await pane(fixture("--extra", String(Math.max(2, texts.length))));
   v.debug = false;
@@ -6690,7 +6690,7 @@ async function openLong(text) {
   settleRows(v, cx);
   dropTimers(v, cx);
   const keys = turns.map((t) => `${v.sessions.length - 1}:${t.n}`);
-  for (const k of keys) v.toggle(k, cx);
+  if (!shut) for (const k of keys) v.toggle(k, cx);
   return { v, cx, key: keys.at(-1), keys };
 }
 // The open card's parts, settled: each one linked as the rules link it alone, and sized at the
@@ -6714,11 +6714,13 @@ function costedFrames(v, cx, n, done) {
   const P = P121;
   const real = performance.now;
   const STOP = new Error("stopped at the draw's time");
-  let t = 1e7, at = null, stopped = false, linked = 0;
+  let t = 1e7, at = null, stopped = false, linked = 0, splits = 0;
   const spend = (ms) => { t += ms; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
   const lo = v.linkOne, wr = v.wrapped;
   v.linkOne = function (md) { if (this.links.length) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); } return lo.call(this, md); };
   v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
+  const sp = v.splitParts;
+  v.splitParts = function (md) { splits++; spend(md.split("\n").filter((x) => x.trim()).length * P.split); return sp.call(this, md); };
   performance.now = () => { if (stopped) throw STOP; return t; };
   const frames = [];
   let settled = -1;
@@ -6738,9 +6740,9 @@ function costedFrames(v, cx, n, done) {
       cx.timers = cx.timers.filter((x) => x.ms > gap).map((x) => ({ ...x, ms: x.ms - gap }));
       for (const x of due) x.fn(cx);
     }
-  } finally { performance.now = real; delete v.linkOne; delete v.wrapped; }
+  } finally { performance.now = real; delete v.linkOne; delete v.wrapped; delete v.splitParts; }
   const ok = frames.filter((x) => x.ok);
-  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, linked, most: Math.max(0, ...ok.map((x) => x.ms)), frames };
+  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, linked, splits, most: Math.max(0, ...ok.map((x) => x.ms)), later: Math.max(0, ...ok.slice(1).map((x) => x.ms)), frames };
 }
 
 const costLog = (what, r) => { if (process.env.THREADS_COST_LOG) console.log(`${what}: ${JSON.stringify({ ...r, frames: r.frames.slice(0, 14).map((x) => (x.ok ? x.ms : `stop ${x.ms}`)) })}`); };
@@ -6752,39 +6754,48 @@ test("opening a reply of 26, 35 or 58 parts of short paragraphs draws at once an
     costLog(`${parts} parts`, r);
     expect([r.stops, r.first]).toEqual([0, 1]);
     expect(r.most).toBeLessThan(P121.stop);
-    // Work left for the next draw goes on from there.
-    expect([v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.linked]).toEqual([parts, parts]);
+    // Work left for the next draw goes on from there: the reply split once, each part linked
+    // once, and the frames after the first within the draw's aim (FRAME_AIM_MS, 30 ms).
+    expect([v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.linked, r.splits]).toEqual([parts, parts, 1]);
+    expect(r.later).toBeLessThanOrEqual(30);
   }
 }, 60000);
 
-test("an open reply of 18 or 58 parts has every part linked and at its worked-out height within 12 frames", async () => {
+test("an open reply of 18 or 58 parts has every part linked and at its worked-out height within 14 frames", async () => {
   for (const [n, parts] of [[980, 18], [4000, 58]]) {
     const { v, cx, key } = await openLong(shortParas(n));
     const r = costedFrames(v, cx, 40, await cardDone(v, key));
     costLog(`${parts} parts, heights`, r);
     expect(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length).toBe(parts);
     expect(r.settled).toBeGreaterThan(0);
-    expect(r.settled).toBeLessThanOrEqual(12);
-    // New rules link every part again, the same way, with the heights kept for the text.
+    expect(r.settled).toBeLessThanOrEqual(14);
+    // New rules link every part again, the same way, with the split and the heights kept.
     const { parseLinks } = await import("../mods/agent-threads/settings.js");
     const l = parseLinks([{ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: "https://tickets.example.com/$1" }]);
     v.setLinks(l.rules, l.list, 1);
     const again = costedFrames(v, cx, 40, await cardDone(v, key));
     costLog(`${parts} parts, new rules`, again);
-    expect([again.stops, again.linked, again.settled > 0 && again.settled <= 12]).toEqual([0, parts, true]);
+    expect([again.stops, again.linked, again.splits, again.settled > 0 && again.settled <= 12]).toEqual([0, parts, 0, true]);
     expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain("tickets.example.com/1)");
   }
 }, 60000);
 
-test("eight open replies of 58 parts each, 464 parts in all, draw in time and link each part once", async () => {
-  const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)));
-  const r = costedFrames(v, cx, 160, await cardDone(v, keys));
-  costLog("8 x 58 parts", r);
+test("eight replies of 58 parts each opened one after another, 464 parts in all, draw in time and link and split each once", async () => {
+  const { v, cx, keys } = await openLong(Array.from({ length: 8 }, (_, j) => shortParas(4000).replaceAll("Paragraph", `Turn ${j}, paragraph`)), true);
+  const all = { stops: 0, linked: 0, splits: 0, most: 0, settled: [] };
+  for (const k of keys) {
+    v.toggle(k, cx);
+    const r = costedFrames(v, cx, 30, await cardDone(v, keys.slice(0, keys.indexOf(k) + 1)));
+    for (const n of ["stops", "linked", "splits"]) all[n] += r[n];
+    all.most = Math.max(all.most, r.most);
+    all.settled.push(r.settled);
+  }
+  costLog("8 x 58 parts", { ...all, frames: [] });
   const parts = v.baseRows.filter((x) => x.kind === "md" && keys.some((k) => x.key.startsWith(`md:${k}:`))).length;
   expect(parts).toBeGreaterThan(400);
-  expect([r.stops, r.linked]).toEqual([0, parts]);
-  expect(r.settled).toBeGreaterThan(0);
-  expect(r.settled).toBeLessThanOrEqual(100);
+  expect([all.stops, all.linked, all.splits]).toEqual([0, parts, 8]);
+  expect(all.most).toBeLessThan(P121.stop);
+  expect(all.settled.every((n) => n > 0 && n <= 12)).toBe(true);
   // Settled, a frame that builds the open turns again links nothing.
   v.againOpen = true;
   v.rowsKey = "again";
@@ -6796,9 +6807,11 @@ test("eight open replies of 58 parts each, 464 parts in all, draw in time and li
   v.againOpen = true;
   v.rowsKey = "again";
   costedFrames(v, cx, 1, () => true);
-  expect([...v.partLinked.turns.keys()]).toEqual([keys[0]]);
-  expect(v.partMemo(keys[0], v.replyText(v.findTurn(keys[0]))).size).toBe(parts / 8);
-  expect(v.partMemo(keys[0], "Rewritten.").size).toBe(0);
+  expect([...v.partTurns.keys()]).toEqual([keys[0]]);
+  const kept = v.partMemo(keys[0], v.replyText(v.findTurn(keys[0])));
+  expect([kept.links.size, kept.split.size]).toEqual([parts / 8, 1]);
+  const re = v.partMemo(keys[0], "Rewritten.");
+  expect([re.links.size, re.split.size]).toEqual([0, 0]);
 }, 60000);
 
 test("an open mixed Markdown reply of 16 to 96 KB settles to the card one unbounded build makes: the same rows, text, links and heights", async () => {
@@ -6812,7 +6825,7 @@ test("an open mixed Markdown reply of 16 to 96 KB settles to the card one unboun
     const settled = card();
     expect(settled.filter((x) => x[0] === "md" && x[4] > 0).length).toBeGreaterThan(kb / 8);
     v.linkMemo = null;
-    v.partLinked = null;
+    v.partTurns = null;
     v.mdHeights = null;
     v.shapeBudget = 1e9;
     v.rowsKey = null;
