@@ -705,7 +705,7 @@ test("timeline paint: the hatch is one stroked path, kept with the layout's brea
   }
 });
 
-test("timeline view: shown from nothing, the strip is placed and laid out over frames inside its budget, a frame asked for each time, its slot holding the waiting line meanwhile", async () => {
+test("timeline view: shown from nothing, the strip is placed and laid out over frames inside its budget, a frame asked for each time, its slot holding a dim line meanwhile that says the timeline is being laid out", async () => {
   const { b, cb } = await dockPane(fixture("--extra", "2000"), "bottom", 1440);
   shownFrame(b, cb);
   b.key(keyEv("b"), cb);
@@ -724,7 +724,7 @@ test("timeline view: shown from nothing, the strip is placed and laid out over f
       cb.timers = cb.timers.filter((x) => x.ms !== 0);
       for (const x of due) x.fn(cb);
       const c = frame(b, cb);
-      frames.push({ wait: own(c, "th-tl-wait") != null, lanes: own(c, "th-tl-lanes") != null, ran: b.tlJob?.ran ?? null, asked: cb.timers.some((x) => x.ms === 0), report: b.trajReport().timeline.waiting });
+      frames.push({ wait: own(c, "th-tl-wait") != null, words: words(own(c, "th-tl-wait")), dim: (own(c, "th-tl-wait") ?? []).some((e) => e[0] === "text_color" && e[1] === theme.dim), lanes: own(c, "th-tl-lanes") != null, ran: b.tlJob?.ran ?? null, asked: cb.timers.some((x) => x.ms === 0), report: b.trajReport().timeline.waiting });
     }
   } finally {
     performance.now = real;
@@ -732,7 +732,8 @@ test("timeline view: shown from nothing, the strip is placed and laid out over f
   expect(b.tlModel).toBeTruthy();
   const going = frames.slice(0, -1);
   expect(going.length).toBeGreaterThan(2);
-  for (const f of going) expect(f).toMatchObject({ wait: true, lanes: false, asked: true, report: true });
+  // The session is read: the line says the strip is being laid out, with the mod's ellipsis, no count and no percent.
+  for (const f of going) expect(f).toMatchObject({ wait: true, words: ["Laying out the timeline…"], dim: true, lanes: false, asked: true, report: true });
   for (const f of going) expect(f.ran).toBeLessThanOrEqual(12 * TL.TL_BUILD_CHUNK);
   expect(frames.at(-1)).toMatchObject({ wait: false, lanes: true });
   // The strip a whole build makes.
