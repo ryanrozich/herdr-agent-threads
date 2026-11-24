@@ -1595,49 +1595,41 @@ test("a landing's late ask after a newer jump has landed in another window is dr
   H.listWindow = null;
 });
 
-// The rows RowWindow.outside reads, counted: the base rows through one proxy per array, so a
-// count kept by the rows' identity still holds.
-function outsideReads(v) {
-  const n = { reads: 0, calls: 0 };
-  const proxies = new WeakMap();
-  const counted = (rows) => {
-    if (!proxies.has(rows)) proxies.set(rows, new Proxy(rows, { get(t, k) { if (typeof k === "string" && k >= "0" && k <= "9~") n.reads++; return t[k]; } }));
-    return proxies.get(rows);
-  };
-  const orig = v.win.outside.bind(v.win);
-  v.win.outside = (list) => { n.calls++; return orig({ ...list, rows: counted(list.rows) }); };
-  return n;
-}
-
-test("a refit for new measures counts the turns outside the window once: it reads no row outside it until the rows or the window change", async () => {
+// The counts outside the window (RowWindow.outside) read through memoReads, below.
+test("a refit for new measures reads no row outside the window, nor does a card opened inside it; a window moved reads only the rows between its old and new edges", async () => {
   const { v, cx } = await capSession(150, SMALL, 125);
+  const n = memoReads(v);
   v.jumpLatest(true);
   frames(v, cx);
   v.action("first", cx);
   frames(v, cx);
-  const n = outsideReads(v);
+  const calls = v.win.outside;
+  let called = 0;
+  v.win.outside = (list) => { called++; return calls(list); };
+  n.outside = 0;
   // A batch of measures: new sizes, the same rows and window.
-  for (let k = 0; k < 3; k++) { v.sizesVer = (v.sizesVer ?? 0) + 1; draw(v, cx); }
-  expect(n.calls).toBeGreaterThan(0);
-  const first = n.reads;
-  expect(first).toBeGreaterThan(0);
-  for (let k = 0; k < 3; k++) { v.sizesVer = (v.sizesVer ?? 0) + 1; draw(v, cx); }
-  expect(n.reads).toBe(first);
-  // A card opened outside nothing, inside the window, changes the rows: the counts again,
-  // and still right.
+  for (let k = 0; k < 6; k++) { v.sizesVer = (v.sizesVer ?? 0) + 1; draw(v, cx); }
+  expect(called).toBeGreaterThan(0);
+  expect(n.outside).toBe(0);
+  // A card opened inside the window splices its rows in, all of them before the window's end:
+  // the count after the window is carried over them.
   const more = v.rows().find((r) => r.key === "newer");
   v.open.add("0:30");
   frames(v, cx, 1);
-  expect(n.reads).toBeGreaterThan(first);
+  expect(n.outside).toBe(0);
   expect(v.rows().find((r) => r.key === "newer").text).toBe(more.text);
-  // Show later: the window moves, the counts follow it.
+  // Show later: the window moves, the counts follow it, from the rows between the edges.
+  const was = { ...v.win.at };
   v.showMore(true);
   frames(v, cx, 1);
-  const { earlier, later } = v.win.outside(v.winList());
   const all = v.allRows();
   const { a, z } = v.win.at;
-  expect(earlier).toBe(all.slice(0, a).filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).length);
-  expect(later).toBe(all.slice(z).filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).length);
+  expect(z).toBeGreaterThan(was.z);
+  expect(n.outside).toBeGreaterThan(0);
+  expect(n.outside).toBeLessThan(a + all.length - z);
+  const { earlier, later } = v.win.outside(v.winList());
+  expect(earlier).toBe(all.slice(0, a).filter((r) => TURN_ROW.has(r.kind)).length);
+  expect(later).toBe(all.slice(z).filter((r) => TURN_ROW.has(r.kind)).length);
 });
 
 test("a window that starts partway through a day keeps that day's pill over its first turns: the day's band is above the window", async () => {
