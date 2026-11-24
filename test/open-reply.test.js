@@ -601,6 +601,31 @@ test("a splice that finds an open turn missing from its session changes no row a
   expect([first?.[0], first?.[1], agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, false, true, true]);
 }, 60000);
 
+// A full build puts its rows, sizes and index in, then makes the record later builds start
+// from (probeList and the build record are calls, where Herdr's stop can fall), then the rows'
+// key. Stopped in between, the new rows stood under the old record and the old key, and the
+// next build trusted that record. The key is cleared before the rows go in: the build after
+// such a stop is of every row.
+test("a full build Herdr stops after its rows are in and before its record is made is followed by a build of every row", async () => {
+  const { v, cx, keys } = await openLong(["Short reply one.", "Short reply two."], true);
+  const MARK = { key: "stop-here", kind: "md" };
+  let armed = true;
+  let keyAfter;
+  const pl = v.probeList;
+  v.probeList = function (...a) { if (armed && this.rowJob == null) { armed = false; keyAfter = this.rowsKey; this.height(MARK); } return pl.apply(this, a); };
+  v.spliceRows = () => false;
+  v.toggle(keys[0], cx);
+  const r = costedFrames(v, cx, 1, () => true, { stopAt: (_w, x) => x === MARK });
+  delete v.spliceRows;
+  delete v.probeList;
+  settleRows(v, cx);
+  const got = v.baseRows.map((x) => x.key).join("\n");
+  const agree = v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i);
+  v.rowsKey = null;
+  settleRows(v, cx);
+  expect([armed, r.stops, keyAfter ?? null, agree, got === v.baseRows.map((x) => x.key).join("\n")]).toEqual([false, 1, null, true, true]);
+}, 60000);
+
 // Herdr's stop is the script engine's interrupt, which falls at any call: a full build can be
 // stopped after it has sized a row and before it has put the row in its index. The build goes
 // on from its next row, so that row was in no index: here the open card's head, which every
