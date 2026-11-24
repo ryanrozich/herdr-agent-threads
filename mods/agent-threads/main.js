@@ -175,6 +175,9 @@ const CUT_WATCH_MS = 250;
 const FRAME_AIM_MS = 30;
 const SHAPE_MIN_MS = 2;
 const BUILD_MIN_MS = 3;
+// A slice of the search's matches (scanStep): SCAN_MS a draw at most, SCAN_MIN_MS at least.
+const SCAN_MS = 6;
+const SCAN_MIN_MS = 1;
 const SCROLL_WAIT_MS = 2000;
 // While a place is held, the probe measures this many rows below the top row with the rows
 // above it, and the rest of the rows below once it is let go.
@@ -6436,8 +6439,10 @@ export default class Threads extends View {
       case "newerMatch": {
         const h = this.hitsNow();
         if (h) {
-          if (h.top === h.bot) return false;
           const p = h.at.get(this.sel);
+          // Past the oldest match found so far, while more can come: one slice, here.
+          if (name === "olderMatch" && (p == null ? h.top === h.bot : p - 1 < h.bot) && !h.done) this.scanStep();
+          if (h.top === h.bot) return !h.done;
           const j = p == null ? h.top - 1 : p + (name === "olderMatch" ? -1 : 1);
           if (j < h.bot || j >= h.top) return true;
           this.sel = h.by.get(j);
@@ -7210,6 +7215,7 @@ export default class Threads extends View {
     if (!this.rowJob) this.shapeSpent = 0;
     const spent = this.shapeSpent ?? 0;
     this.buildSpent = 0;
+    this.scanSpent = 0;
     this.shapeFrame = (this.renders ?? 0) + 1;
     this.renderOpen = true;
     let out;
@@ -7223,8 +7229,9 @@ export default class Threads extends View {
         this.rewrap = null;
       }
     }
-    // The draw's cost apart from reshaping and building rows sets the next draw's time for them.
-    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0));
+    // The draw's cost apart from reshaping, building rows and finding the search's matches sets
+    // the next draw's time for them.
+    this.frameBase = Math.max(0, now() - this.renderAt - Math.max(0, (this.shapeSpent ?? 0) - spent) - (this.buildSpent ?? 0) - (this.scanSpent ?? 0));
     return out;
   }
 
@@ -7236,6 +7243,8 @@ export default class Threads extends View {
   }
   // A slice of a rows build.
   buildMax() { return Math.max(BUILD_MIN_MS, Math.min(BUILD_MS, this.frameRoom() / 2)); }
+  // A slice of the search's matches.
+  scanMax() { return Math.max(SCAN_MIN_MS, Math.min(SCAN_MS, this.frameRoom() / 2)); }
   frameRoom() { return FRAME_AIM_MS - (this.frameBase ?? 0); }
   // One reshaping budget a draw: rows() can be asked for more than once in a draw, and each
   // ask used to start the budget again. Outside a render (tests), each ask starts it.
@@ -7268,8 +7277,8 @@ export default class Threads extends View {
     // The Trajectory, in its own pane or in this one: the ledger only, with its own list.
     if (this.traj) return this.trajFrame(cx);
     this.rows();
-    // The search's matches, before anything reads them (hitsNow).
-    this.hitsNow();
+    // A slice of the search's matches, before anything in the draw reads them.
+    this.scanStep(cx);
     this.syncOutEditors(cx);
     // Rows left with their old shape (SHAPE_MS): the next frame goes on with them.
     // A rows build left for later slices (buildStep): the next frame goes on with it.
@@ -7934,11 +7943,13 @@ export default class Threads extends View {
   // one with no match left that way is dimmed, takes no press, and its tooltip says so.
   stepButtons(t) {
     const { at, n } = this.matchPlace();
+    // While the matches are counted the older step stays on: more can come (scanStep).
+    const more = this.view !== "pinned" && this.hits && !this.hits.done;
     const step = (id, icon, tip, name, off, none) => off
       ? div().id(id).flex_none().size(24).flex().items_center().justify_center().opacity(0.35).text_color(t.dim).tooltip(none).child(svg(ICON(icon)).size(14))
       : this.iconButton(t, id, icon, tip, (_e, cx) => { this.action(name, cx); cx.notify(); });
     return [
-      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n, "No older match"),
+      step("th-match-older", "chevron-up", "Older match (n)", "olderMatch", at === n && !more, "No older match"),
       step("th-match-newer", "chevron-down", "Newer match (Shift n)", "newerMatch", at === 1, "No newer match"),
     ];
   }
@@ -7954,18 +7965,24 @@ export default class Threads extends View {
     const q = this.filterText();
     if (!q) return null;
     let hit = 0, hiddenHit = 0;
+    // While the matches are counted (scanStep): "Counting…" with none found yet, and the total
+    // so far with a "+"; the hidden ones, no match, and the first or only mention wait for
+    // the last turn checked.
+    let more = false;
     // The Pinned view shows every pin, agent message or not, and nothing else: the matches
     // are the pins the search matches. Elsewhere the kept set (hitsNow).
     if (this.view === "pinned") hit = this.matchKeys().length;
     else {
       const h = this.hitsNow();
       hit = h.top - h.bot;
-      hiddenHit = h.hidden;
+      more = !h.done;
+      hiddenHit = more ? 0 : h.hidden;
     }
     const hidden = hiddenHit ? ` · ${hiddenHit} hidden` : "";
-    if (!hit) return `No matches${hidden}`;
+    if (!hit) return more ? "Counting…" : `No matches${hidden}`;
     const { at, n: all } = this.matchPlace();
     const tight = this.pw() < 420;
+    if (more) return !at ? `${all.toLocaleString()}+ matches` : tight ? `${at} of ${all}+` : `${at} of ${all}+ · newest first`;
     if (!at) return `${all.toLocaleString()} ${all === 1 ? "match" : "matches"}${hidden}`;
     const end = all === 1 ? "only mention" : at === all ? "first mention" : "newest first";
     if (tight) return `${at} of ${all}${at === all && all > 1 ? " · first" : ""}`;
@@ -9005,14 +9022,28 @@ export default class Threads extends View {
       }
       if (older || (newest && !this.hitsTail(h))) h = null;
     } else h = null;
-    if (!h) {
-      h = this.hits = { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
-        hidden: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1 }, done: false };
-    }
+    h ??= { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
+      hidden: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1 }, done: false };
     h.vers = S.map((s) => s.version);
     h.lens = S.map((s) => s.turns.length);
     h.loaded = S.map((s) => Boolean(s.loaded));
-    if (!h.done) this.scanHits(h, Infinity);
+    // A new set's first slice, wherever it is first asked for (scanStep).
+    if (h !== this.hits) { this.hits = h; this.scanHits(h, now() + this.scanMax()); }
+    return h;
+  }
+
+  // One slice of the matches, SCAN_MS at most (scanMax), in each draw until all are found, a
+  // 0 ms timer asking for the next draw as the rows' build does; and in the search command,
+  // each letter typed and an older step past the oldest match found so far, which run one
+  // slice each. Its time is left out of the draw's base cost, as the build's is.
+  scanStep(cx = null) {
+    const t0 = now();
+    const was = this.hits;
+    const h = this.hitsNow();
+    if (!h) return h;
+    // A set made just now has had its first slice (hitsNow).
+    if (h === was && !h.done) this.scanHits(h, t0 + this.scanMax());
+    if (this.renderOpen) this.scanSpent = (this.scanSpent ?? 0) + (now() - t0);
     // A new search's selection (setQuery): the newest match, once one is found, unless the
     // selection moved meanwhile.
     const want = this.hitsSelect;
@@ -9023,6 +9054,10 @@ export default class Threads extends View {
         this.follow = false;
         this.scrollTo = { key: this.sel, how: "center" };
       }
+    }
+    if (cx && !h.done && !this.scanNext) {
+      this.scanNext = true;
+      cx.timer.after(0, (cx) => { this.scanNext = false; cx.notify(); });
     }
     return h;
   }
@@ -9132,7 +9167,7 @@ export default class Threads extends View {
         return;
       }
       if (!this.selMatches()) this.hitsSelect = { sel: this.sel };
-      this.hitsNow();
+      this.scanStep();
       return;
     }
     const key = n ? this.jumpKey(n) : null;
