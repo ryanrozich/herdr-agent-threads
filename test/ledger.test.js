@@ -4,11 +4,13 @@
 // detail, the status line and the running rule. The turns are made up here in the reader's
 // shape (turns.js), as small as each case needs.
 import { test, expect } from "bun:test";
+import * as ledgerMod from "../mods/agent-threads/ledger.js";
 import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
   trajCompact, compactRow,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
   BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds, rowTimes,
+  trajLayout, rowsLeft, DOCK_SIDE_MIN, DOCK_LIST_MAX, DOCK_DETAIL_MIN,
 } from "../mods/agent-threads/ledger.js";
 import { fmtTime } from "../mods/agent-threads/core/turns.js";
 
@@ -505,4 +507,77 @@ test("compact tooltips carry what the compact row drops: a heading's calls, fail
   const failed = compactRow({ ...step, status: "failed", failed: true }, 60).tip;
   expect(failed.endsWith("failed")).toBe(true);
   expect(failed).not.toContain("completed");
+});
+
+// TRD-87 picks 3 and 4: the bottom dock's detail at the list's right from 700 px, at least 360 px
+// and whatever the list leaves past 1,100 px, at most 640; none under 700. The right dock as before.
+test("trajLayout: the bottom dock's detail side and widths, and the list's columns by the list's width; the right dock by ledgerCols", () => {
+  const at = (w, open = true) => { const L = trajLayout(w, "bottom", open); return [L.side, L.detailW, L.listW, L.cols.start, L.cols.bar, L.cols.filters, L.cols.detailRight]; };
+  expect(at(1700)).toEqual(["right", 600, 1100, true, true, true, true]);
+  expect(at(1460)).toEqual(["right", 360, 1100, true, true, true, true]);
+  expect(at(1100)).toEqual(["right", 360, 740, true, true, true, true]);
+  expect(at(860)).toEqual(["right", 360, 500, true, true, true, true]);
+  expect(at(859)).toEqual(["right", 360, 499, true, false, true, true]);
+  expect(at(780)).toEqual(["right", 360, 420, true, false, true, true]);
+  expect(at(779)).toEqual(["right", 360, 419, false, false, true, true]);
+  expect(at(700)).toEqual(["right", 360, 340, false, false, true, true]);
+  expect(at(699)).toEqual(["none", null, 699, true, true, true, false]);
+  expect(at(530)).toEqual(["none", null, 530, true, true, false, false]);
+  // The detail closed by the person: the list takes the width, its columns with it.
+  expect(at(1700, false)).toEqual(["right", 600, 1700, true, true, true, true]);
+  expect(at(700, false)).toEqual(["right", 360, 700, true, true, true, true]);
+  expect([DOCK_SIDE_MIN, DOCK_LIST_MAX, DOCK_DETAIL_MIN]).toEqual([700, 1100, 360]);
+  // The right dock, and anything that is not "bottom": its 300 px detail from 900 px, columns by the pane.
+  for (const dock of ["right", undefined, "top"]) {
+    for (const w of [1700, 960, 900, 899, 560, 300]) {
+      const L = trajLayout(w, dock);
+      const side = w >= 900 ? "right" : "under";
+      expect([L.side, L.detailW, L.listW]).toEqual([side, side === "right" ? 300 : null, side === "right" ? w - 300 : w]);
+      expect(L.cols).toEqual(ledgerCols(w));
+      // The detail closed: the list takes the pane's width at every width.
+      const shut = trajLayout(w, dock, false);
+      expect([shut.side, shut.detailW, shut.listW]).toEqual([side, side === "right" ? 300 : null, w]);
+      expect(shut.cols).toEqual(ledgerCols(w));
+    }
+  }
+  expect(trajLayout(Number.NaN, "bottom").side).toBe("none");
+});
+
+// The bottom detail's three boundaries, each 1 px on each side, a test each: it comes in at
+// 700 px (DOCK_SIDE_MIN); it leaves its 360 px least at 1,460 (DOCK_LIST_MAX past it); it stops
+// at 640 px (DOCK_DETAIL_MAX) from 1,740, where the list takes all the rest.
+const dockAt = (w, open = true) => { const L = trajLayout(w, "bottom", open); return [w, L.side, L.detailW, L.listW]; };
+test("trajLayout: along the bottom the detail comes in at 700 px, both sides of it", () => {
+  expect(dockAt(699)).toEqual([699, "none", null, 699]);
+  expect(dockAt(700).slice(0, 2)).toEqual([700, "right"]);
+  expect(dockAt(701).slice(0, 2)).toEqual([701, "right"]);
+  expect(dockAt(700)[2]).not.toBe(null);
+});
+test("trajLayout: along the bottom the detail leaves its 360 px least at 1,460 px, where the list reaches 1,100; 1 px each side", () => {
+  expect(dockAt(1459)).toEqual([1459, "right", 360, 1099]);
+  expect(dockAt(1460)).toEqual([1460, "right", 360, 1100]);
+  expect(dockAt(1461)).toEqual([1461, "right", 361, 1100]);
+});
+test("trajLayout: along the bottom the detail stops at 640 px from 1,740 px and the list takes the rest; 1 px each side, and at 2,000, 2,650 and 3,000", () => {
+  expect(ledgerMod.DOCK_DETAIL_MAX).toBe(640);
+  expect(dockAt(1739)).toEqual([1739, "right", 639, 1100]);
+  expect(dockAt(1740)).toEqual([1740, "right", 640, 1100]);
+  expect(dockAt(1741)).toEqual([1741, "right", 640, 1101]);
+  expect(dockAt(2000)).toEqual([2000, "right", 640, 1360]);
+  expect(dockAt(2650)).toEqual([2650, "right", 640, 2010]);
+  expect(dockAt(3000)).toEqual([3000, "right", 640, 2360]);
+  // The detail closed: the list is the pane.
+  expect(dockAt(2650, false)).toEqual([2650, "right", 640, 2650]);
+  expect(dockAt(3000, false)).toEqual([3000, "right", 640, 3000]);
+});
+
+test("rowsLeft: the whole 24 px rows a list keeps in its height, less a timeline's above it", () => {
+  expect(rowsLeft(240)).toBe(10);
+  expect(rowsLeft(263)).toBe(10);
+  expect(rowsLeft(264)).toBe(11);
+  expect(rowsLeft(240, 60)).toBe(7);
+  expect(rowsLeft(23)).toBe(0);
+  expect(rowsLeft(40, 80)).toBe(0);
+  expect(rowsLeft(null)).toBe(null);
+  expect(rowsLeft(Number.NaN)).toBe(null);
 });
