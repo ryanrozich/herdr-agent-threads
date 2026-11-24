@@ -947,6 +947,23 @@ test("a prose segment over MD_MAX takes none of the reply's 25 links: the segmen
   expect([run.length > 6800, r.settled > 0, parts.length > 1, parts.every((x) => x.links > 0), last?.links]).toEqual([true, true, true, true, 3]);
 }, 60000);
 
+// The whole reply's links are kept for the turn while its segments and the rules are the same
+// (linkedSegs). A reply that changes to one of the same length, as another transcript's turn
+// of the same number can, has segments of the same kinds and lengths: the old links were kept.
+test("an open reply whose text changes to one of the same length shows the new text's links, not the old ones", async () => {
+  const { v, cx, key } = await openLong("See ACME-101 for the cart total.");
+  costedFrames(v, cx, 40, await cardDone(v, key));
+  const md = () => v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`) && x.kind === "md").map((x) => x.md).join("|");
+  const before = md();
+  const turn = v.sessions.at(-1).turns.at(-1);
+  turn.after = ["See ACME-202 for the cart total."];
+  turn.shapeKey = null;
+  v.partTurns = null;
+  v.rowsKey = null;
+  costedFrames(v, cx, 40, await cardDone(v, key));
+  expect([before.includes("ACME-101)"), md().includes("ACME-202)"), md().includes("ACME-101")]).toEqual([true, true, false]);
+}, 60000);
+
 test("an open reply whose text changes keeps the links of the parts it still has and links only the new one", async () => {
   const base = shortParas(980);
   const { v, cx, key } = await openLong(base);
