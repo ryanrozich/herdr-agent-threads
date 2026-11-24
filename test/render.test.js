@@ -8687,6 +8687,22 @@ test("the probe takes the parts nearest the top of the pane first, walking out b
   expect(sigs).toBe(0);
 });
 
+// Following, a read that brings a new turn goes to the end (jumpLatest), as Latest does: a
+// scroll still waiting for the rows to settle (an open's scroll of a card) is dropped, or it
+// would land once they did and take the view from the end.
+test("following, a read that brings a new turn drops a scroll still waiting and goes to the end", async () => {
+  const { appendFileSync } = await import("node:fs");
+  const { file, rest } = grownFixture();
+  const { v, cx } = await pane(file);
+  const key = v.turnKeys(v.rows())[0];
+  v.scrollTo = { key, how: "card", until: Date.now() + 400 };
+  v.follow = true;
+  appendFileSync(file, rest);
+  v.read(cx);
+  await settle(v);
+  expect([v.current().turns.length, v.follow, v.toBottom, v.scrollTo ?? null]).toEqual([3, true, true, null]);
+});
+
 test("the Jump to latest pill floats while the end of the list is off screen, with a dot when a turn came in below", async () => {
   const { appendFileSync } = await import("node:fs");
   const { file, rest } = grownFixture();
