@@ -1558,3 +1558,28 @@ test("a selection the window leaves out opens its Turn card on the first i, as t
   expect(v.sel).toBe(first);
   expect(v.detailsOpen).toBe(true);
 });
+
+test("a landing's late ask after a newer jump has landed in another window is dropped: the view stays on the newer turn", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.jumpLatest(true);
+  settleList(v, cx, sim);
+  // A rail jump to #100 lands: its asks wait 16 and 48 ms (landPlan, landExact).
+  v.railJump("0:100", cx);
+  draw(v, cx);
+  const late = cx.timers;
+  cx.timers = [];
+  expect(late.length).toBeGreaterThan(0);
+  // Before they run, Home moves the window to the oldest turns and lands there.
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:1");
+  const asked = scrollsOf(v);
+  for (const x of late) x.fn(cx);
+  probeFrame(v, cx);
+  // The first landing's asks named rows by their place in its own window's rows.
+  expect(asked).toEqual([]);
+  expect(turns(sim.last())).toContain("0:1");
+  H.listWindow = null;
+});

@@ -9439,6 +9439,7 @@ export default class Threads extends View {
     } else if (this.toBottom && rows.length) {
       this.toBottom = false;
       this.scrollTo = null;
+      this.landN = (this.landN ?? 0) + 1;
       this.pinningUntil = Date.now() + 1000;
       this.upAt = 0;
       this.downAt = 0;
@@ -9462,9 +9463,16 @@ export default class Threads extends View {
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
       let { i, how } = this.scrollRow(st, rows);
       this.scrollTo = null;
-      // The landing's asks 16 and 48 ms on, unless the reader has wheeled since (listWheel).
+      // The landing's asks 16 and 48 ms on, unless the reader has wheeled since (listWheel), or
+      // a newer scroll has come (a jump or latest, waiting or landed: landN): each asks for its
+      // row by key, in the rows of its own frame then, which a window moved since re-indexes.
       const wheels = this.wheelN ?? 0;
-      const ask = (k, h) => { if ((this.wheelN ?? 0) === wheels) this.askScroll(k, h); };
+      const landN = (this.landN = (this.landN ?? 0) + 1);
+      const ask = (k, h) => {
+        if ((this.wheelN ?? 0) !== wheels || this.landN !== landN || this.scrollTo || this.toBottom) return;
+        const now = rows[k] ? this.rowIndex(rows[k].key) : -1;
+        if (now >= 0) this.askScroll(now, h);
+      };
       // A jump held while it waited (the held ask above) has its turn on screen already, at
       // the top or the centre: the first ask, which only brings an item below the view into
       // it, would show a third place between the held one and the landing, so it is left out.
