@@ -964,7 +964,7 @@ test("the opening: with 44 ms of work ahead of the owed row in every draw, a row
 // always the alone one.
 test("the opening: a row released after a second 64 draws runs alone, and its cut holds it: one stop for its text, within the two a text may cost", async () => {
   const runs = new Map();
-  const { v, frames } = await costlyWheel(8, 44, 1400, (v, cx, host) => {
+  const { frames } = await costlyWheel(8, 44, 1400, (v, cx, host) => {
     wheelUp(v, cx, host);
     const reshape = v.reshape;
     v.reshape = function (...a) { if (this.renderOpen) runs.set(a[0], [...(runs.get(a[0]) ?? []), Boolean(this.unitAlone)]); return reshape.apply(this, a); };
