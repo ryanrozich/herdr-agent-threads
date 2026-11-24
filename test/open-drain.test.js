@@ -2,11 +2,11 @@
 // behind it, newest first while following; the rows drawn first and within a draw's time
 // otherwise; and a reader who leaves the end (a wheel, a jump, a pin, the outline) keeps the
 // place. On the render harness (test/render-harness.js), which setup() starts clean.
-import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { test, expect, setSystemTime } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drawnText, frame, H, lastList, openingPane, settle, setup } from "./render-harness.js";
+import { drawnText, frame, H, lastList, openingPane, settle, setup, state } from "./render-harness.js";
 
 setup();
 
@@ -521,3 +521,199 @@ test("the opening: a stopped draw once the rows near the end are settled does no
     expect(after[0].before - after[0].after).toBe(0);
   } finally { H.listWindow = null; }
 }, 30000);
+
+// ---- The draw's time past the shaping budget, a jump in the frame of a scroll to the end, a
+// chat with no Markdown reply parts, and the 2 s wait during the drain.
+
+// The list as Herdr keeps it: an offset in px (host.off) and 600 px of rows from it; a scroll to
+// the end or to a row (want) applies to the heights of the draw that asked for it, and goes no
+// further than the end.
+function hostList() {
+  const host = { off: 0, end: false, want: null };
+  const top = (z, i) => z.slice(0, i).reduce((x, y) => x + y, 0);
+  H.listWindow = (n, id) => {
+    const z = lastList.sizes;
+    if (!String(id).startsWith("threads-list")) return { start: 0, end: n };
+    if (host.end) host.off = Math.max(0, top(z, n) - 600);
+    else if (host.want != null) host.off = Math.min(top(z, host.want), Math.max(0, top(z, n) - 600));
+    host.end = false;
+    host.want = null;
+    let a = 0, y = 0;
+    while (a < n - 1 && y + z[a] <= host.off) y += z[a++];
+    let b = a;
+    while (b < n && y < host.off + 600) y += z[b++];
+    return { start: a, end: b };
+  };
+  return { host, top };
+}
+// The probe's walk made to end with rows still to reshape (in the harness each pass restarts
+// it), in a chat with no Markdown reply parts (prompts, no replies): the probe has nothing to
+// measure, and the place is held by the rows left alone (openUnsettled).
+test("the opening: in a chat with no Markdown reply parts, a wheel up with rows still to reshape takes the place and keeps it until they are done", async () => {
+  const prompts = join(mkdtempSync(join(tmpdir(), "threads-prompts-")), "p.jsonl");
+  writeFileSync(prompts, readFileSync(plainChat(2400), "utf8").split("\n").filter((l) => !l.includes('"type":"assistant"')).join("\n"));
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400, prompts);
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    // The read shapes as many of these cheap rows as the machine's clock allows: all but the
+    // last screen's go back to be reshaped, so as many are left on any machine.
+    v.staleRows = [];
+    v.baseRows.forEach((r, i) => { if (r.kind === "turn" && i < v.baseRows.length - 30) { Object.assign(r.turn, { shapeKey: null, shapeFast: null, shapesKept: null }); v.staleRows.push(i); } });
+    v.probeDue = () => { v.probeLeft = 0; return []; };
+    step();
+    step();
+    expect([v.staleRows.length > 400, v.openHold]).toEqual([true, true]);
+    v.listH = 600;
+    v.listWheel({ delta: { y: 120 } });
+    expect(v.anchor?.open).toBe(true);
+    step();
+    v.listWheel({ delta: { y: 60 } });
+    const held = [];
+    for (let k = 0; v.staleRows.length && k < 1000; k++) { held.push(Boolean(v.anchor?.open)); step(); }
+    expect([v.staleRows.length, held.length > 20, held.filter((x) => !x).length]).toEqual([0, true, 0]);
+  } finally { H.listWindow = null; }
+}, 30000);
+
+// On main the frame's toBottom branch dropped the jump: the end, with the turn selected.
+test("a jump in the same frame as a pending scroll to the end lands on its turn", async () => {
+  const { v, cx, step } = await plainOpening(60);
+  for (let k = 0; (v.openActive() || v.staleRows?.length) && k < 400; k++) step();
+  v.listH = 600;
+  const asks = [];
+  v.scroll = { scroll_to_bottom() { asks.push("end"); }, scroll_to_item(i) { asks.push(lastList.keys[i]); } };
+  v.toBottom = true;
+  v.setQuery("#20", cx);
+  expect(v.follow).toBe(false);
+  for (let k = 0; k < 12; k++) { for (const x of cx.timers) x.ms -= 16; step(); }
+  expect([v.sel, v.toBottom, asks.includes("end"), asks.includes("0:20")]).toEqual(["0:20", false, false, true]);
+  // Nothing left to reshape: no landing hold (openLand), so no place is held.
+  expect(Boolean(v.anchor?.open)).toBe(false);
+}, 30000);
+
+// A wheel up into rows still to reshape (or move(v, cx, host)), on a clock where a reshape costs
+// ms and a draw base before its walk. Each frame: when its reshapes started (ms into the
+// render), blank rows drawn, rows drawn, rows taken from outside them.
+const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
+async function costlyWheel(ms, base, frames, move = wheelUp) {
+  const realPerf = performance.now.bind(performance);
+  let clock = 0;
+  performance.now = () => (clock += 0.001);
+  const { host } = hostList();
+  try {
+    const { v, cx, go } = await openingPane(plainChat(2400));
+    v.debug = false;
+    v.opening.at -= 1000;
+    v.shapeBudget = 12;
+    let starts = [];
+    const reshape = v.reshape;
+    v.reshape = function (...a) { if (this.renderOpen) starts.push(Math.round(clock - this.renderAt)); clock += ms; return reshape.apply(this, a); };
+    const walk = v.reshapeStale;
+    v.reshapeStale = function (...a) { if (this.renderOpen) clock += base; return walk.apply(this, a); };
+    go(() => false);
+    await settle(v);
+    v.listH = 600;
+    v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; } };
+    const step = () => { for (const x of cx.timers) x.ms -= 16; cx.flush(16); starts = []; frame(v, cx); return starts; };
+    for (let k = 0; v.openActive() && k < 600; k++) step();
+    step();
+    move(v, cx, host);
+    const out = [];
+    for (let k = 0; k < frames; k++) {
+      const stale = new Set(v.staleRows);
+      const s = step();
+      const r = lastList.range;
+      const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
+      // Rows taken this frame from outside the rows drawn.
+      const away = [...stale].filter((i) => !v.staleRows.includes(i) && (i + off < r.start || i + off >= r.end)).length;
+      out.push({ starts: s, blank: blankInView(v), drawn: r.end - r.start, away });
+    }
+    return { v, frames: out };
+  } finally { H.listWindow = null; performance.now = realPerf; }
+}
+
+// Rows of 20 ms, the shaping time 12: one reshape a draw, and past the time the walk takes only
+// the rows drawn (memo hits), not the 40 on each side of them as before.
+test("the opening: a wheel into rows that each cost more than a draw's shaping time reshapes one a draw, the rows drawn first", async () => {
+  const { v, frames } = await costlyWheel(20, 0, 30);
+  expect(v.staleRows.length).toBeGreaterThan(400);
+  expect(frames.filter((f) => f.starts.length > 1)).toEqual([]);
+  // After the wheel's frame (its walk had the rows drawn before it).
+  expect(frames.slice(1).filter((f) => f.away > 0)).toEqual([]);
+  // Every row drawn shaped within as many frames as rows on screen.
+  expect(frames.slice(frames[0].drawn).filter((f) => f.blank > 0)).toEqual([]);
+}, 60000);
+
+// Walked 30 ms into the draw, rows of 8 ms: before, a second reshape started at 38 ms. None
+// starts past NEAR_CUT_MS (35), a drawn row's neither; the rows drawn still fill, one a frame,
+// and those left are counted (nearCut).
+test("the opening: a late draw starts no reshape past 35 ms since its render began, and the rows drawn are shaped within a frame each", async () => {
+  const { v, frames } = await costlyWheel(8, 30, 30);
+  expect(v.staleRows.length).toBeGreaterThan(400);
+  expect(frames.flatMap((f) => f.starts).filter((s) => s > 35)).toEqual([]);
+  expect(frames.filter((f) => f.starts.length !== 1)).toEqual([]);
+  expect(frames.slice(frames[0].drawn).filter((f) => f.blank > 0)).toEqual([]);
+  v.report();
+  expect(state.shared["threads.debug"][v.terminal].nearCut).toBeGreaterThan(0);
+}, 60000);
+
+
+// Outside the opening a scroll to a place still waits for the rows to settle, up to
+// SCROLL_WAIT_MS (2 s), as before: only the opening's hold (openHold) skips it.
+test("after the opening, a jump while rows are reshaped waits for them up to 2 s, as before", async () => {
+  const { host } = hostList();
+  const asks = [];
+  try {
+    const { v, cx, step } = await plainOpening(2400);
+    v.listH = 600;
+    v.scroll = { scroll_to_bottom() { host.end = true; }, scroll_to_item(i) { host.want = i; asks.push(lastList.keys[i]); } };
+    for (let k = 0; (v.openActive() || v.staleRows?.length) && k < 600; k++) step();
+    // Every part measured (the harness measures none): the opening's hold ends.
+    v.probeDue = () => { v.probeLeft = 0; return []; };
+    step();
+    step();
+    expect([v.openHold, v.staleRows.length]).toEqual([false, 0]);
+    // Rows above go back to be reshaped (as a settings change sends them).
+    v.baseRows.forEach((r, i) => { if (r.kind === "turn" && i < v.baseRows.length - 30) { Object.assign(r.turn, { shapeKey: null, shapeFast: null, shapesKept: null }); v.staleRows.push(i); } });
+    const t0 = Date.now();
+    setSystemTime(new Date(t0));
+    v.setQuery("#300", cx);
+    for (let k = 0; k < 10; k++) { for (const x of cx.timers) x.ms -= 16; step(); }
+    expect([v.staleRows.length > 400, Boolean(v.scrollTo), asks.length]).toEqual([true, true, 0]);
+    setSystemTime(new Date(t0 + 2001));
+    for (let k = 0; k < 6; k++) { for (const x of cx.timers) x.ms -= 16; step(); }
+    expect([v.staleRows.length > 300, asks.includes("0:300")]).toEqual([true, true]);
+  } finally { H.listWindow = null; setSystemTime(); }
+}, 60000);
+
+// The 2 s wait protected a landing from heights changing above it: parts measured at other
+// heights than their estimates. During the drain the landing's hold does: once it holds, parts
+// above the turn measured 60 px taller than estimated move nothing on screen.
+test("the opening: a jump during the drain holds its place while parts above it are measured at new heights", async () => {
+  let sent = 0;
+  const { v, frames } = await leaveDuringDrain((v, cx, key, step) => {
+    v.setQuery(`#${v.findTurn(key).n}`, cx);
+    for (let k = 0; !v.anchor?.open && k < 20; k++) { if (v.scrollTo?.until) v.scrollTo.until = 1; for (const x of cx.timers) x.ms -= 16; step(); }
+    expect(v.anchor?.open).toBe(true);
+    for (let i = v.baseIndex.get(key) - 1; i >= 0 && sent < 6; i--) {
+      const r = v.baseRows[i];
+      if (r.kind !== "turn" || r.shape?.md == null) continue;
+      const p = v.cmdFor(r);
+      v.probed(p.key, v.partSig(p), { height: (r.shape.mdEst + 60) * v.zoom() }, cx);
+      sent++;
+    }
+  });
+  expect([sent, v.staleRows.length]).toEqual([6, 0]);
+  // On screen from the first frame after, its top where it was, no empty bubble.
+  expect(frames.filter((f) => f[4] == null || f[4] < 0 || f[4] >= 600 || Math.abs(f[4] - frames[0][4]) > 1 || f[3] > 0)).toEqual([]);
+}, 60000);
+
+// A jump during the drain onto rows that cost 8 ms each, in draws whose walk starts 30 ms in:
+// the landing frame and those after start no reshape past NEAR_CUT_MS, and the turn lands.
+test("the opening: a jump during the drain onto costly rows keeps each draw's reshapes under the hard line, and lands", async () => {
+  let aim = null;
+  const { v, frames } = await costlyWheel(8, 30, 20, (v, cx) => { aim = v.baseRows[v.staleRows[v.staleRows.length >> 1]].key; v.setQuery(`#${v.findTurn(aim).n}`, cx); });
+  expect(frames.flatMap((f) => f.starts).filter((s) => s > 35)).toEqual([]);
+  const r = lastList.range;
+  expect([v.sel, lastList.keys.slice(r.start, r.end).includes(aim), frames.slice(6).filter((f) => f.blank > 0).length]).toEqual([aim, true, 0]);
+}, 60000);
