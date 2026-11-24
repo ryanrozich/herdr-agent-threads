@@ -75,6 +75,7 @@ import {
   settleRows,
   setup,
   simList,
+  sliced,
   stamp,
   state,
   stillAt,
@@ -86,6 +87,7 @@ import {
   tileRow,
   toastText,
   tooltips,
+  unsliced,
   until,
   views,
   work,
@@ -2607,7 +2609,7 @@ async function paneWith(file, prep, tries = 200) {
     panes: [{ pane: "p1", tab: "A", terminal: "t4", program: { key: "claude", name: "Claude Code" } }, { pane: "p2", tab: "A", terminal: null, mod: "agent-threads" }],
     props: { terminal: "t4", transcript: file, debug: true }, shared: {},
   };
-  const v = new Threads();
+  const v = unsliced(new Threads());
   const cx = makeCx();
   prep?.(cx, v);
   v.init(state.props, cx);
@@ -2632,7 +2634,8 @@ test.if(process.env.THREADS_CHILD === "read-timing")("S1 child: read the busy fi
   const pcts = [];
   let v;
   const r = await paneWith(busy(), (cx, view) => {
-    v = view;
+    // It times the read's stretches and the draws: the pane's own slices.
+    v = sliced(view);
     H.marks = [];
     cx.sleepHook = () => { stamp("out"); return new Promise((res) => setTimeout(() => { stamp("in"); res(); }, 0)); };
     // The read's last notify (in its finally) closes its last stretch.
@@ -7255,7 +7258,8 @@ test("a render Herdr stopped is asked for again, and counted even when the next 
 });
 
 test("one reshaping budget a draw, and less of it when the rest of the draw is slow", async () => {
-  const { v, cx } = await pane(fixture("--extra", "2"));
+  // About the budgets themselves: the pane's own slices.
+  const { v, cx } = await pane(fixture("--extra", "2"), { sliced: true });
   v.render(cx);
   // A quick draw leaves the whole budget for reshaping and for a slice of a rows build; a
   // slow one splits what is left of 30 ms between them, each down to its floor.
@@ -7378,7 +7382,9 @@ test("the jump to the newest turn goes to the end every frame while the rows set
 const rowSig = (v) => v.baseRows.map((r, i) => `${r.kind}|${r.key}|${r.count ?? ""}|${v.baseSizes[i]}`);
 
 test("a long session's rows are built over several frames, the old rows shown till then, and come out as one build would make them", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7700,7 +7706,9 @@ test("a measure taken for a width the pane has left is used when the pane comes 
 });
 
 test("a rebuild sizes its rows inside the slice's time too, and the rows on screen stay until every new row has its height", async () => {
+  // About the slices themselves: the pane's own.
   const { v, cx } = await longSession(450);
+  sliced(v);
   v.debug = false;
   v.width = 545;
   settleRows(v, cx);
@@ -7742,7 +7750,7 @@ test("a long session whose read ends while its first rows still build selects th
   let fake = 0;
   performance.now = () => (fake += 2);
   let p;
-  try { p = await pane(fixture("--extra", "300")); } finally { performance.now = realPerf; }
+  try { p = await pane(fixture("--extra", "300"), { sliced: true }); } finally { performance.now = realPerf; }
   const { v, cx } = p;
   expect(v.rowJob).not.toBe(null);
   expect(v.sel).toBe(null);
@@ -8609,7 +8617,8 @@ test("the outline marks pins, keeps working narrow, has its own footer, gives wa
 // draw reshapes for at most SHAPE_MS, rows in view first, and the next frames go on.
 test("a settings change in a long session reshapes rows over several frames, the ones in view first", async () => {
   // Agent messages with no reply of their own: hidden, and never shaped, till the toggle below.
-  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), null, 1000);
+  // About the slices themselves: the pane's own.
+  const { v, cx } = await paneWith(fixture("--busy", "130", "--quiet"), (_cx, view) => sliced(view), 1000);
   v.width = 545;
   v.prefs = { ...v.prefs, truncate: true }; // so Reply lines changes the rows
   draw(v, cx);
