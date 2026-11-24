@@ -1402,33 +1402,67 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
 // A step going on by itself is called off by anything the reader does to move the list or
 // leave the view, with the selection left where it is: the wheel over the list, a scroll the
 // list reports with no wheel (its scroll bar), the rail's wheel, a press on a rail end's dot
-// and the pin button on a rail card. Each route as its handler runs it. The pane hidden is
-// not here: it has no event, and a long gap between draws is not shown to mean it (a rig row).
+// and the pin button on a rail card. Each route as its handler runs it: the card's pin button
+// is the handler the draw before the step made. The wheel and the bar move only a list that
+// can scroll, so for those two the tail's first 60 turns match too (the matches the search
+// shows run past the pane), and the bar's scroll comes once the pane's own scroll is done (no
+// scroll asked for or settling). The pane hidden is not here: it has no event, and a long gap
+// between draws is not shown to mean it (a rig row).
+const MANY = Array.from({ length: 60 }, (_, i) => i);
 const LEAVES = {
-  "the wheel": (v, cx) => v.listWheel({ delta: { y: 3000 } }),
-  "a scroll the list reports": (v, cx) => { const rows = v.rows(); v.stickCheck(rows, v.bottomShown, (v.stickStart ?? 40) - 20); },
-  "the rail's wheel": (v, cx) => { v.railCut = true; v.railWheel({ delta_lines: { y: 3 } }, cx); },
-  "a rail end's dot": (v, cx) => v.railReveal(0, cx),
-  "a rail card's pin button": (v, cx) => { v.togglePin(v.sel, cx); cx.notify(); },
+  "the wheel": { also: MANY, go: (v) => v.listWheel({ delta: { y: 3000 } }) },
+  "a scroll the list reports": {
+    also: MANY,
+    go: (v) => {
+      v.scrollTo = null;
+      v.scrollBusyUntil = 0;
+      const rows = v.rows();
+      const at = v.stickStart ?? 40;
+      v.stickCheck(rows, v.bottomShown, at);
+      v.stickCheck(rows, v.bottomShown, at - 20);
+    },
+  },
+  "the rail's wheel": { go: (v, cx) => { v.railCut = true; v.railWheel({ delta_lines: { y: 3 } }, cx); } },
+  "a rail end's dot": { go: (v, cx) => v.railReveal(0, cx) },
+  "a rail card's pin button": {
+    // The last turn's rail card open, as a hover opens it; the draw records its handlers.
+    before: (v, cx, last) => { v.debug = true; v.action(`debugRailCard:${last.split(":")[1]}`, cx); v.debug = false; H.rec = []; },
+    go: (v, cx, pin) => pin(null, cx),
+  },
 };
-for (const [how, go] of Object.entries(LEAVES)) test(`an older step going on by itself is called off by ${how}, with no words and the selection left where it is`, async () => {
-  const z = await zebraTail();
+// The handler the recorded draw gave the element with this id.
+function recorded(id, method) {
+  let at = null;
+  let fn = null;
+  for (const c of H.rec ?? []) {
+    if (c[0] === "id") at = String(c[1]);
+    else if (c[0] === method && at === id) fn = c.at(-1);
+  }
+  return fn;
+}
+for (const [how, { also = [], before, go }] of Object.entries(LEAVES)) test(`an older step going on by itself is called off by ${how}, with no words and the selection left where it is`, async () => {
+  const z = await zebraTail({ also });
   const { v, cx, last } = z;
   const r = {};
   X = 2;
   try { priced(v, () => {
     zebraSearch(z);
+    before?.(v, cx, last);
     drawOnce(v, cx);
+    r.pin = before ? recorded("th-rail-card-pin", "on_click") : null;
+    H.rec = null;
     v.action("olderMatch", cx);
     r.kept = v.sel === last && Boolean(v.hitsNow().step);
-    go(v, cx);
+    r.moves = v.readerMoves ?? 0;
+    go(v, cx, r.pin);
+    r.moved = (v.readerMoves ?? 0) > r.moves;
     for (let k = 0; k < 40; k++) drawOnce(v, cx);
     r.step = v.hitsNow().step ?? null;
     r.field = fieldText(v);
-  }); } finally { X = 1; }
+  }); } finally { X = 1; H.rec = null; }
   await v.pinChain;
   delete recordFiles[PINS];
-  expect({ kept: r.kept, sel: v.sel, step: r.step }).toEqual({ kept: true, sel: last, step: null });
+  expect({ found: !before || Boolean(r.pin), kept: r.kept, moved: r.moved, sel: v.sel, step: r.step }).toEqual({ found: true, kept: true, moved: true, sel: last, step: null });
   expect(r.field).not.toMatch(/No (older|newer) match/);
 }, 300000);
 
