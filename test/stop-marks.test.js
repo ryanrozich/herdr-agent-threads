@@ -67,3 +67,51 @@ test("a render Herdr stops after the rows build asked for its next draw, with th
   for (let k = 0; k < 2000 && v.rowJob; k++) { v.render(cx); cx.flush(0); }
   expect([stopped, ...marks, rows === v.rows().length]).toEqual([true, false, false, true]);
 }, 120000);
+
+// The probe measures the rows' parts over several draws, each asked for by a timer (probeNext).
+// Herdr stops the draw just after the probe asked for its next one, and that timer is lost.
+// The draw after a stopped one clears the mark, so the probe asks again and measures the rest;
+// with the mark left set, it never asked again, and the parts kept their rough heights.
+test("a render Herdr stops after the probe asked for its next draw, with that timer lost, leaves no mark: the probe measures the rest", async () => {
+  const { v, cx } = await scripted(events(1500));
+  v.debug = false;
+  v.width = 560; v.rootH = 1100; v.listH = 1000;
+  H.listWindow = (k) => ({ start: Math.max(0, k - 14), end: k });
+  v.shapeBudget = Infinity;
+  for (let k = 0; k < 400; k++) { v.render(cx); cx.flush(0); if (!v.rowJob && !v.staleRows?.length && !(v.shapeLeft > 0)) break; }
+  v.shapeBudget = null;
+  v.buildMax = () => 0.3;
+  v.action("search:rename", cx);
+  cx.timers = [];
+  // The stop, once: in a draw after the build, once the probe has asked for its next draw.
+  const floating = v.floating;
+  let stopped = false;
+  v.floating = function (...a) { if (!stopped && !this.rowJob && this.probeNext && this.probeLeft > 0) { stopped = true; throw new Error("stopped by Herdr"); } return floating.apply(this, a); };
+  for (let k = 0; k < 400 && !stopped; k++) {
+    const n0 = cx.timers.length;
+    try { v.render(cx); } catch (e) {
+      if (String(e?.message) !== "stopped by Herdr") throw e;
+      // Herdr's stop runs no catch: the render is left open, and its timers are lost.
+      v.renderOpen = true;
+      cx.timers.length = Math.min(cx.timers.length, n0);
+      break;
+    }
+    cx.flush(0);
+  }
+  v.floating = floating;
+  // Herdr's watch draw, then a draw only when the pane asks for one.
+  let asked = 0;
+  cx.notifyHook = () => { asked++; };
+  v.render(cx);
+  // The light draws after a stopped one (CUT_MS, 5 s) measure nothing; that time passes.
+  v.cutUntil = 0;
+  // The probe's timer is 16 ms: the timers due within 20 ms run between draws.
+  for (let k = 0; k < 2000; k++) {
+    asked = 0;
+    cx.flush(20);
+    if (!asked) break;
+    v.render(cx);
+  }
+  cx.notifyHook = null;
+  expect([stopped, Boolean(v.probeNext), v.probeLeft ?? 0]).toEqual([true, false, 0]);
+}, 120000);
