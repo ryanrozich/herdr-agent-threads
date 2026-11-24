@@ -11,6 +11,7 @@ import {
   lastList,
   LIST_MAX,
   openAt,
+  PINS,
   probeFrame,
   rec,
   RowWindow,
@@ -631,6 +632,8 @@ test("a jump to one turn with more items than the list takes lands on its head, 
 // The Pinned view reads from its top when no row is kept (capKey), so latest there keeps the
 // last row instead; the Chat's list keeps its newest items with none.
 test("in the Pinned view past the cap, latest after a scroll to a huge pin's head shows the newest pin: the list ends with it", async () => {
+  // No pins from an earlier test: p toggles, and pins.json lasts the file (as pinPane does).
+  delete H.recordFiles[PINS];
   const { v, cx } = await capSession(150, { ...SMALL, max: 40 }, 140, 80);
   v.jumpLatest(true);
   frames(v, cx);
@@ -640,6 +643,7 @@ test("in the Pinned view past the cap, latest after a scroll to a huge pin's hea
   v.action("pin", cx);
   v.sel = "0:141";
   v.action("pin", cx);
+  expect(v.pinnedAll().map((p) => p.key).sort()).toEqual(["0:141", "0:150"]);
   v.setView("pinned");
   frames(v, cx);
   v.sel = "0:141";
