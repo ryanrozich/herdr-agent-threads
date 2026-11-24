@@ -21268,13 +21268,29 @@ test("past the cap, a jump that waits to a turn with pasted images holds the sam
 test("a wheel up ends the end's own asks: the one 16 ms after the end is taken, and the end held through a re-wrap", async () => {
   for (const rewrap of [false, true]) {
     const { v, cx, sim } = await cutScene();
-    if (rewrap) { v.action("latest", cx); settleList(v, cx, sim); slowRows(v, cx); expect(v.anchor?.end).toBe(true); }
+    if (rewrap) {
+      v.action("latest", cx);
+      settleList(v, cx, sim);
+      slowRows(v, cx);
+      for (let k = 0; k < 20 && !v.anchor?.end; k++) probeFrame(v, cx);
+      expect(v.anchor?.end).toBe(true);
+    }
     else { v.action("latest", cx); draw(v, cx); }
+    // Nothing asks a scroll after the wheel. Through a re-wrap the wheel lets the held end go
+    // (holdDone, before the end's ask in the same frame), and the rows still to reshape then
+    // move the view as with any place let go; with no re-wrap the view stays where it was.
+    const asked = [];
+    const end = v.askEnd.bind(v);
+    v.askEnd = () => { asked.push("end"); end(); };
+    const ask = v.askScroll.bind(v);
+    v.askScroll = (i, h) => { asked.push(i); ask(i, h); };
     sim.wheel(600);
     const at = Math.round(sim.off);
     cx.flush(120, 3);
     dropTimers(v, cx);
-    expect(offs(v, cx, sim, 3)).toEqual([at, at, at]);
+    const o = offs(v, cx, sim, 3);
+    expect(asked).toEqual([]);
+    if (!rewrap) expect(o).toEqual([at, at, at]);
     fastRows(v);
     listWindow = null;
   }

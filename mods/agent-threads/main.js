@@ -5168,6 +5168,17 @@ export default class Threads extends View {
   }
   // Every scroll the pane asks of the list, so trackOff knows where it lands.
   askScroll(i, how) { this.scrollAsk = { i, how }; this.scroll.scroll_to_item(i, how); }
+  // The item a scroll to row i ends with at the top (or the middle, centred): a closed or
+  // running turn's tiles (wtop) or agent line (afold) over its row come along, and for a turn's
+  // head or card, the note above it when the search hides the turn and a pin's day header.
+  landTop(rows, i, how) {
+    if ((rows[i - 1]?.kind === "wtop" || rows[i - 1]?.kind === "afold") && rows[i - 1].turnKey === rows[i].key) i -= 1;
+    if (how !== "head" && how !== "card") return i;
+    const k = rows[i + (rows[i]?.kind === "wtop" || rows[i]?.kind === "afold" ? 1 : 0)]?.key;
+    if (rows[i - 1]?.key === `visit:${k}`) i -= 1;
+    if (rows[i - 1]?.kind === "pday") i -= 1;
+    return i;
+  }
   // The row a scroll (scrollTo) goes to in these rows, and how: its own key, else the next best
   // (or, a pin's place that may be gone), else its turn's head, which a card's scroll takes.
   scrollRow(st, rows) {
@@ -9208,7 +9219,7 @@ export default class Threads extends View {
     const st0 = this.scrollTo;
     if (st0 && (st0.held || (this.capSpan ?? "") !== (this.capLaid ?? ""))) {
       const { i, how } = this.scrollRow(st0, rows);
-      if (i >= 0) { this.askScroll(i, how === "center" ? "center" : "top"); st0.held = true; }
+      if (i >= 0) { this.askScroll(this.landTop(rows, i, how), how === "center" ? "center" : "top"); st0.held = true; }
     }
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
@@ -9234,8 +9245,10 @@ export default class Threads extends View {
       this.upAt = 0;
       this.downAt = 0;
       const holds = this.holds ?? 0;
+      const wheels = this.wheelN ?? 0;
       cx.timer.after(16, (cx) => {
         if ((this.holds ?? 0) !== holds) return; // a highlight started meanwhile (holdForSelect)
+        if ((this.wheelN ?? 0) !== wheels) return; // the reader's wheel since (listWheel)
         this.askEnd();
         cx.notify();
       });
@@ -9259,8 +9272,8 @@ export default class Threads extends View {
       // scroll flashes instead).
       if (i >= 0 && st.flash && !(how === "land" && st.resume)) this.flashTurn(rowTurnKey(rows[i]) ?? rows[i].key, cx);
       // A closed or running turn with pasted images has its tiles in the item over its row
-      // (wtop): a scroll to the turn takes them along.
-      const lead = (k) => ((rows[k - 1]?.kind === "wtop" || rows[k - 1]?.kind === "afold") && rows[k - 1].turnKey === rows[k].key ? k - 1 : k);
+      // (wtop): a scroll to the turn takes them along (landTop).
+      const lead = (k) => this.landTop(rows, k);
       // A second press goes on to the place further down the turn, under a line that says the
       // turn starts above, which the next frame's rows carry.
       if (i >= 0 && how === "land" && st.resume) {
@@ -9272,10 +9285,7 @@ export default class Threads extends View {
       // A turn's head at the top of the pane, with the note above it when the search hides
       // the turn. It lands like a place, so a head already on screen still goes to the top.
       if (i >= 0 && how === "head") {
-        const k = rows[i].key;
-        i = lead(i);
-        if (rows[i - 1]?.key === `visit:${k}`) i -= 1;
-        if (rows[i - 1]?.kind === "pday") i -= 1; // a pin's day header comes with it
+        i = this.landTop(rows, i, how);
         how = "land";
       }
       if (i >= 0 && how === "card") {
@@ -9283,10 +9293,8 @@ export default class Threads extends View {
         // wholly on screen, and a taller one shows from its head down.
         let j = i;
         while (j + 1 < rows.length && CARD.has(rows[j + 1].kind) && rows[j + 1].kind !== "head") j++;
-        // A return to a turn the search hides: its note shows above its head.
-        let top = lead(i);
-        if (rows[top - 1]?.key === `visit:${rows[i].key}`) top -= 1;
-        if (rows[top - 1]?.kind === "pday") top -= 1; // a pin's day header comes with it
+        // A return to a turn the search hides: its note shows above its head (landTop).
+        const top = this.landTop(rows, i, how);
         cx.timer.after(16, (cx) => { ask(j, "top"); cx.notify(); });
         cx.timer.after(48, (cx) => { ask(top, "top"); cx.notify(); });
       } else if (i >= 0 && how === "land") {
