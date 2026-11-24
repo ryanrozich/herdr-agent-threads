@@ -259,3 +259,78 @@ test("a draw Herdr stops as the running row works out its height for a new kind 
   const slot = v.rows().find((x) => x.key === key);
   expect([was, armed, stops, r.kind, v.baseSizes[li] === v.height(r), slot?.kind]).toEqual(["working", false, 1, "wrow", true, "wrow"]);
 }, 60000);
+
+// A splice that Herdr stops after the rows have changed and before the rows' key is set
+// (spliceRows) leaves its mark, and the next build is of every row. But the reader can close
+// the card again before that build: the key is then the one the rows had before the open, the
+// rows looked built, and the build that clears the mark never came. The mark is read before the
+// key is.
+test("a card closed again right after a draw Herdr stopped in its opening splice is closed: the rows, their sizes and their index agree, and it opens again", async () => {
+  const { v, cx, key, run } = await longReply(40);
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const was = v.baseRows.map((x) => x.key).join("\n");
+  let armed = true;
+  // The sizes' splice, after the rows' own: the rows hold the card's, the sizes and the index do not yet.
+  const sizes = v.baseSizes;
+  sizes.splice = function (...a) { if (a.length > 2 && armed) { armed = false; throw STOP; } return Array.prototype.splice.apply(this, a); };
+  v.toggle(key, cx);
+  run.frame();
+  delete sizes.splice;
+  const half = v.baseRows.some((x) => x.key.startsWith(`md:${key}:`));
+  // Closed again before the next draw. A draw that throws (a row with no size) is counted.
+  v.toggle(key, cx);
+  let bad = 0;
+  for (let k = 0; k < 20; k++) { try { run.frame(); } catch { bad++; } cx.flush?.(0); }
+  const agree = (w) => w.baseRows.length === w.baseSizes.length && w.baseRows.every((x, i) => w.baseIndex.get(x.key) === i) && w.baseIndex.size === w.baseRows.length;
+  const closed = [v.baseRows.map((x) => x.key).join("\n") === was, agree(v)];
+  // And opened again: the card draws.
+  v.toggle(key, cx);
+  settleRows(v, cx);
+  const parts = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length;
+  expect([armed, run.stops, half, bad, ...closed, parts > 0, agree(v)]).toEqual([false, 1, true, 0, true, true, true, true]);
+}, 60000);
+
+// A build of many turns goes on over several draws. Each slice after the first adds its rows to
+// the build's own array, from the turn the slice before ended at. Herdr's stop can fall inside a
+// slice, as it builds a turn's rows or works out a row's height: the next draw went on from the
+// same turn and added that slice's rows again, so the rows held turns twice. Made-up session of
+// 120 short turns (scripted).
+test("a resumed build Herdr stops inside a later slice builds each row once: the next draw goes on from where that slice began", async () => {
+  const ev = [];
+  for (let i = 0; i < 120; i++) {
+    const ts = new Date(Date.UTC(2026, 10, 1, 8, 0) + i * 60000).toISOString();
+    ev.push({ k: "p", o: "human", t: `Prompt ${i}: check the cart total ${i}.`, ts }, { k: "t", t: `Reply ${i}: the total rounds per line.` }, { k: "d", ts });
+  }
+  const got = [];
+  // The stop in a row's height (the closed rows kept so far are dropped, so each is sized), or
+  // in the building of a turn's rows, in the fourth slice.
+  for (const at of ["height", "turnRows"]) {
+    const { v, cx } = await scripted(ev);
+    v.debug = false;
+    settleRows(v, cx);
+    dropTimers(v, cx);
+    const key = "0:60";
+    let armed = true;
+    let stops = 0;
+    let slices = 0;
+    v.keptFor().rows.clear();
+    // Every slice ends at the next sixteenth turn: its time is up at once.
+    v.buildMax = () => -1;
+    const fn = v[at];
+    v[at] = function (r, ...a) {
+      if (armed && r?.key === key && this.rowJob?.from?.own) { armed = false; throw STOP; }
+      return fn.call(this, r, ...a);
+    };
+    const buildRows = v.buildRows;
+    v.buildRows = function (...a) { slices++; return buildRows.apply(this, a); };
+    v.rowsKey = null;
+    for (let k = 0; k < 60 && (v.rowJob || v.rowsKey == null); k++) { try { draw(v, cx); } catch (e) { if (e !== STOP) throw e; stops++; } cx.flush?.(0); }
+    delete v[at];
+    delete v.buildMax;
+    delete v.buildRows;
+    const keys = v.baseRows.map((x) => x.key);
+    got.push([at, armed, stops, slices > 4, new Set(keys).size === keys.length, keys.filter((k) => k === key).length, v.baseRows.length === v.baseSizes.length, v.baseRows.every((x, i) => v.baseIndex.get(x.key) === i)]);
+  }
+  expect(got).toEqual([["height", false, 1, true, true, 1, true, true], ["turnRows", false, 1, true, true, 1, true, true]]);
+}, 60000);
