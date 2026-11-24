@@ -5259,7 +5259,7 @@ export default class Threads extends View {
     // Just after the opening, parts above the end are still measured: a scroll up takes the
     // place on screen (takeAnchor), so measures above it move nothing, and takes it again at
     // each wheel while parts wait (the rows above the new top keep the heights they had).
-    if (this.probeLeft > 0 && (this.openHold || this.anchor?.open) && !this.follow) {
+    if (this.openUnsettled() && (this.openHold || this.anchor?.open) && !this.follow) {
       this.openHold = false;
       this.dropAnchor();
       const a = this.takeAnchor();
@@ -5267,6 +5267,9 @@ export default class Threads extends View {
       this.fitKey = null;
     }
   }
+  // Parts still to measure or rows still to reshape once the list shows: either moves rows
+  // above the view, so the end, or the reader's place, is held until neither is left.
+  openUnsettled() { return this.probeLeft > 0 || this.staleRows?.length > 0 || this.shapeLeft > 0; }
   // The person's latest scroll, by direction (dy > 0 is up); the other direction is forgotten.
   scrolledBy(dy, now) {
     this.upAt = dy > 0 ? now : 0;
@@ -9153,7 +9156,7 @@ export default class Threads extends View {
     // slots carry the last measures, which came in after the frame before was laid out (the
     // rig showed a 79 px slip there, and a 15 px one on a short session's first frame shown).
     const partsDue = bottomHeld && (this.openActive() || this.openHold);
-    if (this.openHold && !(this.probeLeft > 0)) this.openHold = false;
+    if (this.openHold && !this.openUnsettled()) this.openHold = false;
     if ((this.toBottom || this.scrollTo) && (unsettled || partsDue) && (bottomHeld || Date.now() - this.scrollWait < SCROLL_WAIT_MS)) {
       // A return's wait for the probe (until, below) starts once the rows are reshaped.
       if (this.scrollTo?.until) this.scrollTo.until = Math.max(this.scrollTo.until, Date.now() + 400);

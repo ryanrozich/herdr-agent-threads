@@ -20224,6 +20224,25 @@ test("the opening: a jump away from the end while the rows above drain lands on 
   }
 }, 30000);
 
+test("the opening: a wheel up once the parts are measured, with rows still to reshape, takes the place on screen", async () => {
+  H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
+  try {
+    const { v, step } = await plainOpening(2400);
+    for (let k = 0; v.openActive() && k < 400; k++) step();
+    v.probeDue = () => { v.probeLeft = 0; return []; };
+    step();
+    step();
+    expect(v.staleRows.length).toBeGreaterThan(400);
+    expect(v.openHold).toBe(true);
+    v.listH = 600;
+    v.listWheel({ delta: { y: 120 } });
+    expect(v.anchor?.open).toBe(true);
+    step();
+    v.listWheel({ delta: { y: 60 } });
+    expect(v.anchor?.open).toBe(true);
+  } finally { H.listWindow = null; }
+}, 30000);
+
 test("the drain uses its shaping time: a pass reshapes rows until the draw's budget is spent, in every frame", async () => {
   H.listWindow = (n) => ({ start: Math.max(0, n - 12), end: n });
   try {
