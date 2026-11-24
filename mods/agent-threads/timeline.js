@@ -16,14 +16,16 @@ const stepN = tlLen;
 // tracks worked out (tlTracks) since the module loaded, for the tests and the debug report.
 export const TL_MADE = { geo: 0, layout: 0, tracks: 0 };
 // A step's start and end from its row, ms from the turn's start (NaN for none: an instant has
-// no end), and its flags: TL_TRACK (in the Tools lane it started while another call ran, drawn
-// half height), TL_OPEN (a call with no result yet) and TL_FAILED.
+// no end), and its flags: TL_TRACK (in the Tools lane it started while a call on the first
+// track ran, drawn half height), TL_OPEN (a call with no result yet) and TL_FAILED.
 const rowA = (r) => r.start ?? Number.NaN;
 const rowB = (r) => (r.start != null && r.dur != null ? r.start + r.dur : Number.NaN);
 const rowF = (r, track) => (track ? TL_TRACK : 0) | (r.open ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0);
 // A turn's tracks: null when no step is on the second track, else one number a step, 1 for a
-// call in the Tools lane that started while another ran. A call with no result holds the
-// first track to the turn's end; one that starts as the last ends stays on the first. The
+// call in the Tools lane that started while a call on the first track ran. A call on the
+// second track does not hold the first: one that starts while only a half-height call runs
+// goes on the first. A call with no result holds the first track to the turn's end; one that
+// starts as the first track's call ends stays on the first. The
 // calls are taken in clock order: as listed, unless one starts before the one listed before
 // it, and then by start, the one listed first at equal starts.
 export function tlTracks(h) {
