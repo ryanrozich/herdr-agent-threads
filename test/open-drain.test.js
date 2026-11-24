@@ -457,7 +457,8 @@ test("the drain's order: while following, every pass walks the rows left newest 
     while (v.rowJob) { v.renders++; v.rows(); }
     expect(v.staleRows.length).toBeGreaterThan(150);
     // The rows a pass's own walk calls shape() for (not shapeInView's), in order. A turn named
-    // in defer is left by that walk, as a turn left for its expected cost is.
+    // in defer is left by that walk, as a turn left for its expected cost is: past the rows near
+    // the view (none while following) the walk ends there, the rest unlooked at.
     const at = new Map(v.baseRows.map((r, i) => [r.turn, i]));
     let walked = [];
     let inView = false;
@@ -474,12 +475,13 @@ test("the drain's order: while following, every pass walks the rows left newest 
     const siv = v.shapeInView;
     v.shapeInView = function (...a) { inView = true; try { return siv.apply(this, a); } finally { inView = false; } };
     const up = (a) => a.every((x, i) => i === 0 || a[i - 1] < x);
-    const pass = (follow) => {
+    const pass = (follow, left = false) => {
       v.follow = follow;
       walked = [];
       const s0 = v.staleRows.filter((i) => v.baseRows[i].kind === "turn").sort((a, b) => a - b);
       v.reshapeStale(v.status());
-      expect(walked.length).toBeGreaterThan(5);
+      if (left) expect(walked.length).toBe(3);
+      else expect(walked.length).toBeGreaterThan(5);
       // Newest first while following. Otherwise the rows near the view first, those drawn and
       // then outward, then the rest oldest first.
       const [a, b, off] = nearRows(v);
@@ -495,7 +497,7 @@ test("the drain's order: while following, every pass walks the rows left newest 
     // A turn left by a pass while following, its third, is the next pass's first.
     const d = v.staleRows.at(-3);
     defer = v.baseRows[d].turn;
-    expect(pass(true)[2]).toBe(d);
+    expect(pass(true, true)[2]).toBe(d);
     expect(v.staleRows.at(-1)).toBe(d);
     expect(pass(true)[0]).toBe(d);
     // Follow changing between two passes, each way.
