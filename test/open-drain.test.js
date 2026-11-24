@@ -821,7 +821,7 @@ test("the opening: a jump during the drain onto costly rows keeps each draw's re
 // where the walk's first fits (base + ms + after and the 3 ms margin within 50 ms), else in
 // at least every second frame; reshapes that end past 50 ms; starts past 35 ms for a row off
 // screen; frames from the sixth with a blank row on screen.
-function gridCell(frames, ms, fits) {
+function gridCell(frames, fits) {
   const filled = frames.findLastIndex((f) => f.blank > 0) + 1;
   let run = 0;
   let most = 0;
@@ -834,7 +834,7 @@ test("the opening: a draw that reaches its walk late starts no reshape expected 
   for (const base of [36, 40, 44, 48]) {
     for (const ms of [2, 8, 20]) {
       const { v, frames } = await costlyWheel(ms, base, 30, wheelUp, { until: true, stop: true, after: 1.5 });
-      got.push([base, ms, ...gridCell(frames, ms, base + ms + 1.5 + 3 <= 50), v.staleRows.length > 400]);
+      got.push([base, ms, ...gridCell(frames, base + ms + 1.5 + 3 <= 50), v.staleRows.length > 400]);
       want.push([base, ms, 0, true, 0, 0, 0, true]);
     }
   }
@@ -906,7 +906,7 @@ test("the opening: a pick, a restart, a dropped place or a switch of view ends a
 // past the line: the rows on screen stayed blank in all 30 frames.
 test("the opening: while a turn streams, the rows on screen are still reshaped, one a frame, and the running turn off screen waits", async () => {
   const { frames } = await costlyWheel(8, 40, 30, wheelUp, { until: true, stop: true, stream: true, after: 1.5, liveMs: 20 });
-  expect(gridCell(frames, 8, false)).toEqual([0, true, 0, 0, 0]);
+  expect(gridCell(frames, false)).toEqual([0, true, 0, 0, 0]);
   // The rows on screen filled by the fourth frame after the wheel.
   expect(frames.findLastIndex((f) => f.blank > 0)).toBeLessThan(3);
 }, 60000);
@@ -935,3 +935,24 @@ test("a reshape asked for past 35 ms in a draw outside the drain starts, and ins
   }
 }, 30000);
 
+
+// The row on screen the line refused is owed by its key for the next frame only while the view
+// stays: a wheel, a jump waiting or a new top row drops it, so the next frame's first reshape
+// is not spent on a row no longer drawn. With the view still, it is reshaped.
+test("the opening: a row the line refused is reshaped first next frame only while the view has not moved", async () => {
+  const { v } = await plainOpening(60);
+  const got = [];
+  for (const [name, move] of [["still", () => {}], ["wheel", () => { v.wheelN = (v.wheelN ?? 0) + 1; }], ["jump", () => { v.scrollTo = { key: "0:1" }; }], ["top row", () => { v.viewRange = [3, 13]; }]]) {
+    const r = v.baseRows.find((x) => x.kind === "turn");
+    Object.assign(r.turn, { shapeKey: null, shapeFast: null, shapesKept: null });
+    Object.assign(v, { viewRange: [0, 10], scrollTo: null, renderOpen: true, renderAt: performance.now(), shapeSpent: 0, shapeAtRender: 0, buildSpent: 0, frameBase: 0, shapeRate: 0.00001 });
+    v.lineOwed = { key: r.key, view: 0, wheel: v.wheelN ?? 0 };
+    const paid = v.owedPaid ?? 0;
+    move();
+    v.payOwed();
+    got.push([name, (v.owedPaid ?? 0) - paid, r.turn.shapeKey != null, v.lineOwed]);
+    v.renderOpen = false;
+    v.scrollTo = null;
+  }
+  expect(got).toEqual([["still", 1, true, null], ["wheel", 0, false, null], ["jump", 0, false, null], ["top row", 0, false, null]]);
+}, 30000);
