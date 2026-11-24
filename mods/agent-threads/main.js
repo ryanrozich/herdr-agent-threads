@@ -6485,7 +6485,7 @@ export default class Threads extends View {
   // Returns false when the action did nothing (so Escape can reach Herdr).
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
-    // A key also calls off an older step going on by itself (stepHit); a step sets it again.
+    // A key also calls off a step going on by itself (stepHit); a step sets it again.
     if (this.hits) this.hits.step = null;
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
@@ -7280,6 +7280,9 @@ export default class Threads extends View {
       if (this.renderWant?.scrollTo && !this.scrollTo) this.scrollTo = this.renderWant.scrollTo;
       // Counted at once: a render that is stopped too would never reach the end of the frame.
       this.publishCuts();
+      // The scan's next draw, asked for in the stopped render: its timer may never run, and
+      // its mark would keep this render from asking again (scanStep).
+      this.scanNext = false;
     }
     // Herdr asks for no render after one it stopped: the 120 ms timer asks for the next.
     this.renderWant = { toBottom: this.toBottom, scrollTo: this.scrollTo };
@@ -9121,6 +9124,8 @@ export default class Threads extends View {
     let h = this.hits;
     // The newest session's tail checked again (hitsTail) in this call.
     let tail = false;
+    // A step kept in a set found again for the same search (stepHit): it goes on in the new one.
+    let step = null;
     if (h && h.base === base && h.sessions.length === S.length && S.every((s, i) => s === h.sessions[i])) {
       let older = false;
       let newest = false;
@@ -9130,7 +9135,7 @@ export default class Threads extends View {
         if (i < L) older = true;
         else newest = true;
       }
-      if (older || (newest && !(tail = this.hitsTail(h)))) h = null;
+      if (older || (newest && !(tail = this.hitsTail(h)))) { step = h.step ?? null; h = null; }
     } else h = null;
     h ??= { base, q, agents: Boolean(this.prefs.agentTurns), sessions: S.slice(), at: new Map(), by: new Map(), top: 0, bot: 0,
       hidOld: 0, hidL: [], cur: { si: L, ti: L >= 0 ? S[L].turns.length - 1 : -1, bot: 0, hidOld: 0, hidL: 0, tail: null }, done: false,
@@ -9145,7 +9150,7 @@ export default class Threads extends View {
     h.open = open?.length ? Math.min(...open.map((t) => t.n - 1)) : Infinity;
     // A new set's first slice, wherever it is first asked for (scanStep). A tail too long to
     // check again at once: its first slice, here, the same way.
-    if (h !== this.hits) { this.hits = h; this.scanHits(h, now() + this.scanMax()); }
+    if (h !== this.hits) { h.step = step; this.hits = h; this.scanHits(h, now() + this.scanMax()); }
     else if (tail && h.cur.tail) this.scanHits(h, now() + this.scanMax(), true);
     return h;
   }
@@ -9159,12 +9164,12 @@ export default class Threads extends View {
     const was = this.hits;
     const h = this.hitsNow();
     if (!h) return h;
-    // An older step kept from a press whose slice ended first (stepHit): in a draw, its next
-    // slice, in place of the scan's, while the step's match is still selected. It keeps
-    // itself until it lands, so a stop in its slice leaves it for the next draw.
+    // A step kept from a press that could not land yet (stepHit): in a draw, its next slice,
+    // in place of the scan's, while the step's match is still selected and still matches. It
+    // keeps itself until it lands, so a stop in its slice leaves it for the next draw.
     let stepped = false;
     if (cx && h.step != null) {
-      if (h.step === this.sel) { stepped = true; this.stepHit(h, true); }
+      if (h.step.key === this.sel && this.selMatches()) { stepped = true; this.stepHit(h, h.step.older); }
       else h.step = null;
     }
     // A set made just now has had its first slice (hitsNow).
@@ -9298,7 +9303,9 @@ export default class Threads extends View {
     if (h.cur.tail) safe = Math.min(safe, h.cur.tail.next);
     // A turn that was open at the last check can be answered by a newer one now.
     if (h.open < safe) safe = h.open;
-    if (was - safe > HITS_TAIL_MAX) return false;
+    // The cap is on the turns to check again, the new ones too: a long read after a finished
+    // session is found again newest first, not checked again oldest first.
+    if (turns.length - safe > HITS_TAIL_MAX) return false;
     // The matches from safe on: the newest places, and the hidden ones in the newest session.
     while (h.top > h.bot) {
       const p = h.top - 1;
@@ -9334,27 +9341,42 @@ export default class Threads extends View {
       if (p != null) return p + (older ? -1 : 1);
       return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
     };
+    // A step that cannot land yet keeps itself (h.step, with its way): each draw after it goes
+    // on with it, a slice each (scanStep), until it lands. A key, a new selection or a change
+    // to the search calls it off.
+    const keep = () => { h.step = { key: this.sel, older }; return true; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
-    // most (tailBack). It lands on the first match there. A slice that ends first leaves the
-    // selection where it is and keeps the step (h.step): each draw after it goes on with it,
-    // a slice each (scanStep), from where it stopped, until it lands. A key or a new selection
-    // calls it off. Every match before the tail's next turn has its place, so hitNear is exact
-    // there.
+    // most (tailBack). It lands on the first match there; a slice that ends first keeps the
+    // step, which goes on from where it stopped. Every match before the tail's next turn has
+    // its place, so hitNear is exact there.
     const tail = h.cur.tail;
-    if (older && tail && !h.at.has(this.sel) && this.selMatches()) {
-      const [si, n] = this.sel.split(":").map(Number);
-      if (si === this.sessions.length - 1 && n - 1 > tail.next) {
-        const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
-        if (k === undefined) { h.step = this.sel; return true; }
-        h.step = null;
-        if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
-      }
+    const L = this.sessions.length - 1;
+    const [si, n] = this.sel ? this.sel.split(":").map(Number) : [-1, 0];
+    const inTail = tail && si === L && n - 1 >= tail.next;
+    const unplaced = !h.at.has(this.sel) && this.selMatches();
+    if (older && inTail && unplaced && n - 1 > tail.next) {
+      const k = this.tailBack(h, this.sel, n - 2, now() + this.scanMax());
+      if (k === undefined) return keep();
+      h.step = null;
+      if (k) { this.sel = k; this.follow = false; this.scrollTo = { key: k, how: "center" }; return true; }
     }
     h.step = null;
+    // A selected match with no place yet, other than an older step in a tail: the scan has not
+    // reached it, so the matches next to it are not all found. One slice here; then, while it
+    // still has no place, the step is kept, and lands once the scan places it.
+    if (unplaced && !h.done && !(older && inTail)) {
+      this.scanStep();
+      if (!h.done && !h.at.has(this.sel)) return keep();
+    }
     let j = next();
-    // Past the oldest match found so far, while more can come: one slice, here.
-    if (older && j < h.bot && !h.done) { this.scanStep(); j = next(); }
+    // Past the oldest match found so far, while more can come: one slice, here, and the step
+    // kept while that finds none.
+    if (older && j < h.bot && !h.done) {
+      this.scanStep();
+      j = next();
+      if (j < h.bot && !h.done) return keep();
+    }
     if (h.top === h.bot) return !h.done;
     if (j < h.bot || j >= h.top) return true;
     this.sel = h.by.get(j);
@@ -9424,6 +9446,9 @@ export default class Threads extends View {
     // The matches are found newest first (hitsNow), which moves the selection to the first
     // one found.
     this.hitsSelect = null;
+    // The field changed: a step kept in the set (stepHit) is called off, also when the same
+    // words are typed again after the field was cleared, which keeps the set.
+    if (this.hits) this.hits.step = null;
     if (n == null && this.filterText()) {
       if (this.view === "pinned") {
         const mk = this.matchKeys();
