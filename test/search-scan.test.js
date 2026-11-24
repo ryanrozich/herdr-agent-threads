@@ -1207,6 +1207,34 @@ test("a step from a match in a long tail being checked again goes the way it is 
   expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
 
+// The tail's pop (hitsTail) takes the newest place off in two writes: its entries, then top.
+// A stop between them leaves top - 1 with no entry. A step's own hitsNow finishes the pop
+// first, so a reader does not meet that state; a step met with it still goes to a match,
+// the nearest each way, and throws nothing. Here the state is made by hand, with nothing
+// changed since the set was counted, so the step's hitsNow keeps it as it is.
+test("a step with the newest place half taken off by a stop in the tail's pop goes to the nearest match each way and throws nothing", async () => {
+  const { v, cx } = await longPane(600);
+  const r = {};
+  priced(v, () => {
+    v.action("search:ar", cx);
+    drive(v, cx, 200, counted);
+    const h = v.hitsNow();
+    const half = () => { const p = h.top - 1; const k = h.by.get(p); h.at.delete(k); h.by.delete(p); return { p, k }; };
+    const step = (name) => { try { v.action(name, cx); return v.sel; } catch (e) { return String(e); } };
+    // n from the match whose place was taken: nearest older is the place below it.
+    let { p, k } = half();
+    v.sel = k;
+    r.older = step("olderMatch") === h.by.get(p - 1);
+    // Shift n from the place below the half-taken one: no newer place, so it stays.
+    ({ p } = half());
+    const below = h.by.get(p - 1);
+    v.sel = below;
+    r.newer = step("newerMatch") === below;
+    r.whole = Array.from({ length: h.top - h.bot }, (_, i) => h.by.has(h.bot + i)).every(Boolean);
+  });
+  expect(r).toEqual({ older: true, newer: true, whole: true });
+}, 120000);
+
 // ---- a transcript replaced ----
 // A replaced transcript is read again from the top into the same session (restart). Read
 // back to as many turns or more before a draw, the matches are found again, not kept from
