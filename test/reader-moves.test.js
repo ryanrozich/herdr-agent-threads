@@ -320,7 +320,7 @@ test("every pointer handler the pane draws has a row, and each counts as its row
 // put back after a stopped row draw (rowCut), the scroll handles themselves (askScroll,
 // askEnd), and jumpLatest, which the reader reaches only through its callers (End, the pill:
 // the action latest). None of them counts.
-const PANE = ["read", "reselectVisible", "applyStick", "latestAfterBuild", "render", "bodyNow", "openOver", "openFinish", "rowCut", "askScroll", "askEnd", "jumpLatest"];
+const PANE = ["read", "reselectVisible", "applyStick", "latestAfterBuild", "render", "bodyNow", "openOver", "openFinish", "rowCut", "askScroll", "ownAsk", "askEnd", "jumpLatest", "letGo"];
 function body(name) {
   const at = SRC.search(new RegExp(`^  (async )?${name}\\(`, "m"));
   if (at < 0) return null;
