@@ -1238,6 +1238,65 @@ test("a step with the newest place half taken off by a stop in the tail's pop go
   expect(r).toEqual({ older: true, newer: true, whole: true });
 }, 120000);
 
+// A turn with no reply: a prompt and its end.
+const asked = (s, t) => {
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  T.apply(s, { k: "p", o: "human", t, ts });
+  T.apply(s, { k: "d", ms: 1000, ts });
+};
+
+// A new search selects the newest match. Its first slice, newest first, finds none in a long
+// tail with no replies; then a turn comes in and the tail is checked again, oldest first. The
+// first match that finds is an old one, and the selection waits for the newest.
+test("a new search whose first slice finds nothing selects the newest match, also when a turn comes in and a long tail is checked again oldest first", async () => {
+  const { v, cx, s } = await longPane(600);
+  const base = s.turns.length;
+  for (let i = 0; i < 5000; i++) asked(s, i === 10 || i === 2400 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:zebra", cx);
+    r.firstSlice = v.hitsNow().top - v.hitsNow().bot;
+    asked(s, "A new turn: nothing here.");
+    // The draw after the turn takes the change (hitsTail) and selects in the same slice.
+    drawOnce(v, cx);
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+  });
+  r.sel = v.sel;
+  expect(r).toEqual({ firstSlice: 0, sel: `0:${base + 2401}` });
+  expect(direct(v, "zebra")).toEqual([`0:${base + 2401}`, `0:${base + 11}`]);
+  expect(places(v)).toEqual(want(v, "zebra"));
+}, 120000);
+
+// A turn left open with no reply while later ones start, then answered together with a later
+// one: its match comes from that reply (answeredBy). It is before the last turn done with a
+// reply, so the tail from that turn on does not hold it; the count still counts it.
+test("a turn left open and answered together with a later one, after the matches were counted, is counted and placed", async () => {
+  const { v, cx, s } = await longPane(600);
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  // A, with no reply, stays open; B gets its reply; C starts, which ends B, not A.
+  T.apply(s, { k: "p", o: "human", t: "Turn A: the alpha question.", ts });
+  T.apply(s, { k: "p", o: "human", t: "Turn B: the beta question.", ts });
+  T.apply(s, { k: "t", t: "Beta answered." });
+  T.apply(s, { k: "p", o: "human", t: "Turn C: the gamma question.", ts });
+  settleRows(v, cx);
+  const r = {};
+  priced(v, () => {
+    v.action("search:widget", cx);
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    r.before = fieldText(v);
+    // C's reply, and its end: A is answered by C.
+    T.apply(s, { k: "t", t: "The widget is fixed." });
+    T.apply(s, { k: "d", ms: 1000, ts });
+    for (let k = 0; k < 80 && (k < 1 || counting(v)); k++) drawOnce(v, cx);
+  });
+  r.answeredBy = s.turns[600].answeredBy;
+  r.matches = want(v, "widget").keys;
+  expect(r).toEqual({ before: "No matches", answeredBy: 603, matches: ["0:603", "0:601"] });
+  expect(places(v)).toEqual(want(v, "widget"));
+}, 120000);
+
 // ---- a transcript replaced ----
 // A replaced transcript is read again from the top into the same session (restart). Read
 // back to as many turns or more before a draw, the matches are found again, not kept from
