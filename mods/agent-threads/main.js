@@ -2286,6 +2286,8 @@ export default class Threads extends View {
     }
     const { key, turn, pin, s } = p;
     const wasSel = this.sel;
+    // A jump wins over a press's pending open (OPEN_WAIT_MS), as a key does.
+    this.openWait = null;
     if (!this.open.has(key)) { this.open.add(key); this.makeCode(key); }
     this.sel = key;
     this.follow = false;
@@ -2965,6 +2967,7 @@ export default class Threads extends View {
   capMore(key) {
     const go = this.rowsMemo?.find((r) => r.key === key)?.go;
     if (go == null) return;
+    this.openWait = null;
     this.follow = false;
     this.toBottom = false;
     this.capKey = go;
@@ -5627,10 +5630,10 @@ export default class Threads extends View {
 
   // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
   // comes first: a second press (on_mouse_down with a click count over 1), a drag
-  // (holdForSelect), any key (key), a jump (a rail click, latest, Show earlier or Show later),
-  // or a search starting. A press on another closed turn
-  // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
-  // then is not opened.
+  // (holdForSelect), any key (key), a jump (a rail click, latest, Show earlier or Show later,
+  // a pin's return, a press on the cut's note, a turn picked in the Trajectory), or a search
+  // starting. A press on another closed turn meanwhile opens the first one straight away, so
+  // no open is lost. A turn a search hides by then is not opened.
   openAfterPress(key, cx) {
     const w = this.openWait;
     if (w && w.key !== key) { this.openWait = null; if (this.mayOpen(w)) this.toggle(w.key, cx); }
@@ -12098,7 +12101,7 @@ export default class Threads extends View {
         this.selSent = e.key;
         if (this.trajPane) {
           if (this.turnOfRow(this.tsel) !== e.key) { this.tsel = e.key; this.tscrollTo = e.key; return true; }
-        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
+        } else if (this.sel !== e.key && this.chatShows(e.key)) { this.openWait = null; this.sel = e.key; this.follow = false; this.scrollTo = { key: e.key, how: "center" }; return true; }
         return false;
       }
     }
