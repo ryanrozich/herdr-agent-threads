@@ -6667,6 +6667,126 @@ test("a reply longer than Herdr draws in one Markdown view opens whole: list ite
   draw(v, cx);
 });
 
+// Opening a long reply on a clock that moves only by priced work (performance.now, which the
+// draw's budgets read): the link rules at P121.line ms a non-blank line, the heights at
+// P121.call ms a wrapped text and P121.char ms a character of it, and P121.rest ms for the rest
+// of a draw. On the rig 26 parts of short paragraphs never drew: 67 of 73 stopped draws died in
+// the link pass. Mixed Markdown of 16 to 96 KB drew in 20 to 38.5 ms. Past P121.stop ms Herdr
+// stops a draw and keeps what it wrote: no catch runs, so the next render finds renderOpen set.
+const P121 = { line: 0.033, call: 0.004, char: 0.0001, rest: 8, stop: 50 };
+const shortParas = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: the cart total rounds per line, see ACME-${i + 1}.`).join("\n\n");
+const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/long-reply.md"), "utf8").trim(); const out = []; for (let i = 1; out.join("\n\n").length < kb * 1024; i++) out.push(one, `Copy ${i} is filed as ACME-${i}.`); return out.join("\n\n"); };
+async function openLong(text) {
+  const { v, cx } = await pane(fixture("--extra", "2"));
+  v.debug = false;
+  const { parseLinks, LINK_TEMPLATES } = await import("../mods/agent-threads/settings.js");
+  const l = parseLinks([LINK_TEMPLATES.ticket.rule]);
+  v.setLinks(l.rules, l.list, 1);
+  const turn = v.sessions.at(-1).turns.at(-1);
+  turn.after = [text];
+  turn.shapeKey = null;
+  v.rowsKey = null;
+  settleRows(v, cx);
+  dropTimers(v, cx);
+  const key = `${v.sessions.length - 1}:${turn.n}`;
+  v.toggle(key, cx);
+  return { v, cx, key };
+}
+// The open card's parts, settled: each one linked as the rules link it alone, and sized at the
+// height worked out for its text, not the rough one from its length (a table has its own).
+async function cardDone(v, key) {
+  const { linkify } = await import("../mods/agent-threads/ui.js");
+  const want = new Map();
+  return () => {
+    const i0 = v.baseRows.findIndex((r) => r.key.startsWith(`md:${key}:`));
+    if (i0 < 0 || !v.rowsKey || v.rowJob) return false;
+    for (let i = i0; v.baseRows[i]?.kind === "md"; i++) {
+      const r = v.baseRows[i];
+      if (!want.has(r.src)) want.set(r.src, linkify(r.src, v.links, v.linkCtx()));
+      const h = v.mdHeights?.map.get(r.src);
+      if (r.md !== want.get(r.src).md || r.links !== want.get(r.src).links || (!r.table && (h == null || v.baseSizes[i] !== (r.gap ?? 6) + h))) return false;
+    }
+    return true;
+  };
+}
+function costedFrames(v, cx, n, done) {
+  const P = P121;
+  const real = performance.now;
+  const STOP = new Error("stopped at the draw's time");
+  let t = 1e7, at = null, stopped = false, linked = 0;
+  const spend = (ms) => { t += ms; if (at != null && t - at > P.stop) { stopped = true; throw STOP; } };
+  const lo = v.linkOne, wr = v.wrapped;
+  v.linkOne = function (md) { linked++; spend(md.split("\n").filter((x) => x.trim()).length * P.line); return lo.call(this, md); };
+  v.wrapped = function (s, ...a) { spend(P.call + s.length * P.char); return wr.call(this, s, ...a); };
+  performance.now = () => { if (stopped) throw STOP; return t; };
+  const frames = [];
+  let settled = -1;
+  try {
+    for (let f = 0; f < n; f++) {
+      at = t;
+      try { spend(P.rest); v.render(cx); } catch (e) { if (e !== STOP) throw e; }
+      if (stopped) v.renderOpen = true;
+      frames.push({ ok: !stopped, ms: Math.round((t - at) * 10) / 10 });
+      at = null;
+      stopped = false;
+      if (settled < 0 && frames.at(-1).ok && done()) settled = f + 1;
+      // The next frame: 16 ms on, or 250 ms after a stop (the watch asks again), and the timers due by then.
+      const gap = frames.at(-1).ok ? 16 : 250;
+      t += gap;
+      const due = cx.timers.filter((x) => x.ms <= gap);
+      cx.timers = cx.timers.filter((x) => x.ms > gap).map((x) => ({ ...x, ms: x.ms - gap }));
+      for (const x of due) x.fn(cx);
+    }
+  } finally { performance.now = real; delete v.linkOne; delete v.wrapped; }
+  const ok = frames.filter((x) => x.ok);
+  return { stops: frames.length - ok.length, first: frames.findIndex((x) => x.ok) + 1, settled, linked, most: Math.max(0, ...ok.map((x) => x.ms)), frames };
+}
+
+const costLog = (what, r) => { if (process.env.THREADS_COST_LOG) console.log(`${what}: ${JSON.stringify({ ...r, frames: r.frames.slice(0, 14).map((x) => (x.ok ? x.ms : `stop ${x.ms}`)) })}`); };
+
+test("opening a reply of 26, 35 or 58 parts of short paragraphs draws at once and no draw runs past Herdr's time; no part is linked twice", async () => {
+  for (const [n, parts] of [[1400, 26], [1900, 35], [4000, 58]]) {
+    const { v, cx, key } = await openLong(shortParas(n));
+    const r = costedFrames(v, cx, 40, await cardDone(v, key));
+    costLog(`${parts} parts`, r);
+    expect([r.stops, r.first]).toEqual([0, 1]);
+    expect(r.most).toBeLessThan(P121.stop);
+    // Work left for the next draw goes on from there.
+    expect([v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length, r.linked]).toEqual([parts, parts]);
+  }
+}, 60000);
+
+test("an open reply of 18 or 58 parts has every part linked and at its worked-out height within 12 frames", async () => {
+  for (const [n, parts] of [[980, 18], [4000, 58]]) {
+    const { v, cx, key } = await openLong(shortParas(n));
+    const r = costedFrames(v, cx, 40, await cardDone(v, key));
+    costLog(`${parts} parts, heights`, r);
+    expect(v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`)).length).toBe(parts);
+    expect(r.settled).toBeGreaterThan(0);
+    expect(r.settled).toBeLessThanOrEqual(12);
+  }
+}, 60000);
+
+test("an open mixed Markdown reply of 16 to 96 KB settles to the card one unbounded build makes: the same rows, text, links and heights", async () => {
+  for (const kb of [16, 48, 96]) {
+    const { v, cx, key } = await openLong(mixedReply(kb));
+    const r = costedFrames(v, cx, 30, await cardDone(v, key));
+    costLog(`mixed ${kb} KB`, r);
+    expect([r.stops, r.settled > 0]).toEqual([0, true]);
+    const turn = v.findTurn(key);
+    const card = () => v.baseRows.map((x, i) => (x.turn === turn ? [x.kind, x.key, x.md ?? null, x.src ?? null, x.links ?? null, v.baseSizes[i]] : null)).filter(Boolean);
+    const settled = card();
+    expect(settled.filter((x) => x[0] === "md" && x[4] > 0).length).toBeGreaterThan(kb / 8);
+    v.linkMemo = null;
+    v.partLinked = null;
+    v.mdHeights = null;
+    v.shapeBudget = 1e9;
+    v.rowsKey = null;
+    v.rows();
+    expect(card()).toEqual(settled);
+  }
+}, 60000);
+
 // A synthetic reply of about 10,000 words in prose, lists and a table, with no code fence.
 function longProse(words) {
   const out = [];
