@@ -34,22 +34,26 @@ function turn(n, steps, o = {}) {
   };
 }
 const S = { agents: new Map(), agentIds: new Map() };
-const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).rows[0];
+const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).head;
 // A heading's steps read back, one object each, for the tests only (the pane keeps none).
 const stepsOf = (h) => Array.from({ length: tlLen(h) }, (_, i) => tlStep(h, i));
-// A heading's step rows: its turn's rows after the heading.
-const rowsOf = (h) => h.rows.slice(1);
+// A heading's step rows: the array ledgerTurn returns beside it (h.steps).
+const rowsOf = (h) => h.steps;
 
-test("timeline steps: a heading keeps no array of its own for its steps: they are its turn's rows, read back with their times and flags", () => {
-  const { rows } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
-  const [h, ...steps] = rows;
+test("timeline steps: a heading keeps no array of its own for its steps: they are its turn's step rows (h.steps), read back with their times and flags", () => {
+  const out = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
+  const { head: h, steps } = out;
   expect(TL_LANES).toEqual(["input", "model", "tools"]);
-  // No object and no number array per step: the heading holds the turn's own rows, the array
-  // ledgerTurn returns, heading first; a step's times and flags are read from its row.
+  // No object and no number array per step: the heading holds its turn's step rows, the one
+  // array ledgerTurn returns beside it (no rows array with the heading in it); a step's times
+  // and flags are read from its row.
+  expect(out.rows).toBe(undefined);
+  expect(h.rows).toBe(undefined);
   expect(h.items).toBe(undefined);
   expect(h.tl).toBe(undefined);
   expect(h.stepRows).toBe(undefined);
-  expect(h.rows).toBe(rows);
+  expect(h.steps).toBe(steps);
+  expect(steps.includes(h)).toBe(false);
   expect(tlLen(h)).toBe(steps.length);
   expect(steps.every((r, i) => tlRow(h, i) === r)).toBe(true);
   const at = (lk) => steps.findIndex((r) => r.lk === lk);
@@ -277,7 +281,7 @@ test("timeline band: the first and last steps whose bars start inside a band, in
   expect(b).toEqual({ a: read2.key, b: bash2.key });
   const across = bandRows(L, heads, L.turns[0].x, L.turns[2].x + L.turns[2].w);
   expect(across.a).toBe(tlRow(heads[0], 0).key);
-  expect(across.b).toBe(heads[2].rows.at(-1).key);
+  expect(across.b).toBe(heads[2].steps.at(-1).key);
   // A band inside the break between turns holds nothing.
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
@@ -426,18 +430,18 @@ test("timeline tracks: worked out in the layout pass, only for a turn drawn wide
 });
 
 // ---- slice 1's bounds (PR #299 review): what a draw can be asked to make ----
-// A made-up heading's rows, heading slot first (h.rows[0], null here), as ledgerTurn gives
-// them: each step's kind and key, and its start, end and flags from tl, three numbers a step
-// (ms from the turn's start, NaN for none; flags 2 an unfinished call). The tracks are the
-// layout's (tlTracks), from the times.
+// A made-up heading's step rows (h.steps), as ledgerTurn gives them: each step's kind and
+// key, and its start, end and flags from tl, three numbers a step (ms from the turn's start,
+// NaN for none; flags 2 an unfinished call). The tracks are the layout's (tlTracks), from the
+// times.
 function rowsOf3(key, lks, tl) {
-  return [null, ...lks.map((lk, j) => {
+  return lks.map((lk, j) => {
     const a = tl[3 * j];
     const b = tl[3 * j + 1];
     const r = { kind: "tr", key: `tr:${key}:${j}`, lk, failed: lk === "failed", start: Number.isNaN(a) ? null : a, dur: Number.isNaN(a) || Number.isNaN(b) ? null : b - a };
     if (tl[3 * j + 2] & 2) r.open = true;
     return r;
-  })];
+  });
 }
 // n made-up headings in the layout's shape, each 60 s long and 100 s after the last: the user's
 // message, a call, a failed call, the reply (fail: false leaves the failed one a plain call).
@@ -449,7 +453,7 @@ function strip(n, { fail = true } = {}) {
     heads.push({
       kind: "trh", key, n: i + 1, t0: T0 + i * 100000, total: 60000, span: 60000, going: false,
       cnt: { steps: 4, input: 1, model: 1, tools: 2, failed: fail ? 1 : 0, user: 1, agent: 0 },
-      rows: rowsOf3(key, lks, [0, Number.NaN, 0, 1000, 5000, 0, 6000, 9000, 0, 10000, 60000, 0]),
+      steps: rowsOf3(key, lks, [0, Number.NaN, 0, 1000, 5000, 0, 6000, 9000, 0, 10000, 60000, 0]),
     });
   }
   return heads;
@@ -649,7 +653,7 @@ function overlapping() {
   return [{
     kind: "trh", key, n: 1, t0: T0, total: 60000, span: 60000, going: false,
     cnt: { steps: 6, input: 1, model: 1, tools: 4, failed: 1, user: 1, agent: 0 },
-    rows: rowsOf3(key, lks, [0, Number.NaN, 0, 2000, 30000, 0, 4000, 40000, 0, 6000, 14000, 0, 9000, 10000, 0, 59000, 60000, 0]),
+    steps: rowsOf3(key, lks, [0, Number.NaN, 0, 2000, 30000, 0, 4000, 40000, 0, 6000, 14000, 0, 9000, 10000, 0, 59000, 60000, 0]),
   }];
 }
 
@@ -684,7 +688,7 @@ test("timeline press: of two bars on top at a point, on the same track and ink, 
   const heads = overlapping();
   // The failed call made a plain tool call: now two plain calls on the half track, the
   // short one inside the long one.
-  heads[0].rows[4] = { ...heads[0].rows[4], lk: "tool", failed: false };
+  heads[0].steps[3] = { ...heads[0].steps[3], lk: "tool", failed: false };
   const L = timelineLayout(heads, 1000, "clock", T0, null);
   const box = (si) => TL.tlBar(L, heads, 0, si, T0);
   const mid = (si) => (box(si).x0 + box(si).x1) / 2;
@@ -699,7 +703,7 @@ test("timeline press: a turn under 2 px at Fit is drawn as one span per lane; a 
     // One turn with no tools call: it draws no tools span of its own. Its rows keep their
     // keys (the reply is tr:0:1000:3).
     const q = heads[1000];
-    heads[1000] = { ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, rows: [null, q.rows[1], q.rows[4]] };
+    heads[1000] = { ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, steps: [q.steps[0], q.steps[3]] };
     const L = timelineLayout(heads, cw, "clock", T0, null);
     for (const ti of [0, 1, 999, 1233, 1980, 1998, 1999]) {
       const T = tlBox(L, ti);
@@ -741,7 +745,7 @@ function runningHead(n, k, t0) {
   return {
     kind: "trh", key, n, t0, total: null, span: 150000 + k * 2000, going: true,
     cnt: { steps: k + 1, input: 1, model: 0, tools: k, failed: 0, user: 1, agent: 0 },
-    rows: rowsOf3(key, lks, tl),
+    steps: rowsOf3(key, lks, tl),
   };
 }
 // What a layout draws, to set two side by side.
@@ -850,7 +854,7 @@ test("timeline model: working on or off on the last turn alone places nothing ag
 test("timeline press: on turns under 1 px whose spans join, a press on a drawn span gets the nearest turn within 4 px that has a bar in the lane, never a turn with none", () => {
   const heads = strip(4000);
   // Every other turn has no tools call, and turns 2000 to 2100 none at all.
-  const bare = (q) => ({ ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, rows: [null, q.rows[1], q.rows[4]] });
+  const bare = (q) => ({ ...q, cnt: { ...q.cnt, tools: 0, failed: 0 }, steps: [q.steps[0], q.steps[3]] });
   for (let i = 0; i < 4000; i++) if (i % 2 === 1 || (i >= 2000 && i <= 2100)) heads[i] = bare(heads[i]);
   const has = (i) => heads[i].cnt.tools > 0;
   const L = timelineLayout(heads, 1000, "clock", T0, null);
@@ -954,4 +958,262 @@ test("timeline build: from nothing it goes on over frames: past its budget in on
   }
   // With no bound, one frame.
   expect(TL.tlBuildGo(TL.tlBuildStart(strip(50), 1370, "clock", T0, null), Infinity, () => 0)).not.toBe(null);
+});
+
+test("timeline lane-less rows: an interrupted turn's Interrupted row is no bar, so no band or press finds it", () => {
+  const h = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 }));
+  const L = timelineLayout([h], 400, "clock", T0 + 100000);
+  const read = rowsOf(h).find((r) => r.lk === "tool");
+  expect(rowsOf(h).some((r) => r.lk === "stop")).toBe(true);
+  // The layout draws nothing at the turn's end: the prompt's bar and the Read's.
+  expect([...L.spans.values()].flat().every(([, b]) => b < 390)).toBe(true);
+  // Where the Interrupted row's box would be, at the turn's end: no band, and the heading.
+  expect(bandRows(L, [h], 396, 400)).toBe(null);
+  expect(timelineHit(L, [h], 398, null, T0 + 100000)).toEqual({ turn: h.key, key: h.key });
+  // A row with a lane is found as before: the Read's bar, 20 to 25 px.
+  expect(bandRows(L, [h], 18, 30)).toEqual({ a: read.key, b: read.key });
+  expect(timelineHit(L, [h], 22, null, T0 + 100000)).toEqual({ turn: h.key, key: read.key });
+});
+
+test("timeline spans: in a turn under 6 px wide, a call with no result keeps its 6 px when it joins the span before it", () => {
+  const heads = Array.from({ length: 100 }, (_, i) => head(turn(i + 1, [[["Read", "a", 2000, 2500], ["Bash", "bun test", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 })));
+  const L = timelineLayout(heads, 500, "clock", T0 + 100000);
+  const t = L.turns[10];
+  expect(t.w).toBeGreaterThan(2);
+  expect(t.w).toBeLessThan(6);
+  expect(rowsOf(heads[10]).find((r) => r.lk === "noresult").open).toBe(true);
+  // The call's bar is the turn's last 6 px, past its start; the Read's bar starts later. The
+  // span they join holds the whole call's bar (here it reaches back over the turn before, and
+  // the turns after join it too, each call's bar reaching back over the break).
+  const end = t.x + t.w;
+  const list = L.spans.get("tools|tools|0");
+  const s = list.find((v) => v[0] <= end - 6 + 1e-9 && v[1] >= end - 1e-9);
+  expect(s).toBeTruthy();
+  expect(s[2]).toBe(1);
+  // The spans stay apart and in order.
+  for (let i = 1; i < list.length; i++) expect(list[i][0]).toBeGreaterThan(list[i - 1][1] + 0.5);
+});
+
+test("timeline press in a break: the nearer turn, and its step only within 4 px of the press itself", () => {
+  const heads = [head(turn(1, [[["Read", "a", 2000, 2500]]])), head(turn(2, [[["Read", "a", 2000, 2500]]]))];
+  const L = timelineLayout(heads, 600, "clock", T0 + 100000);
+  const [t1, t2] = L.turns;
+  expect(t1.x + t1.w).toBe(293);
+  expect(t2.x).toBe(307);
+  const [h1, h2] = heads;
+  const prompt = rowsOf(h2)[0].key;
+  const at = (x, lane = null) => timelineHit(L, heads, x, lane, T0 + 100000);
+  // 301 and 303: nearer the second turn, 6 and 4 px from its prompt's bar at 307: its heading.
+  expect(at(301)).toEqual({ turn: h2.key, key: h2.key });
+  expect(at(301, "input")).toEqual({ turn: h2.key, key: h2.key });
+  expect(at(303)).toEqual({ turn: h2.key, key: h2.key });
+  // 304: 3 px from it, the prompt.
+  expect(at(304)).toEqual({ turn: h2.key, key: prompt });
+  // Nearer the first turn, by the same rule: 3 px past its reply's bar, the reply; 6 px, the heading.
+  expect(at(296)).toEqual({ turn: h1.key, key: rowsOf(h1).find((r) => r.lk === "reply").key });
+  expect(at(299)).toEqual({ turn: h1.key, key: h1.key });
+});
+
+test("timeline steps: a heading and its steps hold no path back to the heading, and the heading has only its own keys", () => {
+  const { head: h, steps, fails, calls } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]], { interrupted: true }), 0);
+  expect([fails, calls]).toEqual([1, 2]);
+  // No cycle: nothing reached from the heading (its steps, its turn, its lists) leads back to
+  // it, so a turn's thrown-away rows are freed as soon as nothing holds them, with no wait for
+  // the engine's cycle collector.
+  const seen = new Set();
+  const back = [];
+  const walk = (v, path) => {
+    if (v === null || typeof v !== "object") return;
+    if (v === h && path) { back.push(path); return; }
+    if (seen.has(v)) return;
+    seen.add(v);
+    for (const k of Object.keys(v)) walk(v[k], `${path}.${k}`);
+  };
+  walk(h, "");
+  expect(back).toEqual([]);
+  expect(steps.length).toBeGreaterThan(3);
+  // The heading's keys, all of them: a second copy of its steps under any name is caught here.
+  expect(Object.keys(h).sort()).toEqual([
+    "agent", "calls", "cnt", "failKeys", "fails", "going", "interrupted", "key", "kind", "lastAt", "n", "partial", "reading",
+    "si", "span", "stale", "steps", "t0", "timed", "tokens", "total", "ts", "turn", "userKeys",
+  ]);
+  // And their values: no copy of a step row (an object with a kind of step, lk) is reached
+  // from the heading other than through its steps and its turn, however deep it is nested.
+  const rows = [];
+  const seen2 = new Set();
+  const look = (v, path) => {
+    if (v === null || typeof v !== "object" || seen2.has(v)) return;
+    seen2.add(v);
+    if ("lk" in v) { rows.push(path); return; }
+    for (const k of Object.keys(v)) look(v[k], `${path}.${k}`);
+  };
+  for (const k of Object.keys(h)) if (k !== "steps" && k !== "turn") look(h[k], k);
+  expect(rows).toEqual([]);
+  // cnt holds only numbers; failKeys and userKeys only keys, each a step row's.
+  expect(Object.values(h.cnt).every((v) => typeof v === "number")).toBe(true);
+  const keys = new Set(steps.map((r) => r.key));
+  for (const list of [h.failKeys, h.userKeys]) {
+    expect(Array.isArray(list)).toBe(true);
+    expect(list.every((v) => typeof v === "string" && keys.has(v))).toBe(true);
+  }
+  expect(h.failKeys.length).toBe(1);
+  expect(h.userKeys.length).toBe(1);
+});
+
+test("timeline press in a break, zoomed: the nearer turn is found once, so a press there can not land back on the turn before", () => {
+  // Twelve turns of 60 s across 1,440 px: each 102 px, breaks of 19.6 px. At this zoom, the
+  // second turn's start in px of the view, turned back into px of the strip, comes out a
+  // little under its start, so a second search from there finds the first turn again.
+  const heads = Array.from({ length: 12 }, (_, i) => head(turn(i + 1, [[["Read", "a", 2000, 2500]]])));
+  const L = timelineLayout(heads, 1440, "clock", T0 + 1e7, { z: 1.0532, x0: 0 });
+  expect(L.z).toBe(1.0532);
+  const t = L.turns[1];
+  expect((t.x * L.z - L.x0 + L.x0) / L.z).toBeLessThan(t.x);
+  // A press 1.6 px of the strip before the second turn: nearer it than the first turn's end.
+  const hit = timelineHit(L, heads, (t.x - 1.6) * L.z - L.x0, null, T0 + 1e7);
+  expect(hit).toEqual({ turn: heads[1].key, key: rowsOf(heads[1])[0].key });
+});
+
+test("timeline 2 px rule at its edge: a turn 2 px wide or more is drawn as bars, with its tracks; one under 2 px is not", () => {
+  const h = head(turn(1, [[["Read", "a", 2000, 2500], ["Bash", "x", 2100, 3000]]]));
+  // One turn placed by hand at w px, at the strip's left.
+  const at = (w) => {
+    const geo = { cw: 100, scale: "clock", turns: [{ x: 0, w, key: h.key, n: h.n }], index: new Map([[h.key, 0]]), walls: [60000], gap: 0, total: w, steps: tlLen(h), live: -1, room: 0 };
+    return timelineLayout([h], 100, "clock", T0 + 1e7, null, geo);
+  };
+  expect(at(1.99).tracks.has(h)).toBe(false);
+  expect(at(2).tracks.has(h)).toBe(true);
+  expect(at(2.5).tracks.has(h)).toBe(true);
+  // Bash starts while Read runs: the second track, so the tracks are not null.
+  expect(at(2).tracks.get(h)).not.toBe(null);
+});
+
+test("timeline tracks by steps: the steps scale draws every bar full height, so no turn's tracks are worked out, in the layout or a press", () => {
+  const heads = [head(turn(1, [[["Read", "a", 2000, 2500], ["Bash", "x", 2100, 3000]]])), head(turn(2, [[["Grep", "b", 2000, 2400]]]))];
+  const before = TL_MADE.tracks;
+  const L = timelineLayout(heads, 600, "steps", T0 + 1e7);
+  expect(L.tracks.size).toBe(0);
+  const x = L.turns[0].x + L.turns[0].w / 2;
+  expect(timelineHit(L, heads, x, null, T0 + 1e7)?.turn).toBe(heads[0].key);
+  expect(TL_MADE.tracks - before).toBe(0);
+});
+
+test("timeline bar ends: a call whose result comes after its turn's end is drawn to the turn's end, not into the break", () => {
+  const h = head(turn(1, [[["Read", "a", 50000, 70000]]], { end: T0 + 60000 }));
+  const i = rowsOf(h).findIndex((r) => r.lk === "tool");
+  const L = timelineLayout([h], 400, "clock", T0 + 1e7);
+  const t = L.turns[0];
+  // Its end is past the turn's length on the clock.
+  expect(tlStep(h, i).b).toBeGreaterThan(L.geo.walls[0]);
+  const [bar] = L.spans.get("tools|tools|0");
+  expect(bar[1]).toBe(t.x + t.w);
+  expect(bar[0]).toBeLessThan(bar[1]);
+});
+
+// A turn of 60 s whose model notes are at the given ms, in that (cell) order.
+const notesAt = (n, ats) => {
+  const t = turn(n, ats.map((_, i) => `Note ${i + 1}.`));
+  ats.forEach((at, i) => { t.steps[i].at = T0 + at; });
+  return t;
+};
+// Each bar of lane's steps as the layout's boxes give it (itemBox), before any join.
+const rawBars = (L, h, ti, lane) => {
+  const t = L.turns[ti];
+  const out = [];
+  for (let i = 0; i < tlLen(h); i++) {
+    const st = tlStep(h, i);
+    if (st.lane !== lane || st.a == null) continue;
+    const bx = itemBox(st.a, st.b ?? Number.NaN, st.open ? 2 : 0, i, t.x * L.z - L.x0, t.w * L.z, L.geo.walls[ti], L.scale, tlLen(h));
+    out.push([bx.x0, bx.x1]);
+  }
+  return out;
+};
+
+test("timeline spans out of order: a bar that ends before an earlier row's bar starts stays apart from it, with the gap between them empty", () => {
+  // One 60 s turn across 1,440 px (24 px a second), Fit, on the clock; its two model notes in
+  // cell order at 30 s and then 10 s: two 3 px bars, at 720 and at 240 px.
+  const h = head(notesAt(1, [30000, 10000]));
+  const L = timelineLayout([h], 1440, "clock", T0 + 1e7);
+  expect(L.turns[0]).toMatchObject({ x: 0, w: 1440 });
+  const raw = rawBars(L, h, 0, "model");
+  expect(raw.slice(0, 2)).toEqual([[720, 723], [240, 243]]);
+  // The reply's bar is the third, from 55 s to the end.
+  expect(raw[2]).toEqual([1320, 1440]);
+  // Drawn: each bar in its place, the 477 px between them empty.
+  expect(L.spans.get("model|model|0")).toEqual([[240, 243], [720, 723], [1320, 1440]]);
+  // Out of order and touching (29.9 s and then 30 s, 0.6 px apart, overlapping): one bar.
+  const g = head(notesAt(2, [30000, 29900]));
+  const G = timelineLayout([g], 1440, "clock", T0 + 1e7);
+  expect(rawBars(G, g, 0, "model").slice(0, 2)).toEqual([[720, 723], [717.6, 720.6]]);
+  expect(G.spans.get("model|model|0")).toEqual([[717.6, 723], [1320, 1440]]);
+});
+
+test("timeline press in the gap between two bars out of order: no step, only the turn's heading, and no drawn span there", () => {
+  // The two notes at 30 s and then 10 s: bars at 720 to 723 and 240 to 243 px.
+  const h = head(notesAt(1, [30000, 10000]));
+  const L = timelineLayout([h], 1440, "clock", T0 + 1e7);
+  const [, later, earlier] = rowsOf(h);
+  expect([later.lk, earlier.lk]).toEqual(["text", "text"]);
+  const at = (x, lane) => timelineHit(L, [h], x, lane, T0 + 1e7);
+  const drawn = (x) => L.spans.get("model|model|0").some(([a, b]) => a <= x && x <= b);
+  // The 4 px rule: under 4 px from a bar, its step; at 4 px or more from both, in the model
+  // lane or in none, the turn's heading, and no drawn span covers the press either.
+  expect(at(246, "model")).toEqual({ turn: h.key, key: earlier.key });
+  expect(at(717, "model")).toEqual({ turn: h.key, key: later.key });
+  for (const x of [247, 247.5, 300, 400, 480, 600, 715.5, 716]) {
+    expect(at(x, "model")).toEqual({ turn: h.key, key: h.key });
+    expect(at(x, null)).toEqual({ turn: h.key, key: h.key });
+    expect(drawn(x)).toBe(false);
+  }
+  expect(drawn(241)).toBe(true);
+  expect(drawn(721)).toBe(true);
+});
+
+test("timeline spans out of order: an unfinished call's torn end is kept, apart from a bar left of it or joined with one that reaches it", () => {
+  // Read from 30 s to 31 s on the first track; Bash at 20 s with no result, so on the second
+  // track from 480 px to the turn's end, torn; then a Grep listed after it but earlier on the
+  // clock, also on the second track (it starts before the Read ends).
+  const mk = (n, at, rt) => head(turn(n, [[["Read", "a", 30000, 31000]], [["Bash", "sleep", 20000, null]], [["Grep", "b", at, rt]]], { interrupted: true, reply: null, end: T0 + 60000 }));
+  const lay = (h) => timelineLayout([h], 1440, "clock", T0 + 1e7);
+  // Grep from 5 s to 6 s, at 120 to 144 px: a gap before the torn bar.
+  const a = mk(1, 5000, 6000);
+  const A = lay(a);
+  expect(A.turns[0]).toMatchObject({ x: 0, w: 1440 });
+  expect(rawBars(A, a, 0, "tools").slice(1)).toEqual([[480, 1440], [120, 144]]);
+  expect(A.spans.get("tools|tools|1")).toEqual([[120, 144], [480, 1440, 1]]);
+  // Grep from 15 s to 22.5 s, at 360 to 540 px: it reaches the torn bar, so one span, still torn.
+  const b = mk(2, 15000, 22500);
+  const B = lay(b);
+  expect(rawBars(B, b, 0, "tools").slice(1)).toEqual([[480, 1440], [360, 540]]);
+  expect(B.spans.get("tools|tools|1")).toEqual([[360, 1440, 1]]);
+});
+
+test("timeline span join (tlJoin): spans touch within half a pixel on either side; a span in any order goes in its place and joins what it reaches", () => {
+  const { tlJoin } = TL;
+  const run = (list, ...adds) => { for (const s of adds) tlJoin(list, ...s); return list; };
+  // In order: 0.3 px apart is a touch; 0.6 px apart is not.
+  expect(run([[0, 10]], [10.3, 20])).toEqual([[0, 20]]);
+  expect(run([[0, 10]], [10.6, 20])).toEqual([[0, 10], [10.6, 20]]);
+  // Out of order, the same on the other side: a span ending 0.3 px left of the next joins it.
+  expect(run([[10, 20]], [0, 9.7])).toEqual([[0, 20]]);
+  expect(run([[10, 20]], [0, 9.4])).toEqual([[0, 9.4], [10, 20]]);
+  // Out of order with a gap: in its place, the others as they were.
+  expect(run([[720, 723]], [240, 243])).toEqual([[240, 243], [720, 723]]);
+  expect(run([[0, 3], [720, 723]], [240, 243])).toEqual([[0, 3], [240, 243], [720, 723]]);
+  // A span that reaches over two keeps the leftmost start and the rightmost end.
+  expect(run([[90, 95], [100, 110]], [85, 105])).toEqual([[85, 110]]);
+  expect(run([[0, 10], [20, 30]], [9, 21])).toEqual([[0, 30]]);
+  expect(run([[0, 10], [20, 30], [40, 50]], [5, 45])).toEqual([[0, 50]]);
+  // The torn mark goes with the rightmost end. Two equal ends: torn if either is.
+  expect(run([[0, 10]], [5, 10, true])).toEqual([[0, 10, 1]]);
+  expect(run([[0, 10, 1]], [5, 10])).toEqual([[0, 10, 1]]);
+  expect(run([[5, 10, 1]], [0, 10])).toEqual([[0, 10, 1]]);
+  expect(run([[20, 30]], [5, 30, true])).toEqual([[5, 30, 1]]);
+  // A torn end inside a span is hidden; one past it is the span's end.
+  expect(run([[0, 10]], [2, 8, true])).toEqual([[0, 10]]);
+  expect(run([[0, 10, 1]], [5, 20])).toEqual([[0, 20]]);
+  expect(run([[0, 10]], [5, 20, true])).toEqual([[0, 20, 1]]);
+  // Out of order and apart, each keeps its own mark.
+  expect(run([[100, 110]], [50, 60, true])).toEqual([[50, 60, 1], [100, 110]]);
+  expect(run([[100, 110, 1]], [50, 60])).toEqual([[50, 60], [100, 110, 1]]);
 });

@@ -11883,7 +11883,7 @@ export default class Threads extends View {
       let out = fresh ? kept.out : null;
       if (!out) {
         out = ledgerTurn(x, turn, si, going && job.next === last, { ends, reading });
-        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.rows.some((r) => r.sub), agentVer: x.agentVer });
+        if (turn.done) this.turnLedger.set(turn, { si, out, v: turn.v, ends, sub: out.steps.some((r) => r.sub), agentVer: x.agentVer });
       }
       job.outs[job.next--] = out;
       if (job.next >= 0 && now() > until) break;
@@ -11903,7 +11903,10 @@ export default class Threads extends View {
     for (let i = from; i < job.all.length; i++) {
       const { x, si, turn } = job.all[i];
       if (si > 0 && turn === x.turns[0]) rows.push({ kind: "sess", key: `sess:${si}`, si, ts: turn.ts ?? null });
-      for (const r of job.outs[i].rows) rows.push(r);
+      // ledger.js ledgerTurn: the heading, then its steps (kept apart, so they make no cycle).
+      const o = job.outs[i];
+      rows.push(o.head);
+      for (const r of o.steps) rows.push(r);
     }
     return rows;
   }
@@ -12267,8 +12270,8 @@ export default class Threads extends View {
     const seen = tb && tb.x + tb.w >= 0 && tb.x <= cw;
     if (seen && sel !== T.turns[ti].key) {
       const h = M.heads[ti];
-      // The step's place among the turn's steps: its row's, less the heading (h.rows[0]).
-      const si = h.rows.findIndex((r) => r?.key === sel) - 1;
+      // The step's place among the turn's steps (h.steps).
+      const si = (h.steps ?? []).findIndex((r) => r?.key === sel);
       const lane = si >= 0 ? LEDGER_KINDS[tlRow(h, si).lk]?.lane : null;
       // The bar as drawn: on a turn under 2 px its lane's span (timeline.js tlBar), so the
       // outline is around what the layers drew, not left of it.

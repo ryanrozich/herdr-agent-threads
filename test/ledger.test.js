@@ -33,10 +33,17 @@ function turn(n, steps, o = {}) {
   };
 }
 const S = { agents: new Map(), agentIds: new Map() };
+// ledgerTurn's heading and its step rows as one list, heading first, as the Trajectory's
+// rows hold them (main.js ledgerJoin). ledgerTurn keeps the two apart, so the heading and its
+// rows make no cycle.
+const turnRows = (...a) => {
+  const o = ledgerTurn(...a);
+  return { ...o, rows: [o.head, ...o.steps] };
+};
 
 test("ledger: a turn is a heading keyed as the chat's turn, then a 24 px row per step in order", () => {
   const t = turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 3000, 45000, true]]]);
-  const { rows, fails, calls } = ledgerTurn(S, t, 0);
+  const { rows, fails, calls } = turnRows(S, t, 0);
   expect(LEDGER_ROW).toBe(24);
   expect(rows[0]).toMatchObject({ kind: "trh", key: "0:3", n: 3, calls: 2, fails: 1, timed: true, total: 60000 });
   expect(rows.slice(1).map((r) => r.lk)).toEqual(["you", "text", "tool", "failed", "reply"]);
@@ -55,7 +62,7 @@ test("ledger: a turn is a heading keyed as the chat's turn, then a 24 px row per
 
 test("ledger times: the start from the turn's start, the duration, blank for a time not given (the detail says not recorded), none where a kind has none", () => {
   const t = turn(1, ["Thinking.", [["Read", "a", 2000, 2300], ["Grep", "b", null, 9000], ["Edit", "c", 12000, null]]]);
-  const r = ledgerTurn(S, t, 0).rows;
+  const r = turnRows(S, t, 0).rows;
   const cell = (x) => [rowTimes(x).start, rowTimes(x).dur];
   // The prompt starts at 0:00 and has no duration; a text starts and has none.
   expect(cell(r[1])).toEqual(["0:00", ""]);
@@ -77,7 +84,7 @@ test("ledger times: the start from the turn's start, the duration, blank for a t
 
 test("ledger times: a turn with no step times leaves its cells empty and its heading says 'no times' once", () => {
   const t = turn(2, ["Thinking.", [["Read", "a", null, null], ["Bash", "b", null, null]]], { untimed: true });
-  const { rows } = ledgerTurn(S, t, 0);
+  const { rows } = turnRows(S, t, 0);
   expect(rows[0].timed).toBe(false);
   expect(headParts(rows[0]).total).toBe("no times");
   for (const r of rows.slice(1)) expect([r.start, r.dur, r.startQ, r.durQ]).toEqual([null, null, false, false]);
@@ -88,13 +95,13 @@ test("ledger times: a turn with no step times leaves its cells empty and its hea
 
 test("ledger: a running turn's open call says 'running'; an interrupted turn ends in an Interrupted row", () => {
   const live = turn(5, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null });
-  const a = ledgerTurn(S, live, 0, true).rows;
+  const a = turnRows(S, live, 0, true).rows;
   expect(a.slice(1).map((r) => r.lk)).toEqual(["you", "tool", "running"]);
   expect(a[3].status).toBe("running");
   expect(a[3].dur).toBe(null);
   expect(headParts(a[0]).total).toBe("running");
   const cut = turn(6, [[["Bash", "bun run e2e", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 });
-  const b = ledgerTurn(S, cut, 0).rows;
+  const b = turnRows(S, cut, 0).rows;
   expect(b.at(-1)).toMatchObject({ lk: "stop", text: "Interrupted", start: 40000 });
   expect(b[0].interrupted).toBe(true);
   expect(headParts(b[0]).total).toBe("interrupted");
@@ -103,7 +110,7 @@ test("ledger: a running turn's open call says 'running'; an interrupted turn end
 test("ledger: an agent's message is marked apart from the person's, with its sender; a background update and calls past the limit are rows", () => {
   const t = turn(7, [[["Read", "a", 1000, 1200]]], { who: "planner", latest: "Build finished\nall green" });
   t.steps[0].count = 40; // 39 calls past the names the reader keeps
-  const rows = ledgerTurn(S, t, 1).rows;
+  const rows = turnRows(S, t, 1).rows;
   expect(rows[1]).toMatchObject({ lk: "agent", sender: "planner" });
   expect(rows[0]).toMatchObject({ agent: true, key: "1:7", calls: 40 });
   expect(rows.find((r) => r.lk === "more").text).toBe("and 39 more calls");
@@ -114,7 +121,7 @@ test("ledger: a background update's row starts when its text began, on either re
   // The Chat's reader keeps the latest update and when its first text came (latestAt).
   const t = turn(22, [[["Read", "a", 1000, 1200]]], { latest: "Build finished" });
   t.latestAt = T0 + 70000;
-  const row = (x) => ledgerTurn(S, x, 0).rows.find((r) => r.lk === "context");
+  const row = (x) => turnRows(S, x, 0).rows.find((r) => r.lk === "context");
   expect(row(t)).toMatchObject({ start: 70000, startQ: false });
   expect(rowTimes(row(t))).toMatchObject({ start: startText(70000), dur: "" });
   expect(detailOf(row(t)).fields).toContainEqual(["Started", `${startText(70000)} into the turn`]);
@@ -128,7 +135,7 @@ test("ledger: a background update's row starts when its text began, on either re
   expect(detailOf(row(u)).fields).toContainEqual(["Started", "not recorded"]);
   // No "?" in any column or detail field of these turns.
   for (const x of [t, w, u, turn(25, [[["Grep", "b", null, null]]], { done: false, end: null, reply: null })]) {
-    for (const r of ledgerTurn(S, x, 0).rows) {
+    for (const r of turnRows(S, x, 0).rows) {
       if (r.kind === "trh") continue;
       expect(`${rowTimes(r).start}|${rowTimes(r).dur}`).not.toContain("?");
       expect(JSON.stringify(detailOf(r).fields)).not.toContain("?");
@@ -142,7 +149,7 @@ test("ledger: a subagent call is one row with its run's time, state and tokens",
   const t = turn(8, [[["Agent", "Review the range math", 2000, 3000]]], { agent: true });
   const id = t.steps[0].ids[0];
   const s = { agents: new Map([[id, { st: "completed", tok: 41000, ms: 48000 }]]), agentIds: new Map([["a1", id]]) };
-  const r = ledgerTurn(s, t, 0).rows[2];
+  const r = turnRows(s, t, 0).rows[2];
   expect(r).toMatchObject({ lk: "subagent", tool: "Agent", text: "Review the range math", dur: 48000, sub: { state: "completed", tokens: 41000 } });
 });
 
@@ -150,7 +157,7 @@ test("ledger: a subagent whose run failed is a failed call (cross, wash, count, 
   const t = turn(9, [[["Agent", "Audit the tests", 2000, 3000], ["Agent", "Check the docs", 2000, 3000]]], { agent: true });
   const [a, b] = t.steps[0].ids;
   const s = { agents: new Map([[a, { st: "failed", tok: 4000, ms: 9000 }], [b, { st: "killed", tok: 1000, ms: 2000 }]]), agentIds: new Map() };
-  const { rows, fails } = ledgerTurn(s, t, 0);
+  const { rows, fails } = turnRows(s, t, 0);
   expect(rows[2]).toMatchObject({ lk: "failed", failed: true, tool: "Agent", text: "Audit the tests", status: "failed · 4k tok", sub: { state: "failed" } });
   expect(rows[3]).toMatchObject({ lk: "subagent", failed: false, sub: { state: "killed" } });
   expect([fails, rows[0].fails, ledgerTotals(rows).fails]).toEqual([1, 1, [rows[2].key]]);
@@ -159,7 +166,7 @@ test("ledger: a subagent whose run failed is a failed call (cross, wash, count, 
 test("ledger: calls past what the reader keeps make the failure count a floor ('1+ failed'), and their row says so", () => {
   const t = turn(10, [[["Bash", "bun test", 2000, 3000, true], ["Read", "a.ts", 3000, 3100]]]);
   t.steps[0].count = 250;
-  const { rows } = ledgerTurn(S, t, 0);
+  const { rows } = turnRows(S, t, 0);
   expect(rows[0]).toMatchObject({ fails: 1, partial: true });
   expect(headParts(rows[0], 600).failed).toBe("1+ failed");
   expect(rows.find((r) => r.lk === "more")).toMatchObject({ text: "and 248 more calls", status: "results not kept" });
@@ -177,8 +184,8 @@ test("ledger heading: '10 calls · 1 failed · 48.2k tok · 9m 44s'; narrow, tok
 });
 
 test("ledger: the session's numbers in one place, with its failures in order", () => {
-  const a = ledgerTurn(S, turn(1, [[["Bash", "x", 1000, 2000, true]]]), 0).rows;
-  const b = ledgerTurn(S, turn(2, [[["Read", "y", 1000, 2000], ["Bash", "z", 3000, 4000, true]]]), 0).rows;
+  const a = turnRows(S, turn(1, [[["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const b = turnRows(S, turn(2, [[["Read", "y", 1000, 2000], ["Bash", "z", 3000, 4000, true]]]), 0).rows;
   const sums = ledgerTotals([{ kind: "spacer" }, ...a, ...b]);
   expect(sums).toMatchObject({ turns: 2, calls: 3, failed: 2 });
   expect(sums.fails).toEqual([a.find((r) => r.failed).key, b.find((r) => r.failed).key]);
@@ -226,8 +233,8 @@ test("ledger inks: the user blue, agents amber, the model violet, tools teal, as
 });
 
 test("ledger totals: the whole session's lanes, the user's and agents' messages, tokens and time worked", () => {
-  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
-  const b = ledgerTurn(S, turn(2, [[["Read", "y", 1000, 2000]]], { who: "reviewer" }), 0).rows;
+  const a = turnRows(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const b = turnRows(S, turn(2, [[["Read", "y", 1000, 2000]]], { who: "reviewer" }), 0).rows;
   const t = ledgerTotals([...a, ...b]);
   expect(t).toMatchObject({ turns: 2, input: 2, model: 3, tools: 2, user: 1, agent: 1, failed: 1, worked: 120000 });
   expect(t.users).toEqual([a.find((r) => r.lk === "you").key]);
@@ -236,8 +243,8 @@ test("ledger totals: the whole session's lanes, the user's and agents' messages,
 });
 
 test("ledger filters: the lane chips take rows out, Failed only and User only list one kind, a heading only with a row listed", () => {
-  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
-  const b = ledgerTurn(S, turn(2, [[["Read", "y", 1000, 2000]]]), 0).rows;
+  const a = turnRows(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const b = turnRows(S, turn(2, [[["Read", "y", 1000, 2000]]]), 0).rows;
   const rows = [...a, { kind: "divider", key: "d" }, ...b];
     expect(filterOn(ALL_ROWS)).toBe(false);
   expect(filterRows(rows, ALL_ROWS).rows).toEqual(rows);
@@ -270,7 +277,7 @@ test("running rule: running only with a followed terminal, a live process and an
 
 test("ledger: a turn with no end record that is not running says 'no result' and the last activity, and never 'running'", () => {
   const t = turn(11, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null });
-  const { rows } = ledgerTurn(S, t, 0, false);
+  const { rows } = turnRows(S, t, 0, false);
   expect(rows.slice(1).map((r) => r.lk)).toEqual(["you", "tool", "noresult"]);
   expect(rows.some((r) => r.status === "running" || r.lk === "running")).toBe(false);
   // The last thing the transcript recorded: the open call's start, after the first call's end.
@@ -287,22 +294,22 @@ test("ledger: a turn with no end record that is not running says 'no result' and
   expect(detailOf(rows[0]).fields.filter(([, v]) => /no result/i.test(v))).toEqual([["Result", "No result"]]);
   expect(detailOf(rows[0]).fields.map(([k]) => k)).not.toContain("Took");
   // The same turn while running: "running", no last activity.
-  const live = ledgerTurn(S, t, 0, true).rows;
+  const live = turnRows(S, t, 0, true).rows;
   expect(live[3]).toMatchObject({ lk: "running", status: "running" });
   expect(live[3].lastAt).toBeUndefined();
   expect(live[0]).toMatchObject({ stale: false, lastAt: null, going: true });
   expect(detailOf(live[3]).fields).toContainEqual(["Result", "Running, no result yet"]);
   // A turn that ended (done, or an end record) is never stale.
-  expect(ledgerTurn(S, turn(12, [[["Bash", "x", 1000, null]]]), 0).rows[0].stale).toBe(false);
+  expect(turnRows(S, turn(12, [[["Bash", "x", 1000, null]]]), 0).rows[0].stale).toBe(false);
 });
 
 test("ledger: a message cell with no words (reasoning only, which the pane never reads) is no row; a withheld mark changes nothing", () => {
   const t = turn(13, ["Looking.", [["Read", "a", 2000, 2300]]]);
-  const plain = ledgerTurn(S, t, 0).rows.map((r) => [r.lk, r.text]);
+  const plain = turnRows(S, t, 0).rows.map((r) => [r.lk, r.text]);
   const marked = { ...t, steps: [{ ...t.steps[0], r: "thinking", h: 2 }, { ...t.steps[1], r: "more thinking", h: 1 }], held: 1 };
-  expect(ledgerTurn(S, marked, 0).rows.map((r) => [r.lk, r.text])).toEqual(plain);
+  expect(turnRows(S, marked, 0).rows.map((r) => [r.lk, r.text])).toEqual(plain);
   const onlyReason = { ...t, steps: [t.steps[1]], reasoning: ["why"], after: [] };
-  expect(ledgerTurn(S, onlyReason, 0).rows.slice(1).map((r) => r.lk)).toEqual(["you", "tool"]);
+  expect(turnRows(S, onlyReason, 0).rows.slice(1).map((r) => r.lk)).toEqual(["you", "tool"]);
 });
 
 test("ledger filters: the buttons say Failed and User, and from 900 px 'Failed only' and 'User only' with counts; one of the two at a time", () => {
@@ -322,7 +329,7 @@ test("ledger filters: the buttons say Failed and User, and from 900 px 'Failed o
 });
 
 test("ledger status line: turns and steps, failed, tokens, time worked; time gives way under 540 px, tokens under 420", () => {
-  const a = ledgerTurn(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
+  const a = turnRows(S, turn(1, ["Looking.", [["Bash", "x", 1000, 2000, true]]]), 0).rows;
   const t = ledgerTotals(a);
   const text = (w, going) => ledgerStatus(t, w, going).map((g) => g.text);
   expect(text(800)).toEqual(["1 turn · 4 steps", "1 failed", `${t.tokens} tokens`, "1m 00s worked"]);
@@ -334,7 +341,7 @@ test("ledger status line: turns and steps, failed, tokens, time worked; time giv
 
 test("ledger: the last turn read so far of a session still being read claims no 'no result' and no last activity", () => {
   const t = turn(11, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { done: false, end: null, reply: null });
-  const { rows } = ledgerTurn(S, t, 0, false, { reading: true });
+  const { rows } = turnRows(S, t, 0, false, { reading: true });
   expect(rows.slice(1).map((r) => r.lk)).toEqual(["you", "tool", "tool"]);
   expect(rows[0]).toMatchObject({ stale: false, lastAt: null, reading: true });
   expect(rows.some((r) => r.lastAt != null || r.noResult || r.open)).toBe(false);
@@ -350,7 +357,7 @@ test("ledger: the last turn read so far of a session still being read claims no 
   // A subagent last seen running: no "no result" either.
   const a = turn(14, [[["Agent", "Audit the tests", 1000, 2000]], [["Agent", "Audit the docs", 3000, null]]], { done: false, end: null, reply: null, agent: true });
   const s = { agents: new Map([[a.steps[0].ids[0], { st: "running", tok: null, ms: null }], [a.steps[1].ids[0], { st: "running", tok: null, ms: null }]]), agentIds: new Map() };
-  const subs = (o) => ledgerTurn(s, a, 0, false, o).rows.filter((r) => r.tool === "Agent");
+  const subs = (o) => turnRows(s, a, 0, false, o).rows.filter((r) => r.tool === "Agent");
   for (const sub of subs({ reading: true })) {
     expect(sub.noResult).toBeUndefined();
     expect(sub.lastAt).toBeUndefined();
@@ -359,11 +366,11 @@ test("ledger: the last turn read so far of a session still being read claims no 
   // Not read in full is what holds them: read, the unfinished run is drawn open, with its last activity.
   expect(subs({})[1]).toMatchObject({ open: true, lastAt: T0 + 3000 });
   // Running wins: reading changes nothing for a live turn.
-  expect(ledgerTurn(S, t, 0, true, { reading: true }).rows[3]).toMatchObject({ lk: "running", status: "running" });
+  expect(turnRows(S, t, 0, true, { reading: true }).rows[3]).toMatchObject({ lk: "running", status: "running" });
   // Nor for a turn whose end is read: its call with no result has none.
   const ended = turn(12, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]]);
-  expect(ledgerTurn(S, ended, 0, false, { reading: true }).rows[3]).toMatchObject({ lk: "noresult", status: "no result" });
-  expect(ledgerTurn(S, ended, 0, false, { reading: true }).rows[0].reading).toBe(false);
+  expect(turnRows(S, ended, 0, false, { reading: true }).rows[3]).toMatchObject({ lk: "noresult", status: "no result" });
+  expect(turnRows(S, ended, 0, false, { reading: true }).rows[0].reading).toBe(false);
 });
 
 test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant", () => {
@@ -376,7 +383,7 @@ test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant",
 test("ledger: a subagent last seen launched or running says so only in a running turn; else no result", () => {
   const t = turn(14, [[["Agent", "Audit the tests", 1000, 2000]]], { done: false, end: null, reply: null, agent: true });
   const s = { agents: new Map([[t.steps[0].ids[0], { st: "running", tok: null, ms: null }]]), agentIds: new Map() };
-  const sub = (live) => ledgerTurn(s, t, 0, live).rows.find((r) => r.tool === "Agent");
+  const sub = (live) => turnRows(s, t, 0, live).rows.find((r) => r.tool === "Agent");
   expect(sub(true).sub.state).toBe("running");
   expect(sub(true).noResult).toBeUndefined();
   expect(sub(false)).toMatchObject({ status: "no result", noResult: true, lastAt: T0 + 2000 });
@@ -389,36 +396,36 @@ test("ledger: a dead turn killed during its only call says no result, when the a
   // Nothing in this turn has a result: whether that means "no result" is the agent's way, not
   // the turn's (Claude Code, or a session with a result time anywhere).
   const t = turn(15, [[["Bash", "bun run e2e", 2000, null]]], { done: false, end: null, reply: null });
-  const dead = ledgerTurn(S, t, 0, false, { ends: true }).rows;
+  const dead = turnRows(S, t, 0, false, { ends: true }).rows;
   expect(dead[2]).toMatchObject({ lk: "noresult", status: "no result", open: true, lastAt: T0 + 2000 });
   expect(detailOf(dead[2]).fields).toContainEqual(["Result", "No result"]);
-  expect(ledgerTurn(S, t, 0, true, { ends: true }).rows[2]).toMatchObject({ lk: "running", status: "running" });
+  expect(turnRows(S, t, 0, true, { ends: true }).rows[2]).toMatchObject({ lk: "running", status: "running" });
   // Every call of a parallel batch pending, while live: each is running.
   const batch = turn(16, [[["Read", "a", 2000, null], ["Read", "b", 2000, null]]], { done: false, end: null, reply: null });
-  expect(ledgerTurn(S, batch, 0, true, { ends: true }).rows.slice(2).map((r) => r.lk)).toEqual(["running", "running"]);
+  expect(turnRows(S, batch, 0, true, { ends: true }).rows.slice(2).map((r) => r.lk)).toEqual(["running", "running"]);
   // An agent that writes no result times: a call with no end is an ordinary row.
-  expect(ledgerTurn(S, t, 0, false, { ends: false }).rows[2].lk).toBe("tool");
+  expect(turnRows(S, t, 0, false, { ends: false }).rows[2].lk).toBe("tool");
   // Left out, the session decides: any call in it with an end.
   const s = { ...S, turns: [turn(1, [[["Read", "a", 1000, 1200]]]), t] };
   expect(sessionHasEnds(s)).toBe(true);
   expect(sessionHasEnds({ ...S, turns: [t] })).toBe(false);
-  expect(ledgerTurn(s, t, 0, false).rows[2].lk).toBe("noresult");
+  expect(turnRows(s, t, 0, false).rows[2].lk).toBe("noresult");
 });
 
 test("ledger detail: no result says 'interrupted' only for a turn marked so, with the last activity where it is known", () => {
   const field = (r, name) => detailOf(r).fields.find(([k]) => k === name)?.[1];
   // A done turn whose one call has no result: not interrupted.
   const done = turn(17, [[["Bash", "bun run e2e", 2000, null]], [["Read", "a", 5000, 5600]]], { end: T0 + 9000 });
-  const d = ledgerTurn(S, done, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
+  const d = turnRows(S, done, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
   expect(field(d, "Result")).toBe("No result");
   expect(field(d, "Last activity")).toBe(fmtTime(T0 + 9000));
   expect(field(d, "Took")).toBeUndefined();
   // A turn marked interrupted says so.
   const cut = turn(18, [[["Bash", "bun run e2e", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 });
-  const c = ledgerTurn(S, cut, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
+  const c = turnRows(S, cut, 0, false, { ends: true }).rows.find((r) => r.lk === "noresult");
   expect(field(c, "Result")).toBe("No result: the turn was interrupted");
   // No detail says interrupted for a turn that was not.
-  for (const r of ledgerTurn(S, done, 0, false, { ends: true }).rows) expect(JSON.stringify(detailOf(r).fields)).not.toContain("interrupted");
+  for (const r of turnRows(S, done, 0, false, { ends: true }).rows) expect(JSON.stringify(detailOf(r).fields)).not.toContain("interrupted");
 });
 
 test("ledger rows: a row that says no result shows no duration, and its detail keeps the launch call's time", () => {
@@ -426,7 +433,7 @@ test("ledger rows: a row that says no result shows no duration, and its detail k
   // and none of the runs is known to have finished.
   const t = turn(19, [[["Agent", "Review range math", 1000, 3000]]], { done: false, end: null, reply: null, agent: true });
   const s = { agents: new Map([[t.steps[0].ids[0], { st: "async_launched", tok: null, ms: null }]]), agentIds: new Map() };
-  const rows = ledgerTurn(s, t, 0, false, { ends: true }).rows;
+  const rows = turnRows(s, t, 0, false, { ends: true }).rows;
   const r = rows.find((x) => x.status === "no result");
   expect(r).toBeTruthy();
   expect(r.dur).toBe(2000);
@@ -434,9 +441,9 @@ test("ledger rows: a row that says no result shows no duration, and its detail k
   expect(detailOf(r).fields).toContainEqual(["Took", "2s"]);
   // Every row of these turns that says "no result" has an empty duration column.
   const cut = turn(20, [[["Bash", "bun run e2e", 2000, null]]], { done: false, end: null, reply: null });
-  for (const x of [...rows, ...ledgerTurn(S, cut, 0, false, { ends: true }).rows]) if (x.status === "no result") expect(rowTimes(x).dur).toBe("");
+  for (const x of [...rows, ...turnRows(S, cut, 0, false, { ends: true }).rows]) if (x.status === "no result") expect(rowTimes(x).dur).toBe("");
   // A finished call keeps its duration.
-  const ok = ledgerTurn(S, turn(21, [[["Read", "a", 1000, 1200]]]), 0).rows.find((x) => x.lk === "tool");
+  const ok = turnRows(S, turn(21, [[["Read", "a", 1000, 1200]]]), 0).rows.find((x) => x.lk === "tool");
   expect(rowTimes(ok).dur).toBe(durText(200));
   expect(rowTimes(ok).bar).toBe(true);
   // Nor does the row draw the launch's time as a bar.
@@ -447,14 +454,14 @@ test("ledger rows: a row that says no result shows no duration, and its detail k
 // first row says what the Chat's quiet line says, from the harness, then its steps and reply.
 test("ledger: a task notification's turn starts with a Background task finished row, never a blank one, then its steps and reply", () => {
   const t = { ...turn(4, [[["Bash", "bun run build", 2000, 9000]]], { prompt: "", reply: "The build finished clean." }), agent: true, sender: { kind: "task-notification" } };
-  const { rows } = ledgerTurn(S, t, 0);
+  const { rows } = turnRows(S, t, 0);
   expect(rows.slice(1).map((r) => [r.lk, r.text])).toEqual([["agent", "Background task finished"], ["tool", "bun run build"], ["reply", "The build finished clean."]]);
   expect(rows[1].sender).toBeNull();
   const d = detailOf(rows[1]);
   expect(d.fields).toContainEqual(["From", "the harness · a background task finished, nobody typed this"]);
   expect(d.text).toBe("Background task finished");
   // A teammate's message keeps its own words and name.
-  const peer = ledgerTurn(S, turn(5, [], { prompt: "Review the diff", who: "helper-a" }), 0).rows[1];
+  const peer = turnRows(S, turn(5, [], { prompt: "Review the diff", who: "helper-a" }), 0).rows[1];
   expect([peer.lk, peer.text, peer.sender]).toEqual(["agent", "Review the diff", "helper-a"]);
 });
 

@@ -242,7 +242,8 @@ export function spanKeys(lane, ink) {
   return v;
 }
 
-// One turn's rows: the heading, then a row per cell. si and the turn make the keys: the
+// One turn's rows, as { head, steps, fails, calls }: the heading, and a row per cell (steps,
+// which the heading holds too; listed after it in the ledger). si and the turn make the keys: the
 // heading's key is the turn's own ("<session>:<number>", as in the chat), so the selected
 // turn is the same key in the Chat and the Trajectory; a cell row is "tr:<session>:<number>:<i>".
 // live: the turn is running by the running rule (turnRunning), so a call with no result yet is
@@ -386,11 +387,13 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     if (r.lk === "you") cnt.user++;
     if (r.lk === "agent") cnt.agent++;
   }
-  // The rows returned, heading first. The heading holds this same array (rows), so the
-  // timeline reads a turn's steps from its rows (timeline.js tlRow) and the turn keeps no
-  // second array of them and no number per step: a step's times and flags are its row's, its
-  // track worked out by the timeline for a turn it draws (timeline.js tlTracks).
-  const all = [null, ...rows];
+  // The heading and its step rows, returned apart (main.js ledgerJoin lists the heading, then
+  // its steps). The heading holds the steps (steps), so the timeline reads a turn's steps from
+  // them (timeline.js tlRow), and nothing in them holds the heading: no cycle, so a turn's
+  // rows thrown away at a rebuild are freed as soon as nothing holds them, with no wait for
+  // QuickJS's cycle collector. One array a turn and no number per step: a step's times and
+  // flags are its row's, its track worked out by the timeline for a turn it draws
+  // (timeline.js tlTracks).
   const head = {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
@@ -398,12 +401,11 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
-    t0, span, cnt, rows: all,
+    t0, span, cnt, steps: rows,
     // The keys of its failed calls and of the user's messages, for the session's lists.
     failKeys: rows.filter((r) => r.failed).map((r) => r.key), userKeys: rows.filter((r) => r.lk === "you").map((r) => r.key),
   };
-  all[0] = head;
-  return { rows: all, fails, calls };
+  return { head, steps: rows, fails, calls };
 }
 
 // The heading's numbers at the right: "10 calls · 1 failed · 48.2k tok · 9m 44s". When
