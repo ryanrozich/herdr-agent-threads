@@ -28,7 +28,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 2. Move with `↑` `↓`. Press `Enter` to open a turn and read the whole reply. `Esc` closes it.
 3. Press `/` and type to search.
 4. Press `o` for the outline, one row per turn, to find an older turn fast.
-5. Press `p` to pin a turn you want to come back to. `1` to `5` take you back.
+5. Press `p` to pin a turn you want to come back to. `1` to `7` take you back.
 6. Press `q` to quote the reply into your prompt, or `c` to copy it.
 7. Press `?` to see every key.
 
@@ -72,7 +72,7 @@ Press `o` for the outline. Each turn is one line, so a few days fit on one scree
 
 ### Pin the turns you need
 
-Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 5. Press a number to go back to that turn. `u` undoes an unpin. `-` and `=` make the Pinned column narrower or wider, and Threads takes or gives the difference so the terminal keeps its width.
+Press `p` to pin a turn. Your pins show in a column beside the list, oldest first, numbered 1 to 7. Press a number to go back to that turn. The unpin button at the right of a pin, on hover or on the selected pin, unpins it while the pins fit the column. When they don't, the unpin button in the column's header unpins the selected pin, and `p` always does. `u` undoes an unpin. `-` and `=` make the Pinned column narrower or wider, and Threads takes or gives the difference so the terminal keeps its width.
 
 <a href="docs/screenshots/pinned.png"><img src="docs/screenshots/pinned.png" alt="Three pinned turns in the Pinned column beside the list" width="560"></a>
 
@@ -126,7 +126,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `→` `←` | Open or close a turn's work, a level at a time |
 | `i` | Show or hide the Turn card |
 | `p` | Pin or unpin |
-| `1` to `5` | Go to a pin |
+| `1` to `7` | Go to a pin |
 | `u` | Undo the last unpin |
 | `v` | Show the Pinned column |
 | `-` `=` | Make the Pinned column or the Trajectory pane narrower or wider |
