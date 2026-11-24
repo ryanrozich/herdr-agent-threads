@@ -232,6 +232,15 @@ async function searchRun(n, x, seed = 0) {
   } finally { X = 1; }
 }
 
+// The field's total once counted, read whole: "N of M · ...", "M match(es) ..." or "No
+// matches ...", M as a number (0 for no match); null for any other text, a count still going
+// on ("M+") among them.
+const fieldTotal = (text) => {
+  const t = String(text).replace(/,/g, "");
+  if (/^No matches( ·|$)/.test(t)) return 0;
+  const m = t.match(/^\d+ of (\d+)( ·|$)/) ?? t.match(/^(\d+) match(es)?( ·|$)/);
+  return m ? Number(m[1]) : null;
+};
 // Each pane's figures once, for the tests that read them.
 const runs = new Map();
 const figures = (n, x, seed = 0) => { const k = `${n}x${x}s${seed}`; if (!runs.has(k)) runs.set(k, searchRun(n, x, seed)); return runs.get(k); };
@@ -256,7 +265,7 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     // The rows are built and the matches counted within 40 draws.
     for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
     // The final count is every matching shown turn.
-    expect(r.steps.map((st) => [st.q, String(st.count).replace(/,/g, "").includes(st.want === 0 ? "No matches" : String(st.want))])).toEqual(QUERIES.map((q) => [q, true]));
+    expect(r.steps.map((st) => [st.q, fieldTotal(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want]));
   }, 300000);
   // After a stop the rows wait out the light draws (CUT_MS) to be reshaped, on a timer that
   // flush(0) does not run: these runs are judged built and counted, not shaped.
@@ -265,7 +274,7 @@ for (const x of [1, 2]) for (const n of [2000, 5600]) {
     if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify(r));
     expect(r.steps.map((st) => ({ q: st.q, stops: st.stops, landed: st.landed, exact: st.exact }))).toEqual(QUERIES.map((q) => ({ q, stops: 1, landed: "scan", exact: true })));
     for (const st of r.steps) expect([st.q, st.counted != null && st.counted <= 40]).toEqual([st.q, true]);
-    expect(r.steps.map((st) => [st.q, String(st.count).replace(/,/g, "").includes(st.want === 0 ? "No matches" : String(st.want))])).toEqual(QUERIES.map((q) => [q, true]));
+    expect(r.steps.map((st) => [st.q, fieldTotal(st.count)])).toEqual(r.steps.map((st) => [st.q, st.want]));
   }, 300000);
   test(`search ${at}: a draw with nothing changed checks no turn, no draw runs past Herdr's time, and the command and each letter take one slice`, async () => {
     const r = await figures(n, x);
@@ -774,6 +783,7 @@ for (const q of QUERIES) for (const seed of PLANTED) {
       expect(counting(v)).toBe(true);
       // A turn comes in and runs (the newest turn, live), then ends, the scan going on.
       T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please rename the cart for order 1.`, ts });
+      landed = null;
       if (seed) plantStop(seeded(seed), 1000, true);
       seen.push(fieldText(v));
       drawOnce(v, cx);
