@@ -665,11 +665,14 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
     };
     for (let k = 0; v.openActive() && k < 600; k++) step();
     step();
-    on = true;
-    move(v, cx, host);
     // An agent writing the newest turn: it runs, and its reply grows a line each frame.
     const live = v.sessions.at(-1).turns.at(-1);
-    if (stream) live.done = false;
+    if (stream) { live.done = false; step(); }
+    // The list is shown (the opening over) before the move, and a wheel leaves the end.
+    expect(v.openActive()).toBe(false);
+    on = true;
+    move(v, cx, host);
+    if (move === wheelUp) expect(v.follow).toBe(false);
     const out = [];
     for (let k = 0; k < frames; k++) {
       if (stream) live.after.push(`More of the reply, line ${k}.`);
@@ -780,7 +783,8 @@ test("the opening: a jump during the drain onto costly rows keeps each draw's re
 // reshapes it first, near 0 ms. Past the line only a row on screen starts. No draw is stopped,
 // a row on screen is reshaped in every frame until they are all shaped (in at least every
 // second frame where the first does not fit), and they are by the sixth frame after the wheel.
-// Per cell: draws stopped; a row on screen reshaped in every frame until they are all shaped
+// Per cell: draws stopped; a row on screen reshaped in every frame from the first drawn at the
+// wheel's place (the wheel's own frame walks the rows at the end) until they are all shaped
 // where the walk's first fits (base + ms and the 3 ms margin within 50 ms), else in at least
 // every second frame (a frame whose owed row took the draw's shaping time owes none); starts
 // that end past 50 ms; starts past 35 ms for a row off screen; frames from the sixth with a
@@ -789,7 +793,7 @@ function gridCell(frames, ms, fits) {
   const filled = frames.findLastIndex((f) => f.blank > 0) + 1;
   let run = 0;
   let most = 0;
-  for (const f of frames.slice(0, filled)) { run = f.seen ? 0 : run + 1; most = Math.max(most, run); }
+  for (const f of frames.slice(1, filled)) { run = f.seen ? 0 : run + 1; most = Math.max(most, run); }
   return [frames.filter((f) => f.stopped).length, most <= (fits ? 0 : 1), frames.flatMap((f) => f.starts).filter((s) => s + ms > 50).length, frames.reduce((n, f) => n + f.offLate, 0), frames.slice(5).filter((f) => f.blank > 0).length];
 }
 test("the opening: a draw that reaches its walk late starts no reshape expected to end past Herdr's stop, and reshapes the row it refused first in the next frame", async () => {
@@ -848,7 +852,8 @@ test("the opening: a pick, a restart, a dropped place or a switch of view ends a
 test("the opening: while a turn streams, the rows on screen are still reshaped, one a frame, and the running turn off screen waits", async () => {
   const { frames } = await costlyWheel(8, 40, 30, wheelUp, { until: true, stop: true, stream: true });
   expect(gridCell(frames, 8, false)).toEqual([0, true, 0, 0, 0]);
-  expect(frames.slice(0, 5).filter((f) => f.seen > 0).length).toBeGreaterThanOrEqual(4);
+  // The rows on screen filled by the fourth frame after the wheel.
+  expect(frames.findLastIndex((f) => f.blank > 0)).toBeLessThan(3);
 }, 60000);
 
 // The 35 ms line is the drain's (reshapeStale): a reshape asked for late in a draw elsewhere (a

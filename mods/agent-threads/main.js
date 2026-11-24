@@ -180,8 +180,9 @@ const FRAME_AIM_MS = 30;
 // Past this long since a render began no reshape of the drain starts in it (pastLine), not
 // even for a row on screen: a draw that started late, with time left of its shaping budget,
 // ran into Herdr's 50 ms stop with one more pasted prompt (9 ms at 45 KB, 40 ms at 200 KB).
-// Past it only the drain's first reshape of the draw may start, and only if it is expected to
-// end in time (lineCut). The first one refused is reshaped first in the next frame (lineOwed).
+// Past it only the drain's first reshape of the draw may start, of a row on screen, and only if
+// it is expected to end in time (lineCut). The first one refused is reshaped first in the next
+// frame (lineOwed).
 const NEAR_CUT_MS = 35;
 // Herdr stops a draw at about 50 ms. No reshape of the drain starts that is expected to end
 // past it, less the rest of the draw after the walk (afterWalk) and HOST_MARGIN_MS.
@@ -2946,6 +2947,7 @@ export default class Threads extends View {
   reshapeStale(status) {
     this.lineOn = true;
     this.lineFirst = true;
+    this.lineScreen = false;
     // Walks that began past the line, and the most frames in a row they did (debug report).
     if (this.renderOpen && this.lateFrame !== this.renders) {
       this.lateFrame = this.renders;
@@ -2955,7 +2957,7 @@ export default class Threads extends View {
         this.lateRunMax = Math.max(this.lateRunMax ?? 0, this.lateRun);
       } else this.lateRun = 0;
     }
-    try { return this.reshapeLeft(status); } finally { this.lineOn = false; this.walkEnd = now(); }
+    try { return this.reshapeLeft(status); } finally { this.lineOn = false; this.lineScreen = false; this.walkEnd = now(); }
   }
   reshapeLeft(status) {
     this.shapeStart();
@@ -2976,20 +2978,30 @@ export default class Threads extends View {
     // The rows drawn are looked at past the draw's time too: the turns shapeInView just shaped
     // are memo hits, and shape() leaves the others as they are at once. The rest of the rows
     // near the view come first, within the time. Past NEAR_CUT_MS since the render began
-    // (pastLine) shape() starts no reshape, for a drawn row neither: one left draws as it was
-    // and is first again in the next frame's walk (nearCut counts them).
+    // (pastLine) only a row on screen (lineScreen, in view by viewRange; in the opening, the rows
+    // near the end it waits for) may start, the draw's
+    // first that fits (lineCut); one left draws as it was and is first again in the next
+    // frame's walk (nearCut counts them), and the walk stops at the first row off screen.
     const nearN = near?.drawn ?? 0;
+    const seen = this.nearSpan();
+    const v0 = seen ? this.viewRange[0] - seen[2] : 0;
+    const v1 = seen ? this.viewRange[1] - seen[2] : 0;
     // While a jump lands (openLand), the rows above the view wait until its place is held.
     const span = this.openLand ? this.nearSpan() : null;
     const top = span ? this.viewRange[0] - span[2] : -1;
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
       if (i < top) continue;
-      if (k >= nearN && ((this.shapeSpent ?? 0) > this.shapeMax() || (this.pastLine() && !this.lineFirst))) { this.shapeLeft += order.length - k; break; }
+      // While the opening is under way, the rows it waits for (the rows near the end, nearSpan)
+      // are the ones it will show.
+      const onScreen = this.openActive() ? seen != null && i >= seen[0] && i < seen[1] : i >= v0 && i < v1;
+      if (k >= nearN && ((this.shapeSpent ?? 0) > this.shapeMax() || (this.pastLine() && !onScreen))) { this.shapeLeft += order.length - k; break; }
       const r = this.baseRows[i];
       done.add(i);
       if (r?.kind !== "turn" || !r.turn) continue;
+      this.lineScreen = onScreen;
       const sh = this.shape(r.turn);
+      this.lineScreen = false;
       if (this.shapeStale) {
         done.delete(i);
         if (k < nearN && this.pastLine()) this.nearCut = (this.nearCut ?? 0) + 1;
@@ -3665,6 +3677,8 @@ export default class Threads extends View {
       if (!L.some((p) => p.key === this.sel)) this.sel = L.find((p) => p.key)?.key ?? null;
     }
     this.follow = false;
+    // A landing still to be held is the other view's: with a selection the switch makes its own.
+    this.openLand = false;
     if (this.sel) this.scrollTo = { key: this.sel, how: "center" };
   }
 
@@ -4761,10 +4775,10 @@ export default class Threads extends View {
     this.keepShape(turn);
     const dt = now() - t0;
     // What it cost, for the next reshape's estimate (shapeCost): the turn's own, and in the
-    // drain, the time a character.
+    // drain (an owed row too), the time a character.
     turn.shapeMs = dt;
     const chars = turn.prompt.length + text.length;
-    if (this.lineOn && chars > 0) this.shapeRate = this.shapeRate == null ? dt / chars : this.shapeRate * 0.7 + (dt / chars) * 0.3;
+    if ((this.lineOn || this.owedOn) && chars > 0) this.shapeRate = this.shapeRate == null ? dt / chars : this.shapeRate * 0.7 + (dt / chars) * 0.3;
     this.shapeSpent = (this.shapeSpent ?? 0) + dt;
     return sh;
   }
@@ -4861,18 +4875,21 @@ export default class Threads extends View {
   // less the rest of the draw after the walk and a margin.
   fitsHost(est) { return est != null && now() - (this.renderAt ?? 0) + est + (this.afterWalk ?? 0) + HOST_MARGIN_MS <= HOST_MS; }
   // In the drain: true when a reshape of turn may not start now. One expected to end past
-  // Herdr's stop never starts. Past NEAR_CUT_MS only the draw's first may, if its cost is known
-  // and fits. The first refused, the top row on screen first (shapeInView), is owed: the next
-  // frame reshapes it before its other work (payOwed). Not one that could fit in no draw.
+  // Herdr's stop never starts. Past NEAR_CUT_MS only the draw's first may, of a row on screen
+  // (lineScreen: the walk's rows in view, not shapeInView's turns, so not a running turn off
+  // screen), if its cost is known and fits. The first row on screen refused, in the walk's
+  // order (the rows drawn, nearest first), is owed: the next frame reshapes it before its
+  // other work (payOwed). Not one that could fit in no draw.
   lineCut(turn, text, live) {
     if (!this.lineOn || !this.renderOpen) return false;
     const est = this.shapeCost(turn, text);
     const fits = this.fitsHost(est);
     const late = this.pastLine();
-    if (late ? this.lineFirst && fits : est == null || fits) return false;
+    if (late ? this.lineFirst && this.lineScreen && fits : est == null || fits) return false;
+    if (!this.lineScreen) return true;
     if (this.lineFirst && !this.lineOwed && !(est != null && est + (this.afterWalk ?? 0) + HOST_MARGIN_MS > HOST_MS)) this.lineOwed = { turn, live };
-    // Past the line the draw's first is spent once refused: the walk goes on with the rows drawn
-    // (memo hits) and stops at the first other one.
+    // Past the line the draw's first is spent once a row on screen is refused: the walk goes on
+    // with the rows drawn (memo hits) and stops at the first row off screen.
     if (late) this.lineFirst = false;
     return true;
   }
@@ -4885,7 +4902,8 @@ export default class Threads extends View {
     const est = this.shapeCost(o.turn, this.replyText(o.turn));
     if (est != null && !this.fitsHost(est)) return;
     this.owedPaid = (this.owedPaid ?? 0) + 1;
-    this.shape(o.turn, o.live);
+    this.owedOn = true;
+    try { this.shape(o.turn, o.live); } finally { this.owedOn = false; }
   }
   reshape(turn, live, q, P, why, text) {
     const cmd = commandParts(turn);
