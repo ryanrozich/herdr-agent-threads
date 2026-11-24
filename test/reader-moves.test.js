@@ -452,6 +452,28 @@ test("a scroll the list reports counts once, and not again after a wheel", async
   expect({ bar, wheel: n1 - n0 - bar, after: moves(v) - n1 }).toEqual({ bar: 1, wheel: 1, after: 0 });
 });
 
+// The pane's own scroll in the list: a scroll just asked for (the open card's 16 ms ask, the
+// place put back after a stopped row draw) and its landing in the 500 ms after it (busy) count
+// nothing, whichever part of busy holds it. A drag on the bar after the window counts once.
+test("the pane's own scroll landing counts nothing: a scroll just asked for, and the 500 ms after it lands", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  const rows = v.rows();
+  v.follow = false;
+  v.toBottom = false;
+  v.pinningUntil = 0;
+  v.scrollBusyUntil = 0;
+  v.scrollTo = null;
+  v.stickCheck(rows, false, 20);
+  const step = (f) => { const n0 = moves(v); f(); return moves(v) - n0; };
+  const got = {
+    asked: step(() => { v.scrollTo = { key: rows.at(-1).key, how: "center" }; v.stickCheck(rows, false, 10); v.scrollTo = null; }),
+    landed: step(() => { v.scrollBusyUntil = Date.now() + 500; v.stickCheck(rows, false, 6); v.stickCheck(rows, false, 5); }),
+    bar: step(() => { v.scrollBusyUntil = 0; v.stickCheck(rows, false, 2); }),
+  };
+  expect(got).toEqual({ asked: 0, landed: 0, bar: 1 });
+});
+
 // The outline and the Pinned view scroll on the same list: a scroll it reports with no wheel
 // since the last frame (a drag on its bar) counts once there too, a wheel there counts once
 // (the frame after it does not count it again), and the pane's own scrolls there (a scroll
