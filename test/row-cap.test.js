@@ -1486,3 +1486,31 @@ test("past the cap, latest on a newest turn open past it, in a session with a hi
   expect(JSON.stringify(frame(v, cx)).includes("No user messages yet")).toBe(false);
   expect(lastList.sizes.length).toBe(40);
 });
+
+test("with no cut, a jump that moves the window shows its turn in the first frame: Home, a newer #n and latest from the oldest window", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.jumpLatest(true);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:150");
+  // Home: from the newest window to the oldest. Neither is cut, so only the window moved.
+  v.action("first", cx);
+  probeFrame(v, cx);
+  expect(v.capCut).toBe(0);
+  expect(turns(sim.last())).toContain("0:1");
+  settleList(v, cx, sim);
+  // #120, in a window of its own, from the oldest one.
+  v.command("search:#120", cx);
+  probeFrame(v, cx);
+  expect(turns(sim.last())).toContain("0:120");
+  settleList(v, cx, sim);
+  // And latest from the oldest window. (From #120's, which runs to the end, latest moves no
+  // window: its frame keeps the view, as with no window, and the end is asked for after it.)
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  v.jumpLatest(true);
+  probeFrame(v, cx);
+  expect(turns(sim.last())).toContain("0:150");
+  H.listWindow = null;
+});

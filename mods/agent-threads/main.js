@@ -2825,12 +2825,14 @@ export default class Threads extends View {
       // list's end is not on screen): it takes the pill's room under its text. In the Pinned
       // view and the outline, which draw no pill, that is only room.
       if (rows.at(-1)?.key === "capped-later") sizes[sizes.length - 1] += PILL_H + PILL_GAP;
-      // The cut, by the first of the session's rows it keeps, past the list's own items (a cut
-      // at the window's start keeps the same list items first over any window). Each way of
-      // cutting keeps a fixed count from a place of its own, so that row names the items, and
-      // the window's ends add nothing. A cut that moved (or came or went) since the list was
-      // last laid out gives it other items under the offset in px it keeps (render, capLaid).
-      this.capSpan = cap.cut ? `${rows.find((r) => !LIST_ITEMS.has(r.key))?.key}` : "";
+      // The list's items, by where they start (capSpan). Cut, by the first of the session's
+      // rows the cut keeps, past the list's own items (a cut at the window's start keeps the
+      // same list items first over any window). Each way of cutting keeps a fixed count from a
+      // place of its own, so that row names the items, and the window's ends add nothing. Not
+      // cut, by the window's first row: Home from the newest window to the oldest is no cut
+      // either way, but other rows. Items that start elsewhere since the list was last laid
+      // out are other items under the offset in px it keeps (render, capLaid).
+      this.capSpan = cap.cut ? `${rows.find((r) => !LIST_ITEMS.has(r.key))?.key}` : W.a > 0 ? `w:${this.baseRows[W.a]?.key}` : "";
       this.rowsMemo = rows;
       // Cut by capList, the list's rows are found by key (rowIndex).
       this.indexedRows = cap.cut ? null : rows;
@@ -9393,7 +9395,7 @@ export default class Threads extends View {
     // A reader at the end through a re-wrap stays at the end: in this frame, every frame, until
     // the place is let go (holdDone).
     if (this.anchor?.end && rows.length && !this.scrollTo) { this.pinningUntil = Date.now() + 1000; this.askEnd(); }
-    // A list cut anew since its last layout holds other items at the offset in px it kept,
+    // A list cut anew, or a window moved, since its last layout holds other items at the offset in px it kept,
     // which can be anywhere in them: the end of the session, for a turn after a long open one.
     // So a scroll to come has its row asked for at once, for this frame's layout, whether it is
     // taken below or waits (for the rows to settle, or for a card's measures), and again in
@@ -9404,6 +9406,9 @@ export default class Threads extends View {
       const { i, how } = this.scrollRow(st0, rows);
       if (i >= 0) { this.askScroll(this.landTop(rows, i, how), how === "center" ? "center" : "top"); st0.held = true; }
     }
+    // So is the end, for latest over other items (from the oldest window, say): asked for at
+    // once, for this frame's layout, and again 16 ms on as below.
+    else if (this.toBottom && rows.length && (this.capSpan ?? "") !== (this.capLaid ?? "")) this.askEnd();
     const unsettled = this.shapeLeft > 0 || this.staleRows?.length || this.rowJob;
     if (!(this.toBottom || this.scrollTo) || !unsettled) this.scrollWait = 0;
     else if (!this.scrollWait) this.scrollWait = Date.now();
