@@ -1028,11 +1028,25 @@ for (const seed of PLANTED) test(`hidden matches among the newest turns, checked
 // interrupted, queued, or with no reply), and the session changing before every draw, as a
 // running agent's does: the count still ends, within the draws a search with no tail takes,
 // and from then on each change is counted again within its own draw.
+// Each tail test with a query that matches nowhere, and one that matches every turn of the
+// tail ("look again"), whose places are dropped and found again while it is checked again.
+const TAIL_QUERIES = ["zqxjvk", "look again"];
+const tailName = (q) => (q === "zqxjvk" ? "" : `, "${q}" matching the tail`);
+// The field's words while counting: none found yet, or a count with a "+".
+const countingWords = (t) => t === "Counting…" || /^[\d,]+\+ matches$|^\d+ of [\d,]+\+/.test(t);
+// The field's words once counted, for the selection where it is.
+const finalWords = (v, q) => {
+  const w = wantOf(v, q).keys;
+  const i = w.indexOf(v.sel);
+  if (!w.length) return "No matches";
+  if (i < 0) return `${w.length} ${w.length === 1 ? "match" : "matches"}`;
+  return `${i + 1} of ${w.length} · ${w.length === 1 ? "only mention" : i === w.length - 1 ? "first mention" : "newest first"}`;
+};
 const tailMore = (s, n) => {
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
   for (let i = 0; i < n; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); }
 };
-for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and a turn coming in before every draw, the count ends in each draw${x === 1 ? "" : `, at ${x}x the prices`}`, async () => {
+for (const q of TAIL_QUERIES) for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and a turn coming in before every draw, the count ends in each draw${x === 1 ? "" : `, at ${x}x the prices`}${tailName(q)}`, async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 100);
   settleRows(v, cx);
@@ -1041,7 +1055,7 @@ for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and
   X = x;
   try {
     priced(v, () => {
-      v.action("search:zqxjvk", cx);
+      v.action(`search:${q}`, cx);
       for (let k = 0; k < 150; k++) {
         tailMore(s, 1);
         const d = drawOnce(v, cx);
@@ -1054,14 +1068,14 @@ for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and
     });
   } finally { X = 1; }
   const first = seen.findIndex((d) => !d.counting);
-  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 100, x, countedAt: first + 1 }));
+  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 100, x, q, countedAt: first + 1 }));
   // Counted within the 40 draws a search is held to, then in every draw after.
   expect(first >= 0 && first < 40).toBe(true);
   expect(seen.filter((d) => d.stopped || !d.ms || (d.k >= first && d.counting))).toEqual([]);
-  // "No matches" only once counted.
-  expect(seen.filter((d) => d.counting && d.text !== "Counting…")).toEqual([]);
-  expect(places(v)).toEqual(want(v, "zqxjvk"));
-  expect(fieldText(v)).toBe("No matches");
+  // "No matches" and a final count only once counted.
+  expect(seen.filter((d) => d.counting && !countingWords(d.text))).toEqual([]);
+  expect(places(v)).toEqual(want(v, q));
+  expect(fieldText(v)).toBe(finalWords(v, q));
 }, 120000);
 
 // The limit: a tail too long for the scan's share of a draw, changing before every draw, is
@@ -1070,7 +1084,7 @@ for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and
 // every draw: a tail of 1,100 turns is counted at draw 34 and one of 1,200 not at all; at 2x
 // the prices, 450 at draw 30 and 550 not at all. The field says it is counting meanwhile, and
 // the count ends within a few draws of the last change.
-for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply and a turn coming in before every draw, the field says it is counting, and the count ends within 20 draws of the last${x === 1 ? "" : `, at ${x}x the prices`}`, async () => {
+for (const q of TAIL_QUERIES) for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply and a turn coming in before every draw, the field says it is counting, and the count ends within 20 draws of the last${x === 1 ? "" : `, at ${x}x the prices`}${tailName(q)}`, async () => {
   const { v, cx, s } = await longPane(5600);
   tailMore(s, 2000);
   settleRows(v, cx);
@@ -1080,7 +1094,7 @@ for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply a
   X = x;
   try {
     priced(v, () => {
-      v.action("search:zqxjvk", cx);
+      v.action(`search:${q}`, cx);
       for (let k = 0; k < 60; k++) {
         tailMore(s, 1);
         const d = drawOnce(v, cx);
@@ -1093,14 +1107,14 @@ for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply a
       }
     });
   } finally { X = 1; }
-  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 2000, x, countingWhileChanging: seen.slice(0, 60).filter((d) => d.counting).length, drawsAfterLast: after }));
+  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 2000, x, q, countingWhileChanging: seen.slice(0, 60).filter((d) => d.counting).length, drawsAfterLast: after }));
   expect(seen.filter((d) => d.stopped || !d.ms)).toEqual([]);
   // The limit itself: counting in every draw while a turn comes in before each.
   expect(seen.slice(0, 60).filter((d) => !d.counting)).toEqual([]);
-  expect(seen.filter((d) => d.counting && d.text !== "Counting…")).toEqual([]);
+  expect(seen.filter((d) => d.counting && !countingWords(d.text))).toEqual([]);
   expect(after != null && after <= 20).toBe(true);
-  expect(places(v)).toEqual(want(v, "zqxjvk"));
-  expect(fieldText(v)).toBe("No matches");
+  expect(places(v)).toEqual(want(v, q));
+  expect(fieldText(v)).toBe(finalWords(v, q));
 }, 120000);
 
 // A reply comes in while a tail longer than a slice is checked again, and then two turns after
@@ -1133,6 +1147,46 @@ test("a reply coming in while a 2,000-turn tail is checked again, then a turn af
   // 2,000 + 3 + the reply's turn + 2.
   expect(want(v, "look again").keys.length).toBe(2006);
   expect(places(v)).toEqual(want(v, "look again"));
+}, 120000);
+
+// A step from a selected match in a tail being checked again: the match has no place until its
+// turn is checked again, and n or Shift n from it goes by turn order to the nearest match older
+// or newer than it, not to the newest found. The count keeps its "+" meanwhile, and the place
+// comes back once the tail is checked.
+test("a step from a match in a long tail being checked again goes the way it is asked, and its place comes back once the tail is checked", async () => {
+  const { v, cx, s } = await longPane(5600);
+  tailMore(s, 2000);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const n = (k) => Number(k.split(":")[1]);
+  const r = {};
+  priced(v, () => {
+    v.action("search:please look", cx);
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    // Two steps older: a turn near the end of the tail.
+    v.action("olderMatch", cx);
+    v.action("olderMatch", cx);
+    const from = v.sel;
+    r.from = n(from) > s.turns.length - 10;
+    r.settled = fieldText(v);
+    const texts = [];
+    for (let k = 0; k < 5; k++) { tailMore(s, 1); drawOnce(v, cx); texts.push(fieldText(v)); }
+    r.texts = texts.filter((t) => !countingWords(t));
+    // A turn comes in; Shift n, then n, from the selected turn, before the next draw.
+    tailMore(s, 1);
+    r.placed = v.hitsNow().at.has(from);
+    v.action("newerMatch", cx);
+    r.newer = n(v.sel) >= n(from);
+    v.sel = from;
+    v.action("olderMatch", cx);
+    r.older = n(v.sel) < n(from) && v.selMatches();
+    v.sel = from;
+    for (let k = 0; k < 80 && counting(v); k++) drawOnce(v, cx);
+    r.back = v.matchPlace().at > 0;
+  });
+  expect(r).toEqual({ from: true, settled: "3 of 5360 · newest first", texts: [], placed: false, newer: true, older: true, back: true });
+  expect(fieldText(v)).toBe(finalWords(v, "please look"));
+  expect(places(v)).toEqual(want(v, "please look"));
 }, 120000);
 
 // ---- a transcript replaced ----
