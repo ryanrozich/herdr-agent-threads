@@ -41,7 +41,9 @@ const mixedReply = (kb) => { const one = readFileSync(join(root, "test/fixtures/
 // One reply, or several on the last turns, every one opened (unless shut).
 async function openLong(text, shut = false) {
   const texts = [].concat(text);
-  const { v, cx } = await pane(fixture("--extra", String(Math.max(2, texts.length))));
+  // The pane cuts its build and shaping into slices by the clock, as on Herdr ({ sliced: true }):
+  // these tests time the pane's work, and a whole-slice test pane does it all in one draw.
+  const { v, cx } = await pane(fixture("--extra", String(Math.max(2, texts.length))), { sliced: true });
   v.debug = false;
   const { parseLinks, LINK_TEMPLATES } = await import("../mods/agent-threads/settings.js");
   const l = parseLinks([LINK_TEMPLATES.ticket.rule]);
