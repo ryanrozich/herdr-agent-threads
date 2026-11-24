@@ -10595,7 +10595,7 @@ export default class Threads extends View {
   // unpin and p still unpin the selected pin. None under the Turn card either: a press
   // outside it only closes it (click()).
   pinButtonRows(rows, slots) {
-    if (this.covered() || (this.detailsOpen && Popup)) return [];
+    if (this.view !== "pinned" || this.covered() || (this.detailsOpen && Popup)) return [];
     let total = 0;
     for (const h of slots) total += h;
     if (total > this.listH + 0.5) return [];

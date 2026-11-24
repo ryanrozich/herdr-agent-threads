@@ -4999,6 +4999,40 @@ test("the Pinned column: a press on a button the pane did not draw selects its p
   expect(v.sel).toBe(c);
 });
 
+// The rows' heights as the list takes them, with a count of the walks over them (each for...of).
+const walkedSlots = (v) => {
+  const n = { walks: 0 };
+  const slots = new Proxy(v.rows().map((r) => v.height(r)), { get(t, k) { if (k === Symbol.iterator) n.walks++; return Reflect.get(t, k); } });
+  return { slots, n };
+};
+
+test("outside the Pinned view the rows' unpin buttons cost nothing a frame: a long Chat has no button layer, and its rows' heights are not summed for one", async () => {
+  // In the Pinned view (the same pane's switch) the heights are summed: the count sees it.
+  const { v: pv, cx: pcx } = await threePins(390);
+  expect(pv.view).toBe("pinned");
+  frame(pv, pcx); // the rows the list drew
+  const a = walkedSlots(pv);
+  expect(pv.pinButtonRows(pv.rows(), a.slots).length).toBeGreaterThan(0);
+  expect(a.n.walks).toBe(1);
+  // A long Chat, a list taller than its box or not: no buttons, and no walk over its rows.
+  const { v, cx } = await pinPane("--extra", "400");
+  expect(v.view).toBe("all");
+  expect(v.rows().length).toBeGreaterThan(400);
+  for (const listH of [700, 1e9]) {
+    v.listH = listH;
+    const b = walkedSlots(v);
+    expect(v.pinButtonRows(v.rows(), b.slots)).toEqual([]);
+    expect(b.n.walks).toBe(0);
+    expect(unpinLayer(v, cx).has).toBe(false);
+  }
+  // Back from the Pinned view in the same pane, the same.
+  pv.key(keyEv("v"), pcx);
+  expect(pv.view).toBe("all");
+  const c = walkedSlots(pv);
+  expect(pv.pinButtonRows(pv.rows(), c.slots)).toEqual([]);
+  expect(c.n.walks).toBe(0);
+});
+
 // The pointer rests on a row (n), a key moves the rows under it (go), and a press with no move:
 // its press-down lands on the frame drawn after the key, then gpui (back in pointer mode)
 // repaints and the row now under the pointer gets an enter, then the release.
@@ -5006,9 +5040,10 @@ function pressAfterShift(v, cx, n, go) {
   hoverRow(v, cx, n);
   go();
   const c = frame(v, cx);
-  const h = ownOf(c, `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
   downButton(cx, n, c);
   hoverRow(v, cx, n, true, frame(v, cx));
+  // The release lands on the frame gpui draws after that enter.
+  const h = ownOf(frame(v, cx), `th-unpin-${n}`).find((e) => e[0] === "on_click")?.at(-1);
   let stopped = 0;
   h({ position: { x: 0, y: 0 }, click_count: 1 }, { ...cx, stop_propagation() { stopped++; } });
   return stopped;
