@@ -330,26 +330,32 @@ test("timeline view: a selection change and a press reuse the placed turns and t
 test("timeline view: every turn number and tick the model gives is drawn, not the first 80, and the fail marks are one layer across the whole strip", async () => {
   const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 2600);
   shownFrame(b, cb);
-  // 400 made-up turns, each with a failed call, in the layout's shape.
-  const heads = [];
-  for (let i = 0; i < 400; i++) {
+  // n made-up turns, each with a failed call, in the layout's shape.
+  const made = (n) => Array.from({ length: n }, (_, i) => {
     const key = `0:${i}`;
-    heads.push({
+    return {
       kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
       cnt: { steps: 2, input: 0, model: 0, tools: 2, failed: 1, user: 0, agent: 0 },
       stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true }],
       tl: [1000, 5000, 0, 6000, 9000, 4],
-    });
-  }
-  H.rec = [];
-  b.timelineView(theme, { totals: { heads }, partial: false }, [], -1, trajInks(theme, true));
-  const c = H.rec;
-  H.rec = null;
-  const T = b.tlModel.L;
+    };
+  });
+  const view = (heads) => {
+    H.rec = [];
+    b.timelineView(theme, { totals: { heads }, partial: false }, [], -1, trajInks(theme, true));
+    const c = H.rec;
+    H.rec = null;
+    return c;
+  };
+  // 85 turns on a 2,530 px strip: each over 24 px wide, so each has its number.
+  let c = view(made(85));
+  let T = b.tlModel.L;
   expect(T.labels.length).toBeGreaterThan(80);
-  const labels = words(own(c, "th-tl-labels"));
-  expect(labels.length).toBe(T.labels.length);
+  expect(words(own(c, "th-tl-labels")).length).toBe(T.labels.length);
   expect(words(own(c, "th-tl-ticks")).length).toBe(T.ticks.length);
+  // 400: a fail mark for nearly every turn, more than 120.
+  c = view(made(400));
+  T = b.tlModel.L;
   expect(T.fails.length).toBeGreaterThan(120);
   // One layer: in Herdr one painted path; here its divs, which reach the last mark.
   const fails = own(c, "th-tl-fails");
