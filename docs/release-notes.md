@@ -4,7 +4,7 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 
 ## 1.2.0
 
-Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The Chat, the Trajectory and the Pinned column dragging and resizing together need Herdr 0.1.16 or 0.1.17; on Herdr 0.1.18, and any other version, they keep the sizes and drags they had in 1.1.0.
+Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The Chat, the Trajectory and the Pinned column dragging and resizing together need Herdr 0.1.16 to 0.1.18; on any other version they keep the sizes and drags they had in 1.1.0.
 
 ### What you will notice first
 
@@ -48,7 +48,7 @@ Open a large session at its end in seconds, see the Trajectory in a pane of its 
 
 ### Panes and widths
 
-The second item below needs Herdr 0.1.16 or 0.1.17. On Herdr 0.1.18, and any other version, those panes keep the sizes and drags they had in 1.1.0.
+The second item below needs Herdr 0.1.16 to 0.1.18. On any other version, those panes keep the sizes and drags they had in 1.1.0.
 
 - Drag the edge of the Threads pane you want to move. Before, a drag of one edge moved the other as well and resized the terminals on the far side.
 - With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` make the pane to the right of the Chat narrower or wider: the Trajectory if it is open, else the Pinned column.
@@ -76,7 +76,6 @@ The second item below needs Herdr 0.1.16 or 0.1.17. On Herdr 0.1.18, and any oth
 ### Known limits
 
 - A search on a very long session can be slow. A fix is in review.
-- On Herdr 0.1.18 the Chat, the Trajectory and the Pinned column do not yet size and drag together by weights. A fix is in review.
 
 ## 1.1.0
 
