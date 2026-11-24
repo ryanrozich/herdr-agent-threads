@@ -88,6 +88,13 @@ const label = (e) => `${e.modifiers.shift ? "shift-" : ""}${e.key}`;
 // What a key that goes on to keyAction counts (the first walk's rows).
 const onward = (v, e) => { const n = keyAction(e, v.filtering, v.quoteKey); return n ? ACTIONS[n] ?? `no row for ${n}` : 0; };
 const BEFORE = {
+  // The plain list, nothing open: every key goes through key() to keyAction, so a key key()
+  // takes on its own in the list only is walked too.
+  list: {
+    enter: () => {},
+    check: (v) => !v.traj && !v.settingsOpen && !v.keysOpen && !v.filtering && !v.fieldFocused && v.view !== "pinned" && !v.outlined(),
+    want: (v, e) => onward(v, e),
+  },
   // The Trajectory in this pane (y in a Chat under its split width).
   trajectory: {
     enter: (v, cx) => { v.paneW = 400; v.width = 400; v.action("trajectory", cx); v.tdetail = false; },
@@ -112,7 +119,7 @@ const BEFORE = {
     want: (_v, e) => (ringKey(e, false) ? RING[ringKey(e, false)] : 0),
   },
 };
-test("every key key() takes ahead of keyAction counts as its row says: the Trajectory's, the settings card's ring and scroll, a field's", async () => {
+test("every key key() takes ahead of keyAction counts as its row says: the plain list's, the Trajectory's, the settings card's ring and scroll, a field's", async () => {
   const got = {};
   const wanted = {};
   const states = [];
@@ -123,6 +130,9 @@ test("every key key() takes ahead of keyAction counts as its row says: the Traje
       for (let k = 0; k < 4 && (v.keysOpen || v.settingsOpen || v.filtering || v.query) && v.action("escape", cx); k++);
       v.fieldFocused = null;
       if (v.traj) v.leaveTraj();
+      if (v.outlined()) v.action("outline:off", cx);
+      if (v.view === "pinned") v.action("pinned", cx);
+      v.choosing = false;
       v.sel = v.sel ?? v.turnKeys(v.rows()).at(-1);
       s.enter(v, cx);
       v.render(cx);
@@ -353,6 +363,24 @@ function code(src) {
 }
 // Whether this source calls readerMoved (in its code, not its comments).
 const callsReaderMoved = (src) => /\breaderMoved\s*\(/.test(code(src));
+// A regex literal: after an operator, a bracket or return, a slash that opens no comment, up
+// to the slash that closes it. The comment strip above reads a regex ending in an escaped
+// slash as a comment (the rest of the line, a call too, dropped), and a quote in one as the
+// start of a string. So the regex literals in the bodies the check reads are listed here, and
+// none holds a slash, a quote, a backtick or a star: a new one fails until it is looked at and
+// listed. A false match (a string with such a slash in it) fails too, the safe way round.
+const REGEX_AT = /(?:^|[(,=:[!&|?{};]|\breturn)\s*(\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[dgimsuyv]*)/gm;
+const regexes = (src) => [...src.matchAll(REGEX_AT)].map((m) => m[1]);
+const KNOWN_REGEXES = { bodyNow: ["/ or ([^ ]+)$/"] };
+test("the bodies the source check reads hold only the regex literals listed, none the strip could misread", () => {
+  // The pattern itself: the reader's case and a quote in a class are found; a division and a
+  // comment are not.
+  const cases = ["if (/^https?:\\/\\//.test(u)) this.readerMoved();", "const a = b / 2; // half", "x = y / z / 3;", "return /[\"']/.test(s);"].map((c) => regexes(c).length);
+  expect(cases).toEqual([1, 0, 0, 1]);
+  const found = Object.fromEntries(PANE.map((n) => [n, regexes(body(n) ?? "")]).filter(([, r]) => r.length));
+  expect(found).toEqual(KNOWN_REGEXES);
+  expect(Object.values(found).flat().filter((r) => /[\\/'"`*]/.test(r.slice(1, r.lastIndexOf("/"))))).toEqual([]);
+});
 test("no scroll the pane makes itself counts as the reader's", () => {
   const found = Object.fromEntries(PANE.map((n) => [n, body(n) == null ? "missing" : callsReaderMoved(body(n)) ? "counts" : "no"]));
   expect(found).toEqual(Object.fromEntries(PANE.map((n) => [n, "no"])));
