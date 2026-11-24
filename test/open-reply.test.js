@@ -5,7 +5,7 @@ import { test, expect } from "bun:test";
 import { segments } from "../mods/agent-threads/core/turns.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { draw, dropTimers, fixture, pane, root, settleRows, setup } from "./render-harness.js";
+import { draw, dropTimers, fixture, frame, pane, root, settleRows, setup } from "./render-harness.js";
 
 setup();
 
@@ -289,6 +289,29 @@ test("a light draw sizes no part longer than MD_MAX: with one 200,000-character 
   const lit = r.frames.filter((_, i) => seen[i]);
   costLog("one 200,000-character word, the light draws at 2x", { ...r, lit: lit.length });
   expect([r.frames[0].ok, lit.length > 0, lit.filter((f) => !f.ok).length, Math.max(...lit.map((f) => f.ms)) < 25, r.stops <= 7]).toEqual([false, true, 0, true, true]);
+}, 60000);
+
+// A part longer than 4,000 characters is a run with no space or line break (a word longer than
+// MD_MAX), past what Herdr draws as one Markdown view, and at twice the price its height alone
+// ran past Herdr's time in every full draw that sized it, for good. It shows as plain text: its
+// first 4,000 characters under a dim line saying so, at a height counted from its length, with
+// no link rules on it. c copies all of it.
+test("a reply of one 200,000-character word shows its start as plain text under a line saying so, draws in time at the price and twice it, and c copies all of it", async () => {
+  const word = "z".repeat(200000);
+  for (const scale of PRICE_SCALES) {
+    const { v, cx, key } = await openLong(word);
+    v.probeDue = function () { this.probeLeft = 0; return []; };
+    const part = () => v.baseRows.find((x) => x.key.startsWith(`md:${key}:`));
+    const r = costedFrames(v, cx, 400, () => Boolean(v.rowsKey && !v.rowJob && part() && !v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`))), { scale });
+    costLog(`one 200,000-character word, at ${scale}x`, r);
+    expect([scale, r.stops, r.settled > 0, part()?.kind, part()?.shown?.length]).toEqual([scale, 0, true, "mdlong", 4000]);
+    const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    expect([text.includes("This part is 200,000 characters with no space; only its start is shown. Copy (c) copies all of it."), text.includes(word.slice(0, 4000)), text.some((x) => x.length > 4000)]).toEqual([true, true, false]);
+    // c, on the selected turn.
+    v.sel = key;
+    cx.clip = null;
+    expect([v.action("copy", cx), cx.clip === word]).toEqual([true, true]);
+  }
 }, 60000);
 
 // Stopped inside the rebuild the shape timer asked for (againOpen), as it builds the card: the
