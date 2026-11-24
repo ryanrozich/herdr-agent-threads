@@ -1297,13 +1297,15 @@ test("an older step whose slice ends before it reaches a match stays, and the ne
 // The 2,400-turn tail above, with "zebra" in its 800th turn and its last, the last selected and
 // a turn come in, so the tail is checked again from its start: the pane, the keys, and the
 // last match's and the nearest older match's keys.
-async function zebraTail() {
+// With also, "zebra" in those tail turns too; with queuedFrom, the tail's turns from that one on
+// are prompts left queued, with no reply and no end (open).
+async function zebraTail({ also = [], queuedFrom = Infinity } = {}) {
   const { v, cx, s } = await longPane(5600);
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
   const base = s.turns.length;
   for (let i = 0; i < 2400; i++) {
-    T.apply(s, { k: "p", o: "human", t: i === 800 || i === 2399 ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
-    T.apply(s, { k: "d", ms: 1000, ts });
+    T.apply(s, { k: "p", o: "human", t: i === 800 || i === 2399 || also.includes(i) ? `Tail ${i}: the zebra list.` : `Tail ${i}: nothing here.`, ts });
+    if (i < queuedFrom) T.apply(s, { k: "d", ms: 1000, ts });
   }
   settleRows(v, cx);
   const last = `0:${base + 2400}`;
@@ -1330,14 +1332,20 @@ test("an older step whose slice ends before it reaches a match goes on by itself
     zebraSearch(z);
     v.action("olderMatch", cx);
     r.stayed = v.sel === last;
+    // While the step is kept, a draw goes on with it in place of the scan's slice: the scan's
+    // place (cur, and the tail's next turn) is where it was.
+    r.scanStill = true;
     for (let k = 0; k < 40 && v.sel === last; k++) {
+      const h = v.hitsNow();
+      const at = JSON.stringify([h.cur.si, h.cur.ti, h.cur.tail?.next ?? null]);
       const d = drawOnce(v, cx);
+      if (v.sel === last && JSON.stringify([h.cur.si, h.cur.ti, h.cur.tail?.next ?? null]) !== at) r.scanStill = false;
       r.draws++;
       if (d.stopped) r.stops++;
       if (d.ms > LIMIT) r.inTime = false;
     }
   }); } finally { X = 1; }
-  expect({ stayed: r.stayed, landed: v.sel, stops: r.stops, inTime: r.inTime }).toEqual({ stayed: true, landed: z.nearest, stops: 0, inTime: true });
+  expect({ stayed: r.stayed, landed: v.sel, stops: r.stops, inTime: r.inTime, scanStill: r.scanStill }).toEqual({ stayed: true, landed: z.nearest, stops: 0, inTime: true, scanStill: true });
   expect(r.draws).toBeGreaterThan(0);
 }, 300000);
 
@@ -1367,8 +1375,10 @@ test("a draw going on with an older step, stopped inside the step's slice, leave
 // leave the selection where that put it. The pin is taken off pins.json after, so no later
 // test opens with it: once the pane's save chain has written it (pinChain, promises only, no
 // clock), with no later save waiting (pinDueAt).
+// The new selection is another match, the one the step was going to, with an older match
+// below it (tail turn 400): a step that went on from it would move on to that one.
 for (const how of ["a key", "a new selection"]) test(`an older step going on by itself is called off by ${how}, and the draws after it leave the selection there`, async () => {
-  const z = await zebraTail();
+  const z = await zebraTail({ also: [400] });
   const { v, cx, base, last } = z;
   const r = {};
   X = 2;
@@ -1377,7 +1387,7 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
     v.action("olderMatch", cx);
     r.stayed = v.sel === last;
     if (how === "a key") v.action("pin", cx);
-    else v.sel = `0:${base + 1200}`;
+    else v.sel = z.nearest;
     r.sel = v.sel;
     for (let k = 0; k < 40; k++) drawOnce(v, cx);
   }); } finally { X = 1; }
@@ -1385,7 +1395,145 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
   expect({ written: (recordFiles[PINS] ?? "").includes("the zebra list"), later: v.pinDueAt ?? null }).toEqual({ written: how === "a key", later: null });
   delete recordFiles[PINS];
   expect({ stayed: r.stayed, sel: v.sel }).toEqual({ stayed: true, sel: r.sel });
-  expect(r.sel).toBe(how === "a key" ? last : `0:${base + 1200}`);
+  expect(r.sel).toBe(how === "a key" ? last : `0:${base + 801}`);
+  expect(direct(v, "zebra")).toContain(`0:${base + 401}`);
+}, 300000);
+
+// An older step going on by itself while the newest session changes before every draw, each
+// time by a turn done with no reply: every turn the step's check back passed was closed, so
+// that check goes on from where it got to, and the step lands.
+test("an older step going on by itself lands on the nearest older match while a turn comes in before every draw", async () => {
+  const z = await zebraTail();
+  const { v, cx, s, ts, last } = z;
+  const r = { draws: 0 };
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    for (let k = 0; k < 40 && v.sel === last; k++) {
+      T.apply(s, { k: "p", o: "human", t: `More ${k}: nothing here.`, ts });
+      T.apply(s, { k: "d", ms: 1000, ts });
+      drawOnce(v, cx);
+      r.draws++;
+    }
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, landed: v.sel }).toEqual({ stayed: true, landed: z.nearest });
+  expect(r.draws).toBeLessThan(10);
+}, 300000);
+
+// An older step going on by itself back through queued turns (open, with no reply), then a
+// reply that ends them all with a match: each of them matches now, so the step's check back
+// starts again from the selection and lands on the newest of them, not on one past where it
+// had got to.
+test("an older step going on by itself back through queued turns lands on the newest of them once a reply answers them with a match", async () => {
+  const z = await zebraTail({ queuedFrom: 1000 });
+  const { v, cx, s, ts, base, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    v.action("search:zebra", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.sel = last;
+    T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
+    v.hitsNow();
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    drawOnce(v, cx);
+    const h = v.hitsNow();
+    r.passed = h.back?.key === last && h.back.ti < base + 2398;
+    r.kept = v.sel === last;
+    T.apply(s, { k: "t", t: "The zebra list is in every one of them." });
+    T.apply(s, { k: "d", ms: 1000, ts });
+    for (let k = 0; k < 40 && v.sel === last; k++) drawOnce(v, cx);
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, passed: r.passed, kept: r.kept, landed: v.sel }).toEqual({ stayed: true, passed: true, kept: true, landed: `0:${base + 2399}` });
+  expect(direct(v, "zebra")).toContain(`0:${base + 2399}`);
+}, 300000);
+
+// A step that cannot land while the session keeps changing: queued turns back from the
+// selection, and one more queued before every draw, so the step's check back starts again from
+// the selection each time and never gets far enough. After STEP_DRAWS (100) draws going on
+// with it, it is dropped, and the field says there is no older match, as the step's own
+// button does; the next key takes the words away.
+test("a step going on by itself that has not landed within 100 draws is dropped, and the field says there is no older match", async () => {
+  const z = await zebraTail({ queuedFrom: 1000 });
+  const { v, cx, s, ts, last } = z;
+  const r = { draws: 0 };
+  X = 2;
+  try { priced(v, () => {
+    v.action("search:zebra", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.sel = last;
+    T.apply(s, { k: "p", o: "human", t: "One more: nothing here.", ts });
+    v.hitsNow();
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    for (let k = 0; k < 140 && v.hitsNow().step; k++) {
+      T.apply(s, { k: "p", o: "human", t: `Queued ${k}: nothing here.`, ts });
+      drawOnce(v, cx);
+      r.draws++;
+    }
+    r.step = v.hitsNow().step ?? null;
+    r.field = fieldText(v);
+    v.action("pin", cx);
+    v.action("pin", cx);
+    r.after = fieldText(v);
+  }); } finally { X = 1; }
+  await v.pinChain;
+  delete recordFiles[PINS];
+  expect({ stayed: r.stayed, draws: r.draws, step: r.step, sel: v.sel, field: r.field }).toEqual({ stayed: true, draws: 100, step: null, sel: last, field: "No older match" });
+  expect(r.after).not.toBe("No older match");
+}, 300000);
+
+// A draw going on with a step that runs scan slices itself (an older step past the oldest
+// match found, while the first count goes on): the draw's scan time is the outer call's, once,
+// not the outer call's and its inner slice's again.
+test("a draw going on with a step counts the scan's time once", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = { seen: 0, same: true };
+  X = 2;
+  try { priced(v, () => {
+    v.sel = last;
+    v.action("search:zebra", cx);
+    v.action("olderMatch", cx);
+    const ss = v.scanStep;
+    let outer = 0;
+    v.scanStep = function (c) { if (!c) return ss.call(this, c); const t0 = performance.now(); try { return ss.call(this, c); } finally { outer = performance.now() - t0; } };
+    for (let k = 0; k < 40 && v.hitsNow().step; k++) {
+      outer = 0;
+      drawOnce(v, cx);
+      if (!outer) continue;
+      r.seen++;
+      if (Math.abs((v.scanSpent ?? 0) - outer) > 1e-6) r.same = false;
+    }
+    v.scanStep = ss;
+  }); } finally { X = 1; }
+  expect(r.seen).toBeGreaterThan(0);
+  expect(r.same).toBe(true);
+}, 300000);
+
+// A new session (after a clear or a restart) is a new set: a step going on by itself in the
+// old one is dropped, with no words in the field, and the selection stays where it is.
+test("an older step going on by itself is dropped with no words when a new session starts", async () => {
+  const z = await zebraTail();
+  const { v, cx, last } = z;
+  const r = {};
+  X = 2;
+  try { priced(v, () => {
+    zebraSearch(z);
+    v.action("olderMatch", cx);
+    r.stayed = v.sel === last;
+    const n = T.newSession("00000000-0000-4000-8000-00000000000c", v.current().file);
+    T.apply(n, { k: "p", o: "human", t: "A new session: nothing here.", ts: z.ts });
+    v.sessions = [...v.sessions, n];
+    for (let k = 0; k < 40; k++) drawOnce(v, cx);
+    r.step = v.hitsNow().step ?? null;
+    r.field = fieldText(v);
+  }); } finally { X = 1; }
+  expect({ stayed: r.stayed, sel: v.sel, step: r.step }).toEqual({ stayed: true, sel: last, step: null });
+  expect(r.field).not.toMatch(/No (older|newer) match/);
 }, 300000);
 
 // An older step going on by itself, and turns coming in that take the tail past the cap, so
