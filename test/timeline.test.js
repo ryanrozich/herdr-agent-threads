@@ -1301,3 +1301,26 @@ test("timeline failure marks: every failed bar has a mark within 6 px of its cen
   expect(marks(b)).toEqual([12, 50]);
 });
 
+test("timeline press: a running call's growing bar is drawn over every other bar, so a press on it gets that call, over a failed one under it", () => {
+  // A running turn: a failed Read from 2 to 40 s, full height, and a Bash started at 10 s
+  // with no result yet, on the half track, its bar growing to now (50 s in). The growing bars
+  // are drawn last, over the lanes' spans.
+  const h = head(turn(1, [[["Read", "a", 2000, 40000, true]], [["Bash", "x", 10000, null]]], { done: false, end: null, reply: null }), true);
+  const now = h.t0 + 50000;
+  const L = timelineLayout([h], 1200, "clock", now);
+  const bash = stepsOf(h).find((it) => it.open);
+  const read = stepsOf(h).find((it) => it.failed);
+  expect([bash.track, L.grow.length]).toEqual([1, 1]);
+  const t = L.turns[0];
+  const at = (ms) => t.x + (ms / L.geo.walls[0]) * t.w;
+  const g = tlGrow(L, now)[0];
+  expect(g.x0).toBeLessThan(at(15000));
+  expect(g.x1).toBeGreaterThan(at(15000));
+  expect(timelineHit(L, [h], at(15000), "tools", now).key).toBe(bash.key);
+  // With the y inside the lane: on the half track (8 to 14 px down), the Bash; above it (2 to
+  // 8 px), only the Read is drawn there.
+  expect(timelineHit(L, [h], at(15000), "tools", now, 10).key).toBe(bash.key);
+  expect(timelineHit(L, [h], at(15000), "tools", now, 4).key).toBe(read.key);
+  // Before the Bash started, only the Read is under the press.
+  expect(timelineHit(L, [h], at(5000), "tools", now).key).toBe(read.key);
+});
