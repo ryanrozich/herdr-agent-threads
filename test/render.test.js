@@ -3161,6 +3161,11 @@ test("V3b: the first-frame estimate is never under the reading-line reference, a
   v.open = new Set(v.current().turns.map((t) => `0:${t.n}`));
   for (const w of [240, 380, 640]) {
     v.forcedWidth = w; v.width = w; v.meas = new Map();
+    // Every row built first: the build is cut into slices by the clock, and rows() outside a
+    // draw takes no further slice, so on a busy machine it listed only some of them. The draws
+    // measure nothing: the estimates are still the first frame's.
+    settleRows(v, cx);
+    expect(v.meas.size).toBe(0);
     let n = 0;
     for (const r of v.rows().filter((x) => x.kind === "md")) {
       const blocks = r.src.split(/\n{2,}/);
