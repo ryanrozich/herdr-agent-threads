@@ -641,7 +641,7 @@ function restaleRow(v, turn) {
   v.reshapeDue = true;
 }
 const STOP = new Error("stopped at 50 ms");
-async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false, each = null } = {}) {
+async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false, each = null, plain = null } = {}) {
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -719,7 +719,8 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       const r = lastList?.range;
       drawn = new Set(r ? v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean) : []);
       stopped = false;
-      try { frame(v, cx); } catch (e) { if (e !== STOP) throw e; stopped = true; }
+      // plain: an error a test throws in a draw, caught as Herdr shows one (the draw left open).
+      try { frame(v, cx); } catch (e) { if (plain && e === plain) { H.rec = null; return starts; } if (e !== STOP) throw e; stopped = true; }
       if (past(v)) stopped = true;
       if (stopped) { v.renderOpen = true; H.rec = null; }
       return starts;
@@ -1138,6 +1139,45 @@ test("the opening: a row the walk refuses for the time spent is owed, and runs a
   expect(runs[0][1]).toBe(true);
   expect(runs[0][0] - madeAt).toBeLessThanOrEqual(3);
   expect(frames[runs[0][0]].starts[0]).toBe(0);
+}, 300000);
+
+// A plain error thrown in an owed row's run alone (payOwed, with owedRun set): in the 44/8 cell
+// the row due at 64 throws there. The draw is left open, so the 5 s of plain draws follow, and
+// the next render starts with no owed run. The row's text then changes and the draws turn light
+// (2 ms of work): it is shaped in the walk like any row, not alone, and no owed run is counted
+// for it (owedAlone). An owed run left from the throw would run it alone, and count it.
+test("the opening: after a plain error in an owed row's run alone, the next render has no owed run: the row, with new text, is shaped like any row", async () => {
+  const BOOM = new Error("a made-up failure in a reshape");
+  let turn = null;
+  let light = false;
+  let cur = -1;
+  let owed = -1;
+  let changed = -1;
+  const runs = [];
+  await costlyWheel(8, () => (light ? 2 : 44), 600, (v, cx, host) => {
+    wheelUp(v, cx, host);
+    const reshape = v.reshape;
+    v.reshape = function (...a) {
+      if (this.renderOpen && !turn && this.unitAlone && this.owedRun) { turn = a[0]; owed = this.owedAlone; throw BOOM; }
+      if (this.renderOpen && a[0] === turn) runs.push([cur, Boolean(this.unitAlone)]);
+      return reshape.apply(this, a);
+    };
+  }, {
+    stop: true, after: 2, plain: BOOM, each: (v, k) => {
+      cur = k;
+      if (turn && changed < 0) {
+        changed = k;
+        expect(turn.shapeMark?.alone).toBe(true);
+        turn.prompt = `${turn.prompt} zerb quil`;
+        light = true;
+      }
+      if (changed >= 0 && k === changed + 1) expect(v.owedRun ?? null).toBeNull();
+      if (k === 599) expect([turn.shapeKey != null, v.owedAlone]).toEqual([true, owed]);
+    },
+  });
+  expect(changed).toBeGreaterThan(60);
+  expect(runs.length).toBeGreaterThan(0);
+  expect(runs.filter(([, alone]) => alone)).toEqual([]);
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
@@ -1629,42 +1669,6 @@ test("shaping: a plain error thrown inside a turn's run alone shows once, and th
     p.restale(big, 20);
     for (let k = 0; k < 600; k++) step();
     expect([runs, thrown]).toEqual([2, 2]);
-  } finally { p.end(); }
-}, 300000);
-
-// A plain error thrown in an owed row's run alone (payOwed, with owedRun set): the draw throws,
-// and the next render starts with no owed run, so the turn is not taken for one. Its text then
-// changes, and with the draws light again it is shaped in the walk like any row, not alone, and
-// no owed run is counted for it (owedAlone).
-test("shaping: after a plain error in an owed row's run alone, the next draw has no owed run: the turn, with new text, is shaped like any row", async () => {
-  const p = await pricedDrain();
-  try {
-    const big = p.turns.at(-3);
-    p.begin();
-    // 30 ms ahead of the owed row in every draw, the last draw's cost (frameBase) one of these
-    // before the turn is made about 12 ms: it fits no such draw (30 + 12 + 10 and the margin).
-    p.setAhead(30);
-    for (let k = 0; k < 3; k++) p.step();
-    p.restale(big, 12000);
-    const BOOM = new Error("a made-up failure in a reshape");
-    let thrown = 0;
-    const alone = [];
-    const reshape = p.v.reshape;
-    p.v.reshape = function (...a) {
-      if (a[0] === big && this.renderOpen) {
-        alone.push(Boolean(this.unitAlone));
-        if (!thrown && this.unitAlone && this.owedRun === big) { thrown++; throw BOOM; }
-      }
-      return reshape.apply(this, a);
-    };
-    const step = () => { try { p.step(); } catch (e) { if (e !== BOOM) throw e; H.rec = null; } };
-    for (let k = 0; k < 600 && !thrown; k++) step();
-    const owed = p.v.owedAlone;
-    expect([thrown, owed > 0, alone]).toEqual([1, true, [true]]);
-    p.setAhead(0);
-    p.restale(big, 20);
-    for (let k = 0; k < 600 && big.shapeKey == null; k++) step();
-    expect([big.shapeKey != null, alone, p.v.owedAlone]).toEqual([true, [true, false], owed]);
   } finally { p.end(); }
 }, 300000);
 
