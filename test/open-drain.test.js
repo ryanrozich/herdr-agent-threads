@@ -6,7 +6,7 @@ import { test, expect, setSystemTime } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drawnText, frame, H, lastList, openingPane, settle, setup, state } from "./render-harness.js";
+import { drawnText, frame, H, lastList, openingPane, settle, setup, simList, state } from "./render-harness.js";
 
 setup();
 
@@ -195,10 +195,18 @@ test("the opening: once the list shows, it stays at its end while the rows above
     for (let k = 0; v.openActive() && k < 400; k++) step();
     expect(v.openActive()).toBe(false);
     expect(v.staleRows.length).toBeGreaterThan(400);
+    // From here the rows drawn follow the list's offset and the rows' current heights (simList),
+    // and the end scrolls asked for are counted, so a frame that does not ask for the end, or
+    // asks against old heights, leaves the view off the end. It starts at the end, as shown.
+    v.listH = 600;
+    const sim = simList(v);
+    sim.off = Number.POSITIVE_INFINITY;
     // The list keeps its offset in px, so a row above the view that changes height moves what
     // is on screen unless the same frame asks for the end again.
     const above = () => v.slotsMemo.slice(0, v.viewRange[0]).reduce((x, y) => x + y, 0);
+    const room = () => Math.max(0, lastList.sizes.reduce((x, y) => x + y, 0) - v.listH);
     const sel = v.sel;
+    step();
     // A turn far above the view, shaped, whose reply block the probe then measures taller.
     const far = v.baseRows.findIndex((r, i) => i < v.nearSpan()[0] - 200 && r.kind === "turn" && r.shape?.md != null && !r.shape.blank);
     expect(far).toBeGreaterThanOrEqual(0);
@@ -212,19 +220,23 @@ test("the opening: once the list shows, it stays at its end while the rows above
         v.probed(part.key, v.partSig(part), { height: (h0 + 600) * v.zoom() }, cx);
         grew = v.baseSizes[far] > h0;
       }
-      const x = step();
+      const asks = sim.asks;
+      step();
       const now = above();
-      frames.push({ grew, moved: now !== was, end: x.end, bottom: v.bottomShown, follow: v.follow, sel: v.sel });
+      // The view the offset gives: its last row the list's last, and the offset the most the
+      // list's current heights allow.
+      frames.push({ grew, moved: now !== was, end: sim.asks > asks, atEnd: v.viewRange[1] === lastList.keys.length && Math.abs(sim.off - room()) < 1e-6, bottom: v.bottomShown, follow: v.follow, sel: v.sel });
       was = now;
     }
     expect(v.staleRows).toEqual([]);
     expect(frames[5].grew).toBe(true);
     expect(frames[5].moved).toBe(true);
     // Heights above the view changed in most frames (each row reshaped there), and in every
-    // frame the end was asked for in that frame, the reader still following, the end on screen
-    // and the selection where it was.
+    // frame the end was asked for in that frame, the view is at the end the offset gives, the
+    // end is on screen, the reader still following and the selection where it was; the frame
+    // of the taller measure too.
     expect(frames.filter((f) => f.moved).length).toBeGreaterThan(frames.length / 2);
-    for (const f of frames) expect([f.end, f.bottom, f.follow, f.sel]).toEqual([true, true, true, sel]);
+    for (const f of frames) expect([f.end, f.atEnd, f.bottom, f.follow, f.sel]).toEqual([true, true, true, true, sel]);
   } finally { H.listWindow = null; }
 }, 30000);
 
