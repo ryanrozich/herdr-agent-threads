@@ -981,8 +981,8 @@ test("the opening: a row the line refused is reshaped first next frame only whil
 // work is done (what it set is kept), and the render is left open. restale(turn, chars) makes
 // a turn chars longer and leaves its row to reshape; step() gives the frame's reshapes, in
 // order ({ turn, at, cost }), and whether it was stopped.
-async function pricedDrain({ n = 120, rate = 0.001, after: afterMs = 10 } = {}) {
-  let after = afterMs;
+async function pricedDrain({ n = 120, rate = 0.001, after = 10 } = {}) {
+  let build = 0;
   const realPerf = performance.now.bind(performance);
   let clock = 0;
   performance.now = () => (clock += 0.001);
@@ -1000,6 +1000,13 @@ async function pricedDrain({ n = 120, rate = 0.001, after: afterMs = 10 } = {}) 
     clock += cost;
     if (on && this.renderOpen && clock - this.renderAt > 50) throw STOP;
     return reshape.apply(this, a);
+  };
+  // A rows build this draw (build ms, once), as a new chunk read makes: building time, which
+  // the draw's fixed cost (frameBase) leaves out.
+  const rows = v.rows;
+  v.rows = function (...a) {
+    if (on && build && this.renderOpen) { clock += build; this.buildSpent = (this.buildSpent ?? 0) + build; build = 0; }
+    return rows.apply(this, a);
   };
   const draw = v.frame;
   v.frame = function (...a) {
@@ -1030,11 +1037,13 @@ async function pricedDrain({ n = 120, rate = 0.001, after: afterMs = 10 } = {}) 
     // As a rebuild that leaves rows to reshape asks for the walk.
     v.reshapeDue = true;
   };
-  const begin = () => { on = true; v.shapeRate = rate; };
+  // Priced from here, with one draw on the priced clock first so the draw's fixed cost
+  // (frameBase, the last draw's) is known.
+  const begin = () => { on = true; v.shapeRate = rate; step(); };
   const end = () => { performance.now = realPerf; };
   // A new chunk of the session read (its version), as an agent writing its reply makes.
   const grow = () => { v.sessions[0].version++; };
-  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setAfter: (x) => { after = x; } };
+  return { v, cx, step, turns: v.sessions[0].turns, restale, begin, end, grow, setBuild: (x) => { build = x; } };
 }
 // Frames until nothing is left to reshape and the light frames after a stop are over.
 function untilDone(v, step, max = 900) {
@@ -1068,30 +1077,27 @@ test("shaping: a turn that can never fit runs alone as its draw's first unit, pa
   } finally { p.end(); }
 }, 120000);
 
-// A turn of 30 ms fits an empty draw (30 + 10 + 3 within 50) but not the draw it met, one whose
-// work after its rows was 25 ms the time before (frameBase): it is refused, owed, and reshaped
-// first in the next draw, ahead of a turn made stale in between, with no stop.
+// A turn of 30 ms fits an empty draw (30 + 10 + 3 within 50) but not the draw it met, one that
+// built rows for 25 ms first: refused, owed, and reshaped first in the next draw, ahead of a
+// newer turn made stale in between that the walk would take first, with no stop.
 test("shaping: a turn that fits an empty draw but not the one it met is reshaped first in the next, with no stop", async () => {
   const p = await pricedDrain();
   try {
     const t30 = p.turns.at(-3);
-    const newer = p.turns.at(-1);
     const later = p.turns.at(-2);
     const at = (f) => f.log.map((x) => p.turns.indexOf(x.turn));
     p.begin();
-    p.setAfter(25);
-    p.step();
-    p.setAfter(10);
     p.restale(t30, 30000);
-    p.restale(newer);
+    p.setBuild(25);
     const f1 = p.step();
-    expect(at(f1)).toEqual([p.turns.indexOf(newer)]);
+    expect([at(f1), f1.stopped, p.v.staleRows.length]).toEqual([[], false, 1]);
     p.restale(later);
     const f2 = p.step();
     expect(at(f2)[0]).toBe(p.turns.indexOf(t30));
     const frames = [f1, f2, ...untilDone(p.v, p.step)];
     expect(frames.filter((f) => f.stopped).length).toBe(0);
     expect(frames.flatMap((f) => f.log).filter((x) => x.turn === t30).length).toBe(1);
+    expect(frames.some((f) => f.log.some((x) => x.turn === later))).toBe(true);
     expect(p.v.staleRows.length).toBe(0);
   } finally { p.end(); }
 }, 120000);

@@ -4799,22 +4799,17 @@ export default class Threads extends View {
       && f.int === Boolean(turn.interrupted) && f.by === turn.answeredBy && f.inn === turn.answeredIn && f.img === (turn.images?.length ?? 0) && f.ag === Boolean(turn.agent) && f.sv === this.sendersVer) return turn.shapeMemo;
     // Out of time and never shaped: no key to build (3 µs a turn, 30 ms a draw with 6,000 rows
     // waiting after renders were stopped through a whole load).
-    if (turn.shapeKey == null && ((this.shapeSpent ?? 0) > this.shapeMax() || this.lineCut(turn, text))) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return this.blankShape(); }
+    let held = null;
+    if (turn.shapeKey == null && (held = this.shapeHeld(turn, text, live, true))) return this.shapeRefused(this.blankShape());
     const q = this.filterText();
     const P = this.prefs;
     const why = turn.interrupted ? `No reply · interrupted after ${plural(turn.tools, "tool call")}` : null;
     const key = `${Math.round(this.width)}|${P.textSize}|${this.chars()}|${P.truncate ? `${P.promptLines}|${P.replyLines}` : "all"}|${q}|${turn.prompt.length}|${text.length}|${why ? 1 : 0}|${live ? 1 : 0}|${turn.answeredBy}|${turn.answeredIn}|${turn.answeredBy && this.prefs.agentTurns ? 1 : 0}|${turn.images?.length ?? 0}|${turn.agent ? 1 : 0}|${this.sendersVer}`;
     const fast = { key, look, p: turn.prompt.length, t: text.length, live, tools: turn.tools, int: Boolean(turn.interrupted), by: turn.answeredBy, inn: turn.answeredIn, img: turn.images?.length ?? 0, ag: Boolean(turn.agent), sv: this.sendersVer };
     if (turn.shapeKey === key) { turn.shapeFast = fast; this.keepShape(turn); return turn.shapeMemo; }
-    // Out of time for this draw, or in the drain not expected to end in time (lineCut): the
-    // shape it had (a row never shaped yet, as when agent messages are turned on, a blank
-    // one-line row), and the next frame reshapes it. A turn whose shaping would take the draw
-    // past its time (shapeCost) waits too, unless it is the draw's first: one turn with a
-    // pasted 200 KB prompt took 20 to 40 ms on the rig, and on top of the draw's 12 ms it ran
-    // past Herdr's time.
-    const spent = this.shapeSpent ?? 0;
-    const cost = this.shapeCost(turn, text);
-    if (spent > this.shapeMax() || (spent > 0 && spent + cost > this.shapeMax()) || this.lineCut(turn, text)) { this.shapeLeft = (this.shapeLeft ?? 0) + 1; this.shapeStale = true; return turn.shapeMemo ?? this.blankShape(); }
+    // Held (shapeHeld): the shape it had (a row never shaped yet, as when agent messages are
+    // turned on, a blank one-line row), and a later frame reshapes it.
+    if (held === null && this.shapeHeld(turn, text, live)) return this.shapeRefused(turn.shapeMemo ?? this.blankShape());
     if (this.lineOn) this.lineFirst = false;
     const t0 = now();
     const sh = this.reshape(turn, live, q, P, why, text);
@@ -4824,6 +4819,41 @@ export default class Threads extends View {
     turn.shapeFast = fast;
     this.keepShape(turn);
     this.shapeSpent = (this.shapeSpent ?? 0) + (now() - t0);
+    this.unitsRun = (this.unitsRun ?? 0) + 1;
+    return sh;
+  }
+  // shape()'s one check: whether turn may not be shaped now.
+  // - A turn that can never fit (its expected cost with the draw's fixed cost, frameBase, and
+  //   the margin over Herdr's limit) runs only as its draw's first shaping unit, alone: nothing
+  //   else is shaped in that draw (unitAlone, counted in aloneRun). It may pass the limit
+  //   once, as one turn that size does on main; what it shaped is kept if the stop comes
+  //   after it, and no later draw shapes it again. Not in the frames after
+  //   a stopped render (shapeMax -1), and not while it runs: a running turn's reply is
+  //   reshaped at each update, and each would pass the limit, so it keeps the shape it had
+  //   until it ends. With a rate far too high every turn is one: each runs alone, a draw each,
+  //   and teaches the rate down (shapeLearn). In the drain the line holds as for any turn:
+  //   past it only a row on screen starts.
+  // - Every other turn: within the draw's shaping time (the draw's first whatever its cost; a
+  //   turn never shaped, fresh, while any is left), and in the drain expected to end in time
+  //   (lineCut, fitsHost).
+  // The rate is learned only from turns shaped.
+  shapeHeld(turn, text, live, fresh = false) {
+    if (this.unitAlone && this.renderOpen) return true;
+    const max = this.shapeMax();
+    const spent = this.shapeSpent ?? 0;
+    const est = this.hostCost(turn, text);
+    if (this.renderOpen && est != null && est + (this.frameBase ?? 0) + HOST_MARGIN_MS > HOST_MS) {
+      if ((this.unitsRun ?? 0) > 0 || spent > 0 || max < 0 || live || (!this.lineScreen && this.pastLine())) return true;
+      this.unitAlone = true;
+      this.aloneRun = (this.aloneRun ?? 0) + 1;
+      return false;
+    }
+    return spent > max || (!fresh && spent > 0 && spent + this.shapeCost(turn, text) > max) || this.lineCut(turn, text);
+  }
+  // A turn held by shapeHeld: left for a later frame.
+  shapeRefused(sh) {
+    this.shapeLeft = (this.shapeLeft ?? 0) + 1;
+    this.shapeStale = true;
     return sh;
   }
   // What shaping a turn is expected to cost, in ms: its length at the rate learned from long
@@ -4958,7 +4988,12 @@ export default class Threads extends View {
     if (!o || !this.renderOpen || o.view !== this.viewRange?.[0] || o.wheel !== (this.wheelN ?? 0) || this.scrollTo) return;
     const i = this.baseIndex?.get(o.key);
     const turn = i == null ? null : this.baseRows[i]?.turn;
-    if (!turn || !this.fitsHost(this.hostCost(turn, this.replyText(turn)))) return;
+    if (!turn) return;
+    // The same check as in the walk, from the draw's start: one that fits, or one that can
+    // never fit (shapeHeld runs it alone, the draw's first unit). An unknown cost goes ahead, as
+    // a draw's first does.
+    const est = this.hostCost(turn, this.replyText(turn));
+    if (est != null && est + (this.frameBase ?? 0) + HOST_MARGIN_MS <= HOST_MS && !this.fitsHost(est)) return;
     this.owedPaid = (this.owedPaid ?? 0) + 1;
     this.owedAt = this.renders;
     this.shape(turn);
@@ -7372,6 +7407,9 @@ export default class Threads extends View {
     // One budget a draw; while rows are built over several draws (rowJob), one for them all,
     // as before.
     if (!this.rowJob) this.shapeSpent = 0;
+    // The draw's shaping units so far, and whether one that can never fit ran (shapeHeld).
+    this.unitsRun = 0;
+    this.unitAlone = false;
     const spent = this.shapeSpent ?? 0;
     this.shapeAtRender = spent;
     this.buildSpent = 0;
