@@ -5051,15 +5051,18 @@ export default class Threads extends View {
   // selected pin draws it at rest. Another draws it while the row is hovered, which gpui works
   // out from the pointer's moves and paints with no event to the pane, so the pane asks for
   // what makes it so: the pointer's last move was over the button at the press's place, with
-  // nothing moved under it since (no new layout of the rows, no wheel). A pointer resting
-  // where the list redrew, a tap straight after the window took focus, or a row scrolled
-  // under a still pointer: the press selects the pin, and nothing is lost.
+  // nothing moved under it since (no new layout of the rows, no wheel, the list as wide). A
+  // pointer resting where the list redrew or narrowed, a tap straight after the window took
+  // focus, or a row scrolled under a still pointer: the press selects the pin, and nothing is
+  // lost.
   unpinDrawn(key) {
     const w = this.bodyW ?? this.width;
     if (!pinUnpinHit(this.pressX, w)) return false;
     if (this.sel === key) return true;
     const m = this.pinMoved;
     if (!m || m.sig !== this.pinSeenSig()) return false;
+    // The button where the press finds it is where it was at the move, and the move was on it.
+    if (Math.abs(m.w - w) > 0.5 || !pinUnpinHit(m.x, w)) return false;
     const p = this.pressAt;
     if (m.at && p) return Math.abs(m.at.x - p.x) <= 1 && Math.abs(m.at.y - p.y) <= 1;
     return Math.abs(m.x - this.pressX) <= 1;
@@ -9204,8 +9207,10 @@ export default class Threads extends View {
         if (this.covered()) return;
         const x = e.local_position?.x;
         this.mouseX = x == null ? null : x / this.zoom() - this.colLeft();
-        // Where the pointer last moved in the Pinned view, and on what layout (unpinDrawn).
-        this.pinMoved = this.view === "pinned" ? { x: this.mouseX, at: e.position ? { x: e.position.x, y: e.position.y } : null, sig: this.pinSeenSig() } : null;
+        // Where the pointer last moved in the Pinned view, on what layout and how wide a list
+        // (unpinDrawn; measured as a press measures it).
+        const bw = e.bounds?.width;
+        this.pinMoved = this.view === "pinned" ? { x: this.mouseX, at: e.position ? { x: e.position.x, y: e.position.y } : null, sig: this.pinSeenSig(), w: bw == null ? this.width : Math.min(bw / this.zoom(), this.width) } : null;
         this.notePointer(e.position, cx);
       })
       // Where the press landed, for the action bar (a list item takes one click handler,

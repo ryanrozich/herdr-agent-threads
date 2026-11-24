@@ -28,7 +28,7 @@ Some agents need a few more command-line tools. [Install in detail](docs/usage.m
 2. Move with `↑` `↓`. Press `Enter` to open a turn and read the whole reply. `Esc` closes it.
 3. Press `/` and type to search.
 4. Press `o` for the outline, one row per turn, to find an older turn fast.
-5. Press `p` to pin a turn you want to come back to. `1` to `5` take you back.
+5. Press `p` to pin a turn you want to come back to. `1` to `7` take you back.
 6. Press `q` to quote the reply into your prompt, or `c` to copy it.
 7. Press `?` to see every key.
 
@@ -126,7 +126,7 @@ Press `,` for settings, a card over the list with one page: text size, your mess
 | `→` `←` | Open or close a turn's work, a level at a time |
 | `i` | Show or hide the Turn card |
 | `p` | Pin or unpin |
-| `1` to `5` | Go to a pin |
+| `1` to `7` | Go to a pin |
 | `u` | Undo the last unpin |
 | `v` | Show the Pinned column |
 | `-` `=` | Make the Pinned column or the Trajectory pane narrower or wider |

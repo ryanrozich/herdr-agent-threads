@@ -4426,7 +4426,12 @@ async function threePins(x) {
   const ev = (at, pos = true) => { const lx = (v.colLeft() + at) * v.zoom(); return { local_position: { x: lx, y: 300 }, ...(pos ? { position: { x: lx, y: 300 } } : {}), bounds: { width: v.width * v.zoom() }, click_count: 1 }; };
   const point = (at = x, pos = true) => body().move(ev(at, pos), cx);
   const press = (key, at = x, { move = true, pos = true } = {}) => { const h = body(); if (move) h.move(ev(at, pos), cx); h.down(ev(at, pos), cx); v.click(key, cx); };
-  return { v, cx, k, press, point, keyOf: (i) => compactPins(v)[i].key };
+  // A move at list x mx on a list mw wide and a press at px on one pw wide (in the list's px):
+  // a list narrower than its column (the pane narrowed while the column holds its width), so
+  // the rows and their heights stay as they were.
+  const at2 = (lx, bw) => { const wx = (v.colLeft() + lx) * v.zoom(); return { local_position: { x: wx, y: 300 }, position: { x: wx, y: 300 }, bounds: { width: bw * v.zoom() }, click_count: 1 }; };
+  const moveThenPress = (key, mx, mw, px, pw) => { const h = body(); h.move(at2(mx, mw), cx); h.down(at2(px, pw), cx); v.click(key, cx); };
+  return { v, cx, k, press, point, moveThenPress, keyOf: (i) => compactPins(v)[i].key };
 }
 
 test("the Pinned column: a click on a pin's unpin control unpins it and it leaves the list; the turn is not opened or selected, and u puts it back", async () => {
@@ -4517,6 +4522,46 @@ test("the Pinned column: only the button's own 24 px is the control: a press at 
   v.sel = null;
   press(b, left);
   expect(v.isPinned(b)).toBe(false);
+});
+
+test("the Pinned column: a press is an unpin only if the last move was on the button where the press finds it: not at another list width, nor just off its edge", async () => {
+  const { v, cx, moveThenPress, keyOf } = await threePins(390);
+  const b = keyOf(1);
+  const W = v.width;
+  const left = (w) => w - PIN_ROW.UNPIN_R - PIN_ROW.UNPIN;
+  // The pointer rests 5 px left of the button at width W; the list narrows by 20 with the
+  // rows unchanged, so the button now lies under that place. The move was never over it.
+  const x = left(W) - 5;
+  v.sel = null;
+  moveThenPress(b, x, W, x, W - 20);
+  expect(v.isPinned(b)).toBe(true);
+  expect(v.sel).toBe(b);
+  // Wider again, the other way: a move on the narrow list's button, at a place the wide list's
+  // button covers too, and a press there at full width: the button moved under a still pointer.
+  v.sel = null;
+  moveThenPress(b, left(W) + 2, W - 20, left(W) + 2, W);
+  expect(v.isPinned(b)).toBe(true);
+  // At one width: a move 1 px left of the button and a press on its edge (within the 1 px a
+  // still pointer may drift) selects; a move on the edge itself unpins.
+  v.sel = null;
+  moveThenPress(b, left(W) - 1, W, left(W), W);
+  expect(v.isPinned(b)).toBe(true);
+  v.sel = null;
+  moveThenPress(b, left(W), W, left(W), W);
+  expect(v.isPinned(b)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // A pane wider than the column: the list is the column's width at the move as at the press.
+  v.sel = null;
+  moveThenPress(b, left(W), W + 100, left(W), W + 100);
+  expect(v.isPinned(b)).toBe(false);
+  v.key(keyEv("u"), cx);
+  // At zoom 1.25 a move and a press on the narrower list's button, both measured in design px.
+  try {
+    herdrSettings = { font_family: "Mono", zoom: 1.25 };
+    v.sel = null;
+    moveThenPress(b, left(W - 20) + 2, W - 20, left(W - 20) + 2, W - 20);
+    expect(v.isPinned(b)).toBe(false);
+  } finally { herdrSettings = { font_family: "Mono" }; }
 });
 
 test("the Pinned column: a press on a pin anywhere but its unpin control still selects it and keeps the pin", async () => {
