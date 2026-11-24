@@ -314,6 +314,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       const live = ti === G.live;
       const len = stepN(h);
       let tk = null;
+      let marks = null;
       if (scale !== "steps") {
         tk = kept?.get(h);
         if (tk === undefined) tk = tlTracks(h);
@@ -332,7 +333,16 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
         }
         const ip = range ? range.pos.get(r.key) : null;
         add(range && !(ip != null && ip >= range.ia && ip <= range.ib) ? `${k}|o` : k, b.x0, b.x1, Boolean(b.open));
-        if (r.failed && b.x0 >= failEnd) { out.fails.push((b.x0 + b.x1) / 2); failEnd = b.x0 + 6; }
+        if (r.failed) {
+          if (!marks) marks = [];
+          marks.push([b.x0, b.x1]);
+        }
+      }
+      // The turn's failure marks left to right as drawn (a call run earlier can be listed after
+      // a later one), each 6 px or more from the last.
+      if (marks) {
+        marks.sort((p, q) => p[0] - q[0]);
+        for (const [a, b] of marks) if (a >= failEnd) { out.fails.push((a + b) / 2); failEnd = a + 6; }
       }
       // Ticks inside a wide turn: on the clock its time from the start, by steps its step
       // numbers. Only those in view.
