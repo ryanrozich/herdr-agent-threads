@@ -1662,8 +1662,12 @@ test("a window that starts partway through a day keeps that day's pill over its 
   const band = all.slice(0, at).findLast((r) => r.kind === "day");
   expect(band).toBeDefined();
   expect(rows.some((r) => r.key === band.key)).toBe(false);
-  v.topKey = top.key;
-  expect(v.stickyDay()?.key).toBe(band.key);
+  // A frame with the window's first turn at the top of the list draws that day's pill: the
+  // band's row as the session's rows hold it.
+  expect(drawnPill(v, cx, top.key)).toBe(band);
+  // And with the turn under it at the top, the same pill.
+  const next = rows[rows.indexOf(top) + 1];
+  expect(drawnPill(v, cx, next.key)).toBe(band);
 });
 
 test("a window that ends with Show later has the Jump to latest pill's room under it in the Chat, and none in the outline", async () => {
@@ -1902,10 +1906,9 @@ function dayAboveNow(v) {
   const at = all.indexOf(head);
   return { head, band: all.slice(0, at).findLast((r) => r.kind === "day") ?? null, inRows: v.rows().some((r) => r.kind === "day" && v.rows().indexOf(r) < v.rows().indexOf(head)) };
 }
-function expectPillRight(v) {
+function expectPillRight(v, cx) {
   const d = dayAboveNow(v);
-  v.topKey = d.head.key;
-  expect(v.stickyDay()).toBe(d.band);
+  expect(drawnPill(v, cx, d.head.key)).toBe(d.band);
   return d;
 }
 
@@ -1919,7 +1922,7 @@ test("the day pill over a window's first turns follows the window each way, acro
   for (let k = 0; k < 14; k++) {
     v.showMore(false);
     frames(v, cx);
-    const d = expectPillRight(v);
+    const d = expectPillRight(v, cx);
     if (!d.inRows && d.band && days.at(-1) !== d.band.key) days.push(d.band.key);
   }
   expect(days.length).toBeGreaterThanOrEqual(2);
@@ -1929,7 +1932,7 @@ test("the day pill over a window's first turns follows the window each way, acro
     if (!v.rows().some((r) => r.key === "newer")) break;
     v.showMore(true);
     frames(v, cx);
-    const d = expectPillRight(v);
+    const d = expectPillRight(v, cx);
     if (!d.inRows && d.band && back.at(-1) !== d.band.key) back.push(d.band.key);
   }
   expect(back.length).toBeGreaterThanOrEqual(2);
@@ -1940,7 +1943,7 @@ test("the day pill over a window's first turns is the band of the rows the pane 
   v.jumpLatest(true);
   frames(v, cx);
   for (let k = 0; k < 14 && dayAboveNow(v).inRows; k++) { v.showMore(false); frames(v, cx); }
-  const d = expectPillRight(v);
+  const d = expectPillRight(v, cx);
   expect(d.inRows).toBe(false);
   // A rebuild: turns appended below. The window's start stays, and the pill's band is the
   // new rows' own, not the one from the rows before.
@@ -1948,7 +1951,7 @@ test("the day pill over a window's first turns is the band of the rows the pane 
   await addCapTurns(s, 150, 3);
   frames(v, cx);
   expect(v.allRows()).not.toBe(rows);
-  const rebuilt = expectPillRight(v);
+  const rebuilt = expectPillRight(v, cx);
   expect(rebuilt.band.key).toBe(d.band.key);
   // The band's row was built again with the newest day's rows: a band kept from the rows
   // before would be another row with the same key.
@@ -1957,10 +1960,10 @@ test("the day pill over a window's first turns is the band of the rows the pane 
   const inside = v.turnKeys(v.rows())[2];
   v.open.add(inside);
   frames(v, cx);
-  expect(expectPillRight(v).band.key).toBe(d.band.key);
+  expect(expectPillRight(v, cx).band.key).toBe(d.band.key);
   v.open.delete(inside);
   frames(v, cx);
-  expect(expectPillRight(v).band.key).toBe(d.band.key);
+  expect(expectPillRight(v, cx).band.key).toBe(d.band.key);
 });
 
 test("a new turn while the reader sits in an older window: nothing on screen moves, Show later's count grows, the counts follow, and the selection stays", async () => {
@@ -2080,14 +2083,14 @@ test("a landing's late asks are dropped by a newer landing in the same rows, and
   // same rows, so #30's row is still in them, and only the newer landing drops its asks.
   v.railJump("0:30", cx);
   draw(v, cx);
-  let late = cx.timers;
+  const late = cx.timers;
   cx.timers = [];
   expect(late.length).toBeGreaterThan(0);
   v.command("search:#5", cx);
   v.command("escape", cx);
   settleList(v, cx, sim);
   expect(turns(sim.last())).toContain("0:5");
-  let asked = scrollsOf(v);
+  const asked = scrollsOf(v);
   for (const x of late) x.fn(cx);
   probeFrame(v, cx);
   expect(asked).toEqual([]);
@@ -2331,5 +2334,203 @@ test("a card opened and closed above the window, and one inside it, keep the cou
     expect(x.outside).toBe(0);
     // The band's own row, once a look: no walk.
     expect(x.day).toBeLessThanOrEqual(x.looks);
+  }
+});
+
+// Rows of made-up kinds over a fixed seed, with day bands, turns and a turn's other rows.
+function madeRows(rnd, n, tag) {
+  const kinds = ["day", "turn", "turn", "turn", "md", "head", "md", "wake"];
+  return Array.from({ length: n }, (_, i) => ({ kind: kinds[Math.floor(rnd() * kinds.length)], key: `${tag}:${i}` }));
+}
+// One change to rows as a build or a splice makes it: the rows before K kept (a band among
+// them may be a new row in its place), gone rows from K replaced by added new ones.
+function madeChange(rnd, rows, tag) {
+  const K = Math.floor(rnd() * (rows.length + 1));
+  const whole = rnd() < 0.3;
+  const gone = whole ? rows.length - K : Math.floor(rnd() * Math.min(12, rows.length - K + 1));
+  const fresh = madeRows(rnd, Math.floor(rnd() * 14), tag);
+  const kept = rows.slice(0, K).map((r) => (r.kind === "day" && rnd() < 0.5 ? { ...r } : r));
+  const next = [...kept, ...fresh, ...rows.slice(K + gone)];
+  const dT = fresh.filter((r) => TURN_ROW.has(r.kind)).length - rows.slice(K, K + gone).filter((r) => TURN_ROW.has(r.kind)).length;
+  return { next, K, end: K + fresh.length, d: fresh.length - gone, dT };
+}
+
+test("the window's memos carried over one to three changes of the rows give what a fresh count gives: a seeded run over made-up rows", async () => {
+  const { v } = await capSession(3);
+  const rnd = seeded(116);
+  const lastBand = (rows, at) => { for (let i = at; i >= 0; i--) if (rows[i].kind === "day") return i; return -1; };
+  const turns = (rows, a, z) => rows.slice(a, z).filter((r) => TURN_ROW.has(r.kind)).length;
+  const bad = [];
+  let carried = 0;
+  for (let k = 0; k < 400; k++) {
+    const first = madeRows(rnd, 20 + Math.floor(rnd() * 60), `r${k}`);
+    // A chain of changes, as the pane notes them (noteRows), every array its own.
+    const log = [];
+    let rows = first;
+    for (let j = 0, m = 1 + Math.floor(rnd() * 3); j < m; j++) {
+      const c = madeChange(rnd, rows, `r${k}c${j}`);
+      log.push({ r0: rows, v0: 0, r1: c.next, v1: 0, K: c.K, end: c.end, d: c.d, dT: c.dT });
+      rows = c.next;
+    }
+    // The pane looks for a band only above a row it holds.
+    if (!rows.length) continue;
+    v.baseRows = rows;
+    v.baseVer = 0;
+    v.rowsLog = log;
+    const pick = (n) => Math.floor(rnd() * (n + 1));
+    // The window's day: the last band at or above a row, carried from the one found before.
+    const was = Math.max(0, pick(first.length - 1));
+    const at = Math.max(0, pick(rows.length - 1));
+    v.dayAbove = { base: first, ver: 0, at: was, idx: lastBand(first, was) };
+    const got = v.bandAbove(rows, at);
+    if (got !== lastBand(rows, at)) bad.push(`day ${k}: ${got} for ${lastBand(rows, at)}`);
+    // The counts outside a window, carried from those of another window over the first rows.
+    const w = new RowWindow(SMALL);
+    const a0 = pick(first.length);
+    const z0 = a0 + pick(first.length - a0);
+    w.at = { a: a0, z: z0 };
+    w.outside({ rows: first, ver: 0, since: (r, ver) => v.rowsSince(r, ver) });
+    const a = pick(rows.length);
+    const z = a + pick(rows.length - a);
+    w.at = { a, z };
+    const c = v.rowsSince(first, 0);
+    if (c && ((a <= c.K && a0 <= c.K) || (a >= c.end && a0 + c.d >= c.end))) carried++;
+    const out = w.outside({ rows, ver: 0, since: (r, ver) => v.rowsSince(r, ver) });
+    const want = { earlier: turns(rows, 0, a), later: turns(rows, z, rows.length) };
+    if (out.earlier !== want.earlier || out.later !== want.later) bad.push(`count ${k}: ${JSON.stringify(out)} for ${JSON.stringify(want)}`);
+  }
+  expect(bad).toEqual([]);
+  // Most edges were carried, not counted afresh.
+  expect(carried).toBeGreaterThan(100);
+});
+
+// ---- the routes the window's tests had not tried: a resize, a filter, search steps, a new session ----
+
+// The rows of every frame in frames, from the list's own drawing.
+const framesShow = (v, frames, key) => frames.filter((f) => !shownIn(v, f).includes(key)).length;
+
+test("in an older window under a small cap and window, a resize keeps the selected turn on screen in every frame, and the window where it was", async () => {
+  const { v, cx } = await capSession(150, { ...SMALL, max: 40 });
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    v.command("search:#12", cx);
+    v.command("escape", cx);
+    settleList(v, cx, sim);
+    expect(shownIn(v, sim.last())).toContain("0:12");
+    // The list is cut (40 items) inside a window that leaves the newest turns out.
+    expect(v.capCut).toBeGreaterThan(0);
+    expect(v.win.at.z).toBeLessThan(v.allRows().length);
+    const ends = { from: v.win.from, to: v.win.to };
+    for (const w of [420, 760, 562]) {
+      stillAt(v, w);
+      const fs = settleList(v, cx, sim);
+      expect(fs.length).toBeGreaterThan(0);
+      expect(framesShow(v, fs, "0:12")).toBe(0);
+      expect({ from: v.win.from, to: v.win.to }).toEqual(ends);
+      expect(v.sel).toBe("0:12");
+    }
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+test("a filter typed in an older window: each letter keeps the selected match in the window's rows and the counts right, and a filter that leaves it out goes to the newest match, on screen", async () => {
+  // 300 turns: "order 1" matches 111 of them (1, 10 to 19, 100 to 199), more than the window.
+  const { v, cx } = await capSession(300, SMALL);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    v.command("search:#13", cx);
+    v.command("escape", cx);
+    settleList(v, cx, sim);
+    expect(v.sel).toBe("0:13");
+    // Typed a letter at a time: "Prompt 12: check order 12." matches each of them. A filter
+    // that keeps the selected turn asks for no scroll (setQuery), with or without a window:
+    // the list keeps its offset in px over the fewer rows, so the turn is in the window's rows
+    // but need not be on screen.
+    for (const q of ["o", "or", "order", "order ", "order 1"]) {
+      v.command(`search:${q}`, cx);
+      settleList(v, cx, sim);
+      expect(v.sel).toBe("0:13");
+      expect(inList(v, "0:13")).toBe(true);
+      expectOutsideRight(v);
+    }
+    // The matches are more than the window holds, so the filtered rows are windowed too.
+    expect(v.win.at.z - v.win.at.a).toBeLessThan(v.allRows().length);
+    // One more letter that leaves #13 out: the newest match, #200.
+    v.command("search:order 19", cx);
+    settleList(v, cx, sim);
+    expect(v.sel).toBe("0:200");
+    expect(shownIn(v, sim.last())).toContain("0:200");
+    // Cleared: every turn again, #200 still selected and the counts right. Like a letter that
+    // keeps the selection, clearing asks for no scroll; the window, which a filter of 11
+    // matches dropped, starts again at the oldest turns.
+    v.command("search:", cx);
+    settleList(v, cx, sim);
+    expect(v.sel).toBe("0:200");
+    expectOutsideRight(v);
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+test("search steps through more matches than the window holds: each step past the window's edge moves it, and the step's turn or control is on screen in every frame", async () => {
+  const { v, cx } = await capSession(300, SMALL);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.command("search:order 1", cx);
+    settleList(v, cx, sim);
+    expect(v.sel).toBe("0:200");
+    const starts = new Set([v.win.at.a]);
+    const seen = new Set();
+    const bad = [];
+    for (let k = 0; k < 130 && v.sel !== "0:2"; k++) {
+      v.action("prev", cx);
+      const fs = settleList(v, cx, sim);
+      seen.add(v.sel);
+      starts.add(v.win.at.a);
+      const miss = framesShow(v, fs, v.sel);
+      if (miss) bad.push(`${k} ${v.sel}: ${miss} of ${fs.length} frames`);
+    }
+    expect(bad).toEqual([]);
+    // Every match from the newest to the oldest, through Show earlier, and the window moved.
+    expect(v.sel).toBe("0:2");
+    expect(seen.has("older")).toBe(true);
+    expect(starts.size).toBeGreaterThan(1);
+    expect([...seen].filter((k) => /^0:\d+$/.test(k)).length).toBe(110);
+  } finally {
+    H.listWindow = null;
+  }
+});
+
+test("a new session picked from an older window opens at its own end: its rows, the window at its end, the counts its own", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  try {
+    openAt(v, cx, sim, 562);
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    expect(v.win.at.a).toBe(0);
+    v.pick({ path: fixture("--only", "200") }, cx);
+    await settle(v);
+    const fs = settleList(v, cx, sim);
+    const s = v.current();
+    expect(s.turns.length).toBe(200);
+    // Every turn row drawn is the new session's.
+    expect(v.rows().filter((r) => TURN_ROW.has(r.kind)).every((r) => r.s === s)).toBe(true);
+    // At its end, following, the window at its end.
+    expect(v.follow).toBe(true);
+    expect(sim.last().end).toBe(true);
+    expect(v.win.at.z).toBe(v.allRows().length);
+    expect(fs.at(-1).keys.at(-1)).toBe(v.rows().at(-1).key);
+    expectOutsideRight(v);
+  } finally {
+    H.listWindow = null;
   }
 });
