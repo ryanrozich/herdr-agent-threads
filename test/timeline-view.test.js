@@ -399,3 +399,30 @@ test("timeline view: at 2,000 turns the strip has numbers, thinned to every k-th
     expect(drawn).toEqual(TL.tlNumbers(T, heads, ti).map((l) => l.text));
   }
 });
+
+test("timeline view: a press on a failed call drawn over other calls selects it and outlines it, not a call under it", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "3", "--subagents"), "bottom", 1440);
+  shownFrame(b, cb);
+  const rows = b.ledgerRows();
+  // A failed call with another call's bar under its middle.
+  const M = b.tlModel;
+  let failed = null;
+  for (const r of rows.filter((x) => x.kind === "tr" && x.lk === "failed")) {
+    const { T, box } = barOf(b, r.key);
+    const ti = M.L.index.get(b.turnOfRow(r.key));
+    const h = M.heads[ti];
+    const mid = (box.x0 + box.x1) / 2;
+    const under = h.stepRows.some((s, si) => s.key !== r.key && LEDGER_KINDS[s.lk]?.lane === "tools" && (() => {
+      const o = TL.itemBox(h.tl, si, T.x, T.w, M.geo.walls[ti], M.L.scale, h.stepRows.length);
+      return o && o.x0 <= mid && o.x1 >= mid;
+    })());
+    if (under) { failed = r; break; }
+  }
+  expect(failed).not.toBe(null);
+  const { box, lane } = barOf(b, failed.key);
+  press(b, cb, (box.x0 + box.x1) / 2, lane * 16 + (box.track ? 11 : 8));
+  expect(b.tsel).toBe(failed.key);
+  const c = frame(b, cb);
+  expect(own(c, "th-tl-sel")).toContainEqual(["left", box.x0 - 2]);
+  expect(own(c, "th-tl-sel")).toContainEqual(["w", box.x1 - box.x0 + 4]);
+});

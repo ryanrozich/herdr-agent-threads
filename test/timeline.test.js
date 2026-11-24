@@ -438,3 +438,61 @@ test("timeline numbers: the selected turn's number always shows and wins a clash
     expect(TL.tlNumbers(L, heads, 99).map((l) => l.text)).toEqual(L.labels.map((l) => l.text));
   }
 });
+
+// One turn whose Tools lane has calls running at once, as a long session's subagents make:
+// a subagent on the first track, then a second subagent, a failed call and a short call
+// inside it, all three on the second (half-height) track. t0 ms, 60 s long.
+function overlapping() {
+  const key = "0:0";
+  const lks = ["you", "subagent", "subagent", "failed", "tool", "reply"];
+  const TR = 1;
+  const F = 4;
+  return [{
+    kind: "trh", key, n: 1, t0: T0, total: 60000, span: 60000, going: false,
+    cnt: { steps: 6, input: 1, model: 1, tools: 4, failed: 1, user: 1, agent: 0 },
+    stepRows: lks.map((lk, j) => ({ kind: "tr", key: `tr:${key}:${j}`, lk, failed: lk === "failed" })),
+    tl: [0, Number.NaN, 0, 2000, 30000, 0, 4000, 40000, TR, 6000, 14000, TR | F, 9000, 10000, TR, 59000, 60000, 0],
+  }];
+}
+
+test("timeline press: where bars overlap, the press gets the bar drawn on top at its x and y: failed over the rest, half height over full, then the narrowest; the y inside the lane picks the track", () => {
+  const heads = overlapping();
+  const L = timelineLayout(heads, 1000, "clock", T0, null);
+  const T = tlBox(L, 0);
+  const box = (si) => itemBox(heads[0].tl, si, T.x, T.w, L.geo.walls[0], "clock", 6);
+  const mid = (si) => (box(si).x0 + box(si).x1) / 2;
+  const at = (x, ly) => timelineHit(L, heads, x, "tools", T0, ly)?.key;
+  expect([box(1).track, box(2).track, box(3).track, box(4).track]).toEqual([0, 1, 1, 1]);
+  // The failed call, drawn over the others: at its middle on the half track, it, not the
+  // short call inside it (later in the turn) or the subagent under it.
+  expect(at(mid(3), 11)).toBe("tr:0:0:3");
+  expect(at(box(3).x0 + 1, 11)).toBe("tr:0:0:3");
+  // The short call is inside the failed one, so under it: the failed one again.
+  expect(at(mid(4), 11)).toBe("tr:0:0:3");
+  // Past the failed call, the second subagent's half bar and the first's full bar overlap:
+  // the half one is on top.
+  expect(at(box(3).x1 + 20, 11)).toBe("tr:0:0:2");
+  // Above the half track (the first 6 px of the lane's bars) only the full bar is there.
+  expect(at(mid(3), 4)).toBe("tr:0:0:1");
+  expect(at(box(3).x1 + 20, 4)).toBe("tr:0:0:1");
+  // With no y, the bar drawn on top at x.
+  expect(at(mid(3))).toBe("tr:0:0:3");
+  // Off every bar but within 4 px: the nearest; past 4 px the turn's heading.
+  expect(at(box(1).x0 - 2, 11)).toBe("tr:0:0:1");
+  expect(at(T.x + T.w - 1, 11)).toBe("0:0");
+});
+
+test("timeline press: of two bars on top at a point, on the same track and ink, the narrower one is pressed", () => {
+  const heads = overlapping();
+  // The failed call made a plain tool call: now two plain calls on the half track, the
+  // short one inside the long one.
+  heads[0].stepRows[3] = { ...heads[0].stepRows[3], lk: "tool", failed: false };
+  heads[0].tl[3 * 3 + 2] = 1;
+  const L = timelineLayout(heads, 1000, "clock", T0, null);
+  const T = tlBox(L, 0);
+  const box = (si) => itemBox(heads[0].tl, si, T.x, T.w, L.geo.walls[0], "clock", 6);
+  const mid = (si) => (box(si).x0 + box(si).x1) / 2;
+  expect(timelineHit(L, heads, mid(4), "tools", T0, 11).key).toBe("tr:0:0:4");
+  // Inside the long one, clear of the short one: the long one.
+  expect(timelineHit(L, heads, box(3).x0 + 5, "tools", T0, 11).key).toBe("tr:0:0:3");
+});
