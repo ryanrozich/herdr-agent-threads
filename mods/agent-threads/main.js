@@ -9176,9 +9176,10 @@ export default class Threads extends View {
     if (h === was && !h.done) this.scanHits(h, t0 + this.scanMax());
     if (this.renderOpen) this.scanSpent = (this.scanSpent ?? 0) + (now() - t0);
     // A new search's selection (setQuery): the newest match, once one is found, unless the
-    // selection moved meanwhile.
+    // selection moved meanwhile. Not while a tail is checked again (oldest first): a newer
+    // match can still come there.
     const want = this.hitsSelect;
-    if (want && (h.top > h.bot || h.done)) {
+    if (want && ((h.top > h.bot && !h.cur.tail) || h.done)) {
       this.hitsSelect = null;
       if (h.top > h.bot && this.sel === want.sel) {
         this.sel = h.by.get(h.top - 1);
