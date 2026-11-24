@@ -57,9 +57,10 @@ function barOf(b, key) {
   const ti = M.L.index.get(turn);
   const T = TL.tlBox(M.L, ti);
   const h = M.heads[ti];
-  const si = h.stepRows.findIndex((r) => r.key === key);
-  const box = TL.itemBox(h.tl, si, T.x, T.w, M.geo.walls[ti], M.L.scale, h.stepRows.length);
-  return { T, box, lane: TL.TL_LANES.indexOf(LEDGER_KINDS[h.stepRows[si].lk].lane) };
+  // The step's place among the turn's steps (its row's, less the heading), and its bar as drawn.
+  const si = h.rows.findIndex((r) => r.key === key) - 1;
+  const box = TL.tlBar(M.L, M.heads, ti, si);
+  return { T, box, lane: TL.TL_LANES.indexOf(LEDGER_KINDS[TL.tlRow(h, si).lk].lane) };
 }
 // A press on the lanes at x px of the strip, y px from the lanes' top.
 function press(b, cb, x, y) {
@@ -273,7 +274,7 @@ test("timeline view: the debug report's traj.timeline says whether it shows, and
   shownFrame(b, cb);
   const tl = b.trajReport().timeline;
   expect(Object.keys(tl).sort()).toEqual(["can", "cw", "drawn", "grow", "hidden", "labels", "layers", "live", "made", "ms", "rowsLeft", "shown", "spans", "turns", "waiting"]);
-  expect(Object.keys(tl.made).sort()).toEqual(["geo", "layout", "tail"]);
+  expect(Object.keys(tl.made).sort()).toEqual(["geo", "layout", "tail", "tracks"]);
   expect(tl).toMatchObject({ can: true, shown: true, waiting: false, cw: 1370, turns: b.ledger().totals.heads.length, live: -1, grow: [] });
   expect(tl.spans).toBeGreaterThan(0);
   expect(tl.layers).toBeGreaterThan(0);
@@ -336,8 +337,7 @@ test("timeline view: every turn number and tick the model gives is drawn, not th
     return {
       kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
       cnt: { steps: 2, input: 0, model: 0, tools: 2, failed: 1, user: 0, agent: 0 },
-      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true }],
-      tl: [1000, 5000, 0, 6000, 9000, 4],
+      rows: [null, { kind: "tr", key: `tr:${key}:0`, lk: "tool", start: 1000, dur: 4000 }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true, start: 6000, dur: 3000 }],
     };
   });
   const view = (heads) => {
@@ -374,8 +374,7 @@ test("timeline view: at 2,000 turns the strip has numbers, thinned to every k-th
     return {
       kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
       cnt: { steps: 1, input: 0, model: 0, tools: 1, failed: 0, user: 0, agent: 0 },
-      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }],
-      tl: [1000, 5000, 0],
+      rows: [null, { kind: "tr", key: `tr:${key}:0`, lk: "tool", start: 1000, dur: 4000 }],
     };
   });
   const view = (shown) => {
@@ -408,12 +407,12 @@ test("timeline view: a press on a failed call drawn over other calls selects it 
   const M = b.tlModel;
   let failed = null;
   for (const r of rows.filter((x) => x.kind === "tr" && x.lk === "failed")) {
-    const { T, box } = barOf(b, r.key);
+    const { box } = barOf(b, r.key);
     const ti = M.L.index.get(b.turnOfRow(r.key));
     const h = M.heads[ti];
     const mid = (box.x0 + box.x1) / 2;
-    const under = h.stepRows.some((s, si) => s.key !== r.key && LEDGER_KINDS[s.lk]?.lane === "tools" && (() => {
-      const o = TL.itemBox(h.tl, si, T.x, T.w, M.geo.walls[ti], M.L.scale, h.stepRows.length);
+    const under = h.rows.slice(1).some((s, si) => s.key !== r.key && LEDGER_KINDS[s.lk]?.lane === "tools" && (() => {
+      const o = TL.tlBar(M.L, M.heads, ti, si);
       return o && o.x0 <= mid && o.x1 >= mid;
     })());
     if (under) { failed = r; break; }
@@ -435,8 +434,7 @@ test("timeline view: at 2,000 turns the selected step's outline is around its tu
     return {
       kind: "trh", key, n: i + 1, t0: 1e12 + i * 100000, total: 60000, span: 60000, going: false,
       cnt: { steps: 2, input: 0, model: 0, tools: 2, failed: 1, user: 0, agent: 0 },
-      stepRows: [{ kind: "tr", key: `tr:${key}:0`, lk: "tool" }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true }],
-      tl: [1000, 5000, 0, 6000, 9000, 4],
+      rows: [null, { kind: "tr", key: `tr:${key}:0`, lk: "tool", start: 1000, dur: 4000 }, { kind: "tr", key: `tr:${key}:1`, lk: "failed", failed: true, start: 6000, dur: 3000 }],
     };
   });
   for (const ti of [0, 1233, 1999]) {
@@ -478,7 +476,7 @@ test("timeline view: a press above the half-height track gets the full bar there
     const mid = (box.x0 + box.x1) / 2;
     // The full bar a press there gets: failed over the rest, then the narrowest.
     let full = null;
-    h.stepRows.forEach((s, si) => {
+    h.rows.slice(1).forEach((s, si) => {
       const o = TL.tlBar(M.L, M.heads, ti, si);
       if (o?.track !== 0 || LEDGER_KINDS[s.lk]?.lane !== "tools" || o.x0 > mid || o.x1 < mid || !listed.has(s.key)) return;
       const rank = LEDGER_KINDS[s.lk].ink === "failed" ? 2 : 0;

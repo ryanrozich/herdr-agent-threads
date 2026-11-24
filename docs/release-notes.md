@@ -2,14 +2,56 @@
 
 Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../CHANGELOG.md).
 
-## Unreleased
+## 1.2.0
 
-- Pins: up to seven, where five was the limit, with `1` to `7` to return to them. Pins saved before load as they were. A closed pin in the Pinned column has an unpin button at its right edge, shown on hover and on the selected pin: one click unpins it, and `u` puts it back. The buttons show while the pins fit the column; a taller list hides them, and the unpin button in the column's header (kept now at every width of the Pinned column, where the count reads "7/7" under 300 px) or `p` unpins the selected pin. Going back to an older version keeps all seven pins, but it shows five, leaves pins 6 and 7 without a number and says the pins are full; nothing is lost.
+Open a large session at its end in seconds, see the Trajectory in a pane of its own, step through search matches, and add sender rules. It needs the same Herdr and tools as 1.1.0. The Chat, the Trajectory and the Pinned column dragging and resizing together need Herdr 0.1.16 to 0.1.18; on any other version they keep the sizes and drags they had in 1.1.0.
+
+### What you will notice first
+
+- A large session opens at its end in a few seconds. A 499 MB session opens in about 7 seconds where it took about 18, on the test machine with Herdr 0.1.18. A loading state shows how far the read has got, and shaping keeps to each draw's time, so a screen of long pasted prompts does not stall the list while it opens.
+- The Trajectory has a pane of its own, to the right of the chat, with the session as a ledger of its turns and steps.
+- Search steps through its matches newest first: `n` goes to the next older one and `Shift n` to the newer one.
+- Sender rules have a page in Settings, a mark on the messages they match, and a count of the prompts a rule would take before you keep it.
+- Unpin a pin in one click, and keep up to seven pins.
+
+### The chat view
+
+- A search starts at its newest match and centres it, unless the selected turn already matches; then that turn stays selected, and the count and `n` start from it. `n` steps to the next older match and `Shift n` to the newer one, and two arrows beside the count do the same. The count is your place among the matches, counted from the newest: "1 of 4 · newest first", then "4 of 4 · first mention" at the oldest. The arrow with nothing left that way is dimmed, and nothing wraps round. The selected turn's matches have a stronger fill, as strong as the text on it allows.
+- A session opens at its end and stays still. While a long session is read, the pane shows a loading state in place of rows: how much is read, the turns so far, the agent and model, when the session started and was last active, how long it spans, its prompts, tool calls, tokens and pins, and your newest prompt. Nothing in it moves as figures arrive. A session that reads in under 0.3 s never shows it.
+- When a background task finishes after a turn has ended and the agent writes a reply for you, that reply is now a row of its own in the chat, with one quiet line, "Background task finished", where a message would be. Before, it showed only inside the turn above, under the latest update, and each new notice wrote over the last one's reply. A search finds these replies, and the rail gives them a tick when Agent messages on the rail is on.
+- A long hyphenated name in an open turn's message breaks after a "-" and no longer inside a word, in a coloured bubble (blue is the default) and in any bubble where a search marks the text. A bubble on the Plain colour with no search on breaks as before, so a copy never picks up a hidden character.
+- A turn read before the session is read to its end is no longer shown as running with a huge elapsed time.
+- File sizes in the loading state, in "Reading session" and in the session chooser now read in decimal MB, as a file listing shows them. A 499 MB file read as 476 MB before, and a file under 1 MB reads in KB.
+- The column now steps with the pane: 70, 90 or 120 characters a line by the pane's width. The Width setting, `Shift w` and Keep the pane at this width are gone. A resize inside a step breaks no lines anew; in a long chat, a drag past a step waits until the pane has been still for 1.2 s before the lines break anew.
+
+### The rail
+
 - Agent messages are off the rail after this update: the turn rail shows your own turns and the running one. To get them back, turn on "Agent messages on the rail" in Settings, under Agent messages. That choice is kept from then on.
 - `↑` and `↓` (and `k` and `j`) follow the rail: they move between the turns that have a tick. With "Agent messages on the rail" off they pass over agent messages; with it on they stop at them, as before. A click still selects an agent message.
-- A Codex subagent rollout exported by itself now starts at its own history boundary.
+
+### Pins
+
+- Pins: up to seven, where five was the limit, with `1` to `7` to return to them. Pins saved before load as they were. A closed pin in the Pinned column has an unpin button at its right edge, shown on hover and on the selected pin: one click unpins it, and `u` puts it back. The buttons show while the pins fit the column; a taller list hides them, and the unpin button in the column's header (kept now at every width of the Pinned column, where the count reads "7/7" under 300 px) or `p` unpins the selected pin. Going back to an older version keeps all seven pins, but it shows five, leaves pins 6 and 7 without a number and says the pins are full; nothing is lost.
+
+### Sender rules
+
+- Settings has a Sender rules page, as Link rules has. A prompt a sender rule matched shows "build-bot · matched by rule" with a tag icon and a thin dashed edge on its bubble, where a message an agent sent keeps "agent message" and its bot icon. Rest the pointer on the label to see which rule matched. The card's Sender rules row counts the rules that are not working, as Link rules does.
+- When a rule cannot be saved, Keep leaves the rule open with everything you typed, and says why under its buttons.
+- The open rule says how many prompts typed in this conversation it matches, such as "Matches 3 of the 7 prompts typed in this conversation.", and follows each key you type. A rule that does not run has no count.
+- The templates stay on the page under your rules for as long as you can add one, and show only those you have not used yet. Use starts a new rule from one, and nothing is written until you press Keep rule. There is a third template, Name and a colon, for a hyphenated name such as "seat-one:".
+- A new rule opens at the end of the list and the card scrolls to show it. The Pattern and Finds hints under a rule wrap inside the card, where they ran past its edge.
 - On the Link rules and Sender rules pages, a press or Tab into a field of the open rule folds the type rows that Change shows, so the fields go back to where they were, and Tab goes on from the field you pressed into. Before, a press aimed at the rule's text after Change could land in Name and leave the text as it was.
-- The column now steps with the pane: 70, 90 or 120 characters a line by the pane's width. The Width setting, `Shift w` and Keep the pane at this width are gone. A resize inside a step breaks no lines anew; in a long chat, a drag past a step waits until the pane has been still for 1.2 s before the lines break anew.
+
+### Settings and keys
+
+- Tab and Shift Tab move a ring through every control on the settings card, in the order they are drawn, and Enter or Space presses the control with the ring. The card scrolls to show the control. A text field takes the keyboard when the ring reaches it, and Tab moves on out of it.
+
+### Panes and widths
+
+The second item below needs Herdr 0.1.16 to 0.1.18. On any other version, those panes keep the sizes and drags they had in 1.1.0.
+
+- Drag the edge of the Threads pane you want to move. Before, a drag of one edge moved the other as well and resized the terminals on the far side.
+- With the Trajectory or the Pinned column open, each divider between the Chat, the Trajectory, the Pinned column and the terminal moves only the two panes beside it, and a window resize scales them all. `-` and `=` make the pane to the right of the Chat narrower or wider: the Trajectory if it is open, else the Pinned column.
 
 ### The Trajectory
 
@@ -17,14 +59,23 @@ Newest first. Each release's full list of pull requests is in [CHANGELOG.md](../
 - In a pane at least 480 px wide, the Trajectory opens as a pane of its own to the right of the chat, leaving the other panes in the tab 200 px for each of them. Narrower, or with no room for that, it shows in the chat's own pane until you press `y` or `Esc` or its Chat button.
 - A call shows as running only while the agent is still at it. A call left with no result says "no result", and its detail says when the transcript last recorded anything. One case cannot be told: a session of an agent other than Claude Code (Codex, say) stopped during its very first call shows that call as a plain row with no duration.
 - Keys: `↑` `↓` or `j` `k` move, `Home` and `End` go to the first or last row, `Enter` or `Space` shows the detail, `f` and `Shift f` go to failed calls, `m` and `Shift m` to your messages, `-` and `=` make the Trajectory pane narrower or wider, `y` switches between it and the chat, and `Esc` closes the detail or goes back.
+- Below 200 px the Trajectory shows a compact form: one short line a row, with the step's mark, its turn's number and its duration, and the heading as the Trajectory icon alone (with a red dot when a call failed). Rest the pointer on a row for what the line leaves out. Below 64 px a row is its mark.
+- A background task's notice that wakes the agent after a turn ended is a turn of its own here, with its steps and reply, and its row reads "Background task finished". It no longer stretches the turn above.
 
 ### Save a session as ATIF
 
+- A Codex subagent rollout exported by itself now starts at its own history boundary.
 - The exported file now holds the model's reasoning, for Claude Code and Codex sessions, as `reasoning_content` on the step it came before. This is the default. To leave it out, put `--no-reasoning` before the path: `bun mods/agent-threads/core/atif.js --no-reasoning <transcript> > session.json`. The file then holds no reasoning, as one from 1.1.0 did.
 - Reasoning a transcript keeps only as a signature, redacted or encrypted is never written. The step it came before says some was left out (`extra.reasoning_withheld`), and the file's notes count those steps.
 - Results now say whether a call failed in `extra.tool_result_is_error`, the name Harbor's tools read, in place of `extra.failed`, which is no longer written. It is `true` when the reader found the call failed, `false` when it found no failure, and left out when it cannot tell, such as for a call still running.
 - Claude Code helper steps carry `extra.agent_id` (the helper's id) and `extra.is_sidechain` (`true`), and the main session's steps carry `extra.is_sidechain` as `false`. Each Claude Code call that has an input repeats it, as the agent sent it, in `extra.raw_arguments`.
 - A background update's step now carries its start time (`timestamp`), where it had none.
+- A call from an OpenCode, Pi or Antigravity session now says whether it failed and when it ended, as one from Claude Code does. Before, every result in those exports read `no_result`, even with its output there, so a failed call looked like a good one. A call whose outcome the transcript does not record leaves the flag out. For Antigravity that is every finished call except one recorded as an error, and a step still running has no result.
+- A background task's notice after a finished turn is a turn of its own in the file: an empty user step whose `extra.sender` is `{ "kind": "task-notification" }`, then the agent's steps and reply. Before, its steps were added to the turn above, and that turn's end and duration stretched to cover them.
+
+### Known limits
+
+- A search on a very long session can be slow. A fix is in review.
 
 ## 1.1.0
 
