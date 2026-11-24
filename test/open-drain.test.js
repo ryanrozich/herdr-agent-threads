@@ -1067,7 +1067,8 @@ function untilDone(v, step, max = 900) {
 // draw (44 + 10 + 3 > 50), so it can never fit. It runs only as its draw's first shaping unit,
 // alone (unitAlone, counted in aloneRun): nothing else is shaped in that draw. It passes
 // Herdr's limit once, in that draw, as one turn that size does on main. It ends before the
-// stop (44 ms), so what it shaped is kept: no later draw shapes it again.
+// stop (44 ms), so what it shaped is kept: no later draw shapes it again, and it has no mark,
+// so a new width runs it alone once more.
 test("shaping: a turn that can never fit runs alone as its draw's first unit, passes Herdr's limit once, and keeps its shape", async () => {
   const p = await pricedDrain();
   try {
@@ -1085,6 +1086,11 @@ test("shaping: a turn that can never fit runs alone as its draw's first unit, pa
     expect(withBig[0].stopped).toBe(true);
     expect([p.v.staleRows.length, big.shapeKey != null, (p.v.aloneRun ?? 0) - alone0]).toEqual([0, true, 1]);
     for (const t of near) expect(frames.some((f) => f.log.some((x) => x.turn === t))).toBe(true);
+    // A run that ended leaves no mark: after a new width it is run alone once more.
+    expect(big.aloneMark ?? null).toBe(null);
+    p.v.width -= 40;
+    const again = untilDone(p.v, p.step);
+    expect(again.filter((f) => f.log.some((x) => x.turn === big)).length).toBe(1);
   } finally { p.end(); }
 }, 120000);
 
