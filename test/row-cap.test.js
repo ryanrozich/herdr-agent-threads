@@ -2149,3 +2149,28 @@ test("latest's own ask 16 ms after the end is taken is dropped by a newer jump: 
   expect(v.sel).toBe("0:20");
   H.listWindow = null;
 });
+
+test("a press's open 300 ms on is dropped by a jump made in the wait: a rail click on #25 in the same window stays on #25", async () => {
+  const { v, cx } = await capSession(150, SMALL);
+  const sim = simList(v);
+  const turns = (f) => shownIn(v, f).filter((k) => /^0:\d+$/.test(k));
+  v.action("first", cx);
+  settleList(v, cx, sim);
+  // A press on closed #10: it opens 300 ms after the release, unless something comes first.
+  v.click("0:10", cx);
+  const wait = cx.timers.filter((x) => x.ms === 300);
+  cx.timers = cx.timers.filter((x) => x.ms !== 300);
+  expect(wait.length).toBe(1);
+  // In the wait, a rail click on #25, in the same window, so #10 is still in its rows: it lands.
+  v.railJump("0:25", cx);
+  settleList(v, cx, sim);
+  expect(turns(sim.last())).toContain("0:25");
+  // #10 is still in the window's rows, so only the jump keeps it from opening there.
+  expect(v.rows().some((r) => r.key === "0:10")).toBe(true);
+  for (const x of wait) x.fn(cx);
+  settleList(v, cx, sim);
+  expect(v.open.has("0:10")).toBe(false);
+  expect(v.sel).toBe("0:25");
+  expect(turns(sim.last())).toContain("0:25");
+  H.listWindow = null;
+});

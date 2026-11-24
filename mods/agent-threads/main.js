@@ -2919,6 +2919,7 @@ export default class Threads extends View {
     const list = this.winList();
     const key = later ? this.win.later(list) : this.win.earlier(list);
     if (!key) return;
+    this.openWait = null;
     this.follow = false;
     this.toBottom = false;
     this.sel = key;
@@ -5495,6 +5496,8 @@ export default class Threads extends View {
   }
 
   jumpLatest(select = true) {
+    // A jump wins over a press's pending open (OPEN_WAIT_MS), as a key does.
+    this.openWait = null;
     this.follow = true;
     this.stickStep = null;
     this.unseen = false;
@@ -5573,7 +5576,8 @@ export default class Threads extends View {
 
   // A press on a closed turn: selected now, opened after OPEN_WAIT_MS unless something else
   // comes first: a second press (on_mouse_down with a click count over 1), a drag
-  // (holdForSelect), any key (key), or a search starting. A press on another closed turn
+  // (holdForSelect), any key (key), a jump (a rail click, latest, Show earlier or Show later),
+  // or a search starting. A press on another closed turn
   // meanwhile opens the first one straight away, so no open is lost. A turn a search hides by
   // then is not opened.
   openAfterPress(key, cx) {
@@ -13061,6 +13065,7 @@ export default class Threads extends View {
   }
   railJump(key, cx) {
     const y = this.railTickY(key);
+    this.openWait = null;
     this.toList();
     this.sel = key;
     this.follow = false;
