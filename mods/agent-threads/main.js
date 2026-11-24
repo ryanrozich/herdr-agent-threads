@@ -6523,6 +6523,13 @@ export default class Threads extends View {
             if (p != null) return p + (older ? -1 : 1);
             return this.selMatches() ? this.hitNear(h, this.sel, older) : h.top - 1;
           };
+          // An older step from a match in a tail being checked again, not placed yet: the
+          // tail's next slice first, so the step does not skip its matches not checked again.
+          const tail = h.cur.tail;
+          if (older && tail && !h.at.has(this.sel) && this.selMatches()) {
+            const [si, n] = this.sel.split(":").map(Number);
+            if (si === this.sessions.length - 1 && n - 1 >= tail.next) this.scanHits(h, now() + this.scanMax(), true);
+          }
           let j = next();
           // Past the oldest match found so far, while more can come: one slice, here.
           if (older && j < h.bot && !h.done) { this.scanStep(); j = next(); }
