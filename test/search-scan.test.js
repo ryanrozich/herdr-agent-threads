@@ -874,25 +874,72 @@ test("a draw stopped inside the matches' scan counts each match once", async () 
 // ---- a long tail with no reply, still changing ----
 // More than HITS_TAIL turns after the newest session's last finished turn with a reply (turns
 // interrupted, queued, or with no reply), and the session changing before every draw, as a
-// running agent's does: the count still ends, in every draw.
-test("with 100 turns after the last one with a reply and a turn coming in before every draw, the count ends in each draw", async () => {
+// running agent's does: the count still ends, within the draws a search with no tail takes,
+// and from then on each change is counted again within its own draw.
+const tailMore = (s, n) => {
   const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
-  const more = (s, n) => { for (let i = 0; i < n; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); } };
+  for (let i = 0; i < n; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please look again.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); }
+};
+for (const x of [1, 2]) test(`with 100 turns after the last one with a reply and a turn coming in before every draw, the count ends in each draw${x === 1 ? "" : `, at ${x}x the prices`}`, async () => {
   const { v, cx, s } = await longPane(5600);
-  more(s, 100);
+  tailMore(s, 100);
   settleRows(v, cx);
   v.sel = `0:${s.turns.length}`;
   const seen = [];
-  priced(v, () => {
-    v.action("search:zqxjvk", cx);
-    for (let k = 0; k < 150; k++) {
-      more(s, 1);
-      const d = drawOnce(v, cx);
-      seen.push({ k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v) });
-    }
-  });
-  // Counted again within the draw of each change, from the first draw on.
-  expect(seen.filter((x) => x.stopped || !x.ms || x.counting)).toEqual([]);
+  X = x;
+  try {
+    priced(v, () => {
+      v.action("search:zqxjvk", cx);
+      for (let k = 0; k < 150; k++) {
+        tailMore(s, 1);
+        const d = drawOnce(v, cx);
+        seen.push({ k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v), text: fieldText(v) });
+      }
+    });
+  } finally { X = 1; }
+  const first = seen.findIndex((d) => !d.counting);
+  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 100, x, countedAt: first + 1 }));
+  // Counted within the 40 draws a search is held to, then in every draw after.
+  expect(first >= 0 && first < 40).toBe(true);
+  expect(seen.filter((d) => d.stopped || !d.ms || (d.k >= first && d.counting))).toEqual([]);
+  // "No matches" only once counted.
+  expect(seen.filter((d) => d.counting && d.text !== "Counting…")).toEqual([]);
+  expect(places(v)).toEqual(want(v, "zqxjvk"));
+  expect(fieldText(v)).toBe("No matches");
+}, 120000);
+
+// The limit: a tail longer than one slice of the scan can check (about 1,500 turns at the
+// test's price), changing before every draw, is checked again from its start at each change
+// and is not done while it changes. The field says it is counting meanwhile, and the count
+// ends within a few draws of the last change. The figures, from the harness: the draws counted
+// while it changes, and the draws after the last change until counted.
+for (const x of [1, 2]) test(`with 2,000 turns after the last one with a reply and a turn coming in before every draw, the field says it is counting, and the count ends within 20 draws of the last${x === 1 ? "" : `, at ${x}x the prices`}`, async () => {
+  const { v, cx, s } = await longPane(5600);
+  tailMore(s, 2000);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const seen = [];
+  let after = null;
+  X = x;
+  try {
+    priced(v, () => {
+      v.action("search:zqxjvk", cx);
+      for (let k = 0; k < 60; k++) {
+        tailMore(s, 1);
+        const d = drawOnce(v, cx);
+        seen.push({ k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v), text: fieldText(v) });
+      }
+      for (let k = 0; k < 40; k++) {
+        const d = drawOnce(v, cx);
+        seen.push({ k: 60 + k, stopped: d.stopped, ms: d.ms <= LIMIT, counting: counting(v), text: fieldText(v) });
+        if (!counting(v)) { after = k + 1; break; }
+      }
+    });
+  } finally { X = 1; }
+  if (process.env.THREADS_SEARCH_FIGURES) console.log(JSON.stringify({ tail: 2000, x, countingWhileChanging: seen.slice(0, 60).filter((d) => d.counting).length, drawsAfterLast: after }));
+  expect(seen.filter((d) => d.stopped || !d.ms)).toEqual([]);
+  expect(seen.filter((d) => d.counting && d.text !== "Counting…")).toEqual([]);
+  expect(after != null && after <= 20).toBe(true);
   expect(places(v)).toEqual(want(v, "zqxjvk"));
   expect(fieldText(v)).toBe("No matches");
 }, 120000);
