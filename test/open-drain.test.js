@@ -1382,6 +1382,43 @@ test("shaping: a turn cut after a neighbour overran in its draw runs alone next,
   } finally { p.end(); }
 }, 300000);
 
+// The neighbour test's cut, with one more row left to reshape in every draw (restaled each
+// frame, its text the same), as a drain, a search being typed or another owed row makes. Each
+// draw reshapes that row before the cut turn reaches its run alone, so the turn, on screen, is
+// refused for the units run before it. Refused so, it is owed and counted like any row on
+// screen the fit check refuses (oweRow, refuse): the next draw tries it first (payOwed), where
+// it runs alone and is kept, with no further stop.
+test("shaping: a turn cut in company, with another row reshaped first in every draw, is owed on screen and runs alone first in a later draw, with no further stop", async () => {
+  for (const back of [5, 20]) {
+    const p = await pricedDrain({ after: 0 });
+    try {
+      const [first, cut, third] = [p.turns.at(-4), p.turns.at(-3), p.turns.at(-2)];
+      const other = p.turns.at(-back);
+      p.begin();
+      p.v.shapeBudget = 60;
+      p.restale(first, 5000);
+      p.charge(first, 25);
+      p.restale(cut, 2000);
+      p.charge(cut, 20);
+      p.restale(third);
+      const frames = [];
+      let shapedAt = -1;
+      for (let k = 0; k < 1500; k++) {
+        p.restale(other);
+        frames.push(p.step());
+        if (shapedAt < 0 && cut.shapeKey != null) shapedAt = k;
+      }
+      const runs = frames.flatMap((f, k) => (f.log.some((x) => x.turn === cut) ? [k] : []));
+      // The first run, with first, is cut at 50 ms; the 5 s of plain draws after it shape
+      // nothing (312 frames); the run alone comes within a few frames of their end.
+      expect([back, frames.filter((f) => f.stopped).length, runs.length]).toEqual([back, 1, 2]);
+      expect([back, frames[runs[1]].log[0].turn === cut, frames[runs[1]].stopped]).toEqual([back, true, false]);
+      expect([back, shapedAt > 0 && shapedAt < 330, cut.shapeMark ?? null, cut.refused ?? null]).toEqual([back, true, null, null]);
+      expect([back, p.v.sharedCut, p.v.aloneCut ?? 0, p.v.owedPaid > 0]).toEqual([back, 1, 0, true]);
+    } finally { p.end(); }
+  }
+}, 300000);
+
 // Herdr's stop landing after a turn's reshape has ended but before its shape is stored (here
 // in shapeLearn, as if the stop came there): nothing of the run is kept, so it counts as a cut.
 // The mark comes off only once the shape is stored, so the turn is held for that text: one
