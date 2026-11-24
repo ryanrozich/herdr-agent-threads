@@ -5392,6 +5392,8 @@ export default class Threads extends View {
   // list keeps the event to itself.
   listWheel(e) {
     const dy = Number(e?.delta?.y) || 0;
+    // A wheel is a newer move than an open card's scrolls still to come: they are not made.
+    if (dy) this.cardAsk = null;
     if (!dy || this.openActive()) return;
     // A list that fits the pane (the spacer above it) does not scroll at all.
     if (this.rowsMemo?.[0]?.kind === "spacer") return;
@@ -9594,6 +9596,9 @@ export default class Threads extends View {
     } else if (this.scrollTo) {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
+      // A newer scroll (a rail tick, a pin, the outline, a search step, another open) drops an
+      // open card's scrolls still to come; a card's own open asks for them again below.
+      this.cardAsk = null;
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }
@@ -9638,8 +9643,8 @@ export default class Threads extends View {
         // Asked by key, as the rows can change in between (a card above coming in).
         const ask = (k) => { const at = this.rowsMemo?.findIndex((x) => x.key === k) ?? -1; if (at >= 0) this.askScroll(at, "top"); };
         const last = rows[j].key, head = rows[top].key;
-        // Neither is made once a newer move has taken over (go, jumpLatest drop cardAsk): the
-        // one at 48 ms took the view back from the end after Latest.
+        // Neither is made once a newer move has taken over (go, jumpLatest, a wheel and any
+        // newer scroll drop cardAsk): the one at 48 ms took the view back from the end after Latest.
         const tok = (this.cardAsk = {});
         cx.timer.after(16, (cx) => { if (this.cardAsk === tok) ask(last); cx.notify(); });
         cx.timer.after(48, (cx) => { if (this.cardAsk === tok) { this.cardAsk = null; ask(head); } cx.notify(); });
