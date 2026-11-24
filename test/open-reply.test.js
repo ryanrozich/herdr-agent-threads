@@ -224,6 +224,22 @@ test("an open reply of 18 or 58 parts, or one with a code fence between long pro
   }
 }, 60000);
 
+// cardDone reads every Markdown part of the turn, those after a code block too: a part there
+// that still shows its old links is not settled.
+test("an open reply's parts after a code block are checked too: one that still shows its old links is not settled", async () => {
+  const { v, cx, key } = await openLong(fencedReply());
+  const done = await cardDone(v, key);
+  costedFrames(v, cx, 80, done);
+  const parts = v.baseRows.filter((r) => r.key.startsWith(`md:${key}:`) && r.kind === "md");
+  const code = v.baseRows.findIndex((r) => r.kind === "codehead" && r.key.includes(`:${key}:`));
+  const last = v.baseRows.findLastIndex((r) => r.kind === "md" && r.key.startsWith(`md:${key}:`));
+  const was = v.baseRows[last];
+  v.baseRows[last] = { ...was, md: was.src };
+  const stale = done();
+  v.baseRows[last] = was;
+  expect([parts.length, code > 0 && last > code, was.md !== was.src, done(), stale]).toEqual([54, true, true, true, false]);
+}, 60000);
+
 // Replies whose lines are long, or whose blocks run past MD_MAX with no blank line: a read of
 // the split is bounded by its work as well as its lines, and a block over the limit is split
 // over several reads like the rest, so no draw is stopped at the rig's cold price or at twice
