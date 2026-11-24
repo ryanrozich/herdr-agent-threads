@@ -1,5 +1,5 @@
 // bun test: the Trajectory's timeline as data (timeline.js, TRD-23 part 1): each heading's steps
-// as items (ledger.js ledgerTurn), the turns placed on a strip (timelineGeo), a view of them
+// as one plain number array, three a step (ledger.js ledgerTurn), the turns placed on a strip (timelineGeo), a view of them
 // (timelineLayout), the zoom and pan kept inside the session, a press found on a bar
 // (timelineHit), the torn end, and a running turn whose bars grow without the rest moving
 // (timelineModel, tlGrow). Nothing here draws. The turns are made up in the reader's shape
@@ -11,7 +11,7 @@ import * as TL from "../mods/agent-threads/timeline.js";
 
 const {
   TL_LANES, TL_ROOM_MIN, TL_ROOM_GROW, liveRoom, timelineGeo, timelineLayout, timelineHit, itemBox, tlMaxZoom, tlClamp, tlZoomAt, tlBox, bandRows,
-  tornPoints, polyRows, timelineModel, tlGrow,
+  tornPoints, polyRows, timelineModel, tlGrow, tlStep,
 } = TL;
 
 const T0 = Date.parse("2026-11-01T09:00:00Z");
@@ -34,28 +34,44 @@ function turn(n, steps, o = {}) {
 }
 const S = { agents: new Map(), agentIds: new Map() };
 const head = (t, live = false, s = S) => ledgerTurn(s, t, 0, live).rows[0];
+// A heading's steps read back, one object each, for the tests only (the pane keeps none).
+const stepsOf = (h) => h.steps.map((_, i) => tlStep(h, i));
 
-test("timeline items: each step of a heading carries its lane, start, end and track, made in the turn's own pass", () => {
+test("timeline steps: a heading keeps its steps' times as one plain number array, three a step, made in the turn's own pass", () => {
   const { rows } = ledgerTurn(S, turn(3, ["Looking first.", [["Read", "src/a.ts", 2000, 2300], ["Bash", "bun test", 2100, 45000, true]]]), 0);
   const [h, ...steps] = rows;
   expect(TL_LANES).toEqual(["input", "model", "tools"]);
-  // One item per step row, in the rows' order, keyed as the row.
-  expect(h.items.map((it) => it.key)).toEqual(steps.map((r) => r.key));
-  expect(h.items.map((it) => it.i)).toEqual(steps.map((_, i) => i));
-  const by = (lk) => h.items.filter((it) => it.lk === lk);
-  expect(by("you")[0]).toMatchObject({ lane: "input", a: 0, b: null, open: false, track: 0 });
-  expect(by("text")[0]).toMatchObject({ lane: "model", a: 1000, b: null });
-  const [read, bash] = by("tool").concat(by("failed"));
-  expect(read).toMatchObject({ lane: "tools", a: 2000, b: 2300, track: 0, failed: false });
-  // Bash starts while Read runs: the second track, drawn half height.
-  expect(bash).toMatchObject({ lane: "tools", ink: "failed", a: 2100, b: 45000, track: 1, failed: true });
+  // No object per step: the heading holds its step rows (the same rows, in order) and tl, a
+  // plain array of [a, b, flags] a step: ms from the turn's start, NaN for none; flags 1 for
+  // the second track, 2 for an unfinished call, 4 for a failed one.
+  expect(h.items).toBe(undefined);
+  expect(h.steps.length).toBe(steps.length);
+  expect(h.steps.every((r, i) => r === steps[i])).toBe(true);
+  expect(Array.isArray(h.tl)).toBe(true);
+  expect(h.tl.length).toBe(3 * steps.length);
+  expect(h.tl.every((x) => typeof x === "number")).toBe(true);
+  const at = (lk) => steps.findIndex((r) => r.lk === lk);
+  const three = (i) => h.tl.slice(3 * i, 3 * i + 3);
+  expect(three(at("you"))).toEqual([0, Number.NaN, 0]);
+  expect(three(at("text"))).toEqual([1000, Number.NaN, 0]);
+  expect(three(at("tool"))).toEqual([2000, 2300, 0]);
+  // Bash starts while Read runs: the second track, drawn half height; and it failed.
+  expect(three(at("failed"))).toEqual([2100, 45000, 1 | 4]);
+  // Read back with the row's key, kind, lane and ink.
+  expect(tlStep(h, at("failed"))).toMatchObject({ i: at("failed"), key: steps[at("failed")].key, lk: "failed", lane: "tools", ink: "failed", a: 2100, b: 45000, track: 1, open: false, failed: true });
+  expect(tlStep(h, at("you"))).toMatchObject({ lane: "input", a: 0, b: null, track: 0 });
   // The span keys are one shared pair per lane and ink, not an array per step.
   const other = head(turn(4, [[["Grep", "x", 3000, 4000]]]));
-  expect(other.items.find((it) => it.lk === "tool").sk).toBe(read.sk);
-  expect(read.sk).toEqual(["tools|tools|0", "tools|tools|1"]);
+  expect(tlStep(other, 1).sk).toBe(tlStep(h, at("tool")).sk);
+  expect(tlStep(h, at("tool")).sk).toEqual(["tools|tools|0", "tools|tools|1"]);
   // An interrupted turn's Interrupted row is no bar.
-  const stop = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 })).items.find((it) => it.lk === "stop");
-  expect(stop).toMatchObject({ lane: null, sk: null });
+  const sh = head(turn(5, [[["Read", "a", 2000, 2500]]], { interrupted: true, reply: null, end: T0 + 40000 }));
+  expect(tlStep(sh, sh.steps.findIndex((r) => r.lk === "stop"))).toMatchObject({ lane: null, sk: null });
+  // A call with no result yet: flag 2.
+  const oh = head(turn(6, [[["Bash", "sleep", 6000, null]]], { done: false, end: null, reply: null }), true);
+  const oi = oh.steps.findIndex((r) => r.open);
+  expect(oh.tl.slice(3 * oi, 3 * oi + 3)).toEqual([6000, Number.NaN, 2]);
+  expect(tlStep(oh, oi).open).toBe(true);
 });
 
 test("timeline: a turn as wide as it took, a break between turns, bars on Input, Model and Tools, joined where they touch", () => {
@@ -78,11 +94,11 @@ test("timeline: a turn as wide as it took, a break between turns, bars on Input,
   expect(L.labels.map((l) => l.text)).toEqual(["1", "2"]);
   // A press on the failed call's bar finds its row; on an empty lane, the turn's heading.
   const fx = (L.spans.get("tools|failed|0")[0][0] + L.spans.get("tools|failed|0")[0][1]) / 2;
-  expect(timelineHit(L, [a, b], fx, "tools").key).toBe(a.items.find((it) => it.failed).key);
+  expect(timelineHit(L, [a, b], fx, "tools").key).toBe(stepsOf(a).find((it) => it.failed).key);
   expect(timelineHit(L, [a, b], L.turns[1].x + L.turns[1].w - 1, "input").key).toBe(b.key);
   // Steps: every step the same width.
   const St = timelineLayout([a, b], 600, "steps");
-  expect(St.turns[0].w / a.items.length).toBeCloseTo(St.turns[1].w / b.items.length, 6);
+  expect(St.turns[0].w / a.steps.length).toBeCloseTo(St.turns[1].w / b.steps.length, 6);
   expect(St.ticks.every((t) => t.step)).toBe(true);
 });
 
@@ -90,7 +106,7 @@ test("timeline: a call with no result in a turn that is not running runs flat to
   // Not running (the running rule): the turn ends at its last recorded event, and so does the bar.
   const t = turn(3, [[["Bash", "sleep", 6000, null]], [["Read", "a", 7000, 8000]]], { done: false, end: null, reply: null });
   const h = head(t, false);
-  const open = h.items.find((it) => it.open);
+  const open = stepsOf(h).find((it) => it.open);
   expect(open).toBeTruthy();
   const L = timelineLayout([h], 400, "clock", T0 + 100000);
   const torn = L.spans.get("tools|tools|0").filter((sp) => sp[2] === 1);
@@ -140,17 +156,17 @@ test("torn end: 3 teeth 4 px tall and 5 px deep; 3 px deep under 12 px wide; a h
 
 test("torn end on the timeline: an unfinished call's span is torn and never under 6 px; a finished one is not", () => {
   const ended = head(turn(7, [[["Read", "a", 2000, 2500], ["Bash", "bun run e2e", 3000, null]]], { interrupted: true, reply: null, end: T0 + 40000 }));
-  const it = ended.items.find((x) => x.open);
+  const it = stepsOf(ended).find((x) => x.open);
   expect(it.lk).toBe("noresult");
   const L = timelineLayout([ended], 400, "clock");
   const torn = L.spans.get("tools|tools|0").filter((sp) => sp[2] === 1);
   expect(torn.length).toBe(1);
   expect(torn[0][1]).toBeCloseTo(L.turns[0].w, 3);
   // A call started at the turn's very end: 6 px, not 3.
-  const box = itemBox({ ...it, a: 99990 }, 0, 400, 100000, "clock", 4);
+  const box = itemBox([99990, Number.NaN, 2], 0, 0, 400, 100000, "clock", 4);
   expect(box.x1 - box.x0).toBe(6);
   expect(box.open).toBe(true);
-  expect(itemBox({ ...it, open: false, b: null, a: 99990 }, 0, 400, 100000, "clock", 4).x1 - 394).toBeLessThanOrEqual(6);
+  expect(itemBox([99990, Number.NaN, 0], 0, 0, 400, 100000, "clock", 4).x1 - 394).toBeLessThanOrEqual(6);
   const done = head(turn(6, [[["Read", "a", 2000, 2500]]]));
   expect([...timelineLayout([done], 400, "clock").spans.values()].flat().some((sp) => sp[2])).toBe(false);
 });
@@ -160,13 +176,13 @@ test("torn end: a subagent whose run has no end yet is unfinished too, on the su
   const id = t.steps[0].ids[0];
   const s = { agents: new Map([[id, { st: "async_launched", tok: null, ms: null }]]), agentIds: new Map() };
   const h = head(t, true, s);
-  const r = h.items.find((x) => x.lk === "subagent");
+  const r = stepsOf(h).find((x) => x.lk === "subagent");
   expect(r).toMatchObject({ open: true, ink: "sub" });
   // Running: its bar is a growing one, on the subagent's span key.
   const L = timelineLayout([h], 400, "clock", T0 + 30000);
   expect(L.grow.map((g) => g.k)).toEqual(["tools|sub|0"]);
   const done = { agents: new Map([[id, { st: "completed", tok: 1000, ms: 9000 }]]), agentIds: new Map() };
-  expect(head(t, true, done).items.find((x) => x.lk === "subagent").open).toBe(false);
+  expect(stepsOf(head(t, true, done)).find((x) => x.lk === "subagent").open).toBe(false);
 });
 
 test("timeline running turn: only the last turn moves; the strip keeps its places until the turn outgrows its room", () => {
@@ -198,7 +214,7 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
   expect((m1.L.spans.get("tools|tools|0") ?? []).some((sp) => sp[2] === 1)).toBe(false);
   // A press on the growing bar finds it; past its end (the room still empty), the heading.
   const hitX = (m2.grow[0].x0 + m2.grow[0].x1) / 2;
-  expect(timelineHit(m2.L, heads, hitX, "tools", at + 1000).key).toBe(live.items.find((it) => it.open).key);
+  expect(timelineHit(m2.L, heads, hitX, "tools", at + 1000).key).toBe(stepsOf(live).find((it) => it.open).key);
   expect(timelineHit(m2.L, heads, tx + T.w - 1, "tools", at + 1000).key).toBe(live.key);
   // Past its room the turn gets the next one, and the strip is placed again, once.
   expect(tx + T.w - 1 - m2.grow[0].x1).toBeGreaterThan(4);
@@ -221,7 +237,7 @@ test("timeline running turn: only the last turn moves; the strip keeps its place
 
 test("timeline view: zoom from 1 to four steps across, the pan kept inside the session, a zoom about a point, a turn's box", () => {
   const heads = Array.from({ length: 10 }, (_, i) => head(turn(i + 1, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 4000, 9000]]])));
-  const steps = heads.reduce((n, h) => n + h.items.length, 0);
+  const steps = heads.reduce((n, h) => n + h.steps.length, 0);
   const geo = timelineGeo(heads, 500, "clock");
   expect(geo.steps).toBe(steps);
   expect(tlMaxZoom(geo)).toBe(steps / 4);
@@ -247,14 +263,14 @@ test("timeline view: zoom from 1 to four steps across, the pan kept inside the s
 test("timeline band: the first and last steps whose bars start inside a band, in order; none when no bar starts there", () => {
   const heads = [1, 2, 3].map((n) => head(turn(n, ["a", [["Read", "x", 2000, 3000], ["Bash", "y", 30000, 40000]]])));
   const L = timelineLayout(heads, 600, "clock");
-  const box = (ti, it) => itemBox(it, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", heads[ti].items.length);
-  const read2 = heads[1].items.find((it) => it.lk === "tool");
-  const bash2 = heads[1].items.filter((it) => it.lk === "tool")[1];
+  const box = (ti, it) => itemBox(heads[ti].tl, it.i, L.turns[ti].x, L.turns[ti].w, L.geo.walls[ti], "clock", heads[ti].steps.length);
+  const read2 = stepsOf(heads[1]).find((it) => it.lk === "tool");
+  const bash2 = stepsOf(heads[1]).filter((it) => it.lk === "tool")[1];
   const b = bandRows(L, heads, box(1, read2).x0 - 0.5, box(1, bash2).x0 + 0.5);
   expect(b).toEqual({ a: read2.key, b: bash2.key });
   const across = bandRows(L, heads, L.turns[0].x, L.turns[2].x + L.turns[2].w);
-  expect(across.a).toBe(heads[0].items[0].key);
-  expect(across.b).toBe(heads[2].items.at(-1).key);
+  expect(across.a).toBe(heads[0].steps[0].key);
+  expect(across.b).toBe(heads[2].steps.at(-1).key);
   // A band inside the break between turns holds nothing.
   expect(bandRows(L, heads, L.gaps[0][0] + 1, L.gaps[0][1] - 1)).toBe(null);
   expect(bandRows(L, heads, 10, 5)).toBe(null);
