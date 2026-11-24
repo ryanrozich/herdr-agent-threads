@@ -369,6 +369,46 @@ test("a run with no break under 4,096 characters that its links would take past 
   expect(seen).toEqual([[4000, "md", 1, false, false], [4060, "md", 0, true, false]]);
 }, 60000);
 
+// The dim line says only a part's start is shown, so it shows only when text is left out. A run
+// with no break of 4,000 characters fits one view as written, but its dollar escapes take it to
+// 6,000, so it is plain text: all of it shown, with no line. Past 4,000 the line stays.
+test("a plain-text part shown whole, a 4,000-character run its dollar escapes take past one view, has no line saying only its start is shown", async () => {
+  const seen = [];
+  for (const text of ["a$".repeat(2000), "z".repeat(5000)]) {
+    const { v, cx, last } = await oneRun(text);
+    const lines = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
+    seen.push([text.length, last.kind, last.shown.length, lines.some((x) => x.includes("only its start is shown"))]);
+  }
+  expect(seen).toEqual([[4000, "mdlong", 4000, false], [5000, "mdlong", 4000, true]]);
+}, 60000);
+
+// Whether a part fits one view (partFits) is kept per open turn, by the part's text. A change of
+// the reply's text makes a new record, so a reply that grows keeps the answers for its parts
+// now; a change of the link rules or the repository drops the old answers too, so new rules do
+// not add a key of the part's text, linked, at each change.
+test("the open turn's record of which parts fit one view stays its parts' size through many changes of the text and of the link rules", async () => {
+  const { parseLinks } = await import("../mods/agent-threads/settings.js");
+  const base = "The cart total is $41.250 for ACME-1.";
+  const { v, cx, key } = await openLong(base);
+  v.probeDue = function () { this.probeLeft = 0; return []; };
+  const settle = () => { v.rowsKey = null; for (let i = 0; i < 8; i++) draw(v, cx); return v.partTurns.get(key)?.fit?.size ?? 0; };
+  const sizes = { grow: [], rules: [] };
+  let text = base;
+  for (let n = 1; n <= 12; n++) {
+    text += ` Added $${n} for ACME-${n + 1}.`;
+    v.findTurn(key).after = [text];
+    sizes.grow.push(settle());
+  }
+  for (let n = 1; n <= 12; n++) {
+    const l = parseLinks([{ name: "Ticket", pattern: "\\bACME-(\\d+)\\b", url: `https://t${n}.example.com/$1` }]);
+    v.setLinks(l.rules, l.list, 1);
+    sizes.rules.push(settle());
+  }
+  if (process.env.THREADS_COST_LOG) console.log(`fit record sizes: ${JSON.stringify(sizes)}`);
+  const most = (xs) => Math.max(...xs);
+  expect([most(sizes.grow) <= 2, most(sizes.rules) <= 2, sizes.rules.at(-1) > 0]).toEqual([true, true, true]);
+}, 60000);
+
 // In a full draw the rows of the parts split in the draws before are made first, then the split
 // goes on: the other way round the split took the draw's whole reshaping time, and no part of a
 // split that ran over several draws was shown until it had finished (at twice the price, none
