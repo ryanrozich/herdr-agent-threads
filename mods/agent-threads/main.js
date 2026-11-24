@@ -9157,6 +9157,8 @@ export default class Threads extends View {
     // and its lift are drawn, the place on screen is held, as a wheel's is (listWheel). Until
     // then the rows above the view wait (reshapeStale).
     if (this.openLand && this.follow) this.openLand = false;
+    // Not while the lift is drawn: takeAnchor has no place then, and the landing would end with
+    // no hold. (The lift's 120 ms timer runs before the 130 ms one; this is for any other order.)
     if (this.openLand === "due" && !this.scrollAsk && !this.landLift) {
       const a = this.takeAnchor();
       if (a) { a.open = true; this.anchor = a; this.fitKey = null; }
@@ -9244,7 +9246,10 @@ export default class Threads extends View {
       // A pin's place can be gone (the reply changed): the next best item, then the card.
       const st = this.scrollTo;
       this.openLand = this.openUnsettled();
-      if (this.openLand) cx.timer.after(130, (cx) => { if (this.openLand) this.openLand = "due"; cx.notify(); });
+      // Due once its scrolls (16, 48 ms) and its lift (120 ms) are drawn; 130 is a margin over
+      // those. Only for this landing (landId): an earlier jump's timer does not end a later one's.
+      const land = (this.landId = (this.landId ?? 0) + 1);
+      if (this.openLand) cx.timer.after(130, (cx) => { if (this.openLand && this.landId === land) this.openLand = "due"; cx.notify(); });
       // The pane's own scrolls never count as the person's (stickCheck); debugScroll does.
       if (st.person) { this.upAt = Date.now() + 600; this.downAt = this.upAt; }
       else { this.scrollBusyUntil = Date.now() + 500; this.upAt = 0; this.downAt = 0; }

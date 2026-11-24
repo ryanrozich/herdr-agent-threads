@@ -743,3 +743,24 @@ test("the opening: a draw that reaches its walk late still reshapes a row on scr
   const { frames } = await costlyWheel(8, 52, 6);
   expect(frames.flatMap((f) => f.starts)).toEqual([]);
 }, 120000);
+
+// Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
+// its own landing. Before, the first's ended the second's 70 ms in: its place was held before
+// the second's scrolls and lift were all drawn.
+test("the opening: a second jump 60 ms after the first is held only after its own scrolls are drawn", async () => {
+  let at = 0;
+  const { v, frames } = await leaveDuringDrain((v, cx, key, step) => {
+    const i = v.staleRows.indexOf(v.baseIndex.get(key));
+    const first = v.baseRows[v.staleRows[i - 200]].key;
+    v.setQuery(`#${v.findTurn(first).n}`, cx);
+    for (let k = 0; k < 4; k++) { if (v.scrollTo?.until) v.scrollTo.until = 1; for (const x of cx.timers) x.ms -= 15; step(); }
+    expect(v.anchor?.open).toBeFalsy();
+    at = v.landId;
+    v.setQuery(`#${v.findTurn(key).n}`, cx);
+  });
+  expect(v.staleRows.length).toBe(0);
+  // Frames are 16 ms apart from the second jump: not held before its 130 ms.
+  const h = frames.findIndex((f) => f[7]);
+  expect([v.landId > at, h >= Math.ceil(130 / 16) - 1]).toEqual([true, true]);
+  expect(frames.slice(h).filter((f) => f[4] == null || f[4] < 0 || f[4] >= 600 || Math.abs(f[4] - frames[h][4]) > 1)).toEqual([]);
+}, 60000);
