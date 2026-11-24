@@ -6862,8 +6862,6 @@ test("an open reply's links follow a change of the repository or its owner", asy
     v.setLinks(l.rules, l.list, 1);
     for (const [j, [repo, owner]] of remotes.entries()) {
       v.remote = { key: "fixed", repo, owner, host: "github.com" };
-      // The rows' key has the repository but not the owner: a new owner comes with a new origin.
-      v.rowsKey = null;
       const r = costedFrames(v, cx, 20, await cardDone(v, key));
       expect([r.stops, r.settled > 0]).toEqual([0, true]);
       expect(v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).md).toContain(want[j]);
