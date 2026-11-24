@@ -44,12 +44,14 @@ const LIMIT = 50;
 // checks; or, with scan, at the given check among those the scan makes in draws.
 let stopV = null;
 let plant = null;
-// Where the last planted stop landed: in the matches' scan (scanHits) or elsewhere.
+// Where the last planted stop landed: in the matches' scan (scanHits) or elsewhere, and the
+// turns of the session it was checking (landedIn).
 let landed = null;
+let landedIn = null;
 const realMatches = T.threadMatches;
-function stopHere() {
+function stopHere(turns) {
   if (!stopV?.renderOpen) return false;
-  if (plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : "other"; return true; }
+  if (plant?.scan ? stopV.scanning && --plant.scan === 0 : plant && checks() >= plant.at) { plant = null; landed = stopV.scanning ? "scan" : "other"; landedIn = turns; return true; }
   return base + clock() - stopV.renderAt > LIMIT;
 }
 // A seeded draw of numbers in [0, 1) (mulberry32), so a planted stop lands at the same check
@@ -119,7 +121,7 @@ function priced(v, fn) {
   base = real.call(performance);
   for (const k of Object.keys(paid)) paid[k] = 0;
   spy = spyOn(T, "threadMatches").mockImplementation((...a) => {
-    if (stopHere()) throw new Error("interrupted");
+    if (stopHere(a[0])) throw new Error("interrupted");
     return realMatches(...a);
   });
   stopV = v;
@@ -955,6 +957,71 @@ test("a stop between the writes of one place leaves no empty place to step onto,
   }
   expect(runs).toEqual(runs.map((r) => ({ side: r.side, which: r.which, after: r.after, stopped: true, landed: `${r.which} ${r.after ? "after" : "before"}`, inside: [], sel: true, cut: [], right: true })));
 }, 300000);
+
+// Hidden matches (agent messages with no reply) are counted apart from the places: hidOld for
+// the older sessions, and hidL, the newest session's turn indexes. A stop in a slice that has
+// counted some is cut back to the slice's start, so each is counted once.
+const CHECKER = [{ n: 1, re: /^Turn \d+: please check/, label: "Checker" }];
+test("hidden matches in an older session and in the newest, with a stop planted in the scan of each, are each counted once", async () => {
+  const { v, cx, s } = await longPane(3000, { bare: true });
+  const o = T.newSession("00000000-0000-4000-8000-00000000000b", s.file);
+  for (const e of events(3000, { bare: true })) T.apply(o, e);
+  o.loaded = true;
+  v.sessions = [o, s];
+  v.setSenders(CHECKER, [], 1);
+  settleRows(v, cx);
+  const runs = [];
+  // The command checks the newest 1,280 turns; the stop lands in the newest session's next
+  // slice, or once the scan is in the older session.
+  for (const [at, want] of [[300, "newest"], [2400, "older"]]) {
+    v.setQuery("", cx);
+    settleRows(v, cx);
+    v.hits = null;
+    v.sel = `1:${s.turns.length}`;
+    landed = null;
+    landedIn = null;
+    priced(v, () => {
+      v.action("search:cart", cx);
+      plant = { scan: at };
+      for (let k = 0; k < 60 && (counting(v) || plant); k++) drawOnce(v, cx);
+    });
+    runs.push({ want, landed, landedIn: landedIn === o.turns ? "older" : landedIn === s.turns ? "newest" : null, counted: !counting(v), hidden: v.hits.hidden, places: JSON.stringify(places(v)) === JSON.stringify(wantOf(v, "cart")) });
+  }
+  const n = hiddenDirect(v, "cart");
+  // 900 cart turns in each session.
+  expect(n).toBe(1800);
+  expect(runs).toEqual(runs.map((r) => ({ want: r.want, landed: "scan", landedIn: r.want, counted: true, hidden: n, places: true })));
+  expect(fieldText(v)).toBe(`No matches · ${n} hidden`);
+}, 120000);
+
+// The newest turns hidden matches, checked again (hitsTail) while the scan goes on: the tail's
+// count is kept in the slice's end mark, so the next slice's cut keeps it.
+for (const seed of PLANTED) test(`hidden matches among the newest turns, checked again while the scan goes on, are each counted once${plantName(seed)}`, async () => {
+  const { v, cx, s } = await longPane(5600, { bare: true });
+  v.setSenders(CHECKER, [], 1);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  const seen = [];
+  landed = null;
+  priced(v, () => {
+    v.action("search:cart", cx);
+    if (seed) plantStop(seeded(seed), 1000, true);
+    for (let k = 0; k < 20; k++) {
+      T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please check the cart again.`, ts });
+      T.apply(s, { k: "d", ms: 1000, ts });
+      drawOnce(v, cx);
+      seen.push(counting(v));
+    }
+    for (let k = 0; k < 60 && counting(v); k++) drawOnce(v, cx);
+  });
+  // The scan was still going while the turns came in.
+  expect(seen.slice(0, 3)).toEqual([true, true, true]);
+  if (seed) expect(landed).toBe("scan");
+  expect(counting(v)).toBe(false);
+  expect(hiddenDirect(v, "cart")).toBe(1700);
+  expect(places(v)).toEqual(want(v, "cart"));
+}, 120000);
 
 // ---- a long tail with no reply, still changing ----
 // More than HITS_TAIL turns after the newest session's last finished turn with a reply (turns
