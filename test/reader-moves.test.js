@@ -244,25 +244,46 @@ test("the pane's own scrolls leave the count: a reply growing while following, a
 
 // Herdr's field reports a value the pane sets as a change, as typing is (the pane's other
 // fields guard against it: quoteSetting, ruleSetting); the harness's does not, so this test
-// makes it. Typing counts once per change; Escape, the field's x, the search button and g
-// count once each, and the change their value sets does not count again.
+// makes it, and counts the change events it sends. For each step: what the field holds before
+// and after, the change events sent, and the count's move. Typing counts once per change;
+// Escape, the field's x, g and a search command count once each, and the change their value
+// sets does not count again (with the pane's value set straight on the field, as before
+// setSearchField, Escape, the x and g would each count twice).
 test("the search field: typing counts, and a value the pane sets does not count again", async () => {
   const { v, cx } = await pane(fixture("--extra", "10"));
   settleRows(v, cx);
   const input = v.input;
   const own = input.set_value;
-  input.set_value = (x) => { own(x); input.handlers.change?.(null, cx); };
-  const type = (x) => { own(x); input.handlers.change(null, cx); };
-  const step = (f) => { const n0 = moves(v); f(); return moves(v) - n0; };
+  let changes = 0;
+  const change = () => { changes++; input.handlers.change(null, cx); };
+  input.set_value = (x) => { own(x); change(); };
+  const type = (x) => { own(x); change(); };
+  const clear = () => handlers(v, cx).find(([m, nid]) => m === "on_click" && nid === "th-clear")[3](PRESS, cx);
+  const step = (f) => {
+    const before = input.value();
+    const n0 = moves(v);
+    const c0 = changes;
+    f();
+    return { field: [before, input.value()], changes: changes - c0, moves: moves(v) - n0 };
+  };
   const got = {
     open: step(() => v.action("filter", cx)),
     typed: step(() => type("Turn")),
     escape: step(() => v.action("escape", cx)),
     jump: step(() => v.action("jump", cx)),
     typedAgain: step(() => type("#3")),
+    x: step(clear),
     command: step(() => v.action("search:Turn", cx)),
   };
-  expect(got).toEqual({ open: 1, typed: 1, escape: 1, jump: 1, typedAgain: 1, command: 1 });
+  expect(got).toEqual({
+    open: { field: ["", ""], changes: 0, moves: 1 },
+    typed: { field: ["", "Turn"], changes: 1, moves: 1 },
+    escape: { field: ["Turn", ""], changes: 1, moves: 1 },
+    jump: { field: ["", "#"], changes: 1, moves: 1 },
+    typedAgain: { field: ["#", "#3"], changes: 1, moves: 1 },
+    x: { field: ["#3", ""], changes: 1, moves: 1 },
+    command: { field: ["", "Turn"], changes: 1, moves: 1 },
+  });
   expect(v.query).toBe("Turn");
 });
 
