@@ -10,7 +10,7 @@ import { stats, segments, reply, fmtTime as fmtTimeForTest, sessionStats as sess
 import { join } from "node:path";
 import { pinRowHeight, senderLabel, stripLayout, railDay, railSwell, RAIL, linkLineRows, cardMarks, cardReveal, statusGroups as statusGroupsForTest, keepingWeight, weightLine, weightFor, weightNear, REWRAP_PAUSE_MS, weightHerdr as weightHerdrOf } from "../mods/agent-threads/ui.js";
 import { turnIds } from "../mods/agent-threads/pins.js";
-import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
+import { trajInks, TRAJ_INKS, sessionHasEnds, laneOf, rowTimes, detailOf, trajLayout, COMPACT_PAD as COMPACT_PAD_T } from "../mods/agent-threads/ledger.js";
 
 const root = join(import.meta.dir, "..");
 const modDir = join(root, "mods/agent-threads");
@@ -20319,4 +20319,34 @@ test("TRD-24: along the bottom a turn's heading drops its figures by the list's 
   const { b: d, cb: dc } = await bottomPane(700, 400);
   d.tdetail = true;
   expect([headTok(frame(d, dc)), headCalls(frame(d, dc)) > 0]).toEqual([headTok(frame(r, rc)), headCalls(frame(r, rc)) > 0]);
+});
+
+const trajLayoutOf = (w, open) => { const L = trajLayout(w, "bottom", open); return { side: L.side, detailW: L.detailW, listW: L.listW }; };
+test("TRD-24: along the bottom a 1 px size change across any layout threshold counts: the side detail, the start and bar columns, and a heading's figures; one across none waits, and the right dock's rule is unchanged", async () => {
+  // [dock, from px, to px, detail as the person left it, counts]
+  for (const [dock, from, to, open, counts] of [
+    ["bottom", 699, 700, undefined, true], ["bottom", 700, 699, undefined, true],
+    ["bottom", 779, 780, undefined, true], ["bottom", 780, 779, undefined, true],
+    ["bottom", 859, 860, undefined, true], ["bottom", 860, 859, undefined, true],
+    ["bottom", 339, 340, undefined, true], ["bottom", 419, 420, undefined, true], ["bottom", 499, 500, undefined, true],
+    // The filter bar goes by the pane's width.
+    ["bottom", 539, 540, undefined, true], ["bottom", 540, 539, undefined, true],
+    // The detail closed: the list is the pane, and 780 crosses nothing more than 779.
+    ["bottom", 779, 780, false, false], ["bottom", 419, 420, false, true],
+    ["bottom", 800, 801, undefined, false], ["bottom", 1459, 1460, undefined, false],
+    // On the right only the compact widths (200 px with the 2 px frame) and the heading's icon
+    // count, as before this change: its own thresholds (900, 420, 500) wait like any 1 px change,
+    // an older gap kept for a change of its own.
+    ["right", 899, 900, undefined, false], ["right", 699, 700, undefined, false], ["right", 419, 420, undefined, false],
+    ["right", 197, 198, undefined, true],
+  ]) {
+    const { b, cb } = await bottomPane(from, 400, dock);
+    b.tdetail = open;
+    const before = b.trajReport().layout;
+    const c = frame(b, cb);
+    handlerAfterId(c, "threads-root", "on_size_change")({ width: to, height: 400 }, cb);
+    expect([dock, from, to, open, b.paneW]).toEqual([dock, from, to, open, counts ? to : from]);
+    if (counts && dock === "bottom") expect(b.trajReport().layout).toEqual(trajLayoutOf(to, b.detailOpen()));
+    else if (dock === "bottom") expect(b.trajReport().layout).toEqual(before);
+  }
 });

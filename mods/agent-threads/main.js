@@ -11468,6 +11468,15 @@ export default class Threads extends View {
   // the list's, so a 340 px list beside the detail shows what a 340 px right pane shows; on the
   // right, and in the Chat's own pane, the pane's, as before.
   rowW() { return this.trajPane && this.trajDock === "bottom" ? this.trajShape().listW : this.pw(); }
+  // Along the bottom, what a width gives the layout (trajLayout: the detail's side, the list's
+  // columns; headParts: a heading's figures by the list's width), so the size callback counts a
+  // 1 px change across any of them. "" on the right, where only its own widths count.
+  dockForm(x) {
+    if (!(this.trajPane && this.trajDock === "bottom")) return "";
+    const L = trajLayout(x, "bottom", this.tdetail ?? true);
+    const h = headParts({ calls: 1, tokens: 1 }, L.listW);
+    return `|${L.side}${L.cols.start ? "s" : ""}${L.cols.bar ? "b" : ""}${L.cols.filters ? "f" : ""}${h.calls ? "c" : ""}${h.tokens ? "t" : ""}`;
+  }
   // Whether the detail shows: as the person last left it, or by the layout until then (open at
   // its right, closed under the ledger). Along the bottom under 700 px there is none.
   detailOpen() {
@@ -11597,8 +11606,9 @@ export default class Threads extends View {
         const pw = size.width / this.zoom();
         this.measuredWidth = size.width;
         // A change of 1 px counts when it takes the pane across 200 or 64 px (ledger.js trajCompact), or
-        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way.
-        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}`;
+        // across HEAD_ICON_MIN inside the frame, where the compact heading's list icon gives way;
+        // along the bottom, also across any of its layout's thresholds (dockForm).
+        const form = (x) => `${trajCompact(Math.round(x) + PANE_FRAME)}${x >= HEAD_ICON_MIN ? "+" : ""}${this.dockForm(x)}`;
         const cross = this.paneW != null && form(pw) !== form(this.paneW);
         if (!this.forcedWidth && (cross || Math.abs(pw - (this.paneW ?? -9)) > 1)) { this.paneW = pw; this.shareWidth(); cx.notify(); }
       })
