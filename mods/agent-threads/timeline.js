@@ -250,6 +250,7 @@ export function timelineLayout(heads, cw, scale = "clock", nowMs = Date.now(), v
       if (b > last[1]) { last[1] = b; if (torn) last[2] = 1; else last.length = 2; }
       else if (torn && b === last[1]) last[2] = 1;
       while (list.length > 1 && list[list.length - 2][1] + 0.5 >= last[0]) {
+        // The list was apart and in order, so last ends past p: p always takes last's end and torn mark (no equal ends).
         const p = list[list.length - 2];
         if (last[0] < p[0]) p[0] = last[0];
         if (last[1] >= p[1]) { p[1] = last[1]; if (last[2]) p[2] = 1; else p.length = 2; }
