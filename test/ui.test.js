@@ -1045,6 +1045,48 @@ test("mdChunks: each piece of a long table starts with its header rows, each pie
   expect(mdChunks(`${head}\n${rows.slice(0, 4).join("\n")}`, 60).some((p) => p.startsWith("| checkout"))).toBe(true);
 });
 
+// Japanese and Chinese prose has no space between words: a line of it over the limit splits
+// after its sentence and clause marks, the full-width forms only (。！？；，、：), as English
+// splits at spaces. Each piece is within the limit, the pieces join back to the text, and each
+// but the last ends at a mark or a space. Made-up prose.
+const CJK_MARKS = "\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A";
+const prose = (clauses, n) => { let out = ""; for (let i = 0; out.length < n; i++) out += clauses[i % clauses.length]; return out; };
+const splitAtMarks = (md, max) => {
+  const parts = mdChunks(md, max);
+  const ends = parts.slice(0, -1).every((p) => CJK_MARKS.includes(p.at(-1)) || /\s$/.test(p));
+  return [parts.length > 1, parts.every((p) => Buffer.byteLength(p) <= max), parts.join("") === md, ends];
+};
+test("mdChunks: a paragraph of Japanese or Chinese prose with no space splits after its sentence and clause marks, within the limit", () => {
+  const stops = prose(["今日は配送ルートの確認を朝のうちに終えました。", "在庫は数え直しますか？", "明天的路线表会在中午之前发出！"], 5000);
+  // On commas alone, no full stop: a long list of clauses.
+  const commas = prose(["倉庫の在庫を午後に数え直し、", "仓库的订单按线路分配给司机，", "明天的路线表在中午之前发出，"], 5000);
+  // Every mark, and a line that starts with marks.
+  const every = `。、${prose(["一つ目の項目；", "二つ目：", "三つ目、", "四つ目，", "五つ目！", "六つ目？", "七つ目。"], 5000)}`;
+  const texts = [stops, commas, every];
+  expect([texts.map((md) => [md.length > 4000, /\s/.test(md)]), /[。！？]/.test(commas)]).toEqual([texts.map(() => [true, false]), false]);
+  expect(texts.map((md) => splitAtMarks(md, MD_MAX))).toEqual(texts.map(() => [true, true, true, true]));
+});
+
+test("mdChunks: a paragraph of Japanese or Chinese prose with ASCII words and spaces splits within the limit, at marks and spaces, its ASCII words whole", () => {
+  const cjk = prose(["今日は配送ルートの確認を朝のうちに終えました。", "仓库的订单按线路分配给每一位司机，"], 2500);
+  const md = `Release v2.1 notes: ${cjk} see ACME-12 and ACME-13 for the routes ${cjk}ACME-14の件は済みました。 Done.`;
+  expect(splitAtMarks(md, MD_MAX)).toEqual([true, true, true, true]);
+  const parts = mdChunks(md, MD_MAX);
+  expect(["v2.1", "ACME-12", "ACME-13", "ACME-14の件は済みました。"].every((w) => parts.some((p) => p.includes(w)))).toBe(true);
+});
+
+// With none of the seven marks, text splits as before at spaces alone (mdChunksBefore, the old
+// rule), the half-width , . : ; ! ? included: a word made of them is still one word.
+test("mdChunks: text with none of the full-width marks splits as before, half-width punctuation included", () => {
+  const texts = [
+    "The cart total rounds per line; see ACME-12, then ACME-13: done! Or not? ".repeat(400),
+    `${"a,b.c:d;e!f?g".repeat(600)} tail, after the long word.`,
+    "日本 ".repeat(3000),
+    `Intro.\n\n${"word, ".repeat(2000)}\n${"z.".repeat(3000)}`,
+  ];
+  for (const md of texts) for (const max of [MD_MAX, 500]) expect(mdChunks(md, max)).toEqual(mdChunksBefore(md, max));
+});
+
 test("escapeDollars: prices outside code are escaped, code and escaped ones are not", () => {
   expect(escapeDollars("The $41.250 total includes **4,180 look-ups at $0.009 each**."))
     .toBe("The \\$41.250 total includes **4,180 look-ups at \\$0.009 each**.");

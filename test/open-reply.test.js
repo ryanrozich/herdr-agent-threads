@@ -291,11 +291,11 @@ test("a light draw sizes no part longer than MD_MAX: with one 200,000-character 
   expect([r.frames[0].ok, lit.length > 0, lit.filter((f) => !f.ok).length, Math.max(...lit.map((f) => f.ms)) < 25, r.stops <= 7]).toEqual([false, true, 0, true, true]);
 }, 60000);
 
-// A part longer than 4,000 characters is a run with no space or line break (a word longer than
-// MD_MAX), past what Herdr draws as one Markdown view, and at twice the price its height alone
-// ran past Herdr's time in every full draw that sized it, for good. It shows as plain text: its
-// first 4,000 characters under a dim line saying so, at a height counted from its length, with
-// no link rules on it. c copies all of it.
+// A part longer than 4,000 characters is a run with no space, line break or Japanese or Chinese
+// sentence or clause mark (a word longer than MD_MAX), past what Herdr draws as one Markdown
+// view, and at twice the price its height alone ran past Herdr's time in every full draw that
+// sized it, for good. It shows as plain text: its first 4,000 characters under a dim line
+// saying so, at a height counted from its length, with no link rules on it. c copies all of it.
 test("a reply of one 200,000-character word shows its start as plain text under a line saying so, draws in time at the price and twice it, and c copies all of it", async () => {
   const word = "z".repeat(200000);
   for (const scale of PRICE_SCALES) {
@@ -306,7 +306,7 @@ test("a reply of one 200,000-character word shows its start as plain text under 
     costLog(`one 200,000-character word, at ${scale}x`, r);
     expect([scale, r.stops, r.settled > 0, part()?.kind, part()?.shown?.length]).toEqual([scale, 0, true, "mdlong", 4000]);
     const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-    expect([text.includes("This part is 200,000 characters with no space; only its start is shown. Copy (c) copies all of it."), text.includes(word.slice(0, 4000)), text.some((x) => x.length > 4000)]).toEqual([true, true, false]);
+    expect([text.includes("This part is 200,000 characters with no place to break it; only its start is shown. Copy (c) copies all of it."), text.includes(word.slice(0, 4000)), text.some((x) => x.length > 4000)]).toEqual([true, true, false]);
     // c, on the selected turn.
     v.sel = key;
     cx.clip = null;
@@ -909,24 +909,31 @@ test.skip("following, a read that brings a new turn drops a scroll still waiting
   expect([v.current().turns.length, v.follow, v.toBottom, v.scrollTo ?? null]).toEqual([3, true, true, null]);
 });
 
-// Japanese and Chinese prose has no space between words, so a long paragraph of it is one run
-// with no space or line break, like a word longer than MD_MAX. It is ordinary text: it shows
-// whole, with no line saying it has no space and that only its start is shown. Made-up prose,
-// about 5,000 characters, with the ideographic full stop and no ASCII space or line break.
-const cjkProse = () => {
-  const s = ["今日は配送ルートの確認を朝のうちに終えました。", "倉庫の在庫は午後に数え直す予定です。", "仓库的订单按线路分配给每一位司机。", "明天的路线表会在中午之前发出。"];
+// Japanese and Chinese prose has no space between words, so a long paragraph of it has no space
+// or line break. It is ordinary text: it splits after its sentence and clause marks and shows
+// whole, in Markdown parts, with no line saying that only its start is shown. Made-up prose,
+// about 5,000 characters with no ASCII space or line break: with full stops, and on commas
+// alone with no full stop (a long list of clauses).
+const cjkProse = (s) => {
   let out = "";
   for (let i = 0; out.length < 5000; i++) out += s[i % s.length];
   return out;
 };
-test("a paragraph of Japanese or Chinese prose over 4,000 characters, with no space, shows whole and not as a run with no space", async () => {
-  const para = cjkProse();
+async function shownWhole(para) {
   const { v, cx, key } = await openLong(para);
   v.probeDue = function () { this.probeLeft = 0; return []; };
   const waiting = () => v.baseRows.some((x) => x.kind === "mdrest" && x.key.includes(`:${key}:`));
   for (let i = 0; i < 200 && (i < 2 || waiting()); i++) draw(v, cx);
   const card = v.baseRows.filter((x) => x.key.startsWith(`md:${key}:`));
   const text = frame(v, cx).filter((e) => e[0] === "child" && typeof e[1] === "string").map((e) => e[1]);
-  expect([para.length > 5000, /[ \n]/.test(para), waiting(), card.map((x) => x.kind).filter((k) => k !== "md"), card.map((x) => x.src).join(""), text.some((x) => x.includes("with no space"))])
-    .toEqual([true, false, false, [], para, false]);
+  return [para.length > 5000, /[ \n]/.test(para), waiting(), card.map((x) => x.kind).filter((k) => k !== "md"), card.map((x) => x.src).join(""), text.some((x) => x.includes("only its start is shown"))];
+}
+test("a paragraph of Japanese or Chinese prose over 4,000 characters, with no space, shows whole and not only its start", async () => {
+  const para = cjkProse(["今日は配送ルートの確認を朝のうちに終えました。", "倉庫の在庫は午後に数え直す予定です。", "仓库的订单按线路分配给每一位司机。", "明天的路线表会在中午之前发出。"]);
+  expect(await shownWhole(para)).toEqual([true, false, false, [], para, false]);
+}, 60000);
+test("a paragraph of Japanese or Chinese prose over 4,000 characters on commas, with no full stop or space, shows whole", async () => {
+  const para = cjkProse(["倉庫の在庫を午後に数え直し、", "配送ルートの確認を朝のうちに終え、", "仓库的订单按线路分配给每一位司机，", "明天的路线表在中午之前发出，"]);
+  expect(/[。！？]/.test(para)).toBe(false);
+  expect(await shownWhole(para)).toEqual([true, false, false, [], para, false]);
 }, 60000);
