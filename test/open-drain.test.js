@@ -725,7 +725,9 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       if (stopped) { v.renderOpen = true; H.rec = null; }
       return starts;
     };
-    for (let k = 0; v.openActive() && k < 600; k++) step();
+    // The frames the opening took to show the list.
+    let opened = 0;
+    for (; v.openActive() && opened < 600; opened++) step();
     step();
     // An agent writing the newest turn: it runs, and its reply grows a line each frame.
     const live = v.sessions.at(-1).turns.at(-1);
@@ -754,7 +756,7 @@ async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, st
       const away = [...stale].filter((i) => !v.staleRows.includes(i) && (i + off < r.start || i + off >= r.end)).length;
       out.push({ starts: s, seen, offLate, over, blank: blankInView(v), drawn: r.end - r.start, away, stopped, owed: v.owedPaid ?? 0, owedAlone: v.owedAlone ?? 0, alone: v.aloneRun ?? 0 });
     }
-    return { v, frames: out };
+    return { v, frames: out, opened };
   } finally { H.listWindow = null; performance.now = realPerf; }
 }
 
@@ -1178,6 +1180,52 @@ test("the opening: after a plain error in an owed row's run alone, the next rend
   expect(changed).toBeGreaterThan(60);
   expect(runs.length).toBeGreaterThan(0);
   expect(runs.filter(([, alone]) => alone)).toEqual([]);
+}, 300000);
+
+// Past the line a row whose cost is unknown (no rate learned yet) does not start: only one
+// expected to fit may (lineCut), and an unknown cost does not count as fitting. With 40 ms of
+// fixed work in the walk, every walk starts past the 35 ms line: the rows on screen left after
+// a wheel up are refused there and owed, and each is reshaped at the start of the next draw
+// (payOwed, where an unknown cost goes ahead as a draw's first does). No reshape starts past 35
+// ms, and the rows on screen fill.
+test("the opening: before a rate is learned, a walk past the line starts no reshape, and the rows on screen are reshaped first in the next draw", async () => {
+  const { v, frames } = await costlyWheel(4, 40, 120, (v, cx, host) => { wheelUp(v, cx, host); v.shapeRate = undefined; }, { after: 0 });
+  expect(v.shapeRate ?? null).toBeNull();
+  expect(frames.flatMap((f) => f.starts).filter((ms) => ms > 35)).toEqual([]);
+  expect(frames.reduce((n, f) => n + f.starts.length, 0)).toBeGreaterThan(0);
+  expect([v.owedPaid > 0, frames.at(-1).blank]).toEqual([true, 0]);
+}, 300000);
+
+// While following, the walk takes the rows left newest first, and past the line it stops at the
+// first row off screen, not at the first row: the rows on screen are still looked at, and the
+// first of them that fits starts (lineCut). With 40 ms of fixed work in the walk every walk is
+// past the line; the rows on screen at the end, left to reshape again (their text the same),
+// are reshaped one a draw at about 40 ms, and none is left after 30 frames.
+test("the opening: following, a walk past the line still reshapes the rows on screen, one a draw, before it stops at the first row off screen", async () => {
+  let rows = [];
+  const { v, frames } = await costlyWheel(4, 40, 30, (v) => {
+    const r = lastList.range;
+    rows = v.rowsMemo.slice(r.start, r.end).map((x) => x.turn).filter(Boolean);
+    for (const t of rows) restaleRow(v, t);
+  }, { after: 0, stop: true });
+  expect(v.follow).toBe(true);
+  expect(rows.length).toBeGreaterThanOrEqual(2);
+  const left = rows.filter((t) => t.shapeKey == null);
+  expect(left).toEqual([]);
+  expect(frames.flatMap((f) => f.starts).filter((ms) => ms > 35).length).toBeGreaterThanOrEqual(rows.length - 1);
+  expect(frames.filter((f) => f.stopped).length).toBe(0);
+}, 300000);
+
+// In the opening the rows it waits for (the rows drawn and 40 either side, nearSpan) count as on
+// screen past the line, not only the rows drawn: with 40 ms of fixed work in the walk from the
+// read's end, every walk is past the line, and the opening still shows the list, one of those
+// rows reshaped a draw. Were only the rows drawn counted, the 40 above them would wait for a walk
+// that starts before the line, which never comes.
+test("the opening: with every walk past the line, the rows the opening waits for are reshaped one a draw, and the list shows", async () => {
+  const { v, opened } = await costlyWheel(4, 40, 1, () => {}, { after: 0 });
+  expect(v.openActive()).toBe(false);
+  expect(opened).toBeLessThan(400);
+  expect(v.lateWalks).toBeGreaterThan(40);
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
