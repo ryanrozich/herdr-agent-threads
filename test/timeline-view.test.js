@@ -117,7 +117,7 @@ test("timeline view: it starts hidden when fewer than 4 rows would be left under
   listTall(b, cb, 3 * 24 + 23 + 98);
   let c = frame(b, cb);
   expect(ids(c)).not.toContain("th-timeline");
-  expect(b.report().traj.timeline).toMatchObject({ shown: false, hidden: null, rowsLeft: 3 });
+  expect(b.trajReport().timeline).toMatchObject({ shown: false, hidden: null, rowsLeft: 3 });
   expect(ids(c)).toContain("th-traj-timeline");
   b.key(keyEv("b"), cb);
   c = frame(b, cb);
@@ -128,7 +128,7 @@ test("timeline view: it starts hidden when fewer than 4 rows would be left under
   own(c, "th-traj-timeline").find((e) => e[0] === "on_click").at(-1)({}, cb);
   c = frame(b, cb);
   expect(ids(c)).toContain("th-timeline");
-  expect(b.report().traj.timeline).toMatchObject({ shown: true, hidden: false });
+  expect(b.trajReport().timeline).toMatchObject({ shown: true, hidden: false });
   // Four whole rows: it shows from the start, and the list it leaves shorter keeps it shown.
   const p = await dockPane(fixture("--extra", "3"), "bottom", 1440);
   listTall(p.b, p.cb, 4 * 24 + 98);
@@ -136,7 +136,7 @@ test("timeline view: it starts hidden when fewer than 4 rows would be left under
   expect(ids(c)).toContain("th-timeline");
   handlerAfterId(c, "th-traj-listbox", "on_size_change")({ width: 1440, height: 4 * 24 }, p.cb);
   expect(ids(frame(p.b, p.cb))).toContain("th-timeline");
-  expect(p.b.report().traj.timeline).toMatchObject({ shown: true, hidden: null, rowsLeft: 4 });
+  expect(p.b.trajReport().timeline).toMatchObject({ shown: true, hidden: null, rowsLeft: 4 });
   const sheet = (o) => keySheet("q", { ledger: true, ...o }).flatMap(([, rows]) => rows).map(([k, w]) => `${k.join(" ")}: ${w}`);
   expect(sheet({ timeline: true })).toContain("b: Show or hide the timeline");
   expect(sheet({}).some((x) => x.startsWith("b:"))).toBe(false);
@@ -156,7 +156,7 @@ test("timeline view: while the rows are built its slot keeps 98 px and holds one
   expect(words(own(c, "th-tl-wait"))).toEqual(["The timeline shows once the whole session is read"]);
   expect(own(c, "th-tl-wait")).toContainEqual(["text_color", theme.dim]);
   expect(ids(c)).not.toContain("th-tl-lanes");
-  expect(b.report().traj.timeline.waiting).toBe(true);
+  expect(b.trajReport().timeline.waiting).toBe(true);
   b.buildMax = () => 1e9;
   for (let n = 0; b.ledgerJob && n < 50; n++) c = frame(b, cb);
   c = frame(b, cb);
@@ -244,21 +244,24 @@ test("timeline view: a failed call is red, a subagent's at 45%, and the running 
   r.b.ledgerMemo = null;
   const L = r.b.ledger();
   expect(L.going).toBe(true);
-  const t0 = L.totals.heads.at(-1).t0;
+  const { t0, span } = L.totals.heads.at(-1);
+  // Two moments past the call's start, inside the running turn's room (timeline.js liveRoom).
+  const room = TL.liveRoom(span);
+  expect(room).toBeGreaterThan(span);
   try {
-    setSystemTime(new Date(t0 + 3000));
+    setSystemTime(new Date(t0 + span + (room - span) / 3));
     shownFrame(r.b, r.cb);
     const m1 = r.b.tlModel;
     expect(m1.grow.length).toBe(1);
     c = frame(r.b, r.cb);
     expect(own(c, "th-tl-grow-0")).toContainEqual(["bg", inks.tools]);
     const a = m1.grow[0].x1;
-    setSystemTime(new Date(t0 + 6000));
+    setSystemTime(new Date(t0 + span + (2 * (room - span)) / 3));
     frame(r.b, r.cb);
     const m2 = r.b.tlModel;
     expect(m2.geo).toBe(m1.geo);
     expect(m2.grow[0].x1).toBeGreaterThan(a);
-    expect(r.b.report().traj.timeline.grow.length).toBe(1);
+    expect(r.b.trajReport().timeline.grow.length).toBe(1);
   } finally {
     setSystemTime();
     H.state.terminals[0].status = "idle";
@@ -268,7 +271,7 @@ test("timeline view: a failed call is red, a subagent's at 45%, and the running 
 test("timeline view: the debug report's traj.timeline says whether it shows, and what the last draw laid out and how long it took", async () => {
   const { b, cb } = await dockPane(fixture("--extra", "3"), "bottom", 1440);
   shownFrame(b, cb);
-  const tl = b.report().traj.timeline;
+  const tl = b.trajReport().timeline;
   expect(Object.keys(tl).sort()).toEqual(["can", "cw", "drawn", "grow", "hidden", "labels", "layers", "live", "ms", "rowsLeft", "shown", "spans", "turns", "waiting"]);
   expect(tl).toMatchObject({ can: true, shown: true, waiting: false, cw: 1370, turns: b.ledger().totals.heads.length, live: -1, grow: [] });
   expect(tl.spans).toBeGreaterThan(0);

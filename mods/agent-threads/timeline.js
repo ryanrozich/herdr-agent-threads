@@ -53,6 +53,22 @@ export function tlStep(h, i) {
 // unfinished bars grow (layout.grow, tlGrow), until it outgrows its room and the strip is
 // placed again: fifteen times in its first hour. nowMs: the clock, for the running turn.
 export const TL_LANES = Object.freeze(["input", "model", "tools"]);
+// Where it is drawn (round 8, slice 1): across the top of the Trajectory pane from TL_MIN_W px
+// wide, TL_H px tall with the line under it. A TL_GUT px gutter of lane names, then the strip:
+// TL_PT, the turn numbers (TL_AX), the ticks (TL_TK), TL_LT, the three TL_LANE px lanes, 2 px
+// and TL_PB. It starts hidden where it would leave fewer than TL_ROWS_MIN rows of the list.
+export const TL_MIN_W = 540;
+export const TL_H = 98;
+export const TL_GUT = 58;
+export const TL_AX = 18;
+export const TL_TK = 15;
+export const TL_LT = 3;
+export const TL_LANE = 16;
+export const TL_PT = 4;
+export const TL_PB = 7;
+export const TL_ROWS_MIN = 4;
+// The strip's width in a pane w px wide: the pane less the gutter and a 12 px margin.
+export function tlStrip(w) { return Math.max(40, Math.floor(w - TL_GUT - 12)); }
 export const TL_ROOM_MIN = 10000;
 export const TL_ROOM_GROW = 1.5;
 export function liveRoom(ms) {

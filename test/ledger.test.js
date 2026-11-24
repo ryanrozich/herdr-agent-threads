@@ -9,7 +9,7 @@ import {
   ledgerTurn, headParts, ledgerTotals, ledgerCols, barFrac, durText, startText, coarse, LEDGER_KINDS, LEDGER_ROW, LEDGER_HEAD, TRAJ_INKS, trajInks,
   trajCompact, compactRow,
   laneOf, USER_COLOR, ALL_ROWS, filterOn, filterRows, passes, detailOf, turnRunning, filterButtons, toggleFilter, ledgerStatus, slantPoints,
-  BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, sessionHasEnds, rowTimes,
+  BAR_W, BAR_H, BAR_SLANT, sessionHasEnds, rowTimes,
   trajLayout, rowsLeft, DOCK_SIDE_MIN, DOCK_LIST_MAX, DOCK_DETAIL_MIN,
 } from "../mods/agent-threads/ledger.js";
 import { fmtTime } from "../mods/agent-threads/core/turns.js";
@@ -79,7 +79,6 @@ test("ledger times: a turn with no step times leaves its cells empty and its hea
   const t = turn(2, ["Thinking.", [["Read", "a", null, null], ["Bash", "b", null, null]]], { untimed: true });
   const { rows } = ledgerTurn(S, t, 0);
   expect(rows[0].timed).toBe(false);
-  expect(rows[0].line).toBe(null);
   expect(headParts(rows[0]).total).toBe("no times");
   for (const r of rows.slice(1)) expect([r.start, r.dur, r.startQ, r.durQ]).toEqual([null, null, false, false]);
   // Calls of an agent that writes no result times are ordinary calls: the outcome is not recorded.
@@ -197,18 +196,7 @@ test("ledger bars: one scale for the session, each step of ten the same length, 
   expect(barFrac(null)).toBe(0);
 });
 
-test("ledger line: the turn's clock with each call a stretch of it, failed ones apart, touching stretches joined", () => {
-  const t = turn(4, [[["Read", "a", 6000, 12000], ["Grep", "b", 12000, 18000], ["Bash", "c", 30000, 36000, true]]]);
-  const { line } = ledgerTurn(S, t, 0).rows[0];
-  expect(line.tools).toEqual([[0.1, 0.3]]);
-  expect(line.red).toEqual([[0.5, 0.6]]);
-  // The reply is the model's stretch of the line (from its first word to the turn's end).
-  expect(line.model.length).toBe(1);
-  expect(line.sub).toEqual([]);
-  // A call of a few ms still shows.
-  const quick = ledgerTurn(S, turn(9, [[["Read", "a", 6000, 6001]]]), 0).rows[0].line.tools[0];
-  expect(quick[1] - quick[0]).toBeGreaterThan(0.005);
-  // Drawn as elements, at most n stretches, the closest joined first.
+test("ledger coarse: drawn as elements, at most n stretches, the closest joined first", () => {
   expect(coarse([[0, 0.1], [0.11, 0.2], [0.5, 0.6], [0.9, 1]], 3)).toEqual([[0, 0.2], [0.5, 0.6], [0.9, 1]]);
 });
 
@@ -378,8 +366,8 @@ test("ledger: the last turn read so far of a session still being read claims no 
   expect(ledgerTurn(S, ended, 0, false, { reading: true }).rows[0].reading).toBe(false);
 });
 
-test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant, the heading line's in 4 px", () => {
-  expect([BAR_W, BAR_H, BAR_SLANT, LINE_SLANT, LEDGER_HEAD]).toEqual([64, 4, 5, 4, 40]);
+test("ledger bars: 64 by 4 px; an unfinished call's bar ends in one 5 px slant", () => {
+  expect([BAR_W, BAR_H, BAR_SLANT, LEDGER_HEAD]).toEqual([64, 4, 5, 40]);
   expect(slantPoints(0, 64, 4, 5)).toEqual([[0, 0], [64, 0], [59, 4], [0, 4]]);
   // Narrower than the slant: a plain box.
   expect(slantPoints(10, 13, 3, 4)).toEqual([[10, 0], [13, 0], [13, 3], [10, 3]]);

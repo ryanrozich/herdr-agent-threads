@@ -105,9 +105,6 @@ export function barFrac(ms) {
 export const BAR_W = 64;
 export const BAR_H = 4;
 export const BAR_SLANT = 5;
-// The thin line under a turn heading: 3 px, an unfinished call's end one 4 px slant.
-export const LINE_H = 3;
-export const LINE_SLANT = 4;
 // A slanted right end as a polygon, in px: [x, y] points of a bar from a to z, h tall, whose
 // top runs d px past its foot. Under d px wide it is a plain box, never a sliver.
 export function slantPoints(a, z, h, d) {
@@ -210,24 +207,9 @@ function firstLine(text) {
   return flattenMd(line.slice(0, 800), 200).trim().slice(0, 200);
 }
 
-// Stretches of the turn's clock, merged where they touch, as fractions of the turn: [[a, b]].
-// A stretch is at least `min` long so a call of a few ms still shows.
-function stretches(list, t0, span, min = 0.006) {
-  const segs = list.map(([s, e]) => [(s - t0) / span, (e - t0) / span])
-    .map(([a, b]) => [Math.max(0, Math.min(1, a)), Math.max(0, Math.min(1, b))])
-    .map(([a, b]) => (b - a < min ? [Math.max(0, Math.min(a, 1 - min)), Math.min(1, Math.max(a, 1 - min) + min)] : [a, b]))
-    .sort((x, y) => x[0] - y[0]);
-  const out = [];
-  for (const sg of segs) {
-    const last = out[out.length - 1];
-    if (last && sg[0] <= last[1]) last[1] = Math.max(last[1], sg[1]);
-    else out.push([sg[0], sg[1]]);
-  }
-  return out;
-}
-
-// At most n stretches: the closest neighbours are joined until n are left, for a drawing
-// that makes an element per stretch (the line without vector paths).
+// At most n stretches ([[a, b]] in order): the closest neighbours are joined until n are
+// left, for a drawing that makes an element per stretch (the timeline's bars without vector
+// paths, main.js rectLayer).
 export function coarse(segs, n = 40) {
   const out = segs.map((x) => [x[0], x[1]]);
   while (out.length > n) {
@@ -299,14 +281,6 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
   let calls = 0;
   let fails = 0;
   let lastEnd = t0;
-  // The line under the heading: calls (a subagent's apart, failed ones red), the reply, and
-  // the unfinished calls, each drawn with its slanted end.
-  const tools = [];
-  const sub = [];
-  const model = [];
-  const red = [];
-  const openAt = [];
-  const openSub = [];
   cells.forEach((c, i) => {
     const r = { kind: "tr", key: `tr:${key}:${i}`, turn, si, lk: "text", text: "", tool: null, status: null, start: null, dur: null, startQ: false, durQ: false, failed: false };
     if (c.start != null) lastEnd = Math.max(lastEnd ?? c.start, c.start);
@@ -327,7 +301,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       if (c.start != null && t0 != null) r.start = c.start - t0;
       else r.startQ = true;
       if (isReply) {
-        if (c.start != null && c.end != null) { r.dur = c.end - c.start; model.push([c.start, c.end]); }
+        if (c.start != null && c.end != null) r.dur = c.end - c.start;
         else r.durQ = true;
       }
     } else if (c.kind === "tool") {
@@ -367,8 +341,6 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       const ms = c.subagent?.ms ?? (c.start != null && c.end != null ? c.end - c.start : null);
       if (Number.isFinite(ms)) r.dur = ms;
       else if (!r.open && !r.reading && (r.lk === "tool" || r.lk === "subagent" || r.lk === "failed")) r.durQ = true;
-      if (c.start != null && c.end != null) (failed ? red : c.subagent ? sub : tools).push([c.start, c.end]);
-      else if (c.start != null && r.open) (subOpen ? openSub : openAt).push(c.start);
     } else if (c.kind === "more") {
       calls += c.count;
       r.lk = "more";
@@ -404,11 +376,6 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
       if (tr.interrupted) r.interrupted = true;
     }
   }
-  const open = openAt.map((a) => [a, Math.max(a, t1)]);
-  const opens = openSub.map((a) => [a, Math.max(a, t1)]);
-  const line = timed && span > 0
-    ? { tools: stretches(tools, t0, span), sub: stretches(sub, t0, span), model: stretches(model, t0, span), red: stretches(red, t0, span), open: stretches(open, t0, span), openSub: stretches(opens, t0, span) }
-    : null;
   // The turn's own counts, for the filter buttons and the status line, and its steps on the
   // timeline (timeline.js): tl, one plain number array of three a step, in the rows' order:
   // the start and end (ms from the turn's start, NaN for none: an instant has no end) and the
@@ -441,7 +408,7 @@ export function ledgerTurn(s, turn, si, live = false, opts = {}) {
     // going, not live or running: those mark the chat's live rows, which tick a clock (main.js).
     kind: "trh", key, turn, si, n: turn.n, ts: turn.ts ?? null, going: live, calls, fails, timed,
     tokens: stats(turn).tokens, total: tr.end != null && t0 != null && (tr.done || tr.interrupted) ? tr.end - t0 : null,
-    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), line, stale, lastAt, reading,
+    interrupted: Boolean(tr.interrupted), agent: Boolean(turn.agent), stale, lastAt, reading,
     // Calls past what the reader keeps: their failures are not known, so the count is a floor.
     partial: cells.some((c) => c.kind === "more"),
     t0, span, cnt, stepRows: rows, tl,

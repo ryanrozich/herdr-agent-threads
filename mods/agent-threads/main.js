@@ -63,6 +63,8 @@ import * as gpuiKit from "gpui-kit";
 // window() (the platform) is read from the namespace, so a Herdr without it still loads the mod.
 import * as herdrNs from "herdr";
 const PAINT = gpuiKit.PathBuilder?.fill && gpuiKit.Background?.linear_gradient ? gpuiKit : null;
+// A stroked path (the timeline's hatched breaks, TRD-23), where Herdr has one.
+const STROKE = gpuiKit.PathBuilder?.stroke ? gpuiKit : null;
 import {
   exec, hc, home, appHome, readTextFile, watchFolder, theme, themes, settings, panes, terminals, spaces,
   focused, props, run, shared, setShared, closeOverlay, openOverlay, notify, nextCommand, updates,
@@ -89,8 +91,12 @@ import { MOD } from "./name.js";
 import {
   LEDGER_ROW, LEDGER_HEAD, LEDGER_FILTERS, LEDGER_KINDS, ledgerTurn, headParts, ledgerTotals, barFrac, coarse, rowTimes, trajCompact, compactRow, COMPACT_PAD, HEAD_ICON_MIN,
   WIDE_MIN, trajInks, SUB_ALPHA, ALL_ROWS, filterRows, filterButtons, toggleFilter, ledgerStatus, detailOf, turnRunning, slantPoints, sessionHasEnds,
-  BAR_W, BAR_H, BAR_SLANT, LINE_H, LINE_SLANT, trajLayout, rowsLeft,
+  BAR_W, BAR_H, BAR_SLANT, trajLayout, rowsLeft,
 } from "./ledger.js";
+import {
+  timelineModel, timelineHit, tlBox, itemBox, tornPoints, polyRows, tlStrip,
+  TL_LANES, TL_MIN_W, TL_H, TL_GUT, TL_AX, TL_TK, TL_LT, TL_LANE, TL_PT, TL_ROWS_MIN,
+} from "./timeline.js";
 import { VERSION, versionLine, parseBuild } from "./version.js";
 // build.js, what install.sh found (version.js). A dynamic import, so a copy whose build.js
 // is missing or does not parse still loads; the version line then says the commit is not
@@ -11662,6 +11668,7 @@ export default class Threads extends View {
       detail: this.detailOpen() && shown[i] ? detailOf(shown[i]) : null,
       heads: L.totals.heads.slice(-5).map((h) => ({ n: h.n, total: headParts(h, w).total, stale: h.stale, lastAt: h.lastAt })),
       status: ledgerStatus(L.totals, w, L.going).map((g) => g.text),
+      timeline: this.tlReport(),
     };
   }
   // y or the Trajectory button in the Chat: the Trajectory pane beside it, split off to the
@@ -11953,6 +11960,7 @@ export default class Threads extends View {
       case "luser": if (held) return false; seek((r) => r.lk === "you", 1); return true;
       case "luserBack": if (held) return false; seek((r) => r.lk === "you", -1); return true;
       case "ldetail": return this.toggleDetail(shown[i]?.key ?? null);
+      case "timeline": return this.toggleTimeline();
       case "trajectory": return this.openTraj();
       case "escape":
         if (this.keysOpen || this.settingsOpen) return this.action("escape", cx);
@@ -12001,8 +12009,9 @@ export default class Threads extends View {
     return at >= 0 ? `${at + 1} of ${n}${more}` : `${n}${more} failed`;
   }
 
-  // The Trajectory: its 40 px named heading, the filter buttons from 540 px, the ledger, the
-  // detail (under the ledger, or at its right from 900 px), the key hints and the status line.
+  // The Trajectory: its 40 px named heading, the filter buttons from 540 px, the timeline
+  // across the pane from 540 px (tlShown), the ledger, the detail (under the ledger, or at its
+  // right from 900 px), the key hints and the status line.
   trajFrame(cx) {
     const t = theme();
     // The column beside the Trajectory's pane, kept for its close (shareWidth).
@@ -12027,9 +12036,10 @@ export default class Threads extends View {
     const right = shape.side === "right";
     const list = this.ledgerList(t, shown, i, cols, inks, cx, right);
     const panel = detail ? this.ledgerDetail(t, detail, inks, right, shape.detailW) : null;
-    // TRD-23's timeline goes here, across the whole pane above the list and the detail, shown
-    // only where it leaves enough rows (rowsLeft with the list box's measured height, tlistH).
-    const timeline = null;
+    // The timeline, across the whole pane above the list and the detail. Whether this frame
+    // has it, for the list's size callback (tlBase).
+    const tlOn = this.tlShown();
+    this.tlSlot = tlOn;
     return v_flex()
       .id("threads-root")
       .track_focus(this.h)
@@ -12052,7 +12062,7 @@ export default class Threads extends View {
       .bg(t.background).text_color(t.foreground).text_size(13)
       .child(this.trajHeading(t, L, shown, i))
       .when(cols.filters, (el) => el.child(this.filterBar(t, L.totals, w, inks, this.ledgerHeld(L))))
-      .when(Boolean(timeline), (el) => el.child(timeline))
+      .when(tlOn, (el) => el.child(this.timelineView(t, L, shown, i, inks)))
       .child(right
         ? h_flex().id("th-traj-body").flex_1().min_h(0).w_full().items_start().child(list).when(Boolean(panel), (el) => el.child(panel))
         : v_flex().id("th-traj-body").flex_1().min_h(0).w_full().child(list).when(Boolean(panel), (el) => el.child(panel)))
@@ -12063,9 +12073,214 @@ export default class Threads extends View {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(t)));
   }
 
+  // ---- the timeline (TRD-23 slice 1; round 7 and round 8) ----
+  // Across the top of the pane from TL_MIN_W px wide, on the right and along the bottom, above
+  // the list and the detail. It starts hidden where it would leave fewer than TL_ROWS_MIN rows
+  // (ledger.js rowsLeft, from the list's height with no timeline, tlBase), and is not shown
+  // until that height is measured. b or the heading's button shows or hides it from then on
+  // (tlHidden). Slice 1 draws the whole session (Fit) on the clock scale.
+  tlCan() { return Boolean(this.traj) && this.pw() >= TL_MIN_W; }
+  tlShown() {
+    if (!this.tlCan()) return false;
+    if (this.tlHidden != null) return !this.tlHidden;
+    const left = rowsLeft(this.tlBase, TL_H);
+    return left != null && left >= TL_ROWS_MIN;
+  }
+  // b, or the heading's button. false where the pane has no timeline, so the key passes on.
+  toggleTimeline() {
+    if (!this.tlCan()) return false;
+    this.tlHidden = this.tlShown();
+    return true;
+  }
+  // The debug report's traj.timeline: whether it shows and why, and what the last draw laid
+  // out (timeline.js timelineModel): the turns placed and drawn, the spans, the layers (one
+  // painted path each, the growing bars' own included), the running turn's growing bars, and
+  // the ms of the last draw that placed or laid out the turns again.
+  tlReport() {
+    const M = this.tlModel;
+    const T = M?.L;
+    const shown = this.tlShown();
+    let spans = 0;
+    for (const x of T?.spans.values() ?? []) spans += x.length;
+    return {
+      can: this.tlCan(), shown, hidden: this.tlHidden ?? null, rowsLeft: rowsLeft(this.tlBase, TL_H), waiting: shown && this.tlWait === true,
+      cw: M?.cw ?? null, turns: T?.turns.length ?? 0, drawn: T ? T.to - T.from + 1 : 0, spans,
+      layers: T ? T.spans.size + new Set(M.grow.map((g) => g.k)).size : 0, live: M?.geo.live ?? -1,
+      grow: (M?.grow ?? []).map((g) => ({ k: g.k, x0: Math.round(g.x0), x1: Math.round(g.x1) })), labels: T?.labels.length ?? 0, ms: this.tlMs ?? null,
+    };
+  }
+  // A press on the lanes: the nearest step in that lane within 4 px, else its turn's heading
+  // (timeline.js timelineHit), at the clock now for the running turn's growing bars.
+  // local_position is in Herdr px from the lanes' corner.
+  tlPress(e, cx) {
+    const M = this.tlModel;
+    const p = e?.local_position;
+    if (!M || this.tlWait || p?.x == null) return;
+    const z = this.zoom();
+    const lane = p.y == null ? null : TL_LANES[Math.floor(p.y / z / TL_LANE)] ?? null;
+    const hit = timelineHit(M.L, M.heads, p.x / z, lane, Date.now());
+    if (hit && this.tlPick(hit)) cx.notify();
+  }
+  // The row a press picked, as a row click does (ledgerClick): selected, or on the selected
+  // row the detail shown or hidden; a step the filter hides gives its turn's heading. The list
+  // scrolls to it.
+  tlPick(hit) {
+    const shown = this.ledgerRows();
+    const listed = (k) => shown.some((r) => r.key === k);
+    const key = listed(hit.key) ? hit.key : listed(hit.turn) ? hit.turn : null;
+    if (!key) return false;
+    if (key === shown[this.ledgerSel(shown)]?.key) this.toggleDetail(key);
+    this.tsel = key;
+    this.tscrollTo = key;
+    return true;
+  }
+  // The timeline: a gutter of lane names, then the strip: each turn's number (and its length
+  // where there is room) and the ticks, then Input, Model and Tools, a bar per step as long as
+  // it took, a tools call that ran while another ran half height on the lower half, the
+  // breaks between turns hatched, failed calls red (with a mark over the lane) and a
+  // subagent's calls at SUB_ALPHA. An unfinished call's end is torn; in the running turn it
+  // grows to now (tlGrow), and the rest stays as placed. The selected row's turn has a lighter
+  // band behind it and the selected step's bar an outline. Until the session is read and its
+  // rows built (ledgerHeld) the turns are only part of it: the slot keeps its height, with one
+  // dim line.
+  timelineView(t, L, shown, i, inks) {
+    const box = (el) => el.id("th-timeline").flex_none().w_full().h(TL_H).overflow_hidden().border_b(1).border_color(t.border)
+      .bg(alpha(t.foreground, 0.025));
+    this.tlWait = this.ledgerHeld(L);
+    if (this.tlWait) {
+      return box(h_flex()).items_center().pl(12)
+        .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child("The timeline shows once the whole session is read"));
+    }
+    const cw = tlStrip(this.pw());
+    const prev = this.tlModel;
+    const t0 = now();
+    const M = timelineModel(prev, L.totals.heads, cw, "clock", Date.now(), null);
+    this.tlModel = M;
+    if (M.L !== prev?.L) this.tlMs = Math.round((now() - t0) * 10) / 10;
+    const T = M.L;
+    const laneH = 3 * TL_LANE;
+    const color = (ink) => (ink === "sub" ? alpha(inks.sub, SUB_ALPHA) : inks[ink] ?? t.dim);
+    const at = (k) => { const [lane, ink, track] = k.split("|"); return { lane, ink, half: track === "1", li: TL_LANES.indexOf(lane), track }; };
+    const kids = [];
+    const hatch = this.hatchLayer(T.gaps, t.border, cw, laneH);
+    if (hatch) kids.push(hatch);
+    // Half-height bars over full ones, failed ones over the rest.
+    const order = (k) => (k.endsWith("|1") ? 1 : 0) + (k.includes("|failed|") ? 2 : 0);
+    for (const [k, spans] of [...T.spans.entries()].sort(([a], [b]) => order(a) - order(b))) {
+      const s = at(k);
+      if (s.li < 0) continue;
+      kids.push(this.rectLayer(spans, color(s.ink), `th-tl-${s.lane}-${s.ink}-${s.track}`, cw, s.li * TL_LANE + (s.half ? 8 : 2), s.half ? 6 : 12));
+    }
+    // The running turn's unfinished bars, at now, torn.
+    const grow = new Map();
+    for (const g of M.grow) { if (!grow.has(g.k)) grow.set(g.k, []); grow.get(g.k).push([g.x0, g.x1, 1]); }
+    let gi = 0;
+    for (const [k, spans] of grow) {
+      const s = at(k);
+      kids.push(this.rectLayer(spans, color(s.ink), `th-tl-grow-${gi++}`, cw, s.li * TL_LANE + (s.half ? 8 : 2), s.half ? 6 : 12));
+    }
+    // The selected row: its turn's band and, for a step, its bar's outline.
+    const sel = shown[i]?.key ?? null;
+    const ti = sel ? T.index.get(this.turnOfRow(sel)) : undefined;
+    const tb = ti != null ? tlBox(T, ti) : null;
+    const seen = tb && tb.x + tb.w >= 0 && tb.x <= cw;
+    if (seen && sel !== T.turns[ti].key) {
+      const h = M.heads[ti];
+      const si = h.stepRows.findIndex((r) => r.key === sel);
+      const lane = si >= 0 ? LEDGER_KINDS[h.stepRows[si].lk]?.lane : null;
+      const wall = M.geo.walls[ti];
+      const upTo = ti === M.geo.live && h.t0 != null && wall > 0 ? tb.x + Math.max(0, Math.min(1, (Date.now() - h.t0) / wall)) * tb.w : null;
+      const b = lane ? itemBox(h.tl, si, tb.x, tb.w, wall, T.scale, h.stepRows.length, upTo) : null;
+      if (b && b.x1 >= 0 && b.x0 <= cw) {
+        kids.push(div().id("th-tl-sel").absolute().left(b.x0 - 2).w(b.x1 - b.x0 + 4).top(TL_LANES.indexOf(lane) * TL_LANE + (b.track ? 8 : 2) - 2)
+          .h((b.track ? 6 : 12) + 4).rounded(2).border_1().border_color(t.foreground));
+      }
+    }
+    const band = seen
+      ? div().id("th-tl-band").absolute().top(TL_PT).left(Math.max(0, tb.x)).w(Math.max(2, Math.min(cw, tb.x + tb.w) - Math.max(0, tb.x)))
+        .h(TL_AX + TL_TK + TL_LT + laneH).rounded(3).bg(alpha(t.foreground, 0.06))
+      : null;
+    const lanes = div().id("th-tl-lanes").relative().w(cw).h(laneH).cursor_pointer().overflow_hidden()
+      .on_mouse_down("left", (e, cx) => this.tlPress(e, cx))
+      .children(kids);
+    const labels = div().id("th-tl-labels").relative().w(cw).h(TL_AX).overflow_hidden()
+      .children(T.labels.slice(0, 80).map((l) => h_flex().absolute().top(0).left(l.x).w(Math.min(l.w, 160)).h(TL_AX).pl(5).gap(5).items_center()
+        .border_l(1).border_color(t.border).text_size(10.5)
+        .child(div().flex_none().text_color(t.foreground).child(l.text))
+        .when(Boolean(l.total), (el) => el.child(div().flex_none().text_color(t.dim).child(l.total)))));
+    const ticks = div().id("th-tl-ticks").relative().w(cw).h(TL_TK).overflow_hidden()
+      .children(T.ticks.slice(0, 80).map((k) => div().absolute().top(0).left(k.x).h(TL_TK).pl(3).border_l(1).border_color(t.dim)
+        .text_size(9.5).font_family(this.mono()).text_color(t.dim).child(k.text)))
+      .children(T.fails.slice(0, 120).map((x) => div().absolute().bottom(0).left(Math.max(0, x - 3)).w(6).h(4).rounded(1).bg(inks.failed)));
+    const name = (word) => div().h(TL_LANE).flex().items_center().text_size(10.5).text_color(t.dim).child(word);
+    return box(h_flex()).items_start()
+      .child(v_flex().id("th-tl-gutter").flex_none().w(TL_GUT).pl(12).pt(TL_PT + TL_AX + TL_TK + TL_LT)
+        .child(name("Input")).child(name("Model")).child(name("Tools")))
+      .child(v_flex().id("th-tl-area").relative().flex_none().w(cw).pt(TL_PT)
+        .when(Boolean(band), (el) => el.child(band))
+        .child(labels).child(ticks).child(div().h(TL_LT)).child(lanes));
+  }
+  // A layer of filled bars, each span [x0, x1] px of a strip cw px wide (a torn one [x0, x1, 1],
+  // timeline.js tornPoints), top px down the lanes and h px tall: one painted path where Herdr
+  // has one (its points in % of the layer), else at most 60 divs, and a torn end as its rows
+  // of whole px (a 12 px bar is 7 divs) for up to 40 of them.
+  rectLayer(spans, color, id, cw, top, h) {
+    const win = globalThis.window;
+    const p = (v) => `${((Math.max(0, Math.min(cw, v)) / cw) * 100).toFixed(3)}%`;
+    const q = (v) => `${((v / h) * 100).toFixed(3)}%`;
+    if (PAINT && typeof win?.paint_path === "function" && spans.length) {
+      try {
+        let b = PAINT.PathBuilder.fill();
+        for (const sp of spans) {
+          const [a, z] = sp;
+          if (!(z > 0 && a < cw)) continue;
+          if (sp[2] && z <= cw) {
+            const pts = tornPoints(a, z, h);
+            b = b.move_to(p(pts[0][0]), q(pts[0][1]));
+            for (let k = 1; k < pts.length; k++) b = b.line_to(p(pts[k][0]), q(pts[k][1]));
+            b = b.close();
+          } else b = b.move_to(p(a), "0%").line_to(p(z), "0%").line_to(p(z), "100%").line_to(p(a), "100%").close();
+        }
+        return win.paint_path(b.build(), color).absolute().left(0).top(top).w(cw).h(h);
+      } catch { /* the divs below */ }
+    }
+    const inView = spans.filter(([a, z]) => z > 0 && a < cw);
+    const plain = inView.filter((sp) => !sp[2] || sp[1] > cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    const few = plain.length > 60 ? coarse(plain.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => [a * cw, z * cw]) : plain;
+    const torn = inView.filter((sp) => sp[2] && sp[1] <= cw).slice(0, 40).flatMap(([a, z]) => polyRows(tornPoints(a, z, h), h).filter((r) => r.x1 > 0));
+    return div().id(id).absolute().left(0).top(top).w(cw).h(h)
+      .children(few.map(([a, z]) => div().absolute().top(0).h_full().left(a).w(Math.max(1, z - a)).rounded(1).bg(color)))
+      .children(torn.map((r) => div().absolute().top(r.y).h(r.h).left(Math.max(0, r.x0)).w(Math.max(0.5, r.x1 - Math.max(0, r.x0))).bg(color)));
+  }
+  // The breaks between turns, hatched: 45 degree lines 5 px apart in each break 4 px or wider,
+  // one stroked path; a faint fill where Herdr has no stroked path.
+  hatchLayer(gaps, color, cw, h) {
+    const wide = gaps.filter(([a, z]) => z - a >= 4 && z > 0 && a < cw).map(([a, z]) => [Math.max(0, a), Math.min(cw, z)]);
+    if (!wide.length) return null;
+    const win = globalThis.window;
+    if (STROKE && typeof win?.paint_path === "function") {
+      try {
+        const px = (v) => `${((v / cw) * 100).toFixed(3)}%`;
+        const py = (v) => `${((v / h) * 100).toFixed(3)}%`;
+        let b = STROKE.PathBuilder.stroke(1);
+        // Lines x - (h - y) = c, cut to each break.
+        for (const [x0, x1] of wide) {
+          for (let c = x0 - h; c < x1; c += 5) {
+            const a = Math.max(x0, c);
+            const z = Math.min(x1, c + h);
+            if (z > a) b = b.move_to(px(a), py(h - (a - c))).line_to(px(z), py(h - (z - c)));
+          }
+        }
+        return win.paint_path(b.build(), color).absolute().top(0).left(0).size_full();
+      } catch { /* the fills below */ }
+    }
+    return div().id("th-tl-gaps").absolute().top(0).left(0).size_full()
+      .children(coarse(wide.map(([a, z]) => [a / cw, z / cw]), 60).map(([a, z]) => div().absolute().top(0).h_full().left(a * cw).w(Math.max(1, (z - a) * cw)).bg(alpha(color, 0.5))));
+  }
+
   // The heading, 40 px: the list icon and "Trajectory", the failures with the
-  // previous and next arrows, then the settings button, and the Chat button when the
-  // Trajectory shows in the Chat's own pane.
+  // previous and next arrows, then the timeline button from TL_MIN_W px, the settings button,
+  // and the Chat button when the Trajectory shows in the Chat's own pane.
   trajHeading(t, L, shown, i) {
     const fails = this.failCount(L, shown, i);
     const arrow = (id, icon, tip, name) => this.iconButton(t, id, icon, tip, (_e, cx) => { this.ledgerAction(name, cx); cx.notify(); });
@@ -12097,6 +12312,8 @@ export default class Threads extends View {
         .child(arrow("th-traj-fail-prev", "chevron-up", "Previous failed call (Shift f)", "lfailBack"))
         .child(arrow("th-traj-fail-next", "chevron-down", "Next failed call (f)", "lfail"))))
       .child(div().flex_1())
+      .when(this.tlCan(), (el) => el.child(this.iconButton(t, "th-traj-timeline", "chart-gantt", this.tlShown() ? "Hide the timeline (b)" : "Show the timeline (b)",
+        (_e, cx) => { this.toggleTimeline(); cx.notify(); }, this.tlShown())))
       .child(this.iconButton(t, "th-settings", "sliders-horizontal", "Settings (,)", this.headerClick("settings"), this.settingsOpen))
       .when(this.traj && !this.trajPane, (el) => el.child(this.labelButton(t, "th-traj-chat", "Chat", "Back to the Chat (y)",
         (_e, cx) => { this.leaveTraj(); cx.notify(); })));
@@ -12147,10 +12364,12 @@ export default class Threads extends View {
       }
     }
     return div().id("th-traj-listbox").flex_1().min_h(0).min_w(0).w_full().relative().when(right, (el) => el.h_full())
-      // Its height, in design px, for the rows it keeps (ledger.js rowsLeft).
+      // Its height, in design px, for the rows it keeps (ledger.js rowsLeft), and what it would
+      // be with no timeline above it (tlBase: TL_H px more when the frame drew one, tlSlot).
       .on_size_change((size, cx) => {
         const h = size.height / this.zoom();
-        if (Math.abs(h - (this.tlistH ?? -9)) >= 1) { this.tlistH = h; cx.notify(); }
+        const base = h + (this.tlSlot ? TL_H : 0);
+        if (Math.abs(h - (this.tlistH ?? -9)) >= 1 || Math.abs(base - (this.tlBase ?? -9)) >= 1) { this.tlistH = h; this.tlBase = base; cx.notify(); }
       })
       .child(v_virtual_list("th-traj-list", shown.length, LEDGER_ROW, (j) => shown[j]?.key ?? `gone:${j}`,
         (range) => {
@@ -12199,27 +12418,22 @@ export default class Threads extends View {
   }
 
   // Below 200 px (ledger.js compactRow), a row on one LEDGER_ROW line: a step's mark, its turn's
-  // number and its duration; a heading's number and total on its band, over its thin line;
-  // below 64 px, the mark alone. The label and the time are in the tooltip.
+  // number and its duration; a heading's number and total on its band; below 64 px, the mark
+  // alone. The label and the time are in the tooltip.
   ledgerCompact(t, r, on, inks, c) {
     const mono = this.mono();
     const head = r.kind === "trh";
     const k = head ? null : LEDGER_KINDS[r.lk] ?? LEDGER_KINDS.text;
-    const row = h_flex().h(head ? LEDGER_ROW - LINE_H : LEDGER_ROW).px(COMPACT_PAD).gap(COMPACT_PAD).items_center()
+    const row = h_flex().h(LEDGER_ROW).px(COMPACT_PAD).gap(COMPACT_PAD).items_center()
       .when(c.mode === "icon", (el) => el.justify_center())
       .when(Boolean(k), (el) => el.child(this.ledgerMark(t, k, inks[k.ink] ?? t.dim)))
       .when(c.num != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5).text_color(head ? t.muted : t.dim).child(c.num)))
       .when(c.mode === "line", (el) => el.child(div().flex_1()))
       .when(c.dur != null, (el) => el.child(div().flex_none().font_family(mono).text_size(11.5)
         .text_color(r.failed ? t.blocked : head && r.going ? t.working : t.muted).text_right().child(c.dur)));
-    const box = div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer().tooltip(c.tip || " ")
+    return div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer().tooltip(c.tip || " ")
       .when(on || head, (el) => el.bg(on ? t.raised : alpha(t.foreground, 0.035))).hover((s) => s.bg(t.hover))
       .child(row);
-    if (!head || !r.line) return box;
-    const seg = (key, list, col) => coarse(list ?? [], 12).map(([a, b], j) => div().id(`${r.key}-${key}-${j}`).absolute().top(0)
-      .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H).bg(col));
-    return box.child(div().id(`${r.key}-line`).absolute().left(COMPACT_PAD).right(COMPACT_PAD).bottom(0).h(LINE_H)
-      .children([...seg("tools", r.line.tools, inks.tools), ...seg("model", r.line.model, inks.model), ...seg("red", r.line.red, inks.failed)]));
   }
 
   // The kind's mark: an icon on a square tinted with its ink, or a drawn dot, ring or square.
@@ -12258,37 +12472,17 @@ export default class Threads extends View {
     }
     return div().w(w).h(h).rounded(1).bg(color);
   }
-  // A d by h px end whose top runs d px past its foot, to close a stretch drawn as a box: a
-  // painted path where Herdr has one, else a plain d px end.
-  slantEnd(color, d, h) {
-    const win = globalThis.window;
-    if (PAINT && typeof win?.paint_path === "function") {
-      try {
-        const b = PAINT.PathBuilder.fill().move_to(0, 0).line_to(d, 0).line_to(0, h);
-        return div().flex_none().w(d).h(h).child(win.paint_path(b.close().build(), color).w(d).h(h));
-      } catch { /* the plain end below */ }
-    }
-    return div().flex_none().w(d).h(h).bg(color);
-  }
 
-  // A turn's heading: its number and time, the numbers at the right (headParts), and under them
-  // the turn's thin line: its calls teal, failed ones red, the reply violet, a subagent's
-  // calls at SUB_ALPHA. An unfinished call is teal too, from its start to the turn's last
-  // recorded event, and that end is one LINE_SLANT px slant.
+  // A turn's heading: its number and time, and the numbers at the right (headParts). Its calls
+  // in time are on the timeline (TRD-23), which took the place of the thin line under it.
   ledgerHead(t, r, on, inks) {
     const mono = this.mono();
     const p = headParts(r, this.rowW());
     const dot = " · ";
     const parts = [p.calls, p.failed ? "failed" : null, p.tokens, p.total].filter(Boolean);
-    const line = r.line;
-    const seg = (key, list, c) => coarse(list ?? [], 40).map(([a, b], j) => div().id(`${r.key}-${key}-${j}`).absolute().top(0)
-      .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H).bg(c));
-    const torn = (key, list, c) => coarse(list ?? [], 40).map(([a, b], j) => h_flex().id(`${r.key}-${key}-${j}`).absolute().top(0)
-      .left(`${(a * 100).toFixed(2)}%`).w(`${Math.max(0.4, (b - a) * 100).toFixed(2)}%`).h(LINE_H)
-      .child(div().flex_1().min_w(0).h(LINE_H).bg(c)).child(this.slantEnd(c, LINE_SLANT, LINE_H)));
     return div().id(r.key).h(LEDGER_ROW).w_full().relative().cursor_pointer()
       .bg(on ? t.raised : alpha(t.foreground, 0.035)).hover((s) => s.bg(t.hover))
-      .child(h_flex().h(LEDGER_ROW - LINE_H).px(10).gap(8).items_center()
+      .child(h_flex().h(LEDGER_ROW).px(10).gap(8).items_center()
         .child(div().flex_none().font_family(mono).text_size(11.5).text_color(t.muted).child(`#${r.n}`))
         .when(Boolean(r.ts), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(fmtTime(r.ts))))
         .child(div().flex_1())
@@ -12298,12 +12492,7 @@ export default class Threads extends View {
             .when(j > 0, (el) => el.child(div().text_color(t.dim).child(dot.trim())))
             .when(fail, (el) => el.child(div().size(6).rounded(3).bg(inks.failed)))
             .child(fail ? p.failed : x);
-        })))
-      .when(Boolean(line), (el) => el.child(div().id(`${r.key}-line`).absolute().left(10).right(10).bottom(0).h(LINE_H)
-        .children([
-          ...seg("tools", line.tools, inks.tools), ...seg("sub", line.sub, alpha(inks.sub, SUB_ALPHA)), ...seg("model", line.model, inks.model),
-          ...torn("open", line.open, inks.tools), ...torn("osub", line.openSub, alpha(inks.sub, SUB_ALPHA)), ...seg("red", line.red, inks.failed),
-        ])));
+        })));
   }
 
   // The detail: the row's tag and title with a close button, its fields, then its whole words.
@@ -12377,7 +12566,7 @@ export default class Threads extends View {
     const row = ([keys, what]) => h_flex().gap(8).items_start().min_w(0)
       .child(h_flex().flex_none().w(col).gap(3).flex_wrap().children(keys.map((k) => this.kbd(t, k))))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(what));
-    const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane, ledger: this.traj, inPane: this.traj && !this.trajPane, bottom: this.trajPane && this.trajDock === "bottom" });
+    const groups = keySheet(this.quoteKey, { outline: !this.pinnedPane, ledger: this.traj, inPane: this.traj && !this.trajPane, bottom: this.trajPane && this.trajDock === "bottom", timeline: this.tlCan() });
     const sheetH = this.keySheetH(groups);
     // Taller than its room: the list scrolls, and where Herdr has Scrollbar and its mode the bar
     // is drawn all the time, in a strip at the right edge, so the sheet shows there is more.

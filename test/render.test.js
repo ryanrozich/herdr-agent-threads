@@ -15695,7 +15695,7 @@ test("the compact heading in the Chat's own pane keeps both buttons inside the p
   }
 });
 
-test("what the compact rows draw: every row box 24 px, a turn's band over its activity line, the selected step raised, and a step's status in its tooltip", async () => {
+test("what the compact rows draw: every row box 24 px, a turn's band, the selected step raised, and a step's status in its tooltip", async () => {
   const { v, cx } = await pane(fixture("--extra", "3"));
   v.enterTraj();
   const s = v.current();
@@ -15714,10 +15714,9 @@ test("what the compact rows draw: every row box 24 px, a turn's band over its ac
     const heads = rows.filter((r) => r.kind === "trh");
     // The box each row draws: 24 px tall, whatever the list is told.
     for (const r of rows) expect([w, r.key, afterId(c, r.key).find((e) => e[0] === "h")?.[1]]).toEqual([w, r.key, 24]);
-    // A turn's band over its activity line, the line drawn in segments.
-    const head = heads.find((r) => r.line?.tools?.length || r.line?.model?.length);
-    expect(hasId(c, `${head.key}-line`)).toBe(true);
-    expect(c.some((e) => e[0] === "id" && (String(e[1]).startsWith(`${head.key}-tools-`) || String(e[1]).startsWith(`${head.key}-model-`)))).toBe(true);
+    // A turn's band: its heading's box is tinted.
+    expect(heads.length).toBeGreaterThan(0);
+    expect(afterId(c, heads[0].key).some((e) => e[0] === "bg")).toBe(true);
     // The selected step is raised; the others only take the hover's.
     const [a, b] = steps;
     // The box's own calls: up to its first child (the row it holds).
@@ -15936,7 +15935,7 @@ test("the ledger is built newest turn first, one slice a draw: the newest turns 
   expect(done.rows.map((r) => r.key)).toEqual(whole);
 });
 
-test("the bars: an unfinished call's row bar is grey with a 5 px slant; the heading line's unfinished end is teal with a 4 px slant", async () => {
+test("the bars: an unfinished call's row bar is grey with a 5 px slant, running or with no result", async () => {
   const { v } = await pane(fixture("--only", "3"));
   v.width = 600;
   v.paneW = 600;
@@ -15944,26 +15943,13 @@ test("the bars: an unfinished call's row bar is grey with a 5 px slant; the head
   const L = v.ledger();
   const inks = trajInks(theme, true);
   const grey = TRAJ_INKS.open.dark;
-  const teal = TRAJ_INKS.tools.dark;
   const slants = [];
   const bar = v.slantBar.bind(v);
   v.slantBar = (c, w, h, d) => { slants.push(["bar", c, w, h, d]); return bar(c, w, h, d); };
-  const end = v.slantEnd.bind(v);
-  v.slantEnd = (c, d, h) => { slants.push(["end", c, d, h]); return end(c, d, h); };
   // A running call and one with no result: the same grey bar.
   const call = L.rows.find((r) => r.lk === "tool");
   for (const lk of ["running", "noresult"]) v.ledgerBar({ ...call, lk, open: true, dur: null }, inks.tools, inks);
   expect(slants).toEqual([["bar", grey, 64, 4, 5], ["bar", grey, 64, 4, 5]]);
-  // The heading's line: the unfinished stretch teal, ending in one 4 px slant; nothing grey.
-  const head = { ...L.rows.find((r) => r.kind === "trh"), line: { tools: [[0, 0.3]], sub: [], model: [], red: [], open: [[0.5, 1]], openSub: [] } };
-  slants.length = 0;
-  H.rec = [];
-  v.ledgerHead(theme, head, false, inks);
-  const bgs = rec.filter((e) => e[0] === "bg").map((e) => e[1]);
-  H.rec = null;
-  expect(slants).toEqual([["end", teal, 4, 3]]);
-  expect(bgs).toContain(teal);
-  expect(bgs).not.toContain(grey);
 });
 
 test("y does nothing in the Chat's Pinned view or in the Pinned column: no Trajectory opens there, and the key passes on", async () => {
