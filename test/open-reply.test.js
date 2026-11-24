@@ -572,11 +572,11 @@ test("a full build Herdr stops between sizing a row and indexing it leaves no ro
   const MARK = { key: "stop-here", kind: "md" };
   let armed = true;
   let hit = null;
-  // Once the build has indexed three rows, its next index entry is stopped as it is made.
+  // The build's index entry for the open card's head is stopped as it is made.
   const arm = () => {
     const job = v.rowJob;
     if (!job?.index || Object.hasOwn(job.index, "set")) return;
-    job.index.set = function (k, i) { if (armed && this.size >= 3) { armed = false; hit = k; v.height(MARK); } return Map.prototype.set.call(this, k, i); };
+    job.index.set = function (k, i) { if (armed && k === key) { armed = false; hit = k; v.height(MARK); } return Map.prototype.set.call(this, k, i); };
   };
   const ph = v.partH;
   v.partH = function (...a) { arm(); return ph.apply(this, a); };
