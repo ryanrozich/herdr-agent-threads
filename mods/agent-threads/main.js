@@ -217,6 +217,13 @@ const HITS_TAIL = 64;
 // is to come; the cap moves if it says so). It is above the 2,000-turn tails the tests check
 // again as tails.
 const HITS_TAIL_MAX = 2500;
+// A step kept from a press that could not land yet (stepHit) goes on for this many draws at
+// most, a slice each; then it is dropped, and the field says there is no further match that
+// way. The bound is in draws, since a draw's slice is what moves a step on, whatever Herdr's
+// frame rate: 100 slices check about 150,000 turns at 6 ms and 4 µs a turn, many times the
+// longest sessions the figures use, so a step still kept then is waiting on a session that
+// changes before every draw (hitsTail), not on work left.
+const STEP_DRAWS = 100;
 // The hold (REWRAP_PAUSE_MS) is for a conversation whose last full re-wrap, at a column width
 // not kept, took more than this much of the pane's own draw time; before one has finished,
 // for one of more than HOLD_TURNS turns. A short one re-wraps at every step of a drag.
@@ -6512,8 +6519,10 @@ export default class Threads extends View {
   action(name, cx) {
     this.stickStep = null; // a key decides, not a frame drawn before it
     if (READER_ACTIONS.has(name) || /^(go|pick|search):/.test(name)) this.readerMoved();
-    // A key also calls off a step going on by itself (stepHit); a step sets it again.
+    // A key also calls off a step going on by itself (stepHit); a step sets it again. It takes
+    // away the words of a step dropped at its bound (stepEnd).
     if (this.hits) this.hits.step = null;
+    this.stepEnd = null;
     if (this.textSel && !["copy", "quote", "keys"].includes(name)) this.textSel = null;
     const rows = this.rows();
     const keys = this.turnKeys(rows);
@@ -8092,6 +8101,9 @@ export default class Threads extends View {
     const q = this.filterText();
     // Less than a search: how much to type, in the count's place.
     if (!q) return this.query.trim() ? (this.pw() < 420 ? "2 or more" : "Type 2 or more characters") : null;
+    // A step dropped at its bound (STEP_DRAWS), its match still selected: the step button's
+    // words for no further match, until a key or a change to the field.
+    if (this.stepEnd && this.stepEnd.key === this.sel && this.view !== "pinned") return this.stepEnd.older ? "No older match" : "No newer match";
     let hit = 0, hiddenHit = 0;
     // While the matches are counted (scanStep): "Counting…" with none found yet, and the total
     // so far with a "+"; the hidden ones, no match, and the first or only mention wait for
@@ -9195,14 +9207,21 @@ export default class Threads extends View {
     // A step kept from a press that could not land yet (stepHit): in a draw, its next slice,
     // in place of the scan's, while the step's match is still selected and still matches. It
     // keeps itself until it lands, so a stop in its slice leaves it for the next draw.
+    // A step still kept after STEP_DRAWS draws going on with it is dropped, and the field says
+    // there is no further match that way (stepEnd) while that match stays selected.
     let stepped = false;
     if (cx && h.step != null) {
-      if (h.step.key === this.sel && this.selMatches()) { stepped = true; this.stepHit(h, h.step.older); }
-      else h.step = null;
+      if (h.step.key === this.sel && this.selMatches()) {
+        stepped = true;
+        h.step.draws = (h.step.draws ?? 0) + 1;
+        this.stepHit(h, h.step.older);
+        if (h.step && h.step.draws >= STEP_DRAWS) { this.stepEnd = { key: h.step.key, older: h.step.older }; h.step = null; }
+      } else h.step = null;
     }
     // A set made just now has had its first slice (hitsNow).
     if (h === was && !h.done && !stepped) this.scanHits(h, t0 + this.scanMax());
-    if (this.renderOpen) this.scanSpent = (this.scanSpent ?? 0) + (now() - t0);
+    // The draw's own call only: a step's slices run inside it (stepHit), and are in its time.
+    if (cx && this.renderOpen) this.scanSpent = (this.scanSpent ?? 0) + (now() - t0);
     // A new search's selection (setQuery): the newest match, once one is found, unless the
     // selection moved meanwhile. Not while a tail is checked again (oldest first): a newer
     // match can still come there.
@@ -9347,7 +9366,11 @@ export default class Threads extends View {
       h.top = p;
     }
     h.hidL = h.hidL.filter((ti) => ti < safe);
-    h.back = null;
+    // A step's check back (tailBack) goes on from where it got to unless a turn it passed was
+    // open at the last check: a newer turn's end can answer that one now (answeredBy), and it
+    // can match. A turn closed then matches as it did, so the turns passed need no check again,
+    // and a step lands while turns come in before every draw.
+    if (h.back && h.open <= Number(h.back.key.slice(h.back.key.indexOf(":") + 1)) - 2) h.back = null;
     // The tail from safe, marked with the counts as they are now, in one write. A scan still
     // among those turns found only matches from safe on, all gone now: it goes on from the turn
     // before safe.
@@ -9372,7 +9395,8 @@ export default class Threads extends View {
     // A step that cannot land yet keeps itself (h.step, with its way): each draw after it goes
     // on with it, a slice each (scanStep), until it lands. A key, a new selection or a change
     // to the search calls it off.
-    const keep = () => { h.step = { key: this.sel, older }; return true; };
+    const draws = h.step?.draws ?? 0;
+    const keep = () => { h.step = { key: this.sel, older, draws }; return true; };
     // An older step from a match in a tail being checked again, not placed yet: the turns back
     // from it to the tail's next turn, not checked again yet, are checked here, one slice at
     // most (tailBack). It lands on the first match there; a slice that ends first keeps the
@@ -9416,8 +9440,8 @@ export default class Threads extends View {
   // The newest shown match among the newest session's turns from turn index from down to the
   // tail's next turn (those not checked again yet), checked within until: its key, or null
   // when there is none. A slice that runs out returns undefined and keeps where it got to
-  // (h.back), and a later call for the same key goes on from there. hitsTail clears it: the
-  // tail checked again from its start can have changed those turns.
+  // (h.back), and a later call for the same key goes on from there. hitsTail clears it when a
+  // turn it passed was open, so a newer turn's end can have changed it.
   tailBack(h, key, from, until) {
     const L = this.sessions.length - 1;
     const s = this.sessions[L];
@@ -9477,6 +9501,7 @@ export default class Threads extends View {
     // The field changed: a step kept in the set (stepHit) is called off, also when the same
     // words are typed again after the field was cleared, which keeps the set.
     if (this.hits) this.hits.step = null;
+    this.stepEnd = null;
     if (n == null && this.filterText()) {
       if (this.view === "pinned") {
         const mk = this.matchKeys();
