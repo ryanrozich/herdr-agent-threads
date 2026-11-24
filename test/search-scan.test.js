@@ -1353,7 +1353,8 @@ test("a draw going on with an older step, stopped inside the step's slice, leave
 // A step going on by itself is called off by a key, here p (the selected turn pinned, the
 // selection left where it is), or by a new selection (a click on a turn): the draws after it
 // leave the selection where that put it. The pin is taken off pins.json after, so no later
-// test opens with it.
+// test opens with it: once the pane's save chain has written it (pinChain, promises only, no
+// clock), with no later save waiting (pinDueAt).
 for (const how of ["a key", "a new selection"]) test(`an older step going on by itself is called off by ${how}, and the draws after it leave the selection there`, async () => {
   const z = await zebraTail();
   const { v, cx, base, last } = z;
@@ -1368,7 +1369,8 @@ for (const how of ["a key", "a new selection"]) test(`an older step going on by 
     r.sel = v.sel;
     for (let k = 0; k < 40; k++) drawOnce(v, cx);
   }); } finally { X = 1; }
-  await new Promise((done) => setTimeout(done, 30)); // the pin's write of pins.json
+  await v.pinChain;
+  expect({ written: (recordFiles[PINS] ?? "").includes("the zebra list"), later: v.pinDueAt ?? null }).toEqual({ written: how === "a key", later: null });
   delete recordFiles[PINS];
   expect({ stayed: r.stayed, sel: v.sel }).toEqual({ stayed: true, sel: r.sel });
   expect(r.sel).toBe(how === "a key" ? last : `0:${base + 1200}`);
