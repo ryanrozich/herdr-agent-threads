@@ -1283,6 +1283,35 @@ test("an older step whose slice ends before it reaches a match stays, and the ne
   expect({ more: r.presses > 1, stays: r.stays, landed: r.landed }).toEqual({ more: true, stays: true, landed: nearest });
 }, 300000);
 
+// A tail longer than the cap (HITS_TAIL_MAX turns) is not dropped place by place in one call:
+// the set is found again from the start, in slices. Just under the cap the tail is checked
+// again; just over it the set is new. Either way the draws keep inside Herdr's time, the
+// matches are the same, and the selected match stays selected.
+for (const [side, more] of [["just under", 2400], ["just over", 2600]]) test(`a turn coming in after a tail ${side} the cap with no reply: the set ${more < 2500 ? "checks the tail again" : "is found again"} in slices, with the same matches and the same match selected`, async () => {
+  const { v, cx, s } = await longPane(5600);
+  tailMore(s, more);
+  settleRows(v, cx);
+  v.sel = `0:${s.turns.length}`;
+  const r = {};
+  priced(v, () => {
+    v.action("search:please look", cx);
+    for (let k = 0; k < 200 && counting(v); k++) drawOnce(v, cx);
+    v.action("olderMatch", cx);
+    v.action("olderMatch", cx);
+    const sel = v.sel;
+    const was = v.hits;
+    tailMore(s, 1);
+    let stops = 0;
+    for (let k = 0; k < 200 && (k < 1 || counting(v)); k++) if (drawOnce(v, cx).stopped) stops++;
+    r.kept = v.hits === was;
+    r.stops = stops;
+    r.sel = v.sel === sel && fieldText(v).startsWith("4 of ");
+  });
+  expect(r).toEqual({ kept: more < 2500, stops: 0, sel: true });
+  expect(counting(v)).toBe(false);
+  expect(places(v)).toEqual(want(v, "please look"));
+}, 300000);
+
 // The tail's pop (hitsTail) takes the newest place off in two writes: its entries, then top.
 // A stop between them leaves top - 1 with no entry. A step's own hitsNow finishes the pop
 // first, so a reader does not meet that state; a step met with it still goes to a match,
