@@ -11,8 +11,9 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { keyAction } from "../mods/agent-threads/ui.js";
-import { H, fixture, pane, pinsShown, root, settleRows, setup } from "./render-harness.js";
+import { cardKey, keyAction, ledgerKey, ringKey } from "../mods/agent-threads/ui.js";
+import { trajCompact } from "../mods/agent-threads/ledger.js";
+import { H, drawRange, fixture, keyEv, pane, pinsShown, root, settleRows, setup, state } from "./render-harness.js";
 
 setup();
 
@@ -66,6 +67,85 @@ test("a key goes through the same count: j once, and a key with no action not at
   expect([n1 - n0, moves(v) - n1]).toEqual([1, 0]);
 });
 
+// Every key key() takes ahead of keyAction, walked through key() itself: the Trajectory's
+// own keys (ledgerKey) while it shows in this pane, the settings card's ring (Tab, Shift Tab,
+// and Enter or Space on a control: ringKey) and its scroll keys (cardKey), and every key
+// while a field in the card has the keyboard. A key none of them takes goes on to keyAction,
+// whose rows are above. Leaving the Trajectory (y, Esc) is the reader's: the Chat scrolls to
+// the Trajectory's turn. Its other keys move the Trajectory's own list.
+const LEDGER = {
+  lprev: 0, lnext: 0, lfirst: 0, llast: 0, ldetail: 0, lfail: 0, lfailBack: 0, luser: 0, luserBack: 0,
+  trajectory: 1, escape: 1, focus: 0, settings: 0, keys: 0, narrower: 0, wider: 0,
+};
+const RING = { next: 0, back: 0, press: 0 };
+const CARD = { down: 0, up: 0, pagedown: 0, pageup: 0, home: 0, end: 0 };
+function allKeys() {
+  const out = [];
+  for (const key of [...NAMED, ...PRINTABLE]) for (const shift of [false, true]) out.push({ key, modifiers: { shift } });
+  return out;
+}
+const label = (e) => `${e.modifiers.shift ? "shift-" : ""}${e.key}`;
+// What a key that goes on to keyAction counts (the first walk's rows).
+const onward = (v, e) => { const n = keyAction(e, v.filtering, v.quoteKey); return n ? ACTIONS[n] ?? `no row for ${n}` : 0; };
+const BEFORE = {
+  // The Trajectory in this pane (y in a Chat under its split width).
+  trajectory: {
+    enter: (v, cx) => { v.paneW = 400; v.width = 400; v.action("trajectory", cx); v.tdetail = false; },
+    check: (v) => v.traj && !v.trajPane,
+    want: (_v, e) => { const n = ledgerKey(e); return n ? LEDGER[n] ?? `no row for ${n}` : 0; },
+  },
+  // The settings card, its ring on nothing and then on its first control that is not a field.
+  settings: {
+    enter: (v, cx) => { v.action("settings", cx); },
+    check: (v) => v.settingsOpen && !v.fieldFocused,
+    want: (v, e) => { const r = ringKey(e, Boolean(v.cardRing)); if (r) return RING[r]; const c = cardKey(e); return c ? CARD[c] : onward(v, e); },
+  },
+  ring: {
+    enter: (v, cx) => { v.action("settings", cx); v.render(cx); for (let k = 0; k < 20 && (k === 0 || v.fieldFocused); k++) v.action("ring:next", cx); },
+    check: (v) => v.settingsOpen && Boolean(v.cardRing) && !v.fieldFocused,
+    want: (v, e) => { const r = ringKey(e, true); if (r) return RING[r]; const c = cardKey(e); return c ? CARD[c] : onward(v, e); },
+  },
+  // A field in the card has the keyboard: its keys are its own, and Esc closes the card.
+  field: {
+    enter: (v, cx) => { v.action("settings", cx); v.fieldFocused = "quoteKey"; },
+    check: (v) => v.settingsOpen && Boolean(v.fieldFocused),
+    want: (_v, e) => (ringKey(e, false) ? RING[ringKey(e, false)] : 0),
+  },
+};
+test("every key key() takes ahead of keyAction counts as its row says: the Trajectory's, the settings card's ring and scroll, a field's", async () => {
+  const got = {};
+  const wanted = {};
+  const states = [];
+  for (const [state, s] of Object.entries(BEFORE)) {
+    const { v, cx } = await pane(fixture("--open", "--extra", "30"));
+    settleRows(v, cx);
+    const back = () => {
+      for (let k = 0; k < 4 && (v.keysOpen || v.settingsOpen || v.filtering || v.query) && v.action("escape", cx); k++);
+      v.fieldFocused = null;
+      if (v.traj) v.leaveTraj();
+      v.sel = v.sel ?? v.turnKeys(v.rows()).at(-1);
+      s.enter(v, cx);
+      v.render(cx);
+    };
+    back();
+    states.push([state, s.check(v)]);
+    for (const e of allKeys()) {
+      const k = `${state} ${label(e)}`;
+      const want = s.want(v, e);
+      const n0 = v.readerMoves ?? 0;
+      const ask = v.scrollTo;
+      try { v.key(e, cx); } catch (err) { got[k] = `threw ${err?.message}`; wanted[k] = want; back(); continue; }
+      got[k] = (v.readerMoves ?? 0) - n0;
+      // A key that counts nothing asks the list for no scroll either.
+      if (!got[k] && v.scrollTo && v.scrollTo !== ask) got[k] = "asked the list to scroll";
+      wanted[k] = want;
+      back();
+    }
+  }
+  expect(states).toEqual(Object.keys(BEFORE).map((k) => [k, true]));
+  expect(got).toEqual(wanted);
+}, 120000);
+
 // ---- the pointer handlers ----
 // Each handler the built pane draws, by its method and its element's id (digits as N), and
 // whether running it is the reader's movement (a figure, or what decides it in that state). A
@@ -98,8 +178,9 @@ const HANDLERS = [
   ["on_click", /^th-rail-(up|down)$/, 1, PRESS],
   ["on_click", /^th-tick-N$/, 1, PRESS],
   ["on_click", /^th-rail-card-pin$/, 1, PRESS],
-  // The Trajectory in this pane: back to the Chat leaves it; its failed-call arrows and rows
-  // move the Trajectory's own list, not the Chat's.
+  // The Trajectory in this pane: back to the Chat (its label button, or its icon at the
+  // compact width) leaves it; its failed-call arrows and rows move the Trajectory's own list,
+  // not the Chat's.
   ["on_click", /^th-traj-chat$/, 1, PRESS],
   ["on_click", /^th-traj-fail-(prev|next)$/, 0, PRESS],
   ["on_item_click", /^tr:N:N:N$/, 0, "item"],
@@ -121,11 +202,22 @@ const HANDLERS = [
   ["on_scroll_wheel", /^th-set-.*$/, 0, WHEEL],
   ["on_click", /^th-(agent)?[bB]ubbleColor-.*$/, 0, PRESS],
   ["on_click", /^th-rail-(left|right)$/, 0, PRESS],
+  // Its Link rules and Senders pages: a rule opened, added, turned on or off, edited or
+  // deleted, and how a sender's name is written. The rows draw again with the new links or
+  // names, which moves nothing of the reader's.
+  ["on_click", /^th-(rule|sender)-.*$/, 0, PRESS],
   ["on_click", /^th-textSize-(minus|plus)$/, 0, PRESS],
-  // The body's press and pointer (where a press lands, for a press that did not move).
+  // The body's press and pointer (where a press lands, for a press that did not move), and
+  // the pointer moving over it (a drag past the slop selects text, which moves nothing).
   ["on_mouse_down", /^threads-body$/, 0, { local_position: { x: 10, y: 10 }, bounds: { width: 400 } }],
+  ["on_mouse_move", /^threads-body$/, 0, { local_position: { x: 12, y: 12 }, position: { x: 12, y: 12 } }],
+  // The pointer over the pane (the floating top's icons), a pin's row (its unpin button), the
+  // rail (its ticks) or a tick's card: they show things and move nothing.
+  ["on_hover", /^(threads-root|th-unpin-row-N|th-rail|th-tick-N|th-tick-card-N|th-rail-card-box)$/, 0, true],
+  // The pane's keys: a key with no action here; every key is walked through key() below.
+  ["on_key_down", /^threads-root$/, 0, keyEv("x")],
 ];
-const POINTER = new Set(["on_click", "on_mouse_down", "on_mouse_up", "on_scroll_wheel", "on_item_click", "on_mouse_down_out"]);
+const POINTER = new Set(["on_click", "on_mouse_down", "on_mouse_up", "on_scroll_wheel", "on_item_click", "on_mouse_down_out", "on_mouse_move", "on_hover", "on_key_down"]);
 
 // The handlers one frame draws: [method, id with digits as N, the id, the handler].
 function handlers(v, cx) {
@@ -157,6 +249,14 @@ const STATES = {
   // wheel, and the dot at its bottom end for the running turn below the window.
   rail: (v, cx) => { v.width = 560; v.listH = 120; v.render(cx); v.action("debugRailCard:1", cx); },
   trajectory: (v, cx) => v.action("trajectory", cx),
+  // The Trajectory in this pane at its compact width: its Chat button is an icon.
+  trajIcon: { enter: (v, cx) => { v.paneW = 150; v.width = 150; v.action("trajectory", cx); }, check: (v) => v.traj && trajCompact(v.trajPx()) != null },
+  // A search kept with its field shown and not typing in: a press on the field takes the
+  // typing back.
+  kept: { enter: (v, cx) => { v.action("search:Turn", cx); v.filtering = false; }, check: (v) => Boolean(v.query) && !v.filtering },
+  // The settings card's Link rules and Senders pages.
+  links: (v, cx) => { v.action("settings", cx); v.action("settingsPage:links", cx); },
+  senders: (v, cx) => { v.action("settings", cx); v.action("settingsPage:senders", cx); },
   // The keys sheet, the Turn card, and the Pinned view with one pin.
   keys: (v, cx) => v.action("keys", cx),
   card: (v, cx) => v.action("legend", cx),
@@ -178,6 +278,7 @@ test("every pointer handler the pane draws has a row, and each counts as its row
     if (!s.make) settleRows(v, cx);
     enter(v, cx);
     v.render(cx);
+    if (s.check && !s.check(v)) wrong.push(`${state}: not the state its row names`);
     const item = v.rows().filter((r) => r.key != null).at(-1)?.key;
     for (const [method, nid, id, fn] of handlers(v, cx)) {
       const row = rowOf(method, nid);
@@ -189,8 +290,11 @@ test("every pointer handler the pane draws has a row, and each counts as its row
       const ev = row[3] === "item" ? item : row[3];
       const want = typeof row[2] === "function" ? row[2](v) : row[2];
       const n0 = moves(v);
+      const ask = v.scrollTo;
       try { fn(ev, cx); } catch (e) { wrong.push(`${k}: threw ${e?.message}`); continue; }
       if (moves(v) - n0 !== want) wrong.push(`${k}: ${moves(v) - n0}, not ${want} (${id})`);
+      // A handler that counts nothing asks the list for no scroll either.
+      else if (!want && v.scrollTo && v.scrollTo !== ask) wrong.push(`${k}: asked the list to scroll and counted nothing (${id})`);
       // Back to the state, for the next handler.
       for (let j = 0; j < 4 && v.action("escape", cx); j++);
       if (v.traj) v.leaveTraj();
@@ -201,6 +305,9 @@ test("every pointer handler the pane draws has a row, and each counts as its row
   }
   expect([...missing].sort()).toEqual([]);
   expect(wrong).toEqual([]);
+  // The handlers only these states draw ran: the Trajectory's Chat button in both its forms,
+  // and the field's press with the search kept and not typing in.
+  expect(["trajectory on_click th-traj-chat", "trajIcon on_click th-traj-chat", "kept on_mouse_down th-search-field"].filter((k) => !ran.has(k))).toEqual([]);
   // Every row is some handler's: a row the walk never reaches stands for nothing.
   expect(HANDLERS.filter((r) => !used.has(r)).map(([m, re]) => `${m} ${re}`)).toEqual([]);
 }, 120000);
@@ -314,15 +421,17 @@ test("the search field: typing counts, and a value the pane sets does not count 
 });
 
 // A wheel over a list too short to scroll moves nothing, and counts nothing; a wheel of no
-// delta neither.
+// delta neither. Two turns fit a pane 2000 px tall: the spacer above them says so.
 test("a wheel that moves nothing does not count", async () => {
-  const { v, cx } = await pane(fixture());
+  const { v, cx } = await pane(fixture("--only", "2"));
+  v.listH = 2000;
   settleRows(v, cx);
+  const fits = v.rows()[0]?.kind === "spacer" && v.rowsMemo?.[0]?.kind === "spacer";
   const n0 = moves(v);
   v.listWheel({ delta: { y: 0 } });
-  const short = v.rowsMemo?.[0]?.kind === "spacer";
+  const none = moves(v) - n0;
   v.listWheel({ delta: { y: 120 } });
-  expect(moves(v) - n0).toBe(short ? 0 : 1);
+  expect({ fits, none, fitting: moves(v) - n0 - none }).toEqual({ fits: true, none: 0, fitting: 0 });
 });
 
 // A scroll the list reports with no wheel since the last frame (its own bar) counts once; the
@@ -392,3 +501,137 @@ test("the source check counts a call to readerMoved, not a comment naming it", (
   };
   expect(Object.fromEntries(Object.entries(cases).map(([k, src]) => [k, callsReaderMoved(src)]))).toEqual({ comment: false, block: false, call: true, afterString: true });
 });
+
+// N1: a draw Herdr stops part way (its time limit) while the list reports a scroll of its
+// bar. Stopped at the count itself, the start is not yet written, so the next frame counts
+// the scroll; stopped after the count (in scrolledBy), the start is written, so the next
+// frames do not count it again. Run through the list's draw (drawRange), where a stop is
+// caught (drawFailed) and the frame goes on.
+test("a draw stopped at a bar scroll's count counts it on the next frame, and one stopped after the count does not count it twice", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  const run = (at) => {
+    v.follow = false;
+    v.scrollTo = null;
+    v.scrollBusyUntil = 0;
+    v.toBottom = false;
+    v.pinningUntil = 0;
+    drawRange(v, 20);
+    const n0 = moves(v);
+    let stops = 0;
+    const own = v[at];
+    v[at] = function (...a) { if (!stops++) throw new Error("stopped"); return own.apply(this, a); };
+    drawRange(v, 10);
+    drawRange(v, 10);
+    drawRange(v, 10);
+    delete v[at];
+    return { stops: Math.min(stops, 1), moves: moves(v) - n0 };
+  };
+  expect({ atCount: run("readerMoved"), afterCount: run("scrolledBy") }).toEqual({ atCount: { stops: 1, moves: 1 }, afterCount: { stops: 1, moves: 1 } });
+});
+
+// The Trajectory's ways back to the Chat each count once: y, Esc, its Chat button (above),
+// and the trajectory action itself run while it shows (a command, or code that calls it).
+test("leaving the Trajectory counts once by each way out", async () => {
+  const { v, cx } = await pane(fixture("--open", "--extra", "30"));
+  settleRows(v, cx);
+  v.paneW = 400;
+  v.width = 400;
+  const ways = {
+    y: () => v.key(keyEv("y"), cx),
+    escape: () => v.key(keyEv("escape"), cx),
+    command: () => v.command("trajectory", cx),
+    action: () => v.action("trajectory", cx),
+    leave: () => v.leaveTraj(),
+  };
+  const got = {};
+  for (const [way, f] of Object.entries(ways)) {
+    v.action("trajectory", cx);
+    v.tdetail = false;
+    const inTraj = v.traj;
+    const n0 = moves(v);
+    f();
+    got[way] = { inTraj, left: !v.traj, moves: moves(v) - n0 };
+  }
+  expect(got).toEqual(Object.fromEntries(Object.keys(ways).map((k) => [k, { inTraj: true, left: true, moves: 1 }])));
+});
+
+// syncSel: the Trajectory pane beside the Chat selected another turn, and the Chat scrolls to
+// it. That is the reader's move, made in the other pane. The same turn again moves nothing.
+test("the Trajectory pane beside the Chat moving its selection counts once in the Chat", async () => {
+  const { v, cx } = await pane(fixture("--extra", "30"));
+  settleRows(v, cx);
+  state.panes.push({ pane: "p3", tab: "A", terminal: null, mod: "agent-threads" });
+  state.shared["threads.trajByTerminal"] = { [v.terminal]: { pane: "p3" } };
+  const keys = v.turnKeys(v.rows());
+  const pick = keys.find((k) => k !== v.sel);
+  const n0 = moves(v);
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 1000, pane: "trajectory" } };
+  const took = v.syncSel();
+  const once = moves(v) - n0;
+  state.shared["threads.turnSel"] = { [v.terminal]: { key: pick, by: "other", at: Date.now() + 2000, pane: "trajectory" } };
+  const again = v.syncSel();
+  expect({ took, sel: v.sel === pick, once, again, after: moves(v) - n0 - once }).toEqual({ took: true, sel: true, once: 1, again: false, after: 0 });
+});
+
+// The commands the pane takes (a mod command, a script's herdr-app do, and the Herdr still
+// tests' debug commands), run through command() as Herdr sends them. Every form action()
+// reads (a case, a name it compares, a prefix, a pattern) has a row: its command, and what it
+// counts. One with no row fails. Forms a key also gives count as the key walk's rows say.
+// debugScroll counts: it stands for the reader's scroll in the still tests, which have no
+// pointer (as debugClick stands for a press and debugRailJump for a tick's), so a kept step
+// or a card's scroll is called off there as it would be by the reader.
+const COMMANDS = {
+  "outline:on": ["outline:on", 1], "outline:off": ["outline:off", 1],
+  "pick:": ["pick:1", 1], "search:": ["search:Turn", 1], "go:": ["go:1", 1], "(go|pick|search):": ["search:Turn", 1],
+  choose: ["choose", 0], unpinSel: ["unpinSel", 0], keyHints: ["keyHints", 0], statusLine: ["statusLine", 0], alwaysTime: ["alwaysTime", 0],
+  "railSide:left": ["railSide:left", 0], "railSide:right": ["railSide:right", 0], truncate: ["truncate", 0],
+  agentsQuiet: ["agentsQuiet", 0], agentRail: ["agentRail", 0], "agents:on": ["agents:on", 0], "agents:off": ["agents:off", 0],
+  resetSettings: ["resetSettings", 0],
+  "settingsScroll:down": ["settingsScroll:down", 0], "settingsScroll:up": ["settingsScroll:up", 0], "settingsScroll:pagedown": ["settingsScroll:pagedown", 0],
+  "settingsScroll:pageup": ["settingsScroll:pageup", 0], "settingsScroll:home": ["settingsScroll:home", 0], "settingsScroll:end": ["settingsScroll:end", 0],
+  "settingsPage:links": ["settingsPage:links", 0], "settingsPage:senders": ["settingsPage:senders", 0], "settingsPage:main": ["settingsPage:main", 0],
+  "ring:next": ["ring:next", 0], "ring:back": ["ring:back", 0], "ring:press": ["ring:press", 0],
+  "(bubbleColor|agentBubbleColor):": ["bubbleColor:teal", 0], "(textSize|promptLines|replyLines):": ["textSize:15", 0],
+  "debugWidth:": ["debugWidth:400", 0], debugLift: ["debugLift", 0], "debugRailJump:": ["debugRailJump:1", 1], "debugRailCard:": ["debugRailCard:1", 0],
+  "debugScroll:": [(v) => `debugScroll:${v.turnKeys(v.rows())[0]}`, 1], "debugHover:": ["debugHover:1", 0], debugDayPill: ["debugDayPill", 0],
+  "debugClick:": [(v) => `debugClick:40:${v.turnKeys(v.rows())[0]}`, 1], debugQuote: ["debugQuote", 0],
+};
+// action()'s forms, read from its code.
+function forms() {
+  const b = code(body("action"));
+  const out = new Set();
+  for (const m of b.matchAll(/case "([^"]+)"/g)) out.add(m[1]);
+  for (const m of b.matchAll(/name === "([^"]+)"/g)) out.add(m[1]);
+  for (const m of b.matchAll(/name\.startsWith\("([^"]+)"\)/g)) out.add(m[1]);
+  for (const m of b.matchAll(/\/\^(\(?[^/]*?:)/g)) out.add(m[1]);
+  return [...out].sort();
+}
+test("every command form the pane takes has a row, and each counts as its row says", async () => {
+  const all = forms();
+  expect(all.filter((f) => !(f in COMMANDS) && !(f in ACTIONS) && !(`${f}1` in ACTIONS))).toEqual([]);
+  const { v, cx } = await pane(fixture("--open", "--extra", "30"));
+  settleRows(v, cx);
+  const got = {};
+  const want = {};
+  for (const f of all) {
+    const [cmd, n] = COMMANDS[f] ?? [f in ACTIONS ? f : `${f}1`, ACTIONS[f] ?? ACTIONS[`${f}1`]];
+    const name = typeof cmd === "function" ? cmd(v) : cmd;
+    // A session switch picks from the picker's list: this session as its one choice.
+    if (f === "pick:") { v.choices = [{ path: v.res.path, label: "This session" }]; v.choosing = true; }
+    if (f.startsWith("ring:") || f.startsWith("settings")) { v.action("settings", cx); v.render(cx); }
+    v.sel = v.sel ?? v.turnKeys(v.rows()).at(-1);
+    const n0 = moves(v);
+    const ask = v.scrollTo;
+    try { v.command(name, cx); } catch (e) { got[f] = `threw ${e?.message}`; want[f] = n; continue; }
+    got[f] = moves(v) - n0;
+    // A command that counts nothing asks the list for no scroll either.
+    if (!got[f] && v.scrollTo && v.scrollTo !== ask) got[f] = "asked the list to scroll";
+    want[f] = n;
+    for (let k = 0; k < 4 && v.action("escape", cx); k++);
+    if (v.traj) v.leaveTraj();
+    v.choosing = false;
+    v.render(cx);
+  }
+  expect(got).toEqual(want);
+}, 60000);
