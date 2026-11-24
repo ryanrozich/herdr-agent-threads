@@ -6792,6 +6792,11 @@ test("an open mixed Markdown reply of 16 to 96 KB settles to the card one unboun
     v.rowsKey = null;
     v.rows();
     expect(card()).toEqual(settled);
+    // With no rules there is nothing to link, and no part waits for a later frame for it.
+    v.setLinks([], [], 0);
+    v.shapeBudget = -1;
+    v.rows();
+    expect([v.otherLeft, v.baseRows.find((x) => x.key.startsWith(`md:${key}:`)).links]).toEqual([0, 0]);
   }
 }, 60000);
 
