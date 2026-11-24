@@ -229,11 +229,13 @@ test("timeline view: zoom from 1 to four steps across, the pan kept inside the s
   const v = tlZoomAt(geo, { z: 1, x0: 0 }, 2, 100);
   expect(v.z).toBe(2);
   expect((100 + v.x0) / v.z).toBeCloseTo(100, 6);
-  // The keys put the moment in the middle.
-  const mid = tlZoomAt(geo, { z: 1, x0: 0 }, 2, 100, 250);
-  expect((250 + mid.x0) / mid.z).toBeCloseTo(100, 6);
-  const L = timelineLayout(heads, 500, "clock", Date.now(), { z: 2, x0: 100 }, geo);
-  expect(tlBox(L, 3)).toEqual({ x: geo.turns[3].x * 2 - 100, w: geo.turns[3].w * 2 });
+  // The keys put the moment in the middle; a view that would start before the session is
+  // held at its start.
+  const mid = tlZoomAt(geo, { z: 1, x0: 0 }, 2, 200, 250);
+  expect((250 + mid.x0) / mid.z).toBeCloseTo(200, 6);
+  expect(tlZoomAt(geo, { z: 1, x0: 0 }, 2, 100, 250).x0).toBe(0);
+  const L = timelineLayout(heads, 500, "clock", Date.now(), { z: 4, x0: 800 }, geo);
+  expect(tlBox(L, 3)).toEqual({ x: geo.turns[3].x * 4 - 800, w: geo.turns[3].w * 4 });
   expect(tlBox(L, 99)).toBe(null);
   // Only the turns in view (and a margin) are walked.
   expect(L.from).toBeGreaterThan(0);
