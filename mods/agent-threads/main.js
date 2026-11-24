@@ -6007,7 +6007,6 @@ export default class Threads extends View {
     return lk;
   }
 
-
   // Focuses the terminal this pane reads, by its pane id: pane.focus {terminal} prefers the
   // first layout block that shows the terminal, which can be another pane than the one
   // beside Threads. Says what it did. It cannot scroll the terminal to a turn.
