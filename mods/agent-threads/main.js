@@ -2903,6 +2903,9 @@ export default class Threads extends View {
     this.buildMs = job.ms;
     // A new column width: the place on screen before these rows come in (holdPlace).
     if (this.anchorDue) { this.anchorDue = false; this.anchor = this.takeAnchor(); }
+    // Until the record below is made, a draw Herdr stops (its stop falls at any call) would
+    // leave these rows under the old record and key: with no key, the next build is of every row.
+    this.rowsKey = null;
     this.baseRows = out;
     this.railTurns = this.buildRail;
     this.baseSizes = job.sizes;
