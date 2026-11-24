@@ -10,7 +10,7 @@ import {
   isShown, visible, countLabel, focusTarget, contrast, ratio, mix, labelColor, matchFill, youHeight, dayParts, bandFill, BAND_LIGHT, over,
   readType, readWidth, replyWidth, MEASURE, PROSE_EM, RAIL, railWindow, toolKind, groupText, groupKinds, KIND_ICON, callTime, outLines, outHeight, outLang, callText, shortPaths, cutPath, OUT,
   pinColumn, PIN_SPLIT_MIN, PIN_COL, PIN_STEP, headerButtonWidth, columnResize, trajColumn, trajFit, TERM_KEEP, codeRows, splitTables, tableCells, tableNeed, TABLE_COL_CHARS, TABLE_CELL_PAD, landPlan, wrapCap, MONO_EM,
-  mdPreview, fitWidth, mdChunks, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
+  mdPreview, fitWidth, mdChunks, mdSplit, mdSplitOn, escapeDollars, cutMd, galleryBox, VIEWER, viewerLayout, viewerKey, labelPieces, replyBlocks, replyScroll, fencedBlock, MD_MAX, cardKey, cardMarks, cardScroll, CARD_LINE, CARD_MARK,
   keySheet, fitHints, hintWidth, agentState, htmlLine, htmlChunks, promptParts, pinPromptText, outlineText,
 } from "../mods/agent-threads/ui.js";
 
@@ -911,6 +911,31 @@ test("mdChunks: Markdown over Herdr's limit splits at paragraphs, never inside f
   const lp = mdChunks(long, 500);
   expect(lp.every((p) => Buffer.byteLength(p) <= 500)).toBe(true);
   expect(lp.join("")).toBe(long);
+});
+
+// The split as a job that stops and goes on (an open reply's, a few lines a draw): read a few
+// lines at a time it makes the parts one whole split makes, with each chunk's tables apart.
+test("mdSplit: read a few lines at a time, the same parts as one whole split, and none from a read that was stopped", () => {
+  const para = (i) => `Paragraph ${i}: the cart total rounds per line, see ACME-${i}.`;
+  const texts = [
+    Array.from({ length: 300 }, (_, i) => para(i)).join("\n\n"),
+    Array.from({ length: 120 }, (_, i) => `Order ${i}\n\n| Ticket | Total |\n|---|---|\n| ACME-${i} | ${i} |`).join("\n\n"),
+    `${para(1)}\n\n\`\`\`sh\n${"echo one\n\necho two\n".repeat(200)}\`\`\`\n\n${para(2)}`,
+    "naïve café … ".repeat(900).trim(),
+    "short",
+  ];
+  for (const md of texts) {
+    const whole = mdChunks(md, 1000);
+    for (const lines of [1, 3, 128]) {
+      const job = mdSplit(md, 1000, true);
+      for (let n = 0; !job.done && n < 1e5; n++) {
+        mdSplitOn(job, lines);
+        // A read Herdr stopped wrote its parts but not the job's count: the next read drops them.
+        if (!job.done) job.parts.push({ text: "from a stopped read", table: false });
+      }
+      expect(job.parts).toEqual(whole.flatMap((c) => splitTables(c)));
+    }
+  }
 });
 
 // mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found

@@ -392,6 +392,11 @@ const tableLine = (l) => l.trim().startsWith("|");
 // [{ text, table }]. A table is its own part so the list can let it run wider than the
 // reading line (tableNeed). Empty parts are dropped; text keeps its own blank lines.
 export function splitTables(md) {
+  // No bar, so no table: the text as one part, as the walk below makes it.
+  if (!String(md ?? "").includes("|")) {
+    const text = String(md ?? "").replace(/^\n+|\n+$/g, "");
+    return [{ text: text.trim() ? text : String(md ?? ""), table: false }];
+  }
   const lines = String(md ?? "").split("\n");
   const out = [];
   let buf = [];
@@ -432,21 +437,64 @@ export function tableNeed(md, charW) {
   return Math.ceil(w);
 }
 
-export function mdChunks(md, max = MD_MAX) {
+export function mdChunks(md, max = MD_MAX) { return mdSplitOn(mdSplit(md, max)).parts; }
+// mdChunks as a job that stops and goes on, so an open reply's split can share a draw's time
+// (a 200,000-character reply took about 64 ms on the rig, past Herdr's 50 ms for a draw).
+// mdSplit(md) starts one; mdSplitOn(job, lines) reads up to that many more of its lines. Its
+// parts so far are job.parts (chunks, or with tables each chunk's splitTables parts), and
+// job.done is set once the whole text is in. A part never changes once made, so the parts made
+// so far are always the first of the whole split's. A Markdown block over max is split when its
+// last line is read, all at once.
+export function mdSplit(md, max = MD_MAX, tables = false) {
   const text = String(md ?? "");
-  if (utf8Len(text) <= max) return [text];
-  const blocks = [];
-  let cur = [];
-  let fence = null;
-  for (const line of text.split("\n")) {
+  const job = { text, max, tables, at: 0, n: 0, cur: [], curLen: 0, fence: null, chunk: [], len: 0, parts: [], done: false };
+  if (text.length <= max && utf8Len(text) <= max) { job.parts = tables ? splitTables(text) : [text]; job.n = job.parts.length; job.done = true; }
+  return job;
+}
+// What one read of lines changes is written back to the job at its end, in one step: Herdr
+// stops a script that runs too long with no catch, and parts made by a read it stopped are
+// dropped on the next.
+export function mdSplitOn(job, lines = Infinity) {
+  if (job.done) return job;
+  const { text, max, tables, parts } = job;
+  parts.length = job.n;
+  let { at, curLen, fence, len } = job;
+  let cur = job.cur.slice();
+  let chunk = job.chunk.slice();
+  // packed() over the blocks' pieces, one at a time: a chunk is made once the next piece
+  // would not fit in it.
+  const made = (c) => { if (tables) parts.push(...splitTables(c)); else parts.push(c); };
+  const piece = (p, pLen = utf8Len(p)) => {
+    if (!len) { chunk = [p]; len = pLen; }
+    else if (len + 2 + pLen > max) { made(chunk.join("\n\n")); chunk = [p]; len = pLen; }
+    else { chunk.push(p); len += 2 + pLen; }
+  };
+  const block = () => {
+    const b = cur.join("\n");
+    if (curLen <= max) piece(b, curLen);
+    else for (const p of splitBlock(b, max) ?? packed(wordsIn(cur, max), "\n", max)) piece(p);
+    cur = [];
+    curLen = 0;
+  };
+  for (let n = 0; n < lines && at <= text.length; n++) {
+    let nl = text.indexOf("\n", at);
+    if (nl < 0) nl = text.length;
+    const line = text.slice(at, nl);
+    at = nl + 1;
     const f = line.match(FENCE);
     if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
-    else if (!fence && !line.trim()) { if (cur.length) blocks.push(cur.join("\n")); cur = []; continue; }
+    else if (!fence && !line.trim()) { if (cur.length) block(); continue; }
+    curLen += (cur.length ? 1 : 0) + utf8Len(line);
     cur.push(line);
   }
-  if (cur.length) blocks.push(cur.join("\n"));
-  const pieces = blocks.flatMap((b) => (utf8Len(b) <= max ? [b] : splitBlock(b, max) ?? packed(wordsIn(b.split("\n"), max), "\n", max)));
-  return packed(pieces, "\n\n", max);
+  const done = at > text.length;
+  if (done) {
+    if (cur.length) block();
+    const last = chunk.join("\n\n");
+    if (last) made(last);
+  }
+  Object.assign(job, { at, n: parts.length, cur, curLen, fence, chunk, len, done });
+  return job;
 }
 
 const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
