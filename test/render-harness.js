@@ -8,8 +8,10 @@
 // setup() as it starts: it re-installs the module stand-ins and, through reset(), puts every
 // setting below back to its default and empties every shared list and count. reset() also runs
 // before every test (test/preload.js calls the hook set at the bottom of this file), so a pin,
-// a setting or a record one test wrote never reaches the next. What reset() leaves alone: keyBinds, since the mod binds its
-// keys once per process (ui.js), so a later file's panes bind nothing and the record of that
+// a setting or a record one test wrote never reaches the next. What a file sets at its top
+// level after setup(), or in its own beforeAll, is put back before each test too, so such
+// state belongs in the test or in the file's beforeEach. What reset() leaves alone: keyBinds,
+// since the mod binds its keys once per process (ui.js), so a later file's panes bind nothing and the record of that
 // one binding has to stay; app and the mod copied into it, made once; and main.js and ui.js
 // themselves, loaded once, with their own module state.
 import { mock, expect } from "bun:test";
@@ -261,21 +263,26 @@ for (const name of ["savePins", "pinChangedLater"]) {
   const real = Threads.prototype[name];
   Threads.prototype[name] = function (...args) { pinPanes.add(this); return real.apply(this, args); };
 }
-// Waits for every pin save in flight (the chain each pane keeps), not for the clock.
-export async function pinsIdle() {
-  const give = new Promise((r) => setTimeout(r, 2000)).then(() => { throw new Error("a pin save never ended"); });
+// Waits for every pin save in flight (the chain each pane keeps), not for the clock. A save
+// that has not ended in capMs fails the call; the cap's timer is cleared when the saves end,
+// and the loop stops when the cap wins, so nothing keeps running behind a failed call.
+export async function pinsIdle(capMs = 2000) {
+  let timer;
+  let over = false;
+  const give = new Promise((_, no) => { timer = setTimeout(() => { over = true; no(new Error("a pin save never ended")); }, capMs); });
   const idle = (async () => {
-    for (let again = true; again;) {
+    for (let again = true; again && !over;) {
       again = false;
       for (const v of pinPanes) {
         const chain = v.pinChain;
         await chain?.catch(() => {});
+        if (over) return;
         await new Promise((r) => setTimeout(r, 0)); // the pane's follow-up (pinSaving, readPins) runs
         if (v.pinChain !== chain || v.pinSaving) again = true;
       }
     }
   })();
-  await Promise.race([idle, give]);
+  try { await Promise.race([idle, give]); } finally { over = true; clearTimeout(timer); }
 }
 // Before every test: the last test's panes finish their saves and drop their queued ones,
 // then everything goes back to its start.

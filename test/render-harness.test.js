@@ -2,7 +2,7 @@
 // process and loads test/render-harness.js once, so a setting one file leaves behind would
 // reach the next file that uses the harness; setup() puts them all back.
 import { test, expect } from "bun:test";
-import { allPins, closed, editors, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, pinPane, PINS, saved, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
+import { allPins, closed, editors, heldClock, hostReads, keyBinds, lacking, mdSources, overlays, pinPane, pinsIdle, PINS, saved, scrollHandles, settingsWrites, setup, stubHas, views, work, H } from "./render-harness.js";
 
 const DEFAULTS = {
   calls: 0,
@@ -122,4 +122,54 @@ test("leak check, part 4: the save of the test before does not land in this one"
   await new Promise((r) => setTimeout(r, 150));
   expect(H.recordFiles).toEqual({});
   expect(H.pinWrites).toBe(0);
+});
+
+// A save queued for later (pinChangedLater, saved by the pane's tick 1.5 s on) belongs to the
+// pane of the test that queued it. The pane is kept here so the next test can look at it.
+let queuedPane = null;
+test("leak check, part 5: a test queues a pin save for later and ends with its pane kept", async () => {
+  const { v } = await pinPane("--extra", "3");
+  queuedPane = v;
+  v.pinChangedLater(v.sessionKey(v.current()));
+  expect(v.pinDueAt).not.toBeNull();
+});
+
+test("leak check, part 6: the pane of the test before has no save queued, and no pins record was written", () => {
+  expect(queuedPane.pinDueAt).toBeNull();
+  expect(H.recordFiles).toEqual({});
+  expect(H.pinWrites).toBe(0);
+});
+
+// Counts the timers a call makes through the global clock functions, then puts them back.
+async function timersOf(fn) {
+  const real = { set: globalThis.setTimeout, clear: globalThis.clearTimeout };
+  const made = [];
+  const live = new Set();
+  const zero = { n: 0 };
+  globalThis.setTimeout = (f, ms, ...a) => { const t = real.set(f, ms, ...a); if (ms === 0) zero.n++; else { made.push(ms); live.add(t); } return t; };
+  globalThis.clearTimeout = (t) => { live.delete(t); return real.clear(t); };
+  try { await fn(zero); } finally { globalThis.setTimeout = real.set; globalThis.clearTimeout = real.clear; }
+  return { made, live: live.size, zero };
+}
+
+test("pinsIdle leaves no timer pending when the saves end", async () => {
+  const { live, made } = await timersOf(() => pinsIdle());
+  expect(made).toEqual([2000]);
+  expect(live).toBe(0);
+});
+
+test("pinsIdle stops its loop when the cap wins: a save that never ends does not keep it turning", async () => {
+  const { v, cx, keys } = await pinPane("--extra", "3");
+  let release;
+  v.pinChain = new Promise((r) => { release = r; });
+  v.sel = keys()[0];
+  v.action("pin", cx);
+  try {
+    await timersOf(async (zero) => {
+      await expect(pinsIdle(40)).rejects.toThrow("a pin save never ended");
+      const at = zero.n;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(zero.n).toBe(at);
+    });
+  } finally { release(); }
 });
