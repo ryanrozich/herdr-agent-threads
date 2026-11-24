@@ -7967,7 +7967,7 @@ export default class Threads extends View {
     let hit = 0, hiddenHit = 0;
     // While the matches are counted (scanStep): "Counting…" with none found yet, and the total
     // so far with a "+"; the hidden ones, no match, and the first or only mention wait for
-    // the last turn checked.
+    // the last turn checked (the words below the counting ones).
     let more = false;
     // The Pinned view shows every pin, agent message or not, and nothing else: the matches
     // are the pins the search matches. Elsewhere the kept set (hitsNow).
@@ -7976,7 +7976,7 @@ export default class Threads extends View {
       const h = this.hitsNow();
       hit = h.top - h.bot;
       more = !h.done;
-      hiddenHit = more ? 0 : h.hidden;
+      hiddenHit = h.hidden;
     }
     const hidden = hiddenHit ? ` · ${hiddenHit} hidden` : "";
     if (!hit) return more ? "Counting…" : `No matches${hidden}`;

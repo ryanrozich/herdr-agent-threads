@@ -679,7 +679,7 @@ for (const q of QUERIES) {
         expect(run).toBe(true);
         v.setSenders([{ n: 1, re: /^Turn \d+: please check/, label: "Checker" }], [], 1, cx);
         for (let k = 0; k < 80; k++) {
-          priced(v, () => { drawOnce(v, cx); seen.push(fieldText(v)); });
+          priced(v, () => { drawOnce(v, cx); seen.push({ text: fieldText(v), counting: counting(v) }); });
           const g = gates.shift();
           if (g) { g(); for (let i = 0; i < 5; i++) await Promise.resolve(); }
           else if (!counting(v)) break;
@@ -693,7 +693,10 @@ for (const q of QUERIES) {
     expect(counting(v)).toBe(false);
     expect(s.turns.filter((t) => t.agent).length).toBe(1680);
     expect(places(v)).toEqual(want(v, q));
-    expect(seen.slice(0, -1).some((t) => t.startsWith("No matches"))).toBe(false);
+    // While counting, neither "No matches" nor a hidden count, which is not all found yet.
+    const during = seen.filter((x) => x.counting).map((x) => x.text);
+    expect(during.length).toBeGreaterThan(0);
+    expect(during.filter((t) => t.startsWith("No matches") || t.includes("hidden"))).toEqual([]);
   }, 120000);
 }
 
@@ -773,4 +776,103 @@ test("many turns coming in at once, or one before the scan is past the newest tu
     expect(places(v)).toEqual(want(v, "rename"));
     expect(want(v, "rename").keys.length).toBe(101);
   }
+}, 120000);
+
+// More of the newest session's changes: a long piece read at once (more than HITS_TAIL turns,
+// so the set is found again, in slices, not checked again in one go), a hidden match among the
+// turns checked again, and the session finishing its read (its newest turn turns live, which
+// shows an agent message).
+test("a long piece read at once, a hidden match checked again, and a read finishing keep the count right and the draws in time", async () => {
+  const ts = new Date(Date.UTC(2026, 10, 4, 9, 0)).toISOString();
+  // 4,000 turns read at once into a 600-turn session with "rename" searched, at twice the price.
+  {
+    const { v, cx, s } = await longPane(600);
+    v.sel = `0:${s.turns.length}`;
+    v.action("search:rename", cx);
+    settleRows(v, cx);
+    X = 2;
+    const draws = [];
+    try {
+      priced(v, () => {
+        for (let i = 0; i < 4000; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please rename part ${i}.`, ts }); T.apply(s, { k: "t", t: "Done." }); T.apply(s, { k: "d", ms: 1000, ts }); }
+        for (let k = 0; k < 400; k++) { const d = drawOnce(v, cx); draws.push(d); if (!d.stopped && counted(v)) break; }
+      });
+    } finally { X = 1; }
+    expect(draws.filter((d) => d.stopped).length).toBe(0);
+    expect(Math.max(...draws.map((d) => d.ms))).toBeLessThanOrEqual(LIMIT);
+    expect(places(v)).toEqual(want(v, "rename"));
+  }
+  // The newest turns hidden matches (agent messages with no reply): a turn comes in, and the
+  // ones checked again are counted once.
+  {
+    const { v, cx, s } = await longPane(598, { bare: true });
+    v.setSenders([{ n: 1, re: /^Turn \d+: please check/, label: "Checker" }], [], 1);
+    expect(s.turns.at(-1).agent).toBe(true);
+    v.action("search:cart", cx);
+    settleRows(v, cx);
+    const n = hiddenDirect(v, "cart");
+    expect(fieldText(v)).toBe(`No matches · ${n} hidden`);
+    for (let i = 0; i < 3; i++) { T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please check the cart again.`, ts }); T.apply(s, { k: "d", ms: 1000, ts }); settleRows(v, cx); }
+    expect(hiddenDirect(v, "cart")).toBe(n + 3);
+    expect(fieldText(v)).toBe(`No matches · ${n + 3} hidden`);
+    expect(places(v)).toEqual(want(v, "cart"));
+  }
+  // A session still being read: its newest turn, an agent message with no reply yet, is
+  // hidden; once the read is done the turn is live and shown, with nothing else changed.
+  {
+    const { v, cx, s } = await longPane(600, { bare: true });
+    v.setSenders([{ n: 1, re: /^Turn \d+: please check/, label: "Checker" }], [], 1);
+    T.apply(s, { k: "p", o: "human", t: `Turn ${s.turns.length}: please check the cart once more.`, ts });
+    expect(s.turns.at(-1).agent).toBe(true);
+    s.loaded = false;
+    v.action("search:once more", cx);
+    settleRows(v, cx);
+    expect(fieldText(v)).toBe("No matches · 1 hidden");
+    s.loaded = true;
+    settleRows(v, cx);
+    expect(fieldText(v)).toBe("1 match");
+    expect(places(v)).toEqual(want(v, "once more"));
+  }
+}, 120000);
+
+// The count goes on by itself: with the rows unchanged (sender rules marked again in slices,
+// changing no turn, each slice starting the count again, as the later slices of a new rule's
+// marking do), the draws the count asks for are enough to finish it.
+test("the count asks for the draws it needs, with nothing else asking", async () => {
+  const { v, cx, s } = await longPane(5600);
+  v.setSenders([{ n: 1, re: /^No turn starts like this/, label: "None" }], [], 1);
+  v.sel = `0:${s.turns.length}`;
+  v.action("search:rename", cx);
+  settleRows(v, cx);
+  const rowsKey = v.rowsKey;
+  const real = T.remarkSenders;
+  const remark = spyOn(T, "remarkSenders").mockImplementation((ss, rules, from, until) => {
+    const pn = performance.now;
+    let t = 0;
+    performance.now = () => (t += 0.01);
+    try { return real(ss, rules, from, until === Infinity ? until : 10); } finally { performance.now = pn; }
+  });
+  const gates = [];
+  cx.sleepHook = () => new Promise((r) => gates.push(r));
+  let asked = 1;
+  cx.notifyHook = () => { asked++; };
+  let draws = 0;
+  try {
+    v.remark(cx);
+    // Draw only when something asks: a timer that notifies, or the marking's end.
+    for (let k = 0; k < 200; k++) {
+      const g = gates.shift();
+      if (g) { g(); for (let i = 0; i < 5; i++) await Promise.resolve(); }
+      cx.flush(0);
+      if (!asked && !g) break;
+      asked = 0;
+      // A draw's own timers run at its end (drawOnce), and may ask for the next.
+      priced(v, () => { drawOnce(v, cx); });
+      draws++;
+    }
+  } finally { remark.mockRestore(); cx.sleepHook = null; cx.notifyHook = null; }
+  expect(v.rowsKey).toBe(rowsKey);
+  expect(draws).toBeGreaterThanOrEqual(5);
+  expect(counting(v)).toBe(false);
+  expect(fieldText(v)).toBe("1 of 560 · newest first");
 }, 120000);
