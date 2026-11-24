@@ -56,6 +56,8 @@ export const TL_LANES = Object.freeze(["input", "model", "tools"]);
 export const TL_ROOM_MIN = 10000;
 export const TL_ROOM_GROW = 1.5;
 export function liveRoom(ms) {
+  // A time with no bound (nowMs or span Infinity) gets the least room, not Infinity.
+  if (!Number.isFinite(ms)) return TL_ROOM_MIN;
   let r = TL_ROOM_MIN;
   while (r < ms) r *= TL_ROOM_GROW;
   return r;
@@ -341,7 +343,9 @@ export function itemBox(tl, i, tx, w, wall, scale, len, upTo = null) {
   if (Number.isNaN(a) || !(wall > 0)) return null;
   // An unfinished call (open) is never under 6 px wide, so its torn end keeps its shape.
   const least = open ? 6 : 3;
-  const x0 = Math.min(tx + (a / wall) * w, tx + w - least);
+  // A step that starts before its turn (a tool's clock behind the prompt's) starts at the
+  // turn's start; in a turn under least px wide the bar still ends at the turn's end.
+  const x0 = Math.min(Math.max(tx, tx + (a / wall) * w), tx + w - least);
   const end = !Number.isNaN(b) ? tx + (b / wall) * w : open ? upTo ?? tx + w : x0 + 3;
   const box = { x0, x1: Math.max(x0 + least, Math.min(end, tx + w)), track: f & TL_TRACK ? 1 : 0 };
   if (open) box.open = true;
@@ -352,7 +356,7 @@ export function itemBox(tl, i, tx, w, wall, scale, len, upTo = null) {
 // px of the view (zoomed and panned).
 export function timelineHit(L, heads, x, lane, nowMs = Date.now()) {
   const T = L.turns;
-  if (!T.length) return null;
+  if (!T.length || !Number.isFinite(x)) return null;
   const z = L.z ?? 1;
   const x0 = L.x0 ?? 0;
   const fx = (x + x0) / z;
