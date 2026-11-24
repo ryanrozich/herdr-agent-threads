@@ -9156,6 +9156,10 @@ export default class Threads extends View {
     h.arrs = S.map((s) => s.turns);
     h.lens = S.map((s) => s.turns.length);
     h.loaded = S.map((s) => Boolean(s.loaded));
+    // The newest session's oldest open turn: a later turn's end can still answer it
+    // (answeredBy), so the next tail starts no later than it (hitsTail).
+    const open = L >= 0 ? S[L].open : null;
+    h.open = open?.length ? Math.min(...open.map((t) => t.n - 1)) : Infinity;
     // A new set's first slice, wherever it is first asked for (scanStep). A tail too long to
     // check again at once: its first slice, here, the same way.
     if (h !== this.hits) { this.hits = h; this.scanHits(h, now() + this.scanMax()); }
@@ -9298,6 +9302,8 @@ export default class Threads extends View {
     // next turn on, the turns are not checked yet.
     this.hitsCut(h);
     if (h.cur.tail) safe = Math.min(safe, h.cur.tail.next);
+    // A turn that was open at the last check can be answered by a newer one now.
+    if (h.open < safe) safe = h.open;
     // The matches from safe on: the newest places, and the hidden ones in the newest session.
     while (h.top > h.bot) {
       const p = h.top - 1;
