@@ -5258,8 +5258,11 @@ export default class Threads extends View {
     }
   }
 
+  // A scroll still waiting for the rows to settle (an open's scroll of a card) is dropped: it
+  // would land once they did, and take the view from the end.
   jumpLatest(select = true) {
     this.follow = true;
+    this.scrollTo = null;
     this.stickStep = null;
     this.unseen = false;
     const keys = this.turnKeys(this.rows());
@@ -6535,7 +6538,7 @@ export default class Threads extends View {
       case "first": go(0); return true;
       // A scroll still waiting for rows to settle (an open card's) gives way to it: held, it
       // kept the end from being held while a long reply's parts came in.
-      case "latest": this.scrollTo = null; this.jumpLatest(true); return true;
+      case "latest": this.jumpLatest(true); return true;
       // A search: the next match back in time (older) or forward (newer). With no match
       // selected, either goes to the newest. At either end the selection stays: the search
       // field already says it is the first mention or the newest, and nothing wraps.
