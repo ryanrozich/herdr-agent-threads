@@ -12207,15 +12207,17 @@ export default class Threads extends View {
   // subagent's calls at SUB_ALPHA. An unfinished call's end is torn; in the running turn it
   // grows to now (tlGrow), and the rest stays as placed. The selected row's turn has a lighter
   // band behind it and the selected step's bar an outline. Until the session is read and its
-  // rows built (ledgerHeld) the turns are only part of it: the slot keeps its height, with one
-  // dim line.
+  // rows built (ledgerHeld) the turns are only part of it, and then until the strip's own build
+  // is done (tlJob): the slot keeps its height, with one dim line for each.
   timelineView(t, L, shown, i, inks) {
     const box = (el) => el.id("th-timeline").flex_none().w_full().h(TL_H).overflow_hidden().border_b(1).border_color(t.border)
       .bg(alpha(t.foreground, 0.025));
-    const waiting = () => box(h_flex()).items_center().pl(12)
-      .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child("The timeline shows once the whole session is read"));
+    // One dim line in the slot: while the session is read, that it waits for it; once read, while
+    // its own build runs over draws, that it is being laid out.
+    const waiting = (text) => box(h_flex()).items_center().pl(12)
+      .child(div().id("th-tl-wait").text_size(12).text_color(t.dim).child(text));
     this.tlWait = this.ledgerHeld(L);
-    if (this.tlWait) return waiting();
+    if (this.tlWait) return waiting("The timeline shows once the whole session is read");
     const cw = tlStrip(this.pw());
     const prev = this.tlModel;
     const t0 = now();
@@ -12230,7 +12232,7 @@ export default class Threads extends View {
       M = tlBuildGo(this.tlJob, t0 + TL_BUILD_MS, now);
       if (!M) {
         this.tlWait = true;
-        return waiting();
+        return waiting("Laying out the timeline…");
       }
       this.tlJob = null;
     }
