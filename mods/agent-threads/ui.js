@@ -471,8 +471,9 @@ export const MD_VIEW_CHARS = 4096;
 // full-width forms only (。！？；，、：, written by code point), so text with none of them splits
 // at spaces alone, as before. The three classes share no character, so a match is one scan: a
 // run of 200,000 characters with no space or mark is read once, not tried again from each place.
+// Marks that start a word go with the text after them, not as a part of their own.
 const MD_SPACE_WORD = /\S+\s*/g;
-const MD_WORD = /[^\s\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]*\s*|[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+\s*/g;
+const MD_WORD = /[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]*[^\s\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]*\s*|[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]+\s*/g;
 const MD_MARK = /[\u3002\uFF01\uFF1F\uFF1B\uFF0C\u3001\uFF1A]/;
 // mdChunks as a job that stops and goes on, so an open reply's split can share a draw's time
 // (on the rig a 120 KB reply's took 44 ms, near Herdr's 50 ms for a draw). mdSplit(md) starts
