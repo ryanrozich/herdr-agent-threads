@@ -51,12 +51,16 @@ const rowF = (r, track) => (track ? TL_TRACK : 0) | (r.open ? TL_OPEN : 0) | (r.
 // A turn's tracks: null when no step is on the second track, else one number a step, 1 for a
 // call in the Tools lane that started while another ran. A call with no result holds the
 // first track to the turn's end; one that starts as the last ends stays on the first.
-export function tlTracks(h) {
+export function tlTracks(h) { return runGen(tracksGen(h, null)); }
+// tlTracks' work; with S (a build's state), each row read counts in S.work and the build may
+// stop for the clock once a step has touched TL_BUILD_BARS bars (tlBuildGo).
+function* tracksGen(h, S) {
   TL_MADE.tracks++;
   const n = stepN(h);
   let out = null;
   let end0 = -Infinity;
   for (let i = 0; i < n; i++) {
+    if (S && ++S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
     const r = h.steps[i];
     const a = r.start;
     if (a == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
@@ -165,8 +169,11 @@ function roomOf(heads, scale, nowMs) {
   if (scale === "steps" || !h?.going || h.t0 == null) return 0;
   return liveRoom(Math.max(h.span ?? 0, nowMs - h.t0));
 }
-// A build stops after at most this many turns of one pass to look at the clock (tlBuildGo).
+// A build stops after at most this many turns of one pass to look at the clock (tlBuildGo),
+// and inside a turn after this many bars (step rows read), so no step holds more than that,
+// however many calls a turn has.
 export const TL_BUILD_CHUNK = 256;
+export const TL_BUILD_BARS = 1024;
 // Runs a build to its end: the whole build in one go.
 function runGen(g) {
   for (;;) {
@@ -390,9 +397,9 @@ function tlTail(P, heads, was, G = P.geo) {
     l[s[0] - 1] = s[1].slice();
     out.spans.set(k, l);
   }
-  const S = { out, heads, G, z: P.z, x0: P.x0, cw: P.cw, scale: P.scale, range: null, walls: G.walls, add: spanAdder(out), M: TL_MARGIN, kept: null, failEnd: c.failEnd, nti: [], nx: [], nw: [] };
+  const S = { out, heads, G, z: P.z, x0: P.x0, cw: P.cw, scale: P.scale, range: null, walls: G.walls, add: spanAdder(out), M: TL_MARGIN, kept: null, failEnd: c.failEnd, nti: [], nx: [], nw: [], work: 0 };
   const n = heads.length;
-  layTurn(S, n - 1);
+  runGen(layTurn(S, n - 1));
   const j = P.labels.length - 1;
   if (on && j >= 0 && P.labels[j].ti === n - 1 && S.nti[0] === n - 1) {
     out.labels = P.labels.slice();
@@ -403,8 +410,10 @@ function tlTail(P, heads, was, G = P.geo) {
 }
 // One turn of a layout: its number's place, its spans (or one per lane under 2 px), its fail
 // marks, its growing bars, its ticks and the break after it. S: the layout's state (timelineLayout).
-// false once the turn is past the strip's end and its margin.
-function layTurn(S, ti) {
+// false once the turn is past the strip's end and its margin. A generator: inside a wide turn
+// it yields 0 (no turn walked) each TL_BUILD_BARS bars read (S.work), so a build step can end
+// inside a turn; the result is the same as laid out in one go.
+function* layTurn(S, ti) {
   const { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept } = S;
   const n = G.turns.length;
   const t = G.turns[ti];
@@ -436,10 +445,11 @@ function layTurn(S, ti) {
     let marks = null;
     if (scale !== "steps") {
       tk = kept?.get(h);
-      if (tk === undefined) tk = tlTracks(h);
+      if (tk === undefined) tk = yield* tracksGen(h, S);
       out.tracks.set(h, tk);
     }
     for (let i = 0; i < len; i++) {
+      if (++S.work >= TL_BUILD_BARS) { S.work = 0; yield 0; }
       const r = h.steps[i];
       const sk = laneKeys(r);
       if (!sk) continue;
@@ -518,17 +528,17 @@ function* layoutGen(heads, cw, scale, nowMs, view, geo, range, kept) {
   while (lo < hi) { const m = (lo + hi) >> 1; const t = G.turns[m]; if (t.x + t.w + G.gap < left) lo = m + 1; else hi = m; }
   out.from = lo;
   // The turns that could have a number (those starting before the strip's end) in nti, nx, nw.
-  const S = { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept, failEnd: -Infinity, nti: [], nx: [], nw: [] };
+  const S = { out, heads, G, z, x0, cw, scale, range, walls, add, M, kept, failEnd: -Infinity, nti: [], nx: [], nw: [], work: 0 };
   let walked = 0;
   for (let ti = lo; ti < n; ti++) {
     // Before the last turn, what the layout holds so far, so a new heading of that turn alone
     // is laid out again from here (tlTail).
     if (ti === n - 1 && !range) out.cut = cutOf(S);
-    if (!layTurn(S, ti)) break;
-    if (++walked === TL_BUILD_CHUNK) { yield walked; walked = 0; }
+    if (!(yield* layTurn(S, ti))) break;
+    if (++walked === TL_BUILD_CHUNK) { yield walked; walked = 0; S.work = 0; }
   }
   yield walked;
-  numbers(out, heads, S.nti, S.nx, S.nw);
+  yield* numbersGen(out, heads, S.nti, S.nx, S.nw);
   return out;
 }
 // A model built from nothing over several draws (opened, or shown again after the pane dropped
@@ -570,8 +580,11 @@ function nextStep(k) { const d = 10 ** Math.floor(Math.log10(k)); const m = k / 
 // the strip's end, or touch the first turn's number, has none. Then the last turn's, moved inside
 // the strip's end, in place of any it touches. nti, nx, nw: the turns in view
 // that start before the strip's end, their number's x and their width from it.
-function numbers(out, heads, nti, nx, nw) {
+function numbers(out, heads, nti, nx, nw) { runGen(numbersGen(out, heads, nti, nx, nw)); }
+// numbers' work, yielding 0 every TL_BUILD_CHUNK turns it reads (tlBuildGo).
+function* numbersGen(out, heads, nti, nx, nw) {
   const cw = out.cw;
+  let read = 0;
   const m = nti.length;
   if (!m) return;
   const top = heads[nti[m - 1]].n;
@@ -580,6 +593,7 @@ function numbers(out, heads, nti, nx, nw) {
     let end = -Infinity;
     let ok = true;
     for (let j = 0; j < m && ok; j++) {
+      if (++read === TL_BUILD_CHUNK) { read = 0; yield 0; }
       const ti = nti[j];
       const h = heads[ti];
       if (ti === 0 || h.n % k) continue;
@@ -594,6 +608,7 @@ function numbers(out, heads, nti, nx, nw) {
   const list = [];
   let end = -Infinity;
   for (let j = 0; j < m; j++) {
+    if (++read === TL_BUILD_CHUNK) { read = 0; yield 0; }
     const ti = nti[j];
     const h = heads[ti];
     if (ti !== 0 && h.n % k) continue;
