@@ -923,3 +923,35 @@ test("timeline paint: a layer's path is kept while its spans are the same, a new
     }
   }
 });
+
+test("timeline build: from nothing it goes on over frames: past its budget in one it stops, goes on in the next, and ends with the model a whole build makes", () => {
+  for (const [n, cw] of [[5600, 1143], [20000, 1370]]) {
+    const heads = strip(n);
+    // A clock the test holds: one unit a look, so each frame does the same work.
+    let t = 0;
+    const clock = () => t++;
+    const J = TL.tlBuildStart(heads, cw, "clock", T0, null);
+    const per = [];
+    let M = null;
+    for (let f = 0; f < 5000 && !M; f++) {
+      M = TL.tlBuildGo(J, t + 4, clock);
+      per.push(J.ran);
+    }
+    expect(M).not.toBe(null);
+    // At most five steps a frame (the budget's four looks, and the step before the first), each
+    // at most TL_BUILD_CHUNK turns, so it takes many frames; nothing done twice or left out.
+    expect(Math.max(...per)).toBeLessThanOrEqual(5 * TL.TL_BUILD_CHUNK);
+    expect(per.length).toBeGreaterThan(Math.floor(J.total / (5 * TL.TL_BUILD_CHUNK)));
+    expect(per.reduce((a, b) => a + b, 0)).toBe(J.total);
+    expect(J.total).toBeGreaterThanOrEqual(3 * n);
+    const whole = timelineModel(null, heads, cw, "clock", T0, null);
+    expect(M.geo.turns).toEqual(whole.geo.turns);
+    expect(drawn(M.L)).toEqual(drawn(whole.L));
+    // It goes on as a model does: the next draw keeps it.
+    const before = { ...TL.TL_MADE };
+    expect(timelineModel(M, heads, cw, "clock", T0, null).L).toBe(M.L);
+    expect([TL.TL_MADE.geo - before.geo, TL.TL_MADE.layout - before.layout]).toEqual([0, 0]);
+  }
+  // With no bound, one frame.
+  expect(TL.tlBuildGo(TL.tlBuildStart(strip(50), 1370, "clock", T0, null), Infinity, () => 0)).not.toBe(null);
+});

@@ -701,3 +701,37 @@ test("timeline paint: the hatch is one stroked path, kept with the layout's brea
     paintKit(false);
   }
 });
+
+test("timeline view: shown from nothing, the strip is placed and laid out over frames inside its budget, a frame asked for each time, its slot holding the waiting line meanwhile", async () => {
+  const { b, cb } = await dockPane(fixture("--extra", "2000"), "bottom", 1440);
+  shownFrame(b, cb);
+  b.key(keyEv("b"), cb);
+  frame(b, cb);
+  expect(b.tlModel ?? null).toBe(null);
+  const real = performance.now;
+  let t = real.call(performance);
+  // Each look at the clock 1 ms later: the budget runs out after a few steps.
+  performance.now = () => (t += 1);
+  const frames = [];
+  try {
+    b.key(keyEv("b"), cb);
+    for (let k = 0; k < 400 && !b.tlModel; k++) {
+      cb.timers = [];
+      const c = frame(b, cb);
+      frames.push({ wait: own(c, "th-tl-wait") != null, lanes: own(c, "th-tl-lanes") != null, ran: b.tlJob?.ran ?? null, asked: cb.timers.some((x) => x.ms === 0), report: b.trajReport().timeline.waiting });
+    }
+  } finally {
+    performance.now = real;
+  }
+  expect(b.tlModel).toBeTruthy();
+  const going = frames.slice(0, -1);
+  expect(going.length).toBeGreaterThan(2);
+  for (const f of going) expect(f).toMatchObject({ wait: true, lanes: false, asked: true, report: true });
+  for (const f of going) expect(f.ran).toBeLessThanOrEqual(12 * TL.TL_BUILD_CHUNK);
+  expect(frames.at(-1)).toMatchObject({ wait: false, lanes: true });
+  // The strip a whole build makes.
+  const M = b.tlModel;
+  const whole = TL.timelineModel(null, M.heads, M.cw, "clock", Date.now(), null);
+  expect([...M.L.spans]).toEqual([...whole.L.spans]);
+  expect(M.L.labels).toEqual(whole.L.labels);
+});
