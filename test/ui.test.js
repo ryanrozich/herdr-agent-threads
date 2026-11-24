@@ -1113,6 +1113,13 @@ test("mdChunks: a word over a view whose only mark is in its last 256 characters
   expect([md.length - md.indexOf("\u3002") <= 256, lens(mdChunks(md, MD_MAX)), lens(job.parts)]).toEqual([true, [6001, 100], [6001, 100]]);
 });
 
+// A word over a view that starts with a mark: the mark goes with the text after it. Alone, it
+// was a part of one character, a paragraph gap above the rest.
+test("mdChunks: a word over a view that starts with a mark keeps the mark with it, not as a part of its own", () => {
+  const md = `\u3002${"a".repeat(6000)}`;
+  expect(mdChunks(md, MD_MAX).map((p) => p.length)).toEqual([6001]);
+});
+
 // With none of the seven marks, text splits as before at spaces alone (mdChunksBefore, the old
 // rule), the half-width , . : ; ! ? included: a word made of them is still one word.
 test("mdChunks: text with none of the full-width marks splits as before, half-width punctuation included", () => {
