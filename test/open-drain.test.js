@@ -633,6 +633,13 @@ test("a jump in the same frame as a pending scroll to the end lands on its turn"
 // the opening drains as it does without them. The clock goes on 16 ms a frame besides the
 // draw's own time, so the 5 s of plain draws after a stop end.
 const wheelUp = (v, _cx, host) => { host.off = Math.max(0, host.off - 30000 / v.zoom()); v.listWheel({ delta: { y: 30000 } }); };
+// A row left to reshape again with its text the same (a new look), as a rebuild leaves it.
+function restaleRow(v, turn) {
+  Object.assign(turn, { shapeKey: null, shapeFast: null, shapesKept: null });
+  const i = v.baseRows.findIndex((r) => r.turn === turn);
+  if (!v.staleRows.includes(i)) { v.staleRows.push(i); v.staleRows.sort((x, y) => x - y); }
+  v.reshapeDue = true;
+}
 const STOP = new Error("stopped at 50 ms");
 async function costlyWheel(ms, base, frames, move = wheelUp, { until = false, stop = false, stream = false, after = 0, liveMs = 0, ahead = false, each = null } = {}) {
   const realPerf = performance.now.bind(performance);
@@ -1055,6 +1062,82 @@ test("the opening: with one light draw in every 40, a row on screen refused 64 d
     expect([ms, ran[0], ran.every((k) => k % 40 === 39), frames.filter((f) => f.stopped).length, frames.reduce((n, f) => n + f.over, 0)]).toEqual([ms, 79, true, 0, 0]);
     expect([ms, frames.slice(0, 79).filter((f) => f.blank === 0).length, frames.at(-1).blank, v.owedAlone > 0]).toEqual([ms, 0, 0, true]);
   }
+}, 300000);
+
+// The count starts again once a row is shaped. In the light-draw cell (rows of 8 ms) the first
+// row run, due at 64, runs in the light draw at 79 and is kept, which clears its count. Left to
+// reshape again at once, its text the same, it is refused anew from 0: in the light draw at 119
+// it has 38 of the 64 and is refused (judged by the heavy draw before it), and it runs in the one
+// at 159. A count kept from before would have it due again at once, run at 119.
+test("the opening: a row shaped and then left to reshape again, its text the same, counts its refused draws from 0", async () => {
+  let turn = null;
+  let cur = -1;
+  let restaled = -1;
+  const runs = [];
+  const mixed = (k) => (k % 40 === 39 ? 2 : 44);
+  await costlyWheel(8, mixed, 240, (v, cx, host) => {
+    wheelUp(v, cx, host);
+    const reshape = v.reshape;
+    v.reshape = function (...a) {
+      if (this.renderOpen && !turn) turn = a[0];
+      if (this.renderOpen && a[0] === turn) runs.push(cur);
+      return reshape.apply(this, a);
+    };
+  }, {
+    stop: true, after: 2, ahead: true, each: (v, k) => {
+      cur = k;
+      if (turn && restaled < 0 && turn.shapeKey != null) {
+        restaled = k;
+        expect(turn.refused ?? null).toBeNull();
+        restaleRow(v, turn);
+      }
+    },
+  });
+  expect([runs[0], restaled]).toEqual([79, 80]);
+  expect(runs.slice(1)).toEqual([159]);
+}, 300000);
+
+// A row refused in the walk for the time spent there is owed, not only counted. With 10 ms of
+// fixed work in the walk (rows of 8 ms, the rows on screen shaped first), one row on screen made
+// a turn of about 40 ms can never fit (40 + 12 and the margin pass 50). The walk reaches it at
+// about 10 ms, where its run alone would end past the limit less the margin (cutWhereNow): it
+// waits, owed. The next draw tries it first (payOwed), at its start, where the run fits the
+// limit: it runs alone there, as its draw's first unit, a draw or two after it was made big. Not
+// owed, it would be met only in the walk, at 10 ms, for a second 64 draws, and then cut there.
+test("the opening: a row the walk refuses for the time spent is owed, and runs alone at the start of the next draw", async () => {
+  let big = null;
+  let madeAt = -1;
+  let cur = -1;
+  const runs = [];
+  const { frames } = await costlyWheel(8, 10, 200, (v, cx, host) => {
+    wheelUp(v, cx, host);
+    const reshape = v.reshape;
+    v.reshape = function (...a) {
+      if (this.renderOpen && a[0] === big) runs.push([cur, Boolean(this.unitAlone)]);
+      return reshape.apply(this, a);
+    };
+  }, {
+    stop: true, after: 2, each: (v, k) => {
+      cur = k;
+      const r = lastList.range;
+      const off = v.rowsMemo[0]?.kind === "spacer" || v.rowsMemo[0]?.kind === "gap" ? 1 : 0;
+      // Once the rows on screen are shaped and the lightest of the last 64 draws is one of these
+      // (lightBase), the one in their middle is made about 40 ms.
+      if (big || k < 70 || blankInView(v) || v.staleRows.some((i) => i + off >= r.start && i + off < r.end)) return;
+      const row = v.rowsMemo[(r.start + r.end) >> 1];
+      big = row.turn;
+      madeAt = k;
+      const add = Math.ceil((40 - v.shapeCost(big, v.replyText(big))) / v.shapeRate);
+      big.prompt = `${big.prompt} ${"kaz vel orin tam ".repeat(Math.ceil(add / 17))}`;
+      restaleRow(v, big);
+      expect(v.neverFits(v.hostCost(big, v.replyText(big)))).toBe(true);
+    },
+  });
+  expect(madeAt).toBeGreaterThan(0);
+  expect(runs).toHaveLength(1);
+  expect(runs[0][1]).toBe(true);
+  expect(runs[0][0] - madeAt).toBeLessThanOrEqual(3);
+  expect(frames[runs[0][0]].starts[0]).toBe(0);
 }, 300000);
 
 // Two jumps 60 ms apart, in different frames, during the drain: each one's 130 ms timer is for
@@ -1546,6 +1629,42 @@ test("shaping: a plain error thrown inside a turn's run alone shows once, and th
     p.restale(big, 20);
     for (let k = 0; k < 600; k++) step();
     expect([runs, thrown]).toEqual([2, 2]);
+  } finally { p.end(); }
+}, 300000);
+
+// A plain error thrown in an owed row's run alone (payOwed, with owedRun set): the draw throws,
+// and the next render starts with no owed run, so the turn is not taken for one. Its text then
+// changes, and with the draws light again it is shaped in the walk like any row, not alone, and
+// no owed run is counted for it (owedAlone).
+test("shaping: after a plain error in an owed row's run alone, the next draw has no owed run: the turn, with new text, is shaped like any row", async () => {
+  const p = await pricedDrain();
+  try {
+    const big = p.turns.at(-3);
+    p.begin();
+    // 30 ms ahead of the owed row in every draw, the last draw's cost (frameBase) one of these
+    // before the turn is made about 12 ms: it fits no such draw (30 + 12 + 10 and the margin).
+    p.setAhead(30);
+    for (let k = 0; k < 3; k++) p.step();
+    p.restale(big, 12000);
+    const BOOM = new Error("a made-up failure in a reshape");
+    let thrown = 0;
+    const alone = [];
+    const reshape = p.v.reshape;
+    p.v.reshape = function (...a) {
+      if (a[0] === big && this.renderOpen) {
+        alone.push(Boolean(this.unitAlone));
+        if (!thrown && this.unitAlone && this.owedRun === big) { thrown++; throw BOOM; }
+      }
+      return reshape.apply(this, a);
+    };
+    const step = () => { try { p.step(); } catch (e) { if (e !== BOOM) throw e; H.rec = null; } };
+    for (let k = 0; k < 600 && !thrown; k++) step();
+    const owed = p.v.owedAlone;
+    expect([thrown, owed > 0, alone]).toEqual([1, true, [true]]);
+    p.setAhead(0);
+    p.restale(big, 20);
+    for (let k = 0; k < 600 && big.shapeKey == null; k++) step();
+    expect([big.shapeKey != null, alone, p.v.owedAlone]).toEqual([true, [true, false], owed]);
   } finally { p.end(); }
 }, 300000);
 
