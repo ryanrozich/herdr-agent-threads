@@ -23,16 +23,26 @@ const rowB = (r) => (r.start != null && r.dur != null ? r.start + r.dur : Number
 const rowF = (r, track) => (track ? TL_TRACK : 0) | (r.open ? TL_OPEN : 0) | (r.failed ? TL_FAILED : 0);
 // A turn's tracks: null when no step is on the second track, else one number a step, 1 for a
 // call in the Tools lane that started while another ran. A call with no result holds the
-// first track to the turn's end; one that starts as the last ends stays on the first.
+// first track to the turn's end; one that starts as the last ends stays on the first. The
+// calls are taken in clock order: as listed, unless one starts before the one listed before
+// it, and then by start, the one listed first at equal starts.
 export function tlTracks(h) {
   TL_MADE.tracks++;
   const n = stepN(h);
-  let out = null;
-  let end0 = -Infinity;
+  const calls = [];
+  let inOrder = true;
   for (let i = 0; i < n; i++) {
     const r = h.steps[i];
+    if (r.start == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
+    if (calls.length && r.start < h.steps[calls[calls.length - 1]].start) inOrder = false;
+    calls.push(i);
+  }
+  if (!inOrder) calls.sort((x, y) => h.steps[x].start - h.steps[y].start || x - y);
+  let out = null;
+  let end0 = -Infinity;
+  for (const i of calls) {
+    const r = h.steps[i];
     const a = r.start;
-    if (a == null || LEDGER_KINDS[r.lk]?.lane !== "tools") continue;
     if (a < end0) {
       if (!out) out = new Array(n).fill(0);
       out[i] = 1;
