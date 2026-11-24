@@ -986,6 +986,22 @@ test("mdSplit: the work counted for known texts is the rule's, line by line and 
   expect([d2, w2]).toEqual([true, block.length * 16 + chars(block) + (block.length + 1) * 16 + block.length * 16 + made2]);
 });
 
+// The work a split counts is the text's, however it is read: a mark looked for in a word over
+// a view is counted up to the mark found, not for the whole slice looked in, so a read of the
+// whole word in one go counted more than reads a step at a time.
+test("mdSplit: the work counted for a word over a view with marks is the same in one read, in reads of 2,000 units and a step at a time", () => {
+  const texts = [`${"a".repeat(5000)}\u3002`.repeat(3), prose(["\u4eca\u65e5\u306f\u914d\u9001\u30eb\u30fc\u30c8\u306e\u78ba\u8a8d\u3092\u671d\u306e\u3046\u3061\u306b\u7d42\u3048\u307e\u3057\u305f\u3002"], 9600).slice(0, 9600), `${"b".repeat(6000)}\u3002${"c".repeat(100)}`];
+  const work = (md, units) => {
+    const job = mdSplit(md, MD_MAX, true);
+    for (let k = 0; k < 1e6 && !job.done; k++) mdSplitOn(job, Infinity, units);
+    return job.work;
+  };
+  for (const md of texts) {
+    const w = [Infinity, 2000, 1].map((u) => work(md, u));
+    expect([md.length, ...w]).toEqual([md.length, w[2], w[2], w[2]]);
+  }
+});
+
 // mdChunks as it was before its pieces' lengths were kept as they grew: the same chunks, found
 // by measuring each whole chunk again for every piece.
 function mdChunksBefore(md, max = MD_MAX) {
