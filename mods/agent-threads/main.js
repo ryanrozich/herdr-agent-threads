@@ -11493,7 +11493,21 @@ export default class Threads extends View {
     if (this.dayOfRows !== rows) {
       this.dayOfRows = rows;
       this.dayOf = new Map();
+      // A window (or a cut) that starts partway through a day has no band for its first rows:
+      // their day is the last band above them in the base rows, looked for once for those rows
+      // and that start (a one-day session can have thousands of rows above it).
       let day = null;
+      const base = this.baseRows ?? [];
+      const head = rows.find((r) => this.baseIndex?.has(r.key));
+      if (head && rows !== base) {
+        const at = this.baseIndex.get(head.key);
+        const m = this.dayAbove;
+        if (m && m.base === base && m.ver === (this.baseVer ?? 0) && m.at === at) day = m.day;
+        else {
+          for (let i = at; i >= 0; i--) if (base[i].kind === "day") { day = base[i]; break; }
+          this.dayAbove = { base, ver: this.baseVer ?? 0, at, day };
+        }
+      }
       for (const r of rows) {
         if (r.kind === "day") day = r;
         this.dayOf.set(r.key, day);

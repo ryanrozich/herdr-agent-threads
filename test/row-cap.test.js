@@ -1628,3 +1628,29 @@ test("a refit for new measures counts the turns outside the window once: it read
   expect(earlier).toBe(all.slice(0, a).filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).length);
   expect(later).toBe(all.slice(z).filter((r) => ["turn", "head", "working", "wrow", "line"].includes(r.kind)).length);
 });
+
+test("a window that starts partway through a day keeps that day's pill over its first turns: the day's band is above the window", async () => {
+  // Three days of 50 turns each.
+  const { v, cx } = await capSession(150, SMALL, -1, 25, (i) => Math.floor(i / 50));
+  v.jumpLatest(true);
+  frames(v, cx);
+  // Show earlier from the newest window, until the window starts partway through a day.
+  let rows = v.rows();
+  let top;
+  for (let k = 0; k < 12 && !top; k++) {
+    v.showMore(false);
+    frames(v, cx);
+    rows = v.rows();
+    const firstDay = rows.findIndex((r) => r.kind === "day");
+    top = rows.find((r, i) => (firstDay < 0 || i < firstDay) && r.kind === "turn");
+  }
+  expect(top).toBeDefined();
+  const all = v.allRows();
+  // The window's first turns are on a day whose band it left out.
+  const at = all.findIndex((r) => r.key === top.key);
+  const band = all.slice(0, at).findLast((r) => r.kind === "day");
+  expect(band).toBeDefined();
+  expect(rows.some((r) => r.key === band.key)).toBe(false);
+  v.topKey = top.key;
+  expect(v.stickyDay()?.key).toBe(band.key);
+});
