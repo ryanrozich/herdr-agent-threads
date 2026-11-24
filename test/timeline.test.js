@@ -587,7 +587,7 @@ function numbersWithLast(L, want, n) {
 }
 
 test("timeline numbers: the last turn's number always shows, end-aligned inside the strip, and only the number it touches gives way, with 1234 selected or nothing", () => {
-  for (const cw of [1370, 1143, 2500]) {
+  for (const cw of [1370, 1143, 1440]) {
     const heads = strip(2000);
     const L = timelineLayout(heads, cw, "clock", T0, null);
     const last = { x: numAt(L, 1999), text: "2000" };
@@ -608,9 +608,9 @@ test("timeline numbers: the last turn's number always shows, end-aligned inside 
       // The last number's length: the room to the strip's end is under TL_NUM_LEN, so none.
       expect(nums.at(-1).total).toBe(null);
     }
-    // Both cases met: at 1,370 px the hundred before it is dropped, at 2,500 px it is kept.
+    // Both cases met: at 1,370 px 1900 touches 2000 and is dropped; at 1,440 px it is kept.
     if (cw === 1370) expect([k, clash(prev, last)]).toEqual([100, true]);
-    if (cw === 2500) expect([k, clash(prev, last)]).toEqual([50, false]);
+    if (cw === 1440) expect([k, clash(prev, last)]).toEqual([100, false]);
   }
 });
 

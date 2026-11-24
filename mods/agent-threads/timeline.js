@@ -410,7 +410,8 @@ export function tlNumW(text) { return TL_NUM_PAD + String(text).length * TL_NUM_
 function nextStep(k) { const d = 10 ** Math.floor(Math.log10(k)); const m = k / d; return (m < 2 ? 2 : m < 5 ? 5 : 10) * d; }
 // out.labels: the first turn's number, then every k-th turn's (turn numbers a multiple of k),
 // k the smallest step that keeps them all apart (out.every). A multiple that would run past
-// the strip's end, or touch the first turn's number, has none. nti, nx, nw: the turns in view
+// the strip's end, or touch the first turn's number, has none. Then the last turn's, moved inside
+// the strip's end, in place of any it touches. nti, nx, nw: the turns in view
 // that start before the strip's end, their number's x and their width from it.
 function numbers(out, heads, nti, nx, nw) {
   const cw = out.cw;
@@ -443,6 +444,20 @@ function numbers(out, heads, nti, nx, nw) {
     if (ti !== 0 && (nx[j] + w > cw || nx[j] < end)) continue;
     list.push({ ti, x: ti === 0 ? Math.min(nx[j], Math.max(0, cw - w)) : nx[j], tw: nw[j], text: `${h.n}`, w: 0, total: null });
     end = list.at(-1).x + w + TL_NUM_GAP;
+  }
+  // The session's last turn, in view, always has its number: end-aligned inside the strip, in
+  // place of the numbers before it that it touches. Touching the first turn's, it has none.
+  const lt = nti[m - 1];
+  if (lt === heads.length - 1 && lt !== 0 && list.at(-1)?.ti !== lt) {
+    const text = `${heads[lt].n}`;
+    const x = Math.min(nx[m - 1], Math.max(0, cw - tlNumW(text)));
+    const touches = (l) => l.x + tlNumW(l.text) + TL_NUM_GAP > x;
+    let keep = list.length;
+    while (keep > 0 && list[keep - 1].ti !== 0 && touches(list[keep - 1])) keep--;
+    if (!(keep > 0 && touches(list[keep - 1]))) {
+      list.length = keep;
+      list.push({ ti: lt, x, tw: nw[m - 1], text, w: 0, total: null });
+    }
   }
   out.labels = roomOfNumbers(list, heads, out);
 }
