@@ -1081,6 +1081,31 @@ test("under a cut that does not move, a rail jump keeps the view for its first f
   H.listWindow = null;
 });
 
+// A trackpad flick: its touch's events, then the momentum tail. gpui on macOS gives the tail's
+// events (no touch phase of their own) as "moved" after the touch's "ended"; what Herdr passes
+// on after a flick is not measured (Limits).
+const flick = (sim) => { sim.wheel(-40, "started"); sim.wheel(-120, "moved"); sim.wheel(-60, "ended"); };
+const tail = (sim) => { for (const dy of [-30, -12, -4]) sim.wheel(dy, "moved"); };
+
+test("under a cut that does not move, a key jump made inside a flick's momentum tail is dropped by the tail's events: the wheel count takes every phase", async () => {
+  const got = {};
+  for (const when of ["no tail", "before its frame", "between its frame and its asks"]) {
+    const { v, cx, sim } = await cutScene();
+    v.action("first", cx);
+    settleList(v, cx, sim);
+    flick(sim);
+    probeFrame(v, cx);
+    v.command("search:#35", cx);
+    if (when === "before its frame") { tail(sim); probeFrame(v, cx); }
+    else if (when !== "no tail") { draw(v, cx); tail(sim); cx.flush(120, 3); dropTimers(v, cx); }
+    settleList(v, cx, sim);
+    got[when] = { shown: shownIn(v, sim.last()).includes("0:35"), waiting: v.scrollTo };
+    H.listWindow = null;
+  }
+  // The same flick with no tail after the key: the jump lands.
+  expect(got).toEqual({ "no tail": { shown: true, waiting: null }, "before its frame": { shown: false, waiting: null }, "between its frame and its asks": { shown: false, waiting: null } });
+});
+
 // A reader's own scroll and latest while a jump waits: the reader wins at once.
 function slowRows(v, cx) { v.buildMax = () => 0; v.shapeBudget = 0; stillAt(v, 380); probeFrame(v, cx); }
 const fastRows = (v) => { delete v.buildMax; v.shapeBudget = null; };

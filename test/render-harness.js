@@ -365,9 +365,11 @@ export function simList(v) {
     sim.frames.push({ key: lastList.keys[start], into: off - pre[start], share: (off - pre[start]) / s[start], end: end >= n, off, sizes: s, keys: lastList.keys, lift: v.anchorLift ?? 0, held: Boolean(v.anchor && !v.anchor.end) });
     return { start, end };
   };
-  sim.wheel = (dy) => {
+  // phase: the event's touch_phase, as gpui gives it ("started", "moved", "ended"); none by
+  // default.
+  sim.wheel = (dy, phase) => {
     sim.off = Math.max(0, Math.min(sim.off - dy, room(lastList.sizes)));
-    v.listWheel({ delta: { y: dy * v.zoom() } });
+    v.listWheel({ delta: { y: dy * v.zoom() }, ...(phase ? { touch_phase: phase } : {}) });
   };
   sim.last = () => sim.frames[sim.frames.length - 1];
   return sim;
